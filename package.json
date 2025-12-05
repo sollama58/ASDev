@@ -1,12 +1,12 @@
 {
   "name": "pump-launcher",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.29.0",
+    "@coral-xyz/anchor": "0.29.0",
     "@solana/web3.js": "^1.91.0",
     "axios": "^1.6.8",
     "bs58": "^5.0.0",

@@ -9,7 +9,15 @@
     <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     <style>
         /* TERMINAL FIRE THEME */
-        body { background-color: #2a1005; color: #ffedd5; font-family: 'Comic Neue', cursive; min-height: 100vh; display: flex; justify-content: center; padding-top: 40px; }
+        body { 
+            background-color: #2a1005; 
+            color: #ffedd5; 
+            font-family: 'Comic Neue', cursive; 
+            min-height: 100vh; 
+            display: flex; 
+            justify-content: center; 
+            padding-top: 40px; 
+        }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
         
         #app-container {
@@ -19,6 +27,7 @@
             border-radius: 16px;
             overflow: hidden;
             box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+            position: relative;
         }
 
         .ticker-wrap { width: 100%; background-color: #2a1005; border-bottom: 2px solid #7c2d12; overflow: hidden; white-space: nowrap; height: 32px; display: flex; align-items: center; }
@@ -40,10 +49,11 @@
             color: #fb923c;
             font-family: 'JetBrains Mono', monospace;
             width: 100%;
-            padding: 10px;
+            padding: 12px;
             margin-bottom: 16px;
             outline: none;
             transition: border-color 0.2s;
+            border-radius: 4px;
         }
         .input-field:focus { border-color: #ea580c; }
         
@@ -53,18 +63,33 @@
             text-transform: uppercase; width: 100%; padding: 14px;
             cursor: pointer; transition: all 0.1s;
             box-shadow: 2px 2px 0 #7c2d12;
+            border-radius: 4px;
         }
         .btn-action:hover { background: #f97316; transform: translate(-1px, -1px); box-shadow: 3px 3px 0 #7c2d12; }
         .btn-action:active { transform: translate(2px, 2px); box-shadow: 0 0 0; }
-        .btn-action:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(100%); }
+        .btn-action:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(100%); transform: none; box-shadow: none; }
 
         .status-box {
             background: rgba(0,0,0,0.3); border: 1px solid #ea580c;
             color: #fdba74; padding: 10px; font-size: 12px; font-family: 'JetBrains Mono';
-            text-align: center; margin-top: 10px; display: none;
+            text-align: center; margin-top: 10px; display: none; border-radius: 4px;
         }
         .status-success { border-color: #22c55e; color: #4ade80; background: rgba(20, 83, 45, 0.3); }
         .status-error { border-color: #ef4444; color: #fca5a5; background: rgba(127, 29, 29, 0.3); }
+        .status-normal { border-color: #ea580c; color: #fdba74; }
+
+        .connect-btn {
+            background: #2a1005;
+            border: 2px solid #ea580c;
+            color: #ea580c;
+            padding: 8px 16px;
+            font-family: 'JetBrains Mono';
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .connect-btn:hover { background: rgba(234, 88, 12, 0.1); }
     </style>
 </head>
 <body>
@@ -81,7 +106,7 @@
                     <p class="text-orange-400 text-xs font-mono uppercase">Protocol Launchpad</p>
                 </div>
             </div>
-            <button id="connect-btn" class="bg-black border border-orange-500 text-orange-500 px-4 py-2 rounded font-mono text-xs hover:bg-orange-900/20">CONNECT WALLET</button>
+            <button id="connect-btn" class="connect-btn">CONNECT WALLET</button>
         </div>
 
         <div class="panel">
@@ -123,9 +148,9 @@
         </div>
         
         <div id="result-area" class="panel hidden">
-            <h3 class="text-green-400 font-bold font-mono mb-2">DEPLOYMENT SUCCESSFUL</h3>
-            <p class="text-xs text-orange-200 font-mono break-all">MINT: <span id="mint-addr" class="text-white"></span></p>
-            <a id="tx-link" href="#" target="_blank" class="block mt-4 text-center text-xs font-mono text-blue-400 underline hover:text-blue-300">VIEW TRANSACTION</a>
+            <h3 class="text-green-400 font-bold font-mono mb-2 text-center text-xl">DEPLOYMENT SUCCESSFUL</h3>
+            <p class="text-xs text-orange-200 font-mono break-all text-center mb-4">MINT: <span id="mint-addr" class="text-white font-bold"></span></p>
+            <a id="tx-link" href="#" target="_blank" class="block text-center text-sm font-mono text-blue-400 underline hover:text-blue-300 border border-blue-900 bg-blue-900/20 py-2 rounded">VIEW TRANSACTION ON SOLSCAN</a>
         </div>
 
         <div class="text-center text-[10px] font-mono text-orange-900 mt-4">
@@ -135,7 +160,7 @@
 </div>
 
 <script>
-    // CONFIGURATION
+    // --- CONFIGURATION ---
     const BACKEND_URL = "https://asdev-1kvy.onrender.com/api/deploy";
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
 
@@ -147,21 +172,25 @@
     const showStatus = (msg, type) => {
         statusBox.innerText = msg;
         statusBox.style.display = 'block';
-        statusBox.className = `status-box ${type === 'error' ? 'status-error' : 'status-success'}`;
+        if (type === 'error') statusBox.className = 'status-box status-error';
+        else if (type === 'success') statusBox.className = 'status-box status-success';
+        else statusBox.className = 'status-box status-normal';
     };
 
-    connectBtn.onclick = async () => {
+    const connectWallet = async () => {
         if (window.solana && window.solana.isPhantom) {
             try {
                 const resp = await window.solana.connect();
                 userPubkey = resp.publicKey.toString();
                 connectBtn.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4);
-                connectBtn.className = "bg-orange-900/50 border border-orange-700 text-orange-500 px-4 py-2 rounded font-mono text-xs";
+                connectBtn.classList.add('bg-orange-900', 'text-white');
             } catch (err) { console.error(err); }
         } else {
             window.open("https://phantom.app/", "_blank");
         }
     };
+
+    connectBtn.onclick = connectWallet;
 
     deployBtn.onclick = async () => {
         if (!userPubkey) return showStatus("CONNECT WALLET FIRST", 'error');
@@ -172,11 +201,11 @@
         if(!name || !ticker) return showStatus("NAME & TICKER REQUIRED", 'error');
 
         deployBtn.disabled = true;
-        deployBtn.innerText = "PROCESSING PAYMENT...";
-        showStatus("SENDING 0.05 SOL FEE...", 'normal');
+        deployBtn.innerText = "PROCESSING...";
+        showStatus("SIGNING 0.05 SOL FEE...", 'normal');
 
         try {
-            // 1. Send Fee
+            // 1. Send Fee Transaction
             const tx = new solanaWeb3.Transaction().add(
                 solanaWeb3.SystemProgram.transfer({
                     fromPubkey: new solanaWeb3.PublicKey(userPubkey),
@@ -190,9 +219,9 @@
             tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
 
             const { signature } = await window.solana.signAndSendTransaction(tx);
-            showStatus("PAYMENT SENT. DEPLOYING...", 'normal');
+            showStatus("PAYMENT SENT. DEPLOYING (WAIT ~15s)...", 'normal');
 
-            // 2. Call Backend
+            // 2. Call Backend to Deploy
             const res = await fetch(BACKEND_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -202,7 +231,7 @@
                     twitter: document.getElementById('twitter').value,
                     website: document.getElementById('website').value,
                     userTx: signature,
-                    userPubkey
+                    userPubkey: userPubkey
                 })
             });
 
@@ -215,7 +244,7 @@
                 document.getElementById('tx-link').href = `https://solscan.io/tx/${data.signature}`;
                 deployBtn.innerText = "LAUNCHED";
             } else {
-                throw new Error(data.error);
+                throw new Error(data.error || "Unknown Server Error");
             }
 
         } catch (e) {
@@ -225,6 +254,16 @@
             deployBtn.innerText = "INITIATE LAUNCH";
         }
     };
+    
+    // Auto Connect if trusted
+    window.addEventListener('load', () => {
+        if (window.solana && window.solana.isPhantom) {
+            window.solana.connect({ onlyIfTrusted: true }).then((resp) => {
+                userPubkey = resp.publicKey.toString();
+                connectBtn.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4);
+            }).catch(() => {});
+        }
+    });
 </script>
 
 </body>
