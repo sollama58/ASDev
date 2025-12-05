@@ -55,7 +55,7 @@
       "args": [
         { "name": "amount", "type": "u64" },
         { "name": "min_sol_output", "type": "u64" },
-        { "name": "track_volume", "type": { "defined": { "name": "OptionBool" } } }
+        { "name": "track_volume", "type": "bool" }
       ]
     },
     {
@@ -93,8 +93,5 @@
         ]
       }
     }
-  ],
-  "types": [
-    { "name": "OptionBool", "type": { "kind": "struct", "fields": ["bool"] } }
   ]
 }
