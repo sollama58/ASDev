@@ -28,7 +28,7 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xW
 const MAYHEM_PROGRAM_ID = new PublicKey("MAyhSmzXzV1pTf7LsNkrNwkWKTo4ougAJ1PPg47MD4e");
 const FEE_PROGRAM_ID = new PublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ");
 
-// Hardcoded Fee Recipient (as per user request)
+// Fee Recipient
 const FEE_RECIPIENT = new PublicKey("FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB");
 
 // --- Setup ---
@@ -42,7 +42,9 @@ const wallet = new Wallet(devKeypair);
 const provider = new AnchorProvider(connection, wallet, CONNECTION_CONFIG);
 
 const idl = JSON.parse(fs.readFileSync('./pump_idl.json', 'utf8'));
-const program = new Program(idl, provider);
+
+// FIX: Explicitly pass PUMP_PROGRAM_ID to avoid "Assertion failed"
+const program = new Program(idl, PUMP_PROGRAM_ID, provider);
 
 // --- Helper Functions ---
 
@@ -76,8 +78,7 @@ function getPumpPDAs(mint, creator) {
     const [userVolume] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PUMP_PROGRAM_ID);
     const [feeConfig] = PublicKey.findProgramAddressSync([Buffer.from("fee_config")], FEE_PROGRAM_ID);
     
-    // FIX: Creator Vault seed must use the CREATOR wallet, not the bonding curve
-    const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PUMP_PROGRAM_ID);
+    const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), bondingCurve.toBuffer()], PUMP_PROGRAM_ID);
 
     return { mintAuthority, bondingCurve, global, eventAuthority, globalVolume, userVolume, feeConfig, creatorVault };
 }
@@ -121,10 +122,6 @@ app.post('/api/deploy', async (req, res) => {
         const mayhemTokenVault = getATA(mint, solVault);
         const associatedUser = getATA(mint, creator);
 
-        console.log("Mint:", mint.toString());
-        console.log("Bonding Curve:", bondingCurve.toString());
-        console.log("Creator Vault:", creatorVault.toString());
-
         // Instruction 1: Create V2
         const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, false)
             .accounts({
@@ -140,7 +137,6 @@ app.post('/api/deploy', async (req, res) => {
             .instruction();
 
         // Instruction 2: Buy 0.01 SOL
-        // Note: trackVolume passed as 'false' (boolean) to match modified IDL
         const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), false)
             .accounts({
                 global, 
@@ -166,7 +162,6 @@ app.post('/api/deploy', async (req, res) => {
             try {
                 const bal = await connection.getTokenAccountBalance(associatedUser);
                 if (bal.value.uiAmount > 0) {
-                    console.log(`Selling ${bal.value.amount} tokens...`);
                     const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0))
                         .accounts({
                             global, feeRecipient: FEE_RECIPIENT, mint, bondingCurve, associatedBondingCurve,
