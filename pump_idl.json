@@ -179,6 +179,10 @@
     }
   ],
   "accounts": [
-    { "name": "BondingCurve", "discriminator": [23, 183, 248, 55, 96, 216, 172, 96] }
+    { 
+      "name": "BondingCurve", 
+      "type": { "kind": "type", "value": "BondingCurve" },
+      "discriminator": [23, 183, 248, 55, 96, 216, 172, 96] 
+    }
   ]
 }
