@@ -268,7 +268,7 @@ if (redisConnection) {
             const [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], MAYHEM_PROGRAM_ID);
             const mayhemTokenVault = getATA(mint, solVault, TOKEN_PROGRAM_2022_ID);
 
-            const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID);
+            const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event-authority")], PUMP_PROGRAM_ID);
 
             // Manual Creator Vault Derivations (New Requirement)
             const [creatorVault] = PublicKey.findProgramAddressSync(
@@ -333,8 +333,7 @@ if (redisConnection) {
             const targetFeeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT;
             
             // Using buy instruction for pre-bond/initial liquidity injection.
-            // Argument for trackVolume: We use {some: false} or null if the native object syntax were desired.
-            // Using [false] array syntax is the most stable method for Option<T> arguments in Anchor 0.29.
+            // Argument for trackVolume: We use [false] for the Option<bool> type.
             const buyIx = await program.methods.buy(new BN(0.01 * LAMPORTS_PER_SOL), new BN(LAMPORTS_PER_SOL), [false])
                 .accounts({
                     global,
