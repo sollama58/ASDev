@@ -14,24 +14,54 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.5";
+const VERSION = "v10.5.6";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
-const PINATA_JWT = process.env.PINATA_JWT;
+// CHANGE: Added .trim() to strip accidental whitespace from copy-paste
+const PINATA_JWT = process.env.PINATA_JWT ? process.env.PINATA_JWT.trim() : null; 
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY; 
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
+// --- LOGGER ---
+const DISK_ROOT = '/var/data';
+const DEBUG_LOG_FILE = path.join(DISK_ROOT, 'server_debug.log');
+if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./data'); }
+const logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
+
+function log(level, message, meta = {}) {
+    const timestamp = new Date().toISOString();
+    const metaString = Object.keys(meta).length ? JSON.stringify(meta) : '';
+    const logLine = `[${timestamp}] [${level.toUpperCase()}] ${message} ${metaString}\n`;
+    logStream.write(logLine);
+    const consoleMethod = level === 'error' ? console.error : console.log;
+    consoleMethod(`[${level.toUpperCase()}] ${message}`, metaString ? meta : '');
+}
+const logger = {
+    info: (msg, meta) => log('info', msg, meta),
+    warn: (msg, meta) => log('warn', msg, meta),
+    error: (msg, meta) => log('error', msg, meta)
+};
+
 // Check Critical Config
-if (!PINATA_JWT) console.warn("⚠️ WARNING: PINATA_JWT is missing. Metadata uploads will fail.");
+if (!PINATA_JWT) {
+    logger.warn("⚠️ WARNING: PINATA_JWT is missing. Metadata uploads will fail.");
+} else {
+    // Validate JWT format roughly (should look like xxx.xxx.xxx)
+    if (PINATA_JWT.split('.').length !== 3) {
+        logger.error("⚠️ CRITICAL: PINATA_JWT appears invalid (wrong format). Ensure you copied the 'JWT' and not the 'API Key'.");
+    } else {
+        logger.info(`✅ Pinata JWT Loaded (Length: ${PINATA_JWT.length})`);
+    }
+}
 
 // --- CONSTANTS WITH SAFETY CHECKS ---
 const safePublicKey = (val, fallback, name) => {
     try {
         return new PublicKey(val);
     } catch (e) {
-        console.warn(`⚠️ WARNING: Invalid ${name} (${val}). Using fallback.`);
+        logger.warn(`⚠️ WARNING: Invalid ${name} (${val}). Using fallback.`);
         return new PublicKey(fallback);
     }
 };
@@ -52,31 +82,11 @@ const FEE_RECIPIENT = safePublicKey("FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1t
 const MAYHEM_PROGRAM_ID = safePublicKey("11111111111111111111111111111111", "11111111111111111111111111111111", "MAYHEM_PROGRAM_ID");
 
 // --- DB & Directories ---
-const DISK_ROOT = '/var/data';
 const DATA_DIR = path.join(DISK_ROOT, 'tokens');
-const DEBUG_LOG_FILE = path.join(DISK_ROOT, 'server_debug.log');
-
-if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./data'); }
 const DB_PATH = fs.existsSync(DISK_ROOT) ? path.join(DISK_ROOT, 'launcher.db') : './data/launcher.db';
 const ACTIVE_DATA_DIR = fs.existsSync(DISK_ROOT) ? DATA_DIR : './data/tokens';
 const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); };
 ensureDir(ACTIVE_DATA_DIR);
-
-// --- LOGGER ---
-const logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
-function log(level, message, meta = {}) {
-    const timestamp = new Date().toISOString();
-    const metaString = Object.keys(meta).length ? JSON.stringify(meta) : '';
-    const logLine = `[${timestamp}] [${level.toUpperCase()}] ${message} ${metaString}\n`;
-    logStream.write(logLine);
-    const consoleMethod = level === 'error' ? console.error : console.log;
-    consoleMethod(`[${level.toUpperCase()}] ${message}`, metaString ? meta : '');
-}
-const logger = {
-    info: (msg, meta) => log('info', msg, meta),
-    warn: (msg, meta) => log('warn', msg, meta),
-    error: (msg, meta) => log('error', msg, meta)
-};
 
 // --- REDIS QUEUE ---
 let deployQueue;
@@ -203,7 +213,7 @@ async function uploadImageToPinata(b64) {
         
         const r = await axios.post('https://api.pinata.cloud/pinning/pinFileToIPFS', f, {
             headers: {
-                'Authorization': `Bearer ${PINATA_JWT}`,
+                'Authorization': `Bearer ${PINATA_JWT}`, // Using cleaned JWT
                 ...f.getHeaders()
             },
             maxBodyLength: Infinity 
@@ -238,7 +248,7 @@ async function uploadMetadataToPinata(n, s, d, t, w, i) {
     try {
         const r = await axios.post('https://api.pinata.cloud/pinning/pinJSONToIPFS', m, {
             headers: {
-                'Authorization': `Bearer ${PINATA_JWT}`,
+                'Authorization': `Bearer ${PINATA_JWT}`, // Using cleaned JWT
                 'Content-Type': 'application/json' 
             }
         });
