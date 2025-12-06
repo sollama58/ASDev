@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.4.1";
+const VERSION = "v10.4.2";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -88,7 +88,7 @@ async function initDB() {
     logger.info(`DB Initialized at ${DB_PATH}`);
 }
 
-// --- MODERATION (CLARIFAI - RELAXED RULES) ---
+// --- MODERATION (CLARIFAI FIX) ---
 async function checkContentSafety(base64Data) {
     if (!CLARIFAI_API_KEY) {
         logger.warn("⚠️ CLARIFAI_API_KEY missing. Moderation Skipped.");
@@ -96,10 +96,16 @@ async function checkContentSafety(base64Data) {
     }
 
     try {
-        const base64Content = base64Data.split(',')[1];
+        // Clean Base64 string
+        const base64Content = base64Data.replace(/^data:image\/(.*);base64,/, '');
         
+        // Use specific Model ID for 'moderation-recognition' (General Model is 'aaa03c23b3724a16a56b629203edc62c' but we want moderation)
+        // 'd16f390eb32cad478c7ae150069bd2c6' is the Moderation model ID.
+        const MODEL_ID = 'd16f390eb32cad478c7ae150069bd2c6';
+        const MODEL_VERSION_ID = 'aa8be956dbaa4b7a858826a84253cab9'; 
+
         const response = await axios.post(
-            "https://api.clarifai.com/v2/models/moderation-recognition/outputs",
+            `https://api.clarifai.com/v2/models/${MODEL_ID}/versions/${MODEL_VERSION_ID}/outputs`,
             {
                 inputs: [{ data: { image: { base64: base64Content } } }]
             },
@@ -110,14 +116,15 @@ async function checkContentSafety(base64Data) {
                 }
             }
         );
+        
+        if (response.status !== 20000 && response.status !== 200) {
+             // Clarifai returns 200 even on some logical errors, check status code in body if needed
+             // but axios throws on non-2xx usually.
+        }
 
         const concepts = response.data.outputs[0].data.concepts;
         
-        // RELAXED FILTER: Only block extreme categories.
-        // Removed 'suggestive' to allow mild content.
-        // 'explicit' = Nudity/Porn
-        // 'gore' = Violence
-        // 'drug' = Illegal drugs
+        // Filter: Block explicitly unsafe content
         const unsafe = concepts.find(c => 
             (c.name === 'gore' || c.name === 'explicit' || c.name === 'drug') && c.value > 0.85
         );
@@ -129,7 +136,9 @@ async function checkContentSafety(base64Data) {
         return true;
 
     } catch (e) {
-        logger.error("Moderation API Error", { err: e.message });
+        // Log detailed error response for debugging
+        const errorMsg = e.response && e.response.data ? JSON.stringify(e.response.data) : e.message;
+        logger.error("Moderation API Error", { err: errorMsg });
         return true; // Fail open
     }
 }
@@ -179,7 +188,7 @@ if (redisConnection) {
         const { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode } = job.data;
 
         const isSafe = await checkContentSafety(image);
-        if (!isSafe) throw new Error("Upload blocked: Illegal content detected.");
+        if (!isSafe) throw new Error("Upload blocked: NSFW/Illegal content detected.");
 
         let metadataUri;
         try { metadataUri = await uploadMetadataToPinata(name, ticker, description, twitter, website, image); }
@@ -242,6 +251,7 @@ app.post('/api/deploy', async (req, res) => {
         const { name, ticker, description, twitter, website, userTx, userPubkey, image, isMayhemMode } = req.body;
         if (!name || name.length > 32) return res.status(400).json({ error: "Invalid Name" });
         if (!ticker || ticker.length > 10) return res.status(400).json({ error: "Invalid Ticker" });
+
         const used = await checkTransactionUsed(userTx); if (used) return res.status(400).json({ error: "Transaction signature already used." });
         const txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
         if (!txInfo) return res.status(400).json({ error: "Transaction not found." });
