@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.20";
+const VERSION = "v10.5.21";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -218,10 +218,9 @@ if (redisConnection) {
             const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s").toBuffer(), mint.toBuffer()], new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"));
             const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID);
 
-            // --- INSTRUCTION 1: Create V2 (Matches IDL: name, symbol, uri) ---
-            // Note: The uploaded IDL does NOT show 'isMayhemMode' or 'creator' as args for create_v2. 
-            // It strictly takes (name, symbol, uri).
-            const createIx = await program.methods.create(name, ticker, metadataUri) 
+            // --- INSTRUCTION 1: Create V2 (Matches IDL: create_v2) ---
+            // FIXED: Method name is createV2 based on snake_case IDL 'create_v2'
+            const createIx = await program.methods.createV2(name, ticker, metadataUri) 
                 .accounts({
                     mint: mint,
                     mintAuthority: mintAuthority,
@@ -509,9 +508,7 @@ async function runPurchaseAndFees() {
                  const { bondingCurve, associatedBondingCurve } = getPumpPDAs(TARGET_PUMP_TOKEN, PUMP_PROGRAM_ID);
                  const associatedUser = getATA(TARGET_PUMP_TOKEN, devKeypair.publicKey);
                  
-                 const buyIx = await program.methods.buy(new BN(Math.floor(spendable * 0.90)), new BN(1)) // Using 'buy' not 'buyExactSolIn'
-                    .accounts({ global: PublicKey.findProgramAddressSync([Buffer.from("global")], PUMP_PROGRAM_ID)[0], feeRecipient: FEE_RECIPIENT, mint: TARGET_PUMP_TOKEN, bondingCurve, associatedBondingCurve, associatedUser, user: devKeypair.publicKey, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_ID, rent: new PublicKey("SysvarRent111111111111111111111111111111111"), eventAuthority: PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID)[0], program: PUMP_PROGRAM_ID })
-                    .instruction();
+                 const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), false).accounts({ global: PublicKey.findProgramAddressSync([Buffer.from("global")], PUMP_PROGRAM_ID)[0], feeRecipient: FEE_RECIPIENT, mint: TARGET_PUMP_TOKEN, bondingCurve, associatedBondingCurve, associatedUser, user: devKeypair.publicKey, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_ID, creatorVault: PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), bondingCurve.toBuffer()], PUMP_PROGRAM_ID)[0], eventAuthority: PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID)[0], program: PUMP_PROGRAM_ID, globalVolumeAccumulator: PublicKey.findProgramAddressSync([Buffer.from("global_volume_accumulator")], PUMP_PROGRAM_ID)[0], userVolumeAccumulator: PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_PROGRAM_ID)[0], feeConfig: PublicKey.findProgramAddressSync([Buffer.from("fee_config")], FEE_PROGRAM_ID)[0], feeProgram: FEE_PROGRAM_ID }).instruction();
                  
                  const tx = new Transaction().add(buyIx)
                     .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 }))
