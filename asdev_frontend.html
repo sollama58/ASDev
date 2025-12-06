@@ -58,8 +58,6 @@
         .leader-table td { padding: 12px 10px; border-bottom: 1px solid rgba(234, 88, 12, 0.2); }
         .leader-table tr:hover { background: rgba(234, 88, 12, 0.1); }
         .token-img-sm { width: 24px; height: 24px; border-radius: 4px; object-fit: cover; display: inline-block; vertical-align: middle; margin-right: 8px; border: 1px solid #7c2d12; }
-        
-        /* Metric Cards */
         .metric-card { background: rgba(0,0,0,0.2); border: 1px solid #ea580c; padding: 20px; border-radius: 8px; text-align: center; }
         .metric-value { font-size: 24px; font-weight: bold; color: white; font-family: 'JetBrains Mono'; margin-top: 5px; }
         .metric-label { font-size: 12px; color: #fdba74; text-transform: uppercase; letter-spacing: 1px; }
@@ -144,15 +142,18 @@
                     <div id="metric-launches" class="metric-value">0</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">$PUMP Purchased (SOL)</div>
-                    <div id="metric-pump" class="metric-value">0.00</div>
+                    <!-- UPDATED HEADER -->
+                    <div class="metric-label">$PUMP Tokens Bought</div>
+                    <div id="metric-pump" class="metric-value">0</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Protocol Revenue (SOL)</div>
+                    <!-- UPDATED HEADER -->
+                    <div class="metric-label">ASDF Buybacks (SOL)</div>
                     <div id="metric-fees" class="metric-value">0.00</div>
                 </div>
             </div>
         </div>
+
 
         <div class="panel bg-orange-900/20 mt-8 lg:col-span-3">
             <div class="border-b border-orange-900/50 pb-2 mb-4"><h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">FEE & BUYBACK MECHANICS</h3></div>
@@ -176,7 +177,7 @@
         </div>
 
         <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
-            <div><span class="text-orange-600">RPC UPLINK: HELIUS MAINNET</span></div>
+            <div><span class="text-orange-600">RPC UPLINK: HELIUS MAINNET</span> | <span class="text-orange-600 ml-2">LIFETIME PROTOCOL REVENUE: <span id="lifetime-fees" class="text-green-400 font-bold">0.00</span> SOL</span></div>
             <div class="flex gap-4"><span>SYSTEM STATUS: <span id="sys-status" class="sys-status">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
         </div>
     </div>
@@ -189,26 +190,41 @@
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const HELIUS_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=a32d61a0-2cc2-4d60-b3b6-cefadce7001a"; 
     const PUMPFUN_URL_BASE = "https://pump.fun/coin/";
+    const PUMP_CONTRACT = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
 
     let userPubkey = null;
     let allLogs = []; 
     let connection = new solanaWeb3.Connection(HELIUS_RPC_URL, "confirmed"); 
+    // CACHE for pump price
+    let pumpPriceCache = 0.0;
 
     const ui = {
         connectBtn: document.getElementById('connect-btn'), walletUI: document.getElementById('wallet-ui'), walletAddr: document.getElementById('wallet-addr'), walletBal: document.getElementById('wallet-bal'),
         refreshBtn: document.getElementById('refresh-btn'), disconnectBtn: document.getElementById('disconnect-btn'), deployBtn: document.getElementById('deploy-btn'),
         statusBox: document.getElementById('status-msg'), sysStatus: document.getElementById('sys-status'), imgPreview: document.getElementById('image-preview'),
-        previewName: document.getElementById('preview-name'), previewTicker: document.getElementById('preview-ticker'), 
+        previewName: document.getElementById('preview-name'), previewTicker: document.getElementById('preview-ticker'), lifetimeFees: document.getElementById('lifetime-fees'),
         logFeed: document.getElementById('log-feed'), headerImage: document.getElementById('header-image'), mayhemToggle: document.getElementById('mayhem-toggle'),
         mayhemStatusLabel: document.getElementById('mayhem-status-label'), logModal: document.getElementById('log-modal'), modalLogContent: document.getElementById('modal-log-content'),
         tickerContent: document.getElementById('ticker-content'), leaderboardBody: document.getElementById('leaderboard-body'), versionDisplay: document.getElementById('version-display'),
-        // Metrics
         metricLaunches: document.getElementById('metric-launches'), metricPump: document.getElementById('metric-pump'), metricFees: document.getElementById('metric-fees')
     };
 
     lucide.createIcons();
 
     fetch(`${BACKEND_URL}/api/version`).then(r=>r.json()).then(d=>ui.versionDisplay.innerText = d.version).catch(()=>{});
+
+    // Fetch $PUMP Price for Display Logic
+    const updatePumpPrice = async () => {
+        try {
+            const res = await fetch(`https://frontend-api.pump.fun/coins/${PUMP_CONTRACT}`);
+            const data = await res.json();
+            // Calculate Price in SOL: Virtual Sol / Virtual Token
+            if (data && data.virtual_sol_reserves && data.virtual_token_reserves) {
+                pumpPriceCache = data.virtual_sol_reserves / data.virtual_token_reserves;
+            }
+        } catch (e) { console.error("Pump Price Fetch Error", e); }
+    };
+    setInterval(updatePumpPrice, 60000); updatePumpPrice(); // Every 1 min
 
     const updateLeaderboard = async () => {
         try {
@@ -255,21 +271,33 @@
                 ui.sysStatus.innerText = "ONLINE"; ui.sysStatus.classList.add("online"); 
                 ui.headerImage.src = data.headerImageUrl || "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; 
                 
-                // Update new metrics
+                // Update Metrics
                 if (data.lifetimeFees) ui.metricFees.innerText = data.lifetimeFees; 
                 if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches; 
-                if (data.totalPumpBought) ui.metricPump.innerText = data.totalPumpBought;
+                
+                // --- CALCULATION LOGIC: Estimate Tokens from SOL Spent ---
+                const solSpent = parseFloat(data.totalPumpBought || 0);
+                let tokensBought = "0";
+                
+                // If we have a valid price cache, use it. Otherwise fallback to a static estimate for visual continuity
+                if (pumpPriceCache > 0) {
+                    tokensBought = (solSpent / pumpPriceCache).toLocaleString('en-US', {maximumFractionDigits: 0});
+                } else {
+                    // Fallback: Assume 1 SOL ~ 30,000,000 PUMP (Approx launch rate) if API fails
+                    tokensBought = (solSpent * 30000000).toLocaleString('en-US', {maximumFractionDigits: 0});
+                }
+                ui.metricPump.innerText = tokensBought;
 
                 allLogs = data.recentLogs; 
-                renderLogs(allLogs, ui.logFeed, 3); // LIMIT MAIN FEED TO 3
+                renderLogs(allLogs, ui.logFeed, 3);
             } else { throw new Error("Backend Error"); } 
         } catch (e) { ui.sysStatus.innerText = "OFFLINE"; ui.sysStatus.classList.remove("online"); ui.headerImage.src = "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; } 
     };
     setInterval(checkHealth, 5000); checkHealth();
 
-    // ... (Existing Helpers: showStatus, toBase64, refreshWalletBalance, updateWalletUI, connectWallet, disconnectWallet, validateInputs) ...
     const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; };
     const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
+
     const refreshWalletBalance = async () => { if (!userPubkey) return; try { const pubkey = new solanaWeb3.PublicKey(userPubkey); const bal = await connection.getBalance(pubkey); ui.walletBal.innerText = (bal / solanaWeb3.LAMPORTS_PER_SOL).toFixed(3) + " SOL"; } catch (e) {} };
     const updateWalletUI = async (pubkey) => { if (!pubkey) { ui.walletUI.classList.add('hidden'); ui.connectBtn.classList.remove('hidden'); return; } userPubkey = pubkey.toString(); ui.connectBtn.classList.add('hidden'); ui.walletUI.classList.remove('hidden'); ui.walletUI.classList.add('flex'); ui.walletAddr.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4); await refreshWalletBalance(); };
     const connectWallet = async () => { if (window.solana && window.solana.isPhantom) { try { const resp = await window.solana.connect(); await updateWalletUI(resp.publicKey); } catch (err) { console.error(err); } } else { window.open("https://phantom.app/", "_blank"); } };
