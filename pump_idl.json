@@ -166,14 +166,14 @@
       "type": {
         "kind": "struct",
         "fields": [
-          { "name": "virtualTokenReserves", "type": { "kind": "u64" } },
-          { "name": "virtualSolReserves", "type": { "kind": "u64" } },
-          { "name": "realTokenReserves", "type": { "kind": "u64" } },
-          { "name": "realSolReserves", "type": { "kind": "u64" } },
-          { "name": "tokenTotalSupply", "type": { "kind": "u64" } },
-          { "name": "complete", "type": { "kind": "bool" } },
-          { "name": "creator", "type": { "kind": "publicKey" } },
-          { "name": "isMayhemMode", "type": { "kind": "bool" } }
+          { "name": "virtualTokenReserves", "type": "u64" },
+          { "name": "virtualSolReserves", "type": "u64" },
+          { "name": "realTokenReserves", "type": "u64" },
+          { "name": "realSolReserves", "type": "u64" },
+          { "name": "tokenTotalSupply", "type": "u64" },
+          { "name": "complete", "type": "bool" },
+          { "name": "creator", "type": "publicKey" },
+          { "name": "isMayhemMode", "type": "bool" }
         ]
       }
     }
