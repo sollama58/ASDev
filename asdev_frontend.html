@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Protocol Launcher</title>
+    <title>ASDev Launcher</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -17,32 +17,32 @@
             min-height: 100vh; 
             display: flex; 
             justify-content: center; 
-            align-items: center;
-            padding: 20px;
+            align-items: center; 
+            padding: 40px 20px; 
         }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
         
         #app-container {
-            width: 100%; max-width: 900px;
+            width: 100%; max-width: 1100px; 
             background-color: #451a03;
             border: 6px solid #7c2d12;
-            border-radius: 16px;
+            border-radius: 20px;
             overflow: hidden;
-            box-shadow: 0 30px 60px rgba(0,0,0,0.9);
+            box-shadow: 0 40px 80px rgba(0,0,0,0.95);
             position: relative;
         }
 
-        .ticker-wrap { width: 100%; background-color: #2a1005; border-bottom: 2px solid #7c2d12; overflow: hidden; white-space: nowrap; height: 32px; display: flex; align-items: center; }
-        .ticker { display: inline-block; padding-left: 100%; animation: marquee 25s linear infinite; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #fb923c; }
+        .ticker-wrap { width: 100%; background-color: #2a1005; border-bottom: 2px solid #7c2d12; overflow: hidden; white-space: nowrap; height: 36px; display: flex; align-items: center; }
+        .ticker { display: inline-block; padding-left: 100%; animation: marquee 30s linear infinite; font-family: 'JetBrains Mono', monospace; font-size: 14px; color: #fb923c; }
         @keyframes marquee { 0% { transform: translate(0, 0); } 100% { transform: translate(-100%, 0); } }
 
         .panel {
             background: rgba(20, 10, 5, 0.6);
             border: 2px solid #ea580c;
-            border-radius: 8px;
-            box-shadow: 4px 4px 0 #9a3412;
-            padding: 24px;
-            margin-bottom: 24px;
+            border-radius: 12px;
+            box-shadow: 6px 6px 0 #9a3412;
+            padding: 32px; 
+            margin-bottom: 32px;
         }
 
         .input-field {
@@ -51,36 +51,37 @@
             color: #fb923c;
             font-family: 'JetBrains Mono', monospace;
             width: 100%;
-            padding: 12px;
-            margin-bottom: 16px;
+            padding: 16px; 
+            margin-bottom: 20px;
             outline: none;
             transition: border-color 0.2s;
-            border-radius: 4px;
+            border-radius: 6px;
+            font-size: 16px;
         }
         .input-field:focus { border-color: #ea580c; }
         
         input[type="file"]::file-selector-button {
-            background: #ea580c; border: none; color: #2a1005; padding: 8px 12px;
+            background: #ea580c; border: none; color: #2a1005; padding: 10px 16px;
             font-family: 'JetBrains Mono'; font-weight: bold; cursor: pointer;
-            margin-right: 15px; border-radius: 2px;
+            margin-right: 15px; border-radius: 4px;
         }
 
         .btn-action {
             background: #ea580c; border: 2px solid #9a3412;
             color: #2a1005; font-weight: bold; font-family: 'JetBrains Mono';
-            text-transform: uppercase; width: 100%; padding: 16px; font-size: 18px;
+            text-transform: uppercase; width: 100%; padding: 20px; font-size: 20px;
             cursor: pointer; transition: all 0.1s;
-            box-shadow: 4px 4px 0 #7c2d12;
-            border-radius: 4px;
+            box-shadow: 5px 5px 0 #7c2d12;
+            border-radius: 8px;
         }
-        .btn-action:hover { background: #f97316; transform: translate(-1px, -1px); box-shadow: 5px 5px 0 #7c2d12; }
+        .btn-action:hover { background: #f97316; transform: translate(-1px, -1px); box-shadow: 6px 6px 0 #7c2d12; }
         .btn-action:active { transform: translate(2px, 2px); box-shadow: 0 0 0; }
         .btn-action:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(100%); transform: none; box-shadow: none; }
 
         .status-box {
             background: rgba(0,0,0,0.3); border: 1px solid #ea580c;
-            color: #fdba74; padding: 12px; font-size: 14px; font-family: 'JetBrains Mono';
-            text-align: center; margin-top: 15px; display: none; border-radius: 4px;
+            color: #fdba74; padding: 16px; font-size: 16px; font-family: 'JetBrains Mono';
+            text-align: center; margin-top: 20px; display: none; border-radius: 6px;
         }
         .status-success { border-color: #22c55e; color: #4ade80; background: rgba(20, 83, 45, 0.3); }
         .status-error { border-color: #ef4444; color: #fca5a5; background: rgba(127, 29, 29, 0.3); }
@@ -89,322 +90,239 @@
         .sys-status.online { color: #22c55e; text-shadow: 0 0 8px rgba(34, 197, 94, 0.6); }
 
         #image-preview {
-            width: 120px; height: 120px; 
+            width: 180px; height: 180px; 
             border: 2px dashed #7c2d12; 
             display: flex; align-items: center; justify-content: center;
             background: #2a1005; color: #7c2d12; font-family: 'JetBrains Mono';
-            font-size: 10px; overflow: hidden; border-radius: 8px;
+            font-size: 12px; overflow: hidden; border-radius: 12px;
+            margin-top: 10px;
         }
         #image-preview img { width: 100%; height: 100%; object-fit: cover; }
+
+        /* Log Table */
+        .log-entry { 
+            border-bottom: 1px solid rgba(234, 88, 12, 0.3); 
+            padding: 8px 0; font-family: 'JetBrains Mono'; font-size: 12px; 
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .log-entry:last-child { border-bottom: none; }
+        .log-skipped { color: #fdba74; opacity: 0.8; }
+        .log-success { color: #4ade80; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div id="app-container">
-    <div class="ticker-wrap"><div class="ticker">INITIALIZING LAUNCH SEQUENCE... PUMP FUN DEPLOYER READY... SECURE CONNECTION ESTABLISHED... WAITING FOR INPUT...</div></div>
+    <div class="ticker-wrap"><div class="ticker">ASDEV LAUNCH SEQUENCE INITIATED... SECURE UPLINK ESTABLISHED... WAITING FOR DEPLOYMENT PARAMETERS...</div></div>
 
-    <div class="p-8">
+    <div class="p-10">
         <!-- Header -->
-        <div class="flex justify-between items-start mb-8 border-b-4 border-orange-900 pb-6">
-            <div class="flex items-center gap-4">
-                <div class="text-5xl animate-bounce">🔥</div>
+        <div class="flex justify-between items-start mb-10 border-b-4 border-orange-900 pb-8">
+            <div class="flex items-center gap-6">
+                <div class="text-6xl animate-bounce">🚀</div>
                 <div>
-                    <h1 class="text-4xl font-bold text-white tracking-wide">IGNITION</h1>
-                    <p class="text-orange-400 text-sm font-mono uppercase tracking-widest mt-1">Protocol Launchpad v2.0</p>
+                    <h1 class="text-4xl md:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1>
+                    <p class="text-orange-400 text-sm font-mono uppercase tracking-widest mt-2">ASDev Airdrop and Flywheel Pumpfun Launcher</p>
                 </div>
             </div>
-            
             <!-- Wallet Panel -->
-            <div class="flex flex-col items-end gap-2">
-                <div id="wallet-ui" class="hidden flex items-center gap-2 bg-orange-950 border border-orange-800 p-2 rounded shadow-lg">
-                    <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                    <span id="wallet-addr" class="font-mono text-xs text-orange-200"></span>
-                    <span id="wallet-bal" class="font-mono text-xs text-white font-bold ml-2 bg-orange-900/50 px-2 py-1 rounded">0.00 SOL</span>
-                    
-                    <button id="refresh-btn" title="Refresh Balance" class="ml-2 text-orange-400 hover:text-white transition p-1 hover:bg-orange-800 rounded">
-                        <i data-lucide="refresh-cw" width="14"></i>
-                    </button>
-                    <button id="disconnect-btn" title="Disconnect" class="ml-1 text-red-400 hover:text-red-200 transition p-1 hover:bg-red-900/30 rounded">
-                        <i data-lucide="log-out" width="14"></i>
-                    </button>
+            <div class="flex flex-col items-end gap-3">
+                <div id="wallet-ui" class="hidden flex items-center gap-3 bg-orange-950 border border-orange-800 p-3 rounded-lg shadow-xl">
+                    <span class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span>
+                    <span id="wallet-addr" class="font-mono text-sm text-orange-200"></span>
+                    <span id="wallet-bal" class="font-mono text-sm text-white font-bold ml-2 bg-orange-900/50 px-3 py-1 rounded">0.00 SOL</span>
+                    <button id="refresh-btn" class="ml-2 text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded"><i data-lucide="refresh-cw" width="16"></i></button>
+                    <button id="disconnect-btn" class="ml-1 text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded"><i data-lucide="log-out" width="16"></i></button>
                 </div>
-                <button id="connect-btn" class="bg-orange-900/50 border border-orange-700 text-orange-500 px-6 py-3 rounded font-mono text-xs hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-md hover:shadow-orange-900/40">
-                    Connect Wallet
-                </button>
+                <button id="connect-btn" class="bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-8 py-3 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg hover:shadow-orange-900/40">Connect Wallet</button>
             </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-            
-            <!-- Left Col: Image -->
-            <div class="panel col-span-1 flex flex-col items-center justify-start">
-                <h3 class="text-orange-500 font-mono text-xs mb-4 uppercase tracking-widest w-full text-left border-b border-orange-900/50 pb-2">Asset Preview</h3>
-                <div id="image-preview" class="mb-4 shadow-lg shadow-orange-900/20 transition-all duration-300">NO IMAGE</div>
-                <input type="file" id="image-file" class="input-field text-xs" accept="image/*" onchange="previewImage(event)">
-                <p class="text-[10px] text-orange-400 font-mono text-center mt-2">Supports PNG, JPG, GIF.<br>Max size 4MB.</p>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
+            <!-- Preview -->
+            <div class="panel col-span-1 flex flex-col items-center justify-start h-full">
+                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest w-full text-center border-b-2 border-orange-900/50 pb-3">Token Preview</h3>
+                <div class="text-center mb-4 min-h-[60px]">
+                    <h2 id="preview-name" class="text-2xl font-bold text-white break-words">Token Name</h2>
+                    <p id="preview-ticker" class="text-orange-400 font-mono text-lg uppercase">$TICKER</p>
+                </div>
+                <div id="image-preview" class="mb-6 shadow-2xl shadow-orange-900/30 transition-all duration-300">NO IMAGE</div>
+                <input type="file" id="image-file" class="input-field text-sm" accept="image/png, image/jpeg, image/gif" onchange="previewImage(event)">
+                <p class="text-xs text-orange-400 font-mono text-center mt-2">Required: PNG, JPG, GIF.<br>Max size 4MB.</p>
             </div>
 
-            <!-- Right Col: Form -->
+            <!-- Form -->
             <div class="panel col-span-2">
-                <h3 class="text-orange-500 font-mono text-xs mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">Token Metadata</h3>
-                
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs text-orange-300 font-mono mb-1">NAME</label>
-                        <input type="text" id="name" class="input-field" placeholder="e.g. Infernal Coin">
-                    </div>
-                    <div>
-                        <label class="block text-xs text-orange-300 font-mono mb-1">TICKER</label>
-                        <input type="text" id="ticker" class="input-field" placeholder="e.g. BURN">
-                    </div>
+                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-orange-900/50 pb-3">Token Metadata</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div><label class="block text-sm text-orange-300 font-mono mb-2">NAME <span class="text-red-500">*</span></label><input type="text" id="name" class="input-field" placeholder="e.g. Infernal Coin" maxlength="32" oninput="updatePreview()"></div>
+                    <div><label class="block text-sm text-orange-300 font-mono mb-2">TICKER <span class="text-red-500">*</span></label><input type="text" id="ticker" class="input-field" placeholder="e.g. BURN" maxlength="10" oninput="updatePreview()"></div>
                 </div>
-
-                <label class="block text-xs text-orange-300 font-mono mb-1">DESCRIPTION</label>
-                <textarea id="desc" class="input-field h-24" placeholder="Description of the asset..."></textarea>
-
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs text-orange-300 font-mono mb-1">TWITTER (OPTIONAL)</label>
-                        <input type="text" id="twitter" class="input-field" placeholder="@username">
-                    </div>
-                    <div>
-                        <label class="block text-xs text-orange-300 font-mono mb-1">WEBSITE (OPTIONAL)</label>
-                        <input type="text" id="website" class="input-field" placeholder="https://...">
-                    </div>
+                <label class="block text-sm text-orange-300 font-mono mb-2">DESCRIPTION</label><textarea id="desc" class="input-field h-32" placeholder="Description of the asset (Max 200 chars)..." maxlength="200"></textarea>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div><label class="block text-sm text-orange-300 font-mono mb-2">TWITTER (OPTIONAL)</label><input type="url" id="twitter" class="input-field" placeholder="https://x.com/username"></div>
+                    <div><label class="block text-sm text-orange-300 font-mono mb-2">WEBSITE (OPTIONAL)</label><input type="url" id="website" class="input-field" placeholder="https://project.io"></div>
                 </div>
             </div>
         </div>
 
         <!-- Action Area -->
-        <div class="panel bg-gradient-to-r from-orange-950 to-[#2a1005]">
-            <div class="flex justify-between items-center mb-4 font-mono text-sm border-b border-orange-900 pb-4">
-                <div class="flex flex-col">
-                    <span class="text-orange-400 text-xs">DEPLOYMENT COST</span>
-                    <span class="text-white font-bold text-lg">0.05 SOL</span>
-                </div>
-                <div class="flex flex-col text-right">
-                    <span class="text-orange-400 text-xs">INITIAL BUY STRATEGY</span>
-                    <span class="text-green-400 font-bold text-lg">0.01 SOL <span class="text-xs text-orange-500">(Auto-Sell)</span></span>
+        <div class="panel bg-gradient-to-r from-orange-950 to-[#2a1005] border-2 border-orange-800">
+            <div class="flex justify-center items-center mb-6 font-mono text-sm border-b border-orange-900 pb-6">
+                <div class="flex flex-col items-center">
+                    <span class="text-orange-400 text-xs tracking-widest mb-1">DEPLOYMENT FEE</span>
+                    <span class="text-white font-bold text-2xl">0.05 SOL</span>
                 </div>
             </div>
-            
-            <button id="deploy-btn" class="btn-action">INITIATE LAUNCH SEQUENCE</button>
+            <button id="deploy-btn" class="btn-action w-full hover:scale-[1.01] active:scale-[0.99] transition-transform">INITIATE LAUNCH SEQUENCE</button>
             <div id="status-msg" class="status-box"></div>
         </div>
-        
-        <!-- Result -->
-        <div id="result-area" class="panel hidden border-green-600 bg-green-950/20">
-            <h3 class="text-green-400 font-bold font-mono mb-4 text-center text-2xl tracking-widest">DEPLOYMENT SUCCESSFUL</h3>
-            <div class="flex flex-col gap-2 mb-4 bg-black/30 p-4 rounded border border-green-800">
-                <p class="text-xs text-green-200 font-mono">MINT ADDRESS</p>
-                <p id="mint-addr" class="text-white font-mono text-sm break-all font-bold select-all"></p>
+
+        <!-- Buyback Feed -->
+        <div class="panel bg-orange-950/30 border border-orange-900 mt-8">
+            <h3 class="text-orange-500 font-mono text-sm mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">BUYBACK OPERATIONS FEED</h3>
+            <div id="log-feed" class="flex flex-col gap-1 max-h-[200px] overflow-y-auto">
+                <p class="text-xs text-orange-400 font-mono text-center py-4">Waiting for next synchronization...</p>
             </div>
-            <a id="tx-link" href="#" target="_blank" class="block text-center text-sm font-mono text-black bg-green-500 hover:bg-green-400 py-3 rounded font-bold transition">VIEW ON SOLSCAN</a>
         </div>
 
-        <!-- Footer System Status -->
-        <div class="flex justify-between items-center mt-6 text-[10px] font-mono border-t border-orange-900 pt-3">
-            <span class="text-orange-700">RPC: HELIUS MAINNET</span>
-            <span>BACKEND UPLINK: <span id="sys-status" class="sys-status">OFFLINE</span></span>
+        <!-- About -->
+        <div class="panel bg-orange-900/20 mt-8">
+            <h3 class="text-orange-500 font-mono text-sm mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">About the System</h3>
+            <p class="text-orange-200 text-sm leading-relaxed font-sans mb-4">The <span class="text-white font-bold">ASDev Airdrop and Flywheel Pumpfun Launcher</span> is a specialized deployment terminal designed for high-velocity token launches on the Solana blockchain.</p>
+            <ul class="list-disc list-inside text-orange-300 text-sm font-mono space-y-2">
+                <li>Automated Metadata Upload via Pinata IPFS.</li>
+                <li>Direct Pump.fun Contract Integration (Token2022 Standard).</li>
+                <li>Optimized Fee Handling & Transaction Routing.</li>
+            </ul>
+        </div>
+        
+        <!-- Result Overlay -->
+        <div id="result-area" class="panel hidden border-green-600 bg-green-950/20 mt-8">
+            <h3 class="text-green-400 font-bold font-mono mb-6 text-center text-3xl tracking-widest">DEPLOYMENT SUCCESSFUL</h3>
+            <div class="flex flex-col gap-3 mb-6 bg-black/40 p-6 rounded-lg border border-green-800">
+                <p class="text-xs text-green-200 font-mono uppercase tracking-wider">MINT ADDRESS</p>
+                <p id="mint-addr" class="text-white font-mono text-lg break-all font-bold select-all"></p>
+            </div>
+            <a id="tx-link" href="#" target="_blank" class="block text-center text-base font-mono text-black bg-green-500 hover:bg-green-400 py-4 rounded-lg font-bold transition shadow-lg hover:shadow-green-500/20">VIEW TRANSACTION ON SOLSCAN</a>
+        </div>
+
+        <!-- Footer -->
+        <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
+            <div><span class="text-orange-600">RPC UPLINK: HELIUS MAINNET</span> | <span class="text-orange-600 ml-2">LIFETIME PROTOCOL REVENUE: <span id="lifetime-fees" class="text-green-400 font-bold">0.00</span> SOL</span></div>
+            <span>SYSTEM STATUS: <span id="sys-status" class="sys-status">OFFLINE</span></span>
         </div>
     </div>
 </div>
 
 <script>
-    // --- CONFIGURATION ---
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
-    // *** NEW HELIUS API KEY ***
     const HELIUS_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=a32d61a0-2cc2-4d60-b3b6-cefadce7001a"; 
 
-    // --- STATE ---
     let userPubkey = null;
-    // Connection object used for all direct blockchain reads (like getBalance) and transaction blockhash fetching.
     let connection = new solanaWeb3.Connection(HELIUS_RPC_URL, "confirmed"); 
 
-    // --- UI ELEMENTS ---
     const ui = {
-        connectBtn: document.getElementById('connect-btn'),
-        walletUI: document.getElementById('wallet-ui'),
-        walletAddr: document.getElementById('wallet-addr'),
-        walletBal: document.getElementById('wallet-bal'),
-        refreshBtn: document.getElementById('refresh-btn'),
-        disconnectBtn: document.getElementById('disconnect-btn'),
-        deployBtn: document.getElementById('deploy-btn'),
-        statusBox: document.getElementById('status-msg'),
-        sysStatus: document.getElementById('sys-status'),
-        imgPreview: document.getElementById('image-preview')
+        connectBtn: document.getElementById('connect-btn'), walletUI: document.getElementById('wallet-ui'), walletAddr: document.getElementById('wallet-addr'), walletBal: document.getElementById('wallet-bal'),
+        refreshBtn: document.getElementById('refresh-btn'), disconnectBtn: document.getElementById('disconnect-btn'), deployBtn: document.getElementById('deploy-btn'),
+        statusBox: document.getElementById('status-msg'), sysStatus: document.getElementById('sys-status'), imgPreview: document.getElementById('image-preview'),
+        previewName: document.getElementById('preview-name'), previewTicker: document.getElementById('preview-ticker'), lifetimeFees: document.getElementById('lifetime-fees'),
+        logFeed: document.getElementById('log-feed')
     };
 
-    // --- ICONS ---
     lucide.createIcons();
 
-    // --- HEALTH CHECK (Backend Dependency) ---
-    const checkHealth = async () => {
-        try {
-            const res = await fetch(`${BACKEND_URL}/api/health`);
-            if (res.ok) {
-                ui.sysStatus.innerText = "ONLINE";
-                ui.sysStatus.classList.add("online");
-            } else {
-                throw new Error("Backend Error");
-            }
-        } catch (e) {
-            ui.sysStatus.innerText = "OFFLINE";
-            ui.sysStatus.classList.remove("online");
-        }
+    // --- PREVIEW & VALIDATION ---
+    const updatePreview = () => {
+        ui.previewName.innerText = document.getElementById('name').value || "Token Name";
+        ui.previewTicker.innerText = document.getElementById('ticker').value ? `$${document.getElementById('ticker').value.toUpperCase()}` : "$TICKER";
     };
-    setInterval(checkHealth, 5000); 
-    checkHealth();
-
-    // --- UTILS ---
-    const showStatus = (msg, type) => {
-        ui.statusBox.innerText = msg;
-        ui.statusBox.style.display = 'block';
-        if (type === 'error') ui.statusBox.className = 'status-box status-error';
-        else if (type === 'success') ui.statusBox.className = 'status-box status-success';
-        else ui.statusBox.className = 'status-box';
-    };
-
-    const toBase64 = file => new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = error => reject(error);
-    });
-
     const previewImage = (event) => {
         const file = event.target.files[0];
         if (file) {
             const reader = new FileReader();
-            reader.onload = (e) => {
-                ui.imgPreview.innerHTML = `<img src="${e.target.result}" alt="Preview" class="rounded">`;
-                ui.imgPreview.style.border = "2px solid #ea580c";
-            }
+            reader.onload = (e) => { ui.imgPreview.innerHTML = `<img src="${e.target.result}" alt="Preview" class="rounded-lg w-full h-full object-cover">`; ui.imgPreview.style.border = "2px solid #ea580c"; }
             reader.readAsDataURL(file);
-        } else {
-            ui.imgPreview.innerHTML = "NO IMAGE";
-            ui.imgPreview.style.border = "2px dashed #7c2d12";
         }
     };
-    window.previewImage = previewImage;
+    window.previewImage = previewImage; window.updatePreview = updatePreview;
 
-    // --- WALLET LOGIC ---
+    const validateInputs = (name, ticker, description, twitter, website, fileInput) => {
+        if (fileInput.files.length === 0) return "Image is required.";
+        if (fileInput.files[0].size > 4*1024*1024) return "Image max 4MB.";
+        if (!name || name.length > 32) return "Name max 32 chars.";
+        if (!ticker || ticker.length > 10) return "Ticker max 10 chars.";
+        return null;
+    };
+
+    // --- HEALTH & LOGS ---
+    const checkHealth = async () => {
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/health`);
+            if (res.ok) {
+                const data = await res.json();
+                ui.sysStatus.innerText = "ONLINE"; ui.sysStatus.classList.add("online");
+                if (data.lifetimeFees) ui.lifetimeFees.innerText = data.lifetimeFees;
+                
+                // Update Logs
+                if (data.recentLogs && data.recentLogs.length > 0) {
+                    ui.logFeed.innerHTML = data.recentLogs.map(log => {
+                        const time = new Date(log.timestamp).toLocaleTimeString();
+                        if (log.type === 'SKIPPED') {
+                            return `<div class="log-entry log-skipped"><span>[${time}] ROUND SKIPPED:</span> <span>Fees Under Limit (${log.current}/${log.target} SOL)</span></div>`;
+                        } else if (log.type === 'SUCCESS') {
+                            return `<div class="log-entry log-success"><span>[${time}] BUYBACK EXECUTED:</span> <span><a href="https://solscan.io/tx/${log.signature}" target="_blank" class="underline hover:text-white">View TX</a></span></div>`;
+                        }
+                        return `<div class="log-entry text-red-400"><span>[${time}] ERROR:</span> <span>${log.message}</span></div>`;
+                    }).join('');
+                }
+            } else { throw new Error("Backend Error"); }
+        } catch (e) { ui.sysStatus.innerText = "OFFLINE"; ui.sysStatus.classList.remove("online"); }
+    };
+    setInterval(checkHealth, 5000); checkHealth();
+
+    // --- WALLET ---
     const refreshWalletBalance = async () => {
         if (!userPubkey) return;
-        try {
-            // Fetch balance directly from the Solana RPC connection
-            const pubkey = new solanaWeb3.PublicKey(userPubkey);
-            const bal = await connection.getBalance(pubkey);
-            ui.walletBal.innerText = (bal / solanaWeb3.LAMPORTS_PER_SOL).toFixed(3) + " SOL";
-        } catch (e) {
-            console.error("Balance fetch error. RPC access required.", e);
-            ui.walletBal.innerText = "Error";
-        }
+        try { const bal = await connection.getBalance(new solanaWeb3.PublicKey(userPubkey)); ui.walletBal.innerText = (bal / solanaWeb3.LAMPORTS_PER_SOL).toFixed(3) + " SOL"; } catch (e) {}
     };
-
     const updateWalletUI = async (pubkey) => {
-        if (!pubkey) {
-            ui.walletUI.classList.add('hidden');
-            ui.connectBtn.classList.remove('hidden');
-            return;
-        }
-        
-        userPubkey = pubkey.toString();
-        ui.connectBtn.classList.add('hidden');
-        ui.walletUI.classList.remove('hidden');
-        ui.walletUI.classList.add('flex');
-        
-        // Short Address
+        if (!pubkey) { ui.walletUI.classList.add('hidden'); ui.connectBtn.classList.remove('hidden'); return; }
+        userPubkey = pubkey.toString(); ui.connectBtn.classList.add('hidden'); ui.walletUI.classList.remove('hidden'); ui.walletUI.classList.add('flex');
         ui.walletAddr.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4);
-        
         await refreshWalletBalance();
     };
+    const connectWallet = async () => { if (window.solana) { const resp = await window.solana.connect(); await updateWalletUI(resp.publicKey); } else window.open("https://phantom.app/", "_blank"); };
+    const disconnectWallet = async () => { if (window.solana) { try{await window.solana.disconnect();}catch(e){} userPubkey = null; updateWalletUI(null); } };
+    
+    ui.connectBtn.onclick = connectWallet; ui.refreshBtn.onclick = refreshWalletBalance; ui.disconnectBtn.onclick = disconnectWallet;
 
-    const connectWallet = async () => {
-        if (window.solana && window.solana.isPhantom) {
-            try {
-                const resp = await window.solana.connect();
-                await updateWalletUI(resp.publicKey);
-            } catch (err) { console.error(err); }
-        } else {
-            window.open("https://phantom.app/", "_blank");
-        }
-    };
+    // --- DEPLOY ---
+    const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; ui.statusBox.className = type === 'error' ? 'status-box status-error' : (type === 'success' ? 'status-box status-success' : 'status-box'); };
+    const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
 
-    const disconnectWallet = async () => {
-        if (window.solana) {
-            try {
-                await window.solana.disconnect();
-            } catch (e) {
-                // Ignore disconnect errors
-            }
-            userPubkey = null;
-            updateWalletUI(null);
-        }
-    };
-
-    ui.connectBtn.onclick = connectWallet;
-    ui.refreshBtn.onclick = refreshWalletBalance;
-    ui.disconnectBtn.onclick = disconnectWallet;
-
-    // --- DEPLOY LOGIC ---
     ui.deployBtn.onclick = async () => {
         if (!userPubkey) return showStatus("CONNECT WALLET FIRST", 'error');
-        
         const name = document.getElementById('name').value;
         const ticker = document.getElementById('ticker').value;
         const fileInput = document.getElementById('image-file');
         
-        if(!name || !ticker) return showStatus("NAME & TICKER REQUIRED", 'error');
+        const err = validateInputs(name, ticker, null, null, null, fileInput);
+        if (err) return showStatus(err.toUpperCase(), 'error');
 
-        let imageBase64 = null;
-        if (fileInput.files.length > 0) {
-            try {
-                imageBase64 = await toBase64(fileInput.files[0]);
-            } catch(e) {
-                return showStatus("IMAGE PROCESSING FAILED", 'error');
-            }
-        }
+        let imageBase64;
+        try { imageBase64 = await toBase64(fileInput.files[0]); } catch(e) { return showStatus("IMAGE ERROR", 'error'); }
 
-        ui.deployBtn.disabled = true;
-        ui.deployBtn.innerText = "PROCESSING SEQUENCE...";
-        showStatus("SIGNING 0.05 SOL FEE...", 'normal');
+        ui.deployBtn.disabled = true; ui.deployBtn.innerText = "PROCESSING..."; showStatus("SIGNING 0.05 SOL FEE...", 'normal');
 
         try {
-            // 1. Fee Transaction
-            const tx = new solanaWeb3.Transaction().add(
-                solanaWeb3.SystemProgram.transfer({
-                    fromPubkey: new solanaWeb3.PublicKey(userPubkey),
-                    toPubkey: new solanaWeb3.PublicKey(DEV_WALLET_PUBKEY),
-                    lamports: 0.05 * 1000000000 
-                })
-            );
-            
-            // Fetch recent blockhash using the reliable connection
-            const { blockhash } = await connection.getLatestBlockhash();
-            tx.recentBlockhash = blockhash;
-            tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
+            const tx = new solanaWeb3.Transaction().add(solanaWeb3.SystemProgram.transfer({ fromPubkey: new solanaWeb3.PublicKey(userPubkey), toPubkey: new solanaWeb3.PublicKey(DEV_WALLET_PUBKEY), lamports: 0.05 * 1000000000 }));
+            const { blockhash } = await connection.getLatestBlockhash(); tx.recentBlockhash = blockhash; tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
+            const signed = await window.solana.signAndSendTransaction(tx);
+            showStatus("PAYMENT SENT. DEPLOYING...", 'normal');
 
-            // Phantom Sign and Send
-            const signedTx = await window.solana.signAndSendTransaction(tx);
-            showStatus("PAYMENT CONFIRMED. DEPLOYING...", 'normal');
-
-            // 2. Backend Call
-            const res = await fetch(`${BACKEND_URL}/api/deploy`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name, ticker, 
-                    description: document.getElementById('desc').value,
-                    twitter: document.getElementById('twitter').value,
-                    website: document.getElementById('website').value,
-                    image: imageBase64, 
-                    userTx: signedTx.signature, // Use the Base58 signature string
-                    userPubkey: userPubkey
-                })
-            });
-
+            const res = await fetch(`${BACKEND_URL}/api/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ticker, description: document.getElementById('desc').value, twitter: document.getElementById('twitter').value, website: document.getElementById('website').value, image: imageBase64, userTx: signed.signature, userPubkey }) });
             const data = await res.json();
 
             if (data.success) {
@@ -412,35 +330,12 @@
                 document.getElementById('result-area').classList.remove('hidden');
                 document.getElementById('mint-addr').innerText = data.mint;
                 document.getElementById('tx-link').href = `https://solscan.io/tx/${data.signature}`;
-                ui.deployBtn.innerText = "LAUNCH COMPLETE";
-                refreshWalletBalance(); 
-            } else {
-                throw new Error(data.error || "Backend Error");
-            }
-
-        } catch (e) {
-            console.error(e);
-            showStatus("ERROR: " + (e.message || "Transaction failed or rejected."), 'error');
-            ui.deployBtn.disabled = false;
-            ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE";
-        }
+                ui.deployBtn.innerText = "LAUNCH COMPLETE"; refreshWalletBalance();
+            } else { throw new Error(data.error); }
+        } catch (e) { showStatus("ERROR: " + (e.message || "Failed"), 'error'); ui.deployBtn.disabled = false; ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE"; }
     };
-    
-    // Auto Connect
-    window.addEventListener('load', () => {
-        if (window.solana && window.solana.isPhantom) {
-            window.solana.connect({ onlyIfTrusted: true })
-                .then((resp) => updateWalletUI(resp.publicKey))
-                .catch(() => {});
-            
-            // Phantom Event Listener for disconnect
-            window.solana.on('disconnect', () => {
-                disconnectWallet();
-                showStatus("Wallet Disconnected.", 'info');
-            });
-        }
-    });
-</script>
 
+    window.addEventListener('load', () => { if (window.solana && window.solana.isPhantom) window.solana.connect({ onlyIfTrusted: true }).then((r)=>updateWalletUI(r.publicKey)).catch(()=>{}); });
+</script>
 </body>
 </html>
