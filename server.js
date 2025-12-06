@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.9.0-MANUAL-IX";
+const VERSION = "v10.9.2-FIX-SIGNER-ORDER";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -181,7 +181,7 @@ if (redisConnection) {
 
         try {
             if (!metadataUri) throw new Error("Metadata URI missing");
-            // [STRICT VALIDATION] Ensure no argument passed to createV2 is undefined
+            // [STRICT VALIDATION]
             if (!name) throw new Error("Name missing");
             if (!ticker) throw new Error("Ticker missing");
             if (typeof isMayhemMode !== 'boolean') throw new Error("Mayhem Mode flag invalid");
@@ -193,10 +193,8 @@ if (redisConnection) {
             // PDAs
             const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = getPumpPDAs(mint);
             const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PUMP_PROGRAM_ID);
-            const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), MPL_TOKEN_METADATA_PROGRAM_ID.toBuffer(), mint.toBuffer()], MPL_TOKEN_METADATA_PROGRAM_ID);
             const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PUMP_PROGRAM_ID);
-            const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PUMP_PROGRAM_ID);
-
+            
             // Mayhem PDAs
             let mayhemState, mayhemTokenVault;
             if (isMayhemMode) {
@@ -205,35 +203,32 @@ if (redisConnection) {
             }
 
             // --- MANUAL create_v2 INSTRUCTION ---
-            // Bypass Anchor IDL serialization issues by manually building buffer
             const discriminator = Buffer.from([214, 144, 76, 236, 95, 139, 49, 180]); // create_v2
             const serializeString = (str) => { const b = Buffer.from(str, 'utf8'); const len = Buffer.alloc(4); len.writeUInt32LE(b.length, 0); return Buffer.concat([len, b]); };
             
-            // Args: name, symbol, uri, creator, is_mayhem_mode
             const data = Buffer.concat([
                 discriminator,
                 serializeString(name),
                 serializeString(ticker),
                 serializeString(metadataUri),
-                creator.toBuffer(), // PublicKey is 32 bytes
-                Buffer.from([isMayhemMode ? 1 : 0]) // Bool is 1 byte
+                creator.toBuffer(), 
+                Buffer.from([isMayhemMode ? 1 : 0]) 
             ]);
 
+            // [FIXED] Removed Metadata accounts. Aligned strictly with pump.json create_v2 structure.
             const keys = [
                 { pubkey: mint, isSigner: true, isWritable: true },
                 { pubkey: mintAuthority, isSigner: false, isWritable: false },
                 { pubkey: bondingCurve, isSigner: false, isWritable: true },
                 { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
                 { pubkey: global, isSigner: false, isWritable: false },
-                { pubkey: MPL_TOKEN_METADATA_PROGRAM_ID, isSigner: false, isWritable: false }, // REQUIRED
-                { pubkey: metadata, isSigner: false, isWritable: true }, // REQUIRED (Mut)
-                { pubkey: creator, isSigner: true, isWritable: true },
+                { pubkey: creator, isSigner: true, isWritable: true }, // User (Signer) is index 5
                 { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                 { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false },
                 { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                { pubkey: MAYHEM_PROGRAM_ID, isSigner: false, isWritable: false }, // Mayhem ID is ReadOnly unless initializing state? Usually read.
+                { pubkey: MAYHEM_PROGRAM_ID, isSigner: false, isWritable: true }, // Writable in manual construct
                 { pubkey: GLOBAL_PARAMS, isSigner: false, isWritable: false },
-                { pubkey: SOL_VAULT, isSigner: false, isWritable: true }, // Vaults are mutable
+                { pubkey: SOL_VAULT, isSigner: false, isWritable: true },
                 { pubkey: isMayhemMode ? mayhemState : PublicKey.default, isSigner: false, isWritable: true },
                 { pubkey: isMayhemMode ? mayhemTokenVault : PublicKey.default, isSigner: false, isWritable: true },
                 { pubkey: eventAuthority, isSigner: false, isWritable: false },
@@ -246,15 +241,11 @@ if (redisConnection) {
             const feeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
             const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
             
-            // Manual buy_exact_sol_in to avoid Anchor errors
+            // Manual buy_exact_sol_in
             const buyDiscriminator = Buffer.from([56, 252, 116, 8, 158, 223, 205, 95]);
             const amountBuf = new BN(0.01 * LAMPORTS_PER_SOL).toArrayLike(Buffer, 'le', 8);
             const minSolBuf = new BN(1).toArrayLike(Buffer, 'le', 8);
-            // OptionBool: 0 (None) or 1 (Some) + Bool. We want Some(false) or None? 
-            // Docs say `track_volume: Option<bool>`.
-            // Standard Option serialization: 1 byte (0=None, 1=Some). If Some, followed by value.
-            // We pass "Some(false)" -> [1, 0]
-            const trackVolumeBuf = Buffer.from([1, 0]); 
+            const trackVolumeBuf = Buffer.from([1, 0]); // Some(false)
             
             const buyData = Buffer.concat([buyDiscriminator, amountBuf, minSolBuf, trackVolumeBuf]);
 
@@ -271,7 +262,7 @@ if (redisConnection) {
                 { pubkey: creatorVault, isSigner: false, isWritable: true },
                 { pubkey: eventAuthority, isSigner: false, isWritable: false },
                 { pubkey: PUMP_PROGRAM_ID, isSigner: false, isWritable: false },
-                { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: false }, // Read only usually?
+                { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: false }, 
                 { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
                 { pubkey: feeConfig, isSigner: false, isWritable: false },
                 { pubkey: FEE_PROGRAM_ID, isSigner: false, isWritable: false }
@@ -290,7 +281,7 @@ if (redisConnection) {
             
             await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
 
-            // Sell (Delayed) - Keeping simple for now
+            // Sell (Delayed)
             setTimeout(async () => { try { 
                 const bal = await connection.getTokenAccountBalance(associatedUser); 
                 if (bal.value && bal.value.uiAmount > 0) { 
@@ -475,7 +466,6 @@ async function runPurchaseAndFees() {
                  
                  const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = getPumpPDAs(TARGET_PUMP_TOKEN);
                  
-                 // [FIXED] Try/Catch specifically for bonding curve fetch to prevent crash
                  let bondingCurveAccount;
                  let isMayhem = false;
                  try {
@@ -483,8 +473,6 @@ async function runPurchaseAndFees() {
                     isMayhem = bondingCurveAccount.isMayhemMode;
                  } catch (bcError) {
                     logger.warn("Target token bonding curve not found. Skipping buyback.", { target: TARGET_PUMP_TOKEN.toString() });
-                    // Refund accumulated fees if target is invalid to prevent lockup? 
-                    // Or just skip this round. Skipping is safer.
                     return; 
                  }
 
@@ -493,10 +481,8 @@ async function runPurchaseAndFees() {
                  const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_PROGRAM_ID);
                  const associatedUser = getATA(TARGET_PUMP_TOKEN, devKeypair.publicKey, TOKEN_PROGRAM_2022_ID);
                  
-                 // [FIX] Ensure correct fee recipient for Mayhem Mode if applicable
                  const feeRecipient = isMayhem ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
 
-                 // [FIXED] Passed boolean `false` instead of array `[false]` for `track_volume`
                  const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), false)
                     .accounts({ 
                         global, 
@@ -507,7 +493,7 @@ async function runPurchaseAndFees() {
                         associatedUser, 
                         user: devKeypair.publicKey, 
                         systemProgram: SystemProgram.programId, 
-                        tokenProgram: TOKEN_PROGRAM_2022_ID, // [DOCS] Always Token2022 now
+                        tokenProgram: TOKEN_PROGRAM_2022_ID, 
                         creatorVault, 
                         eventAuthority, 
                         program: PUMP_PROGRAM_ID, 
@@ -518,7 +504,7 @@ async function runPurchaseAndFees() {
                     }).instruction();
                  
                  const tx = new Transaction();
-                 addPriorityFee(tx); // Add Gas
+                 addPriorityFee(tx); // Gas
                  tx.add(buyIx)
                     .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 }))
                     .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
