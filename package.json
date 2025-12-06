@@ -20,6 +20,7 @@
     "ioredis": "^5.4.0",
     "jpeg-js": "^0.4.4",
     "pngjs": "^7.0.0",
-    "typescript": ">=5.3.3"
+    "typescript": ">=5.3.3",
+    "borsh": "^1.0.0"
   }
 }
