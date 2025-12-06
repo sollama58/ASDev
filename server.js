@@ -591,7 +591,11 @@ async function runPurchaseAndFees() {
                  const associatedBondingCurve = getATA(TARGET_PUMP_TOKEN, bondingCurve, TOKEN_PROGRAM_2022_ID);
                  const associatedUser = getATA(TARGET_PUMP_TOKEN, devKeypair.publicKey, TOKEN_PROGRAM_2022_ID);
                  
-                 const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), bondingCurve.toBuffer()], PUMP_PROGRAM_ID);
+                 // Fetch Bonding Curve to get creator (needed for seeds)
+                 const bondingCurveAccount = await program.account.bondingCurve.fetch(bondingCurve);
+                 const coinCreator = bondingCurveAccount.creator;
+
+                 const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), coinCreator.toBuffer()], PUMP_PROGRAM_ID);
                  const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID);
                  const [globalVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("global_volume_accumulator")], PUMP_PROGRAM_ID);
                  const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_PROGRAM_ID);
