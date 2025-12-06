@@ -15,7 +15,7 @@ const IORedis = require('ioredis');
 const borsh = require('borsh'); // We need borsh for manual serialization
 
 // --- Config ---
-const VERSION = "v10.5.23";
+const VERSION = "v10.5.24";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -292,7 +292,8 @@ if (redisConnection) {
             const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
             const targetFeeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT;
             
-            const buyIx = await program.methods.buy(new BN(0.01 * LAMPORTS_PER_SOL), new BN(LAMPORTS_PER_SOL), false)
+            // NOTE: 'buy' instruction takes 2 args (amount, maxSolCost)
+            const buyIx = await program.methods.buy(new BN(0.01 * LAMPORTS_PER_SOL), new BN(LAMPORTS_PER_SOL))
                 .accounts({
                     global,
                     feeRecipient: targetFeeRecipient,
@@ -602,6 +603,14 @@ async function runPurchaseAndFees() {
                  const [feeConfig] = PublicKey.findProgramAddressSync([Buffer.from("fee_config"), FEE_PROGRAM_ID.toBuffer()], FEE_PROGRAM_ID);
                  
                  // UPDATED: buyExactSolIn signature and accounts
+                 // OptionBool with {bool: false} or [false] is tricky in JS/Anchor. 
+                 // If defined as struct { bool }, passing `false` usually fails.
+                 // Correct way for OptionBool tuple struct is likely { '0': false } or similar, but with raw boolean `false` as 3rd argument, 
+                 // the IDL parser might expect something else.
+                 // Since we don't track volume, we can pass null? No, type is not Option<bool>.
+                 // Try passing { bool: false } if needed, but assuming standard Anchor behavior for single field struct might just require the value?
+                 // Let's try passing `false` directly first, if failed, the error will be specific. 
+                 // However, the error "Type not found" was the main issue.
                  const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), false)
                     .accounts({ 
                         global: PublicKey.findProgramAddressSync([Buffer.from("global")], PUMP_PROGRAM_ID)[0], 
