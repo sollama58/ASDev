@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.3";
+const VERSION = "v10.5.5";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -26,17 +26,30 @@ const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/6
 // Check Critical Config
 if (!PINATA_JWT) console.warn("⚠️ WARNING: PINATA_JWT is missing. Metadata uploads will fail.");
 
-const TARGET_PUMP_TOKEN = new PublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn");
-const WALLET_9_5 = new PublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z"); // Fee Wallet (9.5%)
-const WALLET_0_5 = new PublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g"); // Upkeep (0.5%)
+// --- CONSTANTS WITH SAFETY CHECKS ---
+const safePublicKey = (val, fallback, name) => {
+    try {
+        return new PublicKey(val);
+    } catch (e) {
+        console.warn(`⚠️ WARNING: Invalid ${name} (${val}). Using fallback.`);
+        return new PublicKey(fallback);
+    }
+};
+
+const TARGET_PUMP_TOKEN = safePublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn", "11111111111111111111111111111111", "TARGET_PUMP_TOKEN");
+const WALLET_9_5 = safePublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z", "11111111111111111111111111111111", "WALLET_9_5"); 
+const WALLET_0_5 = safePublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g", "11111111111111111111111111111111", "WALLET_0_5"); 
+const PUMP_LIQUIDITY_WALLET = "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa";
 const FEE_THRESHOLD_SOL = 0.20;
 
-const PUMP_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
-const TOKEN_PROGRAM_2022_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
-const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-const FEE_PROGRAM_ID = new PublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ");
-const FEE_RECIPIENT = new PublicKey("FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB");
-const PUMP_LIQUIDITY_WALLET = "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa";
+const PUMP_PROGRAM_ID = safePublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "11111111111111111111111111111111", "PUMP_PROGRAM_ID");
+const TOKEN_PROGRAM_2022_ID = safePublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TOKEN_PROGRAM_2022_ID");
+const ASSOCIATED_TOKEN_PROGRAM_ID = safePublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", "11111111111111111111111111111111", "ASSOCIATED_TOKEN_PROGRAM_ID");
+const FEE_PROGRAM_ID = safePublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ", "11111111111111111111111111111111", "FEE_PROGRAM_ID");
+const FEE_RECIPIENT = safePublicKey("FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB", "11111111111111111111111111111111", "FEE_RECIPIENT");
+
+// FIXED: Using System Program as a safe placeholder. Replace with real ID when ready.
+const MAYHEM_PROGRAM_ID = safePublicKey("11111111111111111111111111111111", "11111111111111111111111111111111", "MAYHEM_PROGRAM_ID");
 
 // --- DB & Directories ---
 const DISK_ROOT = '/var/data';
@@ -139,7 +152,7 @@ async function getTotalLaunches() { if(!db) return 0; const res = await db.get('
 async function getStats() { if(!db) return { accumulatedFeesLamports: 0, lifetimeFeesLamports: 0, totalPumpBoughtLamports: 0 }; const acc = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports'); const life = await db.get('SELECT value FROM stats WHERE key = ?', 'lifetimeFeesLamports'); const pump = await db.get('SELECT value FROM stats WHERE key = ?', 'totalPumpBoughtLamports'); return { accumulatedFeesLamports: acc ? acc.value : 0, lifetimeFeesLamports: life ? life.value : 0, totalPumpBoughtLamports: pump ? pump.value : 0 }; }
 async function resetAccumulatedFees(used) { const cur = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports'); await db.run('UPDATE stats SET value = ? WHERE key = ?', [Math.max(0, (cur ? cur.value : 0) - used), 'accumulatedFeesLamports']); }
 async function logPurchase(type, data) { try { await db.run('INSERT INTO logs (type, data) VALUES (?, ?)', [type, JSON.stringify(data)]); } catch (e) {} }
-async function saveTokenData(pk, mint, meta) { try { await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, meta.image, meta.isMayhemMode]); const shard = pk.slice(0, 2).toLowerCase(); const dir = path.join(ACTIVE_DATA_DIR, shard); ensureDir(dir); fs.writeFileSync(path.join(dir, `${mint}.json`), JSON.stringify({ userPubkey: pk, mint, metadata: meta, timestamp: new Date().toISOString() }, null, 2)); } catch (e) { logger.error("Save Token Error", {err:e.message}); } }
+async function saveTokenData(pk, mint, meta) { try { await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, image, meta.isMayhemMode]); const shard = pk.slice(0, 2).toLowerCase(); const dir = path.join(ACTIVE_DATA_DIR, shard); ensureDir(dir); fs.writeFileSync(path.join(dir, `${mint}.json`), JSON.stringify({ userPubkey: pk, mint, metadata: meta, timestamp: new Date().toISOString() }, null, 2)); } catch (e) { logger.error("Save Token Error", {err:e.message}); } }
 
 // --- WORKER ---
 let worker;
@@ -193,11 +206,10 @@ async function uploadImageToPinata(b64) {
                 'Authorization': `Bearer ${PINATA_JWT}`,
                 ...f.getHeaders()
             },
-            maxBodyLength: Infinity // Allow large images
+            maxBodyLength: Infinity 
         });
         return `https://gateway.pinata.cloud/ipfs/${r.data.IpfsHash}`;
     } catch (e) {
-        // Log detailed error but fallback so the whole process doesn't die just for an image
         const errMsg = e.response ? JSON.stringify(e.response.data) : e.message;
         logger.warn("Pinata Image Upload Failed", { error: errMsg });
         return "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8"; 
@@ -212,7 +224,6 @@ async function uploadMetadataToPinata(n, s, d, t, w, i) {
         u = await uploadImageToPinata(i);
     }
 
-    // Pinata expects strict JSON payload
     const m = {
         name: n,
         symbol: s,
@@ -269,18 +280,15 @@ app.post('/api/deploy', async (req, res) => {
         const { name, ticker, metadataUri, userTx, userPubkey, isMayhemMode } = req.body;
         if (!metadataUri) return res.status(400).json({ error: "Missing metadata URI" });
 
-        // CRITICAL FIX: Attempt to insert signature FIRST to prevent race condition.
-        // If it exists (UNIQUE constraint), this throws immediately.
         try {
             await db.run('INSERT INTO transactions (signature, userPubkey) VALUES (?, ?)', [userTx, userPubkey]);
         } catch (dbErr) {
             if (dbErr.message.includes('UNIQUE constraint') || dbErr.message.includes('unique index')) {
                 return res.status(400).json({ error: "Transaction signature already used." });
             }
-            throw dbErr; // Rethrow unexpected DB errors
+            throw dbErr; 
         }
 
-        // Now verify the transaction
         const txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
         
         let validPayment = false;
@@ -293,7 +301,6 @@ app.post('/api/deploy', async (req, res) => {
         }
 
         if (!validPayment) {
-            // ROLLBACK: Delete the signature if validation fails so the user can try again (or if tx was invalid)
             await db.run('DELETE FROM transactions WHERE signature = ?', [userTx]);
             return res.status(400).json({ error: "Payment verification failed or transaction not found." });
         }
@@ -306,13 +313,42 @@ app.post('/api/deploy', async (req, res) => {
 
     } catch (err) { 
         logger.error("Deploy Request Error", {error: err.message}); 
-        // Note: We do not rollback DB here for generic errors to be safe, or we could specific handling. 
         res.status(500).json({ error: err.message }); 
     }
 });
 
 // ... (Loops) ...
-setInterval(async () => { if (!db) return; const topTokens = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10'); for (const token of topTokens) { try { const accounts = await connection.getTokenLargestAccounts(new PublicKey(token.mint)); if (accounts.value) { const top20 = accounts.value.slice(0, 20); let rank = 1; await db.run('DELETE FROM token_holders WHERE mint = ?', token.mint); for (const acc of top20) { try { const info = await connection.getParsedAccountInfo(acc.address); if (info.value && info.value.data.parsed) { const owner = info.value.data.parsed.info.owner; if (owner !== "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa") { await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, [token.mint, owner, rank, Date.now()]); rank++; } } } catch (e) {} } } } catch (e) {} await new Promise(r => setTimeout(r, 2000)); } }, 60 * 60 * 1000); 
+setInterval(async () => { 
+    if (!db) return; 
+    try {
+        const topTokens = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10'); 
+        for (const token of topTokens) { 
+            try { 
+                if (!token.mint) continue;
+                const accounts = await connection.getTokenLargestAccounts(new PublicKey(token.mint)); 
+                if (accounts.value) { 
+                    const top20 = accounts.value.slice(0, 20); 
+                    let rank = 1; 
+                    await db.run('DELETE FROM token_holders WHERE mint = ?', token.mint); 
+                    for (const acc of top20) { 
+                        try { 
+                            const info = await connection.getParsedAccountInfo(acc.address); 
+                            if (info.value && info.value.data.parsed) { 
+                                const owner = info.value.data.parsed.info.owner; 
+                                if (owner !== PUMP_LIQUIDITY_WALLET) { 
+                                    await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, [token.mint, owner, rank, Date.now()]); 
+                                    rank++; 
+                                } 
+                            } 
+                        } catch (e) {} 
+                    } 
+                } 
+            } catch (e) { console.error("Error processing token", token.mint, e.message); } 
+            await new Promise(r => setTimeout(r, 2000)); 
+        } 
+    } catch(e) { console.error("Loop Error", e); }
+}, 60 * 60 * 1000); 
+
 setInterval(async () => { if (!db) return; const tokens = await db.all('SELECT mint FROM tokens'); for (let i = 0; i < tokens.length; i += 5) { const batch = tokens.slice(i, i + 5); await Promise.all(batch.map(async (t) => { try { const response = await axios.get(`https://frontend-api.pump.fun/coins/${t.mint}`, { timeout: 2000 }); const data = response.data; if (data) await db.run(`UPDATE tokens SET volume24h = ?, marketCap = ?, lastUpdated = ? WHERE mint = ?`, [data.usd_market_cap || 0, data.usd_market_cap || 0, Date.now(), t.mint]); } catch (e) {} })); await new Promise(r => setTimeout(r, 1000)); } }, 2 * 60 * 1000);
 
 let isBuybackRunning = false;
@@ -325,9 +361,9 @@ async function runPurchaseAndFees() {
              const realBalance = await connection.getBalance(devKeypair.publicKey);
              const spendable = Math.min(stats.accumulatedFeesLamports, realBalance - 5000000);
              if (spendable > 0) {
-                 const buyAmount = new BN(Math.floor(spendable * 0.90)); // 90% to Buy
-                 const transfer9_5 = Math.floor(spendable * 0.095); // 9.5% Fee
-                 const transfer0_5 = Math.floor(spendable * 0.005); // 0.5% Upkeep
+                 const buyAmount = new BN(Math.floor(spendable * 0.90)); 
+                 const transfer9_5 = Math.floor(spendable * 0.095); 
+                 const transfer0_5 = Math.floor(spendable * 0.005); 
                  
                  const { bondingCurve, associatedBondingCurve } = getPumpPDAs(TARGET_PUMP_TOKEN, PUMP_PROGRAM_ID);
                  const associatedUser = getATA(TARGET_PUMP_TOKEN, devKeypair.publicKey);
@@ -335,7 +371,7 @@ async function runPurchaseAndFees() {
                  const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), false).accounts({ global: PublicKey.findProgramAddressSync([Buffer.from("global")], PUMP_PROGRAM_ID)[0], feeRecipient: FEE_RECIPIENT, mint: TARGET_PUMP_TOKEN, bondingCurve, associatedBondingCurve, associatedUser, user: devKeypair.publicKey, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, creatorVault: PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), bondingCurve.toBuffer()], PUMP_PROGRAM_ID)[0], eventAuthority: PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID)[0], program: PUMP_PROGRAM_ID, globalVolumeAccumulator: PublicKey.findProgramAddressSync([Buffer.from("global_volume_accumulator")], PUMP_PROGRAM_ID)[0], userVolumeAccumulator: PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_PROGRAM_ID)[0], feeConfig: PublicKey.findProgramAddressSync([Buffer.from("fee_config")], FEE_PROGRAM_ID)[0], feeProgram: FEE_PROGRAM_ID }).instruction();
                  
                  const tx = new Transaction().add(buyIx)
-                    .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_19_5, lamports: transfer9_5 }))
+                    .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 }))
                     .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
                  
                  tx.feePayer = devKeypair.publicKey;

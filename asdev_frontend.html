@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.5.1</title>
+    <title>ASDev Launcher v10.5.5</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -169,7 +169,7 @@
         </div>
 
         <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
-            <div><span class="text-orange-600">RPC UPLINK: HELIUS MAINNET</span> | <span class="text-orange-600 ml-2">LIFETIME PROTOCOL REVENUE: <span id="lifetime-fees" class="text-green-400 font-bold">0.00</span> SOL</span></div>
+            <div><span class="text-orange-600">RPC UPLINK: MAINNET PUBLIC</span> | <span class="text-orange-600 ml-2">LIFETIME PROTOCOL REVENUE: <span id="lifetime-fees" class="text-green-400 font-bold">0.00</span> SOL</span></div>
             <div class="flex gap-4"><span>SYSTEM STATUS: <span id="sys-status" class="sys-status">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
         </div>
     </div>
@@ -178,16 +178,17 @@
 <div id="log-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeLogModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FULL BUYBACK LOGS</h3><div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2"></div></div></div>
 
 <script>
-    const FRONTEND_VERSION = "v10.5.1";
+    const FRONTEND_VERSION = "v10.5.5";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
-    const HELIUS_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=a32d61a0-2cc2-4d60-b3b6-cefadce7001a"; 
+    // CHANGED: Use Public RPC endpoint
+    const SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"; 
     const PUMPFUN_URL_BASE = "https://pump.fun/coin/";
     const PUMP_CONTRACT = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
 
     let userPubkey = null;
     let allLogs = []; 
-    let connection = new solanaWeb3.Connection(HELIUS_RPC_URL, "confirmed"); 
+    let connection = new solanaWeb3.Connection(SOLANA_RPC_URL, "confirmed"); 
     let pumpPriceCache = 0.0;
 
     const ui = {
