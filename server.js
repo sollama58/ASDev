@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
+const { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram, sendAndConfirmTransaction, Keypair } = require('@solana/web3.js');
 const { Program, AnchorProvider, Wallet, BN } = require('@coral-xyz/anchor');
 const bs58 = require('bs58');
 const fs = require('fs');
@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.1";
+const VERSION = "v10.5.3";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -23,8 +23,11 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY; 
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
+// Check Critical Config
+if (!PINATA_JWT) console.warn("⚠️ WARNING: PINATA_JWT is missing. Metadata uploads will fail.");
+
 const TARGET_PUMP_TOKEN = new PublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn");
-const WALLET_9_5 = new PublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z"); // Fee Wallet (9.5%)
+const WALLET_19_5 = new PublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z"); // Fee Wallet (9.5%)
 const WALLET_0_5 = new PublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g"); // Upkeep (0.5%)
 const FEE_THRESHOLD_SOL = 0.20;
 
@@ -33,7 +36,7 @@ const TOKEN_PROGRAM_2022_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqC
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const FEE_PROGRAM_ID = new PublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ");
 const FEE_RECIPIENT = new PublicKey("FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB");
-const PUMP_LIQUIDITY_WALLET = "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa";
+const MAYHEM_PROGRAM_ID = new PublicKey("Mq3xTBfFv2ph4b5sA4WpWq3sA4WpWq3sA4WpWq3sA4"); 
 
 // --- DB & Directories ---
 const DISK_ROOT = '/var/data';
@@ -111,7 +114,7 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 const connection = new Connection(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`, "confirmed");
-const devKeypair = require('@solana/web3.js').Keypair.fromSecretKey(bs58.decode(DEV_WALLET_PRIVATE_KEY));
+const devKeypair = Keypair.fromSecretKey(bs58.decode(DEV_WALLET_PRIVATE_KEY));
 const wallet = new Wallet(devKeypair);
 const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
 const idlRaw = fs.readFileSync('./pump_idl.json', 'utf8');
@@ -136,10 +139,7 @@ async function getTotalLaunches() { if(!db) return 0; const res = await db.get('
 async function getStats() { if(!db) return { accumulatedFeesLamports: 0, lifetimeFeesLamports: 0, totalPumpBoughtLamports: 0 }; const acc = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports'); const life = await db.get('SELECT value FROM stats WHERE key = ?', 'lifetimeFeesLamports'); const pump = await db.get('SELECT value FROM stats WHERE key = ?', 'totalPumpBoughtLamports'); return { accumulatedFeesLamports: acc ? acc.value : 0, lifetimeFeesLamports: life ? life.value : 0, totalPumpBoughtLamports: pump ? pump.value : 0 }; }
 async function resetAccumulatedFees(used) { const cur = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports'); await db.run('UPDATE stats SET value = ? WHERE key = ?', [Math.max(0, (cur ? cur.value : 0) - used), 'accumulatedFeesLamports']); }
 async function logPurchase(type, data) { try { await db.run('INSERT INTO logs (type, data) VALUES (?, ?)', [type, JSON.stringify(data)]); } catch (e) {} }
-async function getRecentLogs(limit=5) { const rows = await db.all('SELECT * FROM logs ORDER BY id DESC LIMIT ?', limit); return rows.map(row => ({ ...JSON.parse(row.data), type: row.type, timestamp: row.timestamp })); }
 async function saveTokenData(pk, mint, meta) { try { await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, meta.image, meta.isMayhemMode]); const shard = pk.slice(0, 2).toLowerCase(); const dir = path.join(ACTIVE_DATA_DIR, shard); ensureDir(dir); fs.writeFileSync(path.join(dir, `${mint}.json`), JSON.stringify({ userPubkey: pk, mint, metadata: meta, timestamp: new Date().toISOString() }, null, 2)); } catch (e) { logger.error("Save Token Error", {err:e.message}); } }
-async function checkTransactionUsed(sig) { const res = await db.get('SELECT signature FROM transactions WHERE signature = ?', sig); return !!res; }
-async function markTransactionUsed(sig, pk) { await db.run('INSERT INTO transactions (signature, userPubkey) VALUES (?, ?)', [sig, pk]); }
 
 // --- WORKER ---
 let worker;
@@ -148,8 +148,6 @@ if (redisConnection) {
         logger.info(`Processing Job ${job.id}: ${job.data.ticker}`);
         const { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode, metadataUri } = job.data;
 
-        // Re-verify metadata URI if passed (or upload if not)
-        // In v10.5 flow, metadataUri is passed directly.
         if (!metadataUri) throw new Error("Metadata URI missing in job payload");
 
         const mintKeypair = Keypair.generate();
@@ -182,8 +180,65 @@ function getPumpPDAs(mint, programId = PUMP_PROGRAM_ID) { const [bondingCurve] =
 function getDeploymentPDAs(mint, creator) { const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PUMP_PROGRAM_ID); const [bondingCurve] = PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), mint.toBuffer()], PUMP_PROGRAM_ID); const [global] = PublicKey.findProgramAddressSync([Buffer.from("global")], PUMP_PROGRAM_ID); const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID); const [globalVolume] = PublicKey.findProgramAddressSync([Buffer.from("global_volume_accumulator")], PUMP_PROGRAM_ID); const [userVolume] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PUMP_PROGRAM_ID); const [feeConfig] = PublicKey.findProgramAddressSync([Buffer.from("fee_config")], FEE_PROGRAM_ID); const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PUMP_PROGRAM_ID); return { mintAuthority, bondingCurve, global, eventAuthority, globalVolume, userVolume, feeConfig, creatorVault }; }
 function getMayhemPDAs(mint) { const [globalParams] = PublicKey.findProgramAddressSync([Buffer.from("global-params")], MAYHEM_PROGRAM_ID); const [solVault] = PublicKey.findProgramAddressSync([Buffer.from("sol-vault")], MAYHEM_PROGRAM_ID); const [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], MAYHEM_PROGRAM_ID); return { globalParams, solVault, mayhemState }; }
 function getATA(mint, owner) { return PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN_PROGRAM_2022_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0]; }
-async function uploadImageToPinata(b64) { try { const b=Buffer.from(b64.split(',')[1],'base64'); const f=new FormData(); f.append('file',b,{filename:'i.png'}); const r=await axios.post('https://api.pinata.cloud/pinning/pinFileToIPFS',f,{headers:{'Authorization':`Bearer ${PINATA_JWT}`,...f.getHeaders()}}); return `https://gateway.pinata.cloud/ipfs/${r.data.IpfsHash}`; } catch(e){ return "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8"; } }
-async function uploadMetadataToPinata(n,s,d,t,w,i) { let u="https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8"; if(i) u=await uploadImageToPinata(i); const m={name:n,symbol:s,description:d,image:u,extensions:{twitter:t,website:w}}; try { const r=await axios.post('https://api.pinata.cloud/pinning/pinJSONToIPFS',m,{headers:{'Authorization':`Bearer ${PINATA_JWT}`}}); return `https://gateway.pinata.cloud/ipfs/${r.data.IpfsHash}`; } catch(e) { throw new Error("Failed to upload metadata"); } }
+
+// --- ENHANCED PINATA FUNCTIONS ---
+async function uploadImageToPinata(b64) {
+    try {
+        const b = Buffer.from(b64.split(',')[1], 'base64');
+        const f = new FormData();
+        f.append('file', b, { filename: 'i.png' });
+        
+        const r = await axios.post('https://api.pinata.cloud/pinning/pinFileToIPFS', f, {
+            headers: {
+                'Authorization': `Bearer ${PINATA_JWT}`,
+                ...f.getHeaders()
+            },
+            maxBodyLength: Infinity // Allow large images
+        });
+        return `https://gateway.pinata.cloud/ipfs/${r.data.IpfsHash}`;
+    } catch (e) {
+        // Log detailed error but fallback so the whole process doesn't die just for an image
+        const errMsg = e.response ? JSON.stringify(e.response.data) : e.message;
+        logger.warn("Pinata Image Upload Failed", { error: errMsg });
+        return "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8"; 
+    }
+}
+
+async function uploadMetadataToPinata(n, s, d, t, w, i) {
+    if (!PINATA_JWT) throw new Error("Server Config Error: PINATA_JWT is missing.");
+    
+    let u = "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8";
+    if (i) {
+        u = await uploadImageToPinata(i);
+    }
+
+    // Pinata expects strict JSON payload
+    const m = {
+        name: n,
+        symbol: s,
+        description: d,
+        image: u,
+        extensions: {
+            twitter: t,
+            website: w
+        }
+    };
+
+    try {
+        const r = await axios.post('https://api.pinata.cloud/pinning/pinJSONToIPFS', m, {
+            headers: {
+                'Authorization': `Bearer ${PINATA_JWT}`,
+                'Content-Type': 'application/json' 
+            }
+        });
+        return `https://gateway.pinata.cloud/ipfs/${r.data.IpfsHash}`;
+    } catch (e) {
+        const errMsg = e.response ? JSON.stringify(e.response.data) : e.message;
+        const statusCode = e.response ? e.response.status : 'N/A';
+        logger.error(`Pinata Metadata Upload Error (${statusCode})`, { details: errMsg });
+        throw new Error(`Failed to upload metadata to Pinata: ${errMsg}`);
+    }
+}
 
 // --- Routes ---
 app.get('/api/version', (req, res) => res.json({ version: VERSION }));
@@ -214,19 +269,46 @@ app.post('/api/deploy', async (req, res) => {
         const { name, ticker, metadataUri, userTx, userPubkey, isMayhemMode } = req.body;
         if (!metadataUri) return res.status(400).json({ error: "Missing metadata URI" });
 
-        const used = await checkTransactionUsed(userTx); if (used) return res.status(400).json({ error: "Transaction signature already used." });
-        const txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-        if (!txInfo) return res.status(400).json({ error: "Transaction not found." });
-        const validPayment = txInfo.transaction.message.instructions.some(ix => { if (ix.programId.toString() !== '11111111111111111111111111111111') return false; if (ix.parsed.type !== 'transfer') return false; return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL; });
-        if (!validPayment) return res.status(400).json({ error: "Payment verification failed." });
+        // CRITICAL FIX: Attempt to insert signature FIRST to prevent race condition.
+        // If it exists (UNIQUE constraint), this throws immediately.
+        try {
+            await db.run('INSERT INTO transactions (signature, userPubkey) VALUES (?, ?)', [userTx, userPubkey]);
+        } catch (dbErr) {
+            if (dbErr.message.includes('UNIQUE constraint') || dbErr.message.includes('unique index')) {
+                return res.status(400).json({ error: "Transaction signature already used." });
+            }
+            throw dbErr; // Rethrow unexpected DB errors
+        }
 
-        await markTransactionUsed(userTx, userPubkey);
+        // Now verify the transaction
+        const txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+        
+        let validPayment = false;
+        if (txInfo) {
+            validPayment = txInfo.transaction.message.instructions.some(ix => { 
+                if (ix.programId.toString() !== '11111111111111111111111111111111') return false; 
+                if (ix.parsed.type !== 'transfer') return false; 
+                return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL; 
+            });
+        }
+
+        if (!validPayment) {
+            // ROLLBACK: Delete the signature if validation fails so the user can try again (or if tx was invalid)
+            await db.run('DELETE FROM transactions WHERE signature = ?', [userTx]);
+            return res.status(400).json({ error: "Payment verification failed or transaction not found." });
+        }
+
         await addFees(0.05 * LAMPORTS_PER_SOL);
 
         if (!deployQueue) return res.status(500).json({ error: "Deployment Queue Unavailable" });
         const job = await deployQueue.add('deployToken', { name, ticker, metadataUri, userPubkey, isMayhemMode });
         res.json({ success: true, jobId: job.id, message: "Queued" });
-    } catch (err) { logger.error("Deploy Request Error", {error: err.message}); res.status(500).json({ error: err.message }); }
+
+    } catch (err) { 
+        logger.error("Deploy Request Error", {error: err.message}); 
+        // Note: We do not rollback DB here for generic errors to be safe, or we could specific handling. 
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 // ... (Loops) ...
