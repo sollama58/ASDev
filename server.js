@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.9.3-FIX-UNDEFINED-PDA";
+const VERSION = "v10.9.4-FIX-ATA-INIT";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -270,9 +270,27 @@ if (redisConnection) {
 
             const buyIx = new TransactionInstruction({ keys: buyKeys, programId: PUMP_PROGRAM_ID, data: buyData });
 
+            // [FIX] Create Associated Token Account Instruction (Instruction #3 in 0-index, #4 in 1-index)
+            // The Buy instruction expects this account to exist. Since the mint is new, we MUST create it here.
+            const createATAIx = new TransactionInstruction({
+                keys: [
+                    { pubkey: creator, isSigner: true, isWritable: true }, // Payer
+                    { pubkey: associatedUser, isSigner: false, isWritable: true }, // ATA Address
+                    { pubkey: creator, isSigner: false, isWritable: false }, // Owner
+                    { pubkey: mint, isSigner: false, isWritable: false }, // Mint
+                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // System
+                    { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false }, // Token Program (Must be Token2022)
+                ],
+                programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+                data: Buffer.alloc(0),
+            });
+
             const tx = new Transaction();
             addPriorityFee(tx); // Gas
-            tx.add(createIx).add(buyIx);
+            
+            // ORDER: [Create Mint] -> [Create User ATA] -> [Buy Tokens]
+            tx.add(createIx).add(createATAIx).add(buyIx);
+            
             tx.feePayer = creator;
             
             logger.info("Sending Transaction...");
