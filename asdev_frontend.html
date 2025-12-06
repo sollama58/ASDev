@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.6.0</title>
+    <title>ASDev Launcher v10.7.0</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -34,14 +34,19 @@
         .sys-status.online { color: #22c55e; text-shadow: 0 0 8px rgba(34, 197, 94, 0.6); }
         #image-preview { width: 180px; height: 180px; border: 2px dashed #7c2d12; display: flex; align-items: center; justify-content: center; background: #2a1005; color: #7c2d12; font-family: 'JetBrains Mono'; font-size: 12px; overflow: hidden; border-radius: 12px; margin-top: 10px; }
         #image-preview img { width: 100%; height: 100%; object-fit: cover; }
+        .log-entry { border-bottom: 1px solid rgba(234, 88, 12, 0.3); padding: 8px 0; font-family: 'JetBrains Mono'; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .log-entry:last-child { border-bottom: none; }
+        .log-skipped { color: #fdba74; opacity: 0.8; }
+        .log-success { color: #4ade80; font-weight: bold; }
+        .log-error { color: #ef4444; }
         .toggle-switch { display: flex; align-items: center; }
         .toggle-switch input { display: none; }
         .toggle-switch .slider { cursor: pointer; width: 60px; height: 34px; background-color: #7c2d12; transition: .4s; border-radius: 34px; position: relative; box-shadow: inset 0 0 4px rgba(0,0,0,0.5); min-width: 60px; }
         .toggle-switch .slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
         .toggle-switch input:checked + .slider { background-color: #ef4444; } 
         .toggle-switch input:checked + .slider:before { transform: translateX(26px); }
-        .mayhem-label { transition: color 0.4s; font-weight: bold; }
-        .mayhem-label.active { color: #ef4444; text-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
+        .mayhem-label { transition: color 0.4s; }
+        .mayhem-label.active { color: #ef4444; }
         #header-image { width: 60px; height: 60px; border-radius: 8px; object-fit: cover; animation: bounce 1s infinite alternate; }
         @keyframes bounce { from { transform: translateY(0); } to { transform: translateY(-5px); } }
         .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); }
@@ -51,43 +56,48 @@
         .leader-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
         .leader-table th { text-align: left; padding: 10px; border-bottom: 2px solid #ea580c; color: #ea580c; text-transform: uppercase; font-size: 11px; }
         .leader-table td { padding: 12px 10px; border-bottom: 1px solid rgba(234, 88, 12, 0.2); }
+        .leader-table tr:hover { background: rgba(234, 88, 12, 0.1); }
         .token-img-sm { width: 24px; height: 24px; border-radius: 4px; object-fit: cover; display: inline-block; vertical-align: middle; margin-right: 8px; border: 1px solid #7c2d12; }
+        .metric-card { background: rgba(0,0,0,0.2); border: 1px solid #ea580c; padding: 20px; border-radius: 8px; text-align: center; }
+        .metric-value { font-size: 24px; font-weight: bold; color: white; font-family: 'JetBrains Mono'; margin-top: 5px; }
+        .metric-label { font-size: 12px; color: #fdba74; text-transform: uppercase; letter-spacing: 1px; }
+        .holder-check { color: #4ade80; font-weight: bold; margin-left: 8px; }
     </style>
 </head>
 <body>
 
 <div id="app-container">
-    <div class="ticker-wrap"><div class="ticker" id="ticker-content"><span class="ticker-item text-orange-600">CONNECTING...</span></div></div>
+    <div class="ticker-wrap"><div class="ticker" id="ticker-content"><span class="ticker-item text-orange-600">CONNECTING TO LAUNCH FEED...</span></div></div>
 
     <div class="p-10">
         <div class="flex justify-between items-start mb-10 border-b-4 border-orange-900 pb-8">
             <div class="flex items-center gap-6">
                 <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
-                <div><h1 class="text-4xl md:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1><p class="text-orange-400 text-sm font-mono uppercase tracking-widest mt-2">Token Launchpad</p></div>
+                <div><h1 class="text-4xl md:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1><p class="text-orange-400 text-sm font-mono uppercase tracking-widest mt-2">ASDev Airdrop and Flywheel Pumpfun Launcher</p></div>
             </div>
             <div class="flex flex-col items-end gap-3">
-                <div id="wallet-ui" class="hidden flex items-center gap-3 bg-orange-950 border border-orange-800 p-3 rounded-lg shadow-xl"><span class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span><span id="wallet-addr" class="font-mono text-sm text-orange-200"></span><span id="wallet-bal" class="font-mono text-sm text-white font-bold ml-2 bg-orange-900/50 px-3 py-1 rounded">0.00 SOL</span><button id="disconnect-btn" class="ml-1 text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded"><i data-lucide="log-out" width="16"></i></button></div>
-                <button id="connect-btn" class="bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-8 py-3 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg">Connect Wallet</button>
+                <div id="wallet-ui" class="hidden flex items-center gap-3 bg-orange-950 border border-orange-800 p-3 rounded-lg shadow-xl"><span class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span><span id="wallet-addr" class="font-mono text-sm text-orange-200"></span><span id="wallet-bal" class="font-mono text-sm text-white font-bold ml-2 bg-orange-900/50 px-3 py-1 rounded">0.00 SOL</span><button id="refresh-btn" class="ml-2 text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded"><i data-lucide="refresh-cw" width="16"></i></button><button id="disconnect-btn" class="ml-1 text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded"><i data-lucide="log-out" width="16"></i></button></div>
+                <button id="connect-btn" class="bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-8 py-3 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg hover:shadow-orange-900/40">Connect Wallet</button>
             </div>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
             <div class="panel col-span-1 flex flex-col items-center justify-start h-full">
-                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest w-full text-center border-b-2 border-orange-900/50 pb-3">Preview</h3>
+                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest w-full text-center border-b-2 border-orange-900/50 pb-3">Token Preview</h3>
                 <div class="text-center mb-4 min-h-[60px]"><h2 id="preview-name" class="text-2xl font-bold text-white break-words">Token Name</h2><p id="preview-ticker" class="text-orange-400 font-mono text-lg uppercase">$TICKER</p></div>
                 <div id="image-preview" class="mb-6 shadow-2xl shadow-orange-900/30 transition-all duration-300">NO IMAGE</div>
-                <input type="file" id="image-file" class="input-field text-sm" accept="image/png, image/jpeg, image/gif" onchange="previewImage(event)">
+                <input type="file" id="image-file" class="input-field text-sm" accept="image/png, image/jpeg, image/gif" onchange="previewImage(event)"><p class="text-xs text-orange-400 font-mono text-center mt-2">Required: PNG, JPG, GIF.<br>Max size 4MB.</p>
             </div>
             <div class="panel col-span-2">
-                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-orange-900/50 pb-3">Metadata</h3>
+                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-orange-900/50 pb-3">Token Metadata</h3>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div><label class="block text-sm text-orange-300 font-mono mb-2">NAME <span class="text-red-500">*</span></label><input type="text" id="name" class="input-field" placeholder="e.g. Infernal Coin" maxlength="32" oninput="updatePreview()"></div>
                     <div><label class="block text-sm text-orange-300 font-mono mb-2">TICKER <span class="text-red-500">*</span></label><input type="text" id="ticker" class="input-field" placeholder="e.g. BURN" maxlength="10" oninput="updatePreview()"></div>
                 </div>
-                <label class="block text-sm text-orange-300 font-mono mb-2">DESCRIPTION</label><textarea id="desc" class="input-field h-32" placeholder="Description of the asset..." maxlength="200"></textarea>
+                <label class="block text-sm text-orange-300 font-mono mb-2">DESCRIPTION</label><textarea id="desc" class="input-field h-32" placeholder="Description of the asset (Max 200 chars)..." maxlength="200"></textarea>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div><label class="block text-sm text-orange-300 font-mono mb-2">TWITTER</label><input type="url" id="twitter" class="input-field" placeholder="https://x.com/..."></div>
-                    <div><label class="block text-sm text-orange-300 font-mono mb-2">WEBSITE</label><input type="url" id="website" class="input-field" placeholder="https://..."></div>
+                    <div><label class="block text-sm text-orange-300 font-mono mb-2">TWITTER (OPTIONAL)</label><input type="url" id="twitter" class="input-field" placeholder="https://x.com/username"></div>
+                    <div><label class="block text-sm text-orange-300 font-mono mb-2">WEBSITE (OPTIONAL)</label><input type="url" id="website" class="input-field" placeholder="https://project.io"></div>
                 </div>
             </div>
         </div>
@@ -95,62 +105,267 @@
         <div class="panel bg-gradient-to-r from-orange-950 to-[#2a1005] border-2 border-orange-800 mt-10 lg:col-span-3"> 
             <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-orange-900 pb-4">
                 <div class="flex justify-center items-center gap-4 w-full md:w-1/3 order-2 md:order-1 mb-4 md:mb-0">
-                    <span class="mayhem-label text-orange-400 text-xs tracking-widest" id="mayhem-status-label">MAYHEM MODE: OFF</span>
-                    <label class="toggle-switch"><input type="checkbox" id="mayhem-toggle" onchange="toggleMayhem()"><span class="slider"></span></label>
+                    <span class="mayhem-label text-orange-400 text-xs tracking-widest transition-colors duration-300" id="mayhem-status-label">MAYHEM MODE: OFF</span>
+                    <label class="toggle-switch"><input type="checkbox" id="mayhem-toggle"><span class="slider"></span></label>
                 </div>
                 <div class="flex flex-col items-center w-full md:w-1/3 order-1 md:order-2">
                     <span class="text-orange-400 text-xs tracking-widest mb-1">DEPLOYMENT FEE</span>
                     <span class="text-white font-bold text-2xl">0.05 SOL</span>
                 </div>
-                <div class="w-full md:w-1/3 order-3"><button id="deploy-btn" class="btn-action w-full py-3 text-lg">INITIATE LAUNCH</button></div>
+                <div class="w-full md:w-1/3 order-3"><button id="deploy-btn" class="btn-action w-full hover:scale-[1.01] active:scale-[0.99] transition-transform py-3 text-lg">INITIATE LAUNCH SEQUENCE</button></div>
             </div>
+            <div class="text-center text-sm text-orange-400 mb-4 pt-2"><span class="font-bold">Mayhem Mode:</span> <span class="text-xs">(Enables Pump.fun's advanced features. Use with caution. Default is Standard Deployment.)</span></div>
             <div id="status-msg" class="status-box"></div>
+        </div>
+        
+        <div class="panel bg-black/30 border border-orange-900 mt-8 lg:col-span-3">
+            <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
+                <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">🔥 TOP 10 LAUNCHES (BY 24H VOL)</h3>
+                <button onclick="updateLeaderboard()" class="text-orange-400 hover:text-white transition p-1 rounded hover:bg-orange-800" title="Refresh Leaderboard">
+                    <i data-lucide="refresh-cw" width="16"></i>
+                </button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="leader-table">
+                    <thead><tr><th style="width: 50px;">#</th><th>Token</th><th>Name</th><th class="text-right">Price</th><th class="text-right">Vol (24H)</th><th class="text-right">Action</th></tr></thead>
+                    <tbody id="leaderboard-body"><tr><td colspan="6" class="text-center text-orange-400 py-4">Scanning Chain Data...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="panel bg-orange-950/30 border border-orange-900 mt-8 lg:col-span-3">
+            <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4"><h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">BUYBACK OPERATIONS FEED (LAST 3)</h3><button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-xs underline p-1">VIEW ALL</button></div>
+            <div id="log-feed" class="flex flex-col gap-1 max-h-[120px] overflow-hidden"><p class="text-xs text-orange-400 font-mono text-center py-4">Waiting for next synchronization...</p></div>
+        </div>
+
+        <div class="panel bg-orange-900/10 mt-8 lg:col-span-3">
+            <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-6">PLATFORM METRICS</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="metric-card"><div class="metric-label">Lifetime Launches</div><div id="metric-launches" class="metric-value">0</div></div>
+                <div class="metric-card"><div class="metric-label">$PUMP Tokens Bought</div><div id="metric-pump" class="metric-value">0</div></div>
+                <div class="metric-card"><div class="metric-label">ASDF Buybacks (SOL)</div><div id="metric-fees" class="metric-value">0.00</div></div>
+            </div>
+            <div class="text-center mt-6">
+                <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-xs border border-orange-700 hover:bg-orange-800 px-4 py-2 rounded transition">ℹ️ VIEW FEE & BUYBACK MECHANICS</button>
+            </div>
         </div>
         
         <div id="result-area" class="panel hidden border-green-600 bg-green-950/20 mt-8">
             <h3 class="text-green-400 font-bold font-mono mb-6 text-center text-3xl tracking-widest">DEPLOYMENT SUCCESSFUL</h3>
             <div class="flex flex-col gap-3 mb-6 bg-black/40 p-6 rounded-lg border border-green-800"><p class="text-xs text-green-200 font-mono uppercase tracking-wider">MINT ADDRESS</p><p id="mint-addr" class="text-white font-mono text-lg break-all font-bold select-all"></p></div>
-            <a id="tx-link" href="#" target="_blank" class="block text-center text-base font-mono text-black bg-green-500 hover:bg-green-400 py-4 rounded-lg font-bold transition shadow-lg">VIEW ON SOLSCAN</a>
+            <a id="tx-link" href="#" target="_blank" class="block text-center text-base font-mono text-black bg-green-500 hover:bg-green-400 py-4 rounded-lg font-bold transition shadow-lg hover:shadow-green-500/20">VIEW TRANSACTION ON SOLSCAN</a>
+        </div>
+
+        <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
+            <div><span class="text-orange-600">RPC UPLINK: MAINNET PUBLIC</span> | <span class="text-orange-600 ml-2">LIFETIME PROTOCOL REVENUE: <span id="lifetime-fees" class="text-green-400 font-bold">0.00</span> SOL</span></div>
+            <div class="flex gap-4"><span>SYSTEM STATUS: <span id="sys-status" class="sys-status">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
         </div>
     </div>
 </div>
 
-<script>
-    const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
-    const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB"; 
-    let userPubkey = null;
+<div id="log-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeLogModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FULL BUYBACK LOGS</h3><div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2"></div></div></div>
 
-    lucide.createIcons();
+<div id="about-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAboutModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FEE & BUYBACK MECHANICS</h3>
+    <div id="about-content-static">
+        <p class="text-orange-200 text-sm leading-relaxed font-sans mb-4">The platform implements an automated flywheel mechanism designed for ecosystem stability and growth, funded by the mandatory <span class="text-white font-mono">0.05 SOL</span> deployment fee. This fee is automatically added to a reserve pool.</p>
+        <h4 class="text-white text-base mb-2">Autoclaim & Distribution Breakdown (Every 5 Minutes, Threshold: 0.20 SOL)</h4>
+        <ul class="list-disc list-inside text-orange-300 text-sm font-mono space-y-2">
+            <li><span class="text-green-400 font-bold">90.0%</span>: Utilized for immediate buyback of the **$PUMP** token (Contract: `pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn`), **accumulating for airdrops**.</li>
+            <li><span class="text-red-400 font-bold">9.5%</span>: **Sent to the Fee Wallet for Buybacks and Burns of $ASDFASDFA**.</li>
+            <li><span class="text-red-400 font-bold">0.5%</span>: **Upkeep Fee**.</li>
+            <li><span class="text-yellow-400">STATUS</span>: The distribution is only executed when the accumulated fee pool reaches or exceeds **0.20 SOL**. Rounds are skipped if the threshold is not met.</li>
+        </ul>
+        <div class="mt-6 p-4 border border-orange-800 bg-orange-950/50 rounded-lg">
+            <h5 class="text-red-400 font-bold mb-2">LEGAL DISCLAIMER</h5>
+            <p class="text-xs text-orange-300">This platform is a decentralized utility tool provided "as-is". The operators are not responsible for the nature of tokens created, their value, or any financial losses incurred. By using this service, you agree to comply with all applicable laws and regulations in your jurisdiction. Uploading illegal or prohibited content is strictly forbidden and will be blocked by automated AI moderation systems. Transactions on the blockchain are irreversible.</p>
+        </div>
+    </div>
+</div></div>
+
+<script>
+    const FRONTEND_VERSION = "v10.7.0";
+    const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
+    const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
+    const DEPLOYMENT_FEE = 0.05;
+    const PUMPFUN_URL_BASE = "https://pump.fun/coin/";
+    const PUMP_CONTRACT = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
+
+    let userPubkey = null;
+    let allLogs = []; 
+    // Frontend connection removed. Using backend proxy for critical ops.
+    let pumpPriceCache = 0.0;
+    let isDeploying = false;
 
     const ui = {
         connectBtn: document.getElementById('connect-btn'), walletUI: document.getElementById('wallet-ui'), walletAddr: document.getElementById('wallet-addr'), walletBal: document.getElementById('wallet-bal'),
-        disconnectBtn: document.getElementById('disconnect-btn'), deployBtn: document.getElementById('deploy-btn'), statusBox: document.getElementById('status-msg'),
-        imgPreview: document.getElementById('image-preview'), previewName: document.getElementById('preview-name'), previewTicker: document.getElementById('preview-ticker'),
-        mayhemToggle: document.getElementById('mayhem-toggle'), mayhemStatusLabel: document.getElementById('mayhem-status-label')
+        refreshBtn: document.getElementById('refresh-btn'), disconnectBtn: document.getElementById('disconnect-btn'), deployBtn: document.getElementById('deploy-btn'),
+        statusBox: document.getElementById('status-msg'), sysStatus: document.getElementById('sys-status'), imgPreview: document.getElementById('image-preview'),
+        previewName: document.getElementById('preview-name'), previewTicker: document.getElementById('preview-ticker'), lifetimeFees: document.getElementById('lifetime-fees'),
+        logFeed: document.getElementById('log-feed'), headerImage: document.getElementById('header-image'), mayhemToggle: document.getElementById('mayhem-toggle'),
+        mayhemStatusLabel: document.getElementById('mayhem-status-label'), logModal: document.getElementById('log-modal'), modalLogContent: document.getElementById('modal-log-content'),
+        aboutModal: document.getElementById('about-modal'), 
+        tickerContent: document.getElementById('ticker-content'), leaderboardBody: document.getElementById('leaderboard-body'), versionDisplay: document.getElementById('version-display'),
+        metricLaunches: document.getElementById('metric-launches'), metricPump: document.getElementById('metric-pump'), metricFees: document.getElementById('metric-fees')
     };
 
-    const toggleMayhem = () => {
-        if (ui.mayhemToggle.checked) {
-            ui.mayhemStatusLabel.innerText = "MAYHEM MODE: ON (HIGH RISK)";
-            ui.mayhemStatusLabel.classList.add('active');
-        } else {
-            ui.mayhemStatusLabel.innerText = "MAYHEM MODE: OFF";
-            ui.mayhemStatusLabel.classList.remove('active');
-        }
+    lucide.createIcons();
+
+    fetch(`${BACKEND_URL}/api/version`).then(r=>r.json()).then(d=>ui.versionDisplay.innerText = `${FRONTEND_VERSION} | BE: ${d.version}`).catch(()=>{});
+
+    // --- OPTIMIZED DATA FETCHING (Unified 60s Loop) ---
+    const updatePumpPrice = async () => {
+        try {
+            const res = await fetch(`https://frontend-api.pump.fun/coins/${PUMP_CONTRACT}`);
+            const data = await res.json();
+            if (data && data.virtual_sol_reserves && data.virtual_token_reserves) {
+                pumpPriceCache = data.virtual_sol_reserves / data.virtual_token_reserves;
+            }
+        } catch (e) {}
     };
-    window.toggleMayhem = toggleMayhem;
+
+    const updateLeaderboard = async () => {
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/leaderboard${userPubkey ? '?userPubkey='+userPubkey : ''}`);
+            const data = await res.json();
+            if (!data || data.length === 0) { ui.leaderboardBody.innerHTML = '<tr><td colspan="6" class="text-center text-orange-400 py-4">No active tokens found.</td></tr>'; return; }
+            ui.leaderboardBody.innerHTML = data.map((item, index) => `
+                <tr>
+                    <td class="text-orange-500 font-bold">${index + 1}</td>
+                    <td>
+                        <img src="${item.image || 'https://placehold.co/24x24/333/fff?text=?'}" class="token-img-sm" alt="icon">
+                        <span class="text-white font-bold">${item.ticker}</span>
+                        ${item.isUserTopHolder ? '<span class="holder-check" title="You are a Top 100 Holder">✅</span>' : ''}
+                    </td>
+                    <td class="text-orange-200 truncate max-w-[100px]">${item.name}</td>
+                    <td class="text-right text-green-400">$${item.price}</td>
+                    <td class="text-right text-white font-bold">$${parseFloat(item.volume).toLocaleString()}</td>
+                    <td class="text-right"><a href="${PUMPFUN_URL_BASE}${item.mint}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a></td>
+                </tr>`).join('');
+        } catch (e) {}
+    };
+    window.updateLeaderboard = updateLeaderboard;
+
+    const fetchRecentLaunches = async () => { try { const res = await fetch(`${BACKEND_URL}/api/recent-launches`); if (res.ok) { const launches = await res.json(); if (launches.length === 0) { ui.tickerContent.innerHTML = '<span class="ticker-item text-orange-600">NO RECENT LAUNCHES YET... START ONE!</span>'; return; } const repeatedLaunches = Array(5).fill(launches).flat(); const tickerItems = repeatedLaunches.map(launch => `<span class="ticker-item"><span class="text-white font-bold">LAUNCHED:</span><span class="text-white">${launch.userSnippet}...</span><span class="text-orange-400">-></span><a href="${PUMPFUN_URL_BASE}${launch.mint}" target="_blank" class="font-bold underline">${launch.ticker}</a></span>`).join(''); ui.tickerContent.innerHTML = tickerItems; } } catch (e) {} };
+
+    const checkHealth = async () => { 
+        try { 
+            const res = await fetch(`${BACKEND_URL}/api/health`); 
+            if (res.ok) { 
+                const data = await res.json(); 
+                ui.sysStatus.innerText = "ONLINE"; ui.sysStatus.classList.add("online"); 
+                ui.headerImage.src = data.headerImageUrl || "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; 
+                if (data.lifetimeFees) ui.metricFees.innerText = data.lifetimeFees; 
+                if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches; 
+                const solSpent = parseFloat(data.totalPumpBought || 0);
+                let tokensBought = "0";
+                if (pumpPriceCache > 0) { tokensBought = (solSpent / pumpPriceCache).toLocaleString('en-US', {maximumFractionDigits: 0}); } 
+                else { tokensBought = (solSpent * 30000000).toLocaleString('en-US', {maximumFractionDigits: 0}); }
+                ui.metricPump.innerText = tokensBought;
+                allLogs = data.recentLogs; 
+                renderLogs(allLogs, ui.logFeed, 3);
+            } else { throw new Error("Backend Error"); } 
+        } catch (e) { ui.sysStatus.innerText = "OFFLINE"; ui.sysStatus.classList.remove("online"); ui.headerImage.src = "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; } 
+    };
+
+    const refreshWalletBalance = async () => { 
+        if (!userPubkey) return; 
+        try { 
+            const res = await fetch(`${BACKEND_URL}/api/balance?pubkey=${userPubkey}`);
+            if (!res.ok) throw new Error("Balance fetch failed");
+            const data = await res.json();
+            const solBalance = data.balance / solanaWeb3.LAMPORTS_PER_SOL;
+            ui.walletBal.innerText = solBalance.toFixed(3) + " SOL"; 
+            if (!isDeploying) {
+                if (solBalance < DEPLOYMENT_FEE) {
+                    ui.deployBtn.disabled = true; ui.deployBtn.innerText = `INSUFFICIENT BALANCE (< ${DEPLOYMENT_FEE} SOL)`; ui.deployBtn.classList.add("opacity-50", "cursor-not-allowed");
+                } else {
+                    ui.deployBtn.disabled = false; ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE"; ui.deployBtn.classList.remove("opacity-50", "cursor-not-allowed");
+                }
+            }
+        } catch (e) { console.error("Balance check error:", e); } 
+    };
+
+    // Unified Refresh Function
+    const refreshAllData = async () => {
+        // Visual feedback on button
+        if (ui.refreshBtn) ui.refreshBtn.classList.add('opacity-50', 'cursor-wait');
+        
+        try {
+            await Promise.allSettled([
+                updatePumpPrice(),
+                updateLeaderboard(),
+                fetchRecentLaunches(),
+                checkHealth(),
+                refreshWalletBalance()
+            ]);
+        } catch (e) { console.error("Auto-Refresh Error", e); }
+        
+        if (ui.refreshBtn) ui.refreshBtn.classList.remove('opacity-50', 'cursor-wait');
+    };
+    window.refreshAllData = refreshAllData;
+
+    // Set Interval to 60s (1 Minute) for everything
+    setInterval(refreshAllData, 60000);
+    // Initial Load
+    refreshAllData();
+
+    // Bind Button
+    ui.refreshBtn.onclick = () => refreshAllData();
+
+    // --- End Unified Fetching ---
+
+    const updateMayhemLabel = () => { if (ui.mayhemToggle.checked) { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: ON (HIGH RISK)"; ui.mayhemStatusLabel.classList.add('active'); } else { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: OFF"; ui.mayhemStatusLabel.classList.remove('active'); } };
+    ui.mayhemToggle.addEventListener('change', updateMayhemLabel); updateMayhemLabel(); 
 
     const updatePreview = () => { ui.previewName.innerText = document.getElementById('name').value || "Token Name"; ui.previewTicker.innerText = document.getElementById('ticker').value ? `$${document.getElementById('ticker').value.toUpperCase()}` : "$TICKER"; };
     const previewImage = (event) => { const file = event.target.files[0]; if (file) { const reader = new FileReader(); reader.onload = (e) => { ui.imgPreview.innerHTML = `<img src="${e.target.result}" alt="Preview" class="rounded-lg w-full h-full object-cover">`; ui.imgPreview.style.border = "2px solid #ea580c"; }; reader.readAsDataURL(file); } else { ui.imgPreview.innerHTML = "NO IMAGE"; ui.imgPreview.style.border = "2px dashed #7c2d12"; } };
     window.previewImage = previewImage; window.updatePreview = updatePreview;
 
-    const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; ui.statusBox.className = type === 'error' ? 'status-box status-error' : (type === 'success' ? 'status-box status-success' : 'status-box'); };
+    const renderLogs = (logs, targetElement, limit) => {
+        targetElement.innerHTML = ''; if (!logs || logs.length === 0) { targetElement.innerHTML = '<p class="text-xs text-orange-400 font-mono text-center py-4">No logs available.</p>'; return; }
+        const displayLogs = logs.slice().reverse().slice(0, limit); 
+        const logHtml = displayLogs.map(log => {
+            const time = new Date(log.timestamp).toLocaleTimeString();
+            let content, logClass;
+            if (log.type === 'SKIPPED') { content = `Fees Under Limit (${log.current}/${log.target} SOL)`; logClass = 'log-skipped'; } else if (log.type === 'SUCCESS') { content = `BUY: 80% | DIST: 20% | <a href="https://solscan.io/tx/${log.signature}" target="_blank" class="underline hover:text-white">View TX</a>`; logClass = 'log-success'; } else if (log.type === 'ERROR') { content = `FATAL ERROR: ${log.message.slice(0, 80)}`; logClass = 'log-error'; } else { content = `UNKNOWN EVENT`; logClass = 'text-orange-400'; }
+            return `<div class="log-entry ${logClass}"><span>[${time}] ${log.type}:</span> <span>${content}</span></div>`;
+        }).join('');
+        targetElement.innerHTML = logHtml;
+    };
+
+    const toggleLogModal = () => { ui.modalLogContent.innerHTML = ''; renderLogs(allLogs, ui.modalLogContent, allLogs.length); ui.logModal.style.display = 'block'; };
+    window.toggleLogModal = toggleLogModal;
+    const closeLogModal = () => { ui.logModal.style.display = 'none'; };
+    window.closeLogModal = closeLogModal;
+
+    // NEW About Modal Toggles
+    const toggleAboutModal = () => { ui.aboutModal.style.display = 'block'; };
+    window.toggleAboutModal = toggleAboutModal;
+    const closeAboutModal = () => { ui.aboutModal.style.display = 'none'; };
+    window.closeAboutModal = closeAboutModal;
+
+    const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; };
     const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
 
-    const updateWalletUI = async (pubkey) => { if (!pubkey) { ui.walletUI.classList.add('hidden'); ui.connectBtn.classList.remove('hidden'); return; } userPubkey = pubkey.toString(); ui.connectBtn.classList.add('hidden'); ui.walletUI.classList.remove('hidden'); ui.walletUI.classList.add('flex'); ui.walletAddr.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4); };
+    const updateWalletUI = async (pubkey) => { if (!pubkey) { ui.walletUI.classList.add('hidden'); ui.connectBtn.classList.remove('hidden'); return; } userPubkey = pubkey.toString(); ui.connectBtn.classList.add('hidden'); ui.walletUI.classList.remove('hidden'); ui.walletUI.classList.add('flex'); ui.walletAddr.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4); await refreshWalletBalance(); };
     const connectWallet = async () => { if (window.solana && window.solana.isPhantom) { try { const resp = await window.solana.connect(); await updateWalletUI(resp.publicKey); } catch (err) { console.error(err); } } else { window.open("https://phantom.app/", "_blank"); } };
     const disconnectWallet = async () => { if (window.solana) { try { await window.solana.disconnect(); } catch (e) {} userPubkey = null; updateWalletUI(null); } };
     ui.connectBtn.onclick = connectWallet; ui.disconnectBtn.onclick = disconnectWallet;
+
+    const validateInputs = (name, ticker, description, twitter, website, fileInput) => {
+        if (fileInput.files.length === 0) return "Image is required.";
+        const file = fileInput.files[0];
+        if (file.size > 4 * 1024 * 1024) return "Image size must be less than 4MB.";
+        if (!name || name.trim().length === 0) return "Token Name is required.";
+        if (name.length > 32) return "Token Name must be 32 characters or less.";
+        if (!ticker || ticker.trim().length === 0) return "Ticker Symbol is required.";
+        if (ticker.length > 10) return "Ticker must be 10 characters or less.";
+        if (description.length > 200) return "Description must be 200 characters or less.";
+        const urlPattern = /^(https?:\/\/[^\s]+|([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[^\s]*)?)$/;
+        if (twitter && twitter.trim() !== '' && !urlPattern.test(twitter)) return "Invalid Twitter URL.";
+        if (website && website.trim() !== '' && !urlPattern.test(website)) return "Invalid Website URL.";
+        return null;
+    };
 
     ui.deployBtn.onclick = async () => {
         if (!userPubkey) return showStatus("CONNECT WALLET FIRST", 'error');
@@ -160,55 +375,78 @@
         const twitter = document.getElementById('twitter').value;
         const website = document.getElementById('website').value;
         const fileInput = document.getElementById('image-file');
-        const isMayhemMode = ui.mayhemToggle.checked; // Capture State
-
-        if (fileInput.files.length === 0 || !name || !ticker) return showStatus("MISSING FIELDS", 'error');
+        const isMayhemMode = ui.mayhemToggle.checked;
+        
+        const validationError = validateInputs(name, ticker, description, twitter, website, fileInput);
+        if (validationError) return showStatus(validationError.toUpperCase(), 'error');
 
         let imageBase64;
-        try { imageBase64 = await toBase64(fileInput.files[0]); } catch(e) { return showStatus("IMAGE ERROR", 'error'); }
+        try { imageBase64 = await toBase64(fileInput.files[0]); } catch(e) { return showStatus("IMAGE PROCESSING FAILED", 'error'); }
 
+        isDeploying = true; // Lock button
         ui.deployBtn.disabled = true; 
-        ui.deployBtn.innerText = "PROCESSING..."; 
-        showStatus("UPLOADING METADATA...", 'normal');
+        ui.deployBtn.innerText = "UPLOADING & VERIFYING METADATA..."; 
+        showStatus("PREPARING METADATA...", 'normal');
 
         try {
+            // STEP 1: Upload Metadata & Moderate
             const prepRes = await fetch(`${BACKEND_URL}/api/prepare-metadata`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, ticker, description, twitter, website, image: imageBase64 })
             });
+            
+            if (!prepRes.ok) {
+                const errData = await prepRes.json();
+                throw new Error(errData.error || "Metadata upload failed");
+            }
             const { metadataUri } = await prepRes.json();
             
-            ui.deployBtn.innerText = "SIGNING...";
-            showStatus("PLEASE SIGN TRANSACTION...", 'normal');
+            // STEP 2: Sign Transaction
+            ui.deployBtn.innerText = "SIGNING FEE TRANSACTION...";
+            showStatus("METADATA READY. PLEASE SIGN WALLET...", 'normal');
 
+            // Fetch Blockhash from Backend (Avoids 403 Public RPC Error)
             const bhRes = await fetch(`${BACKEND_URL}/api/blockhash`);
+            if (!bhRes.ok) throw new Error("Failed to fetch blockhash from backend");
             const { blockhash } = await bhRes.json();
 
-            const tx = new solanaWeb3.Transaction().add(
+            // FIXED: Added Priority Fees to the frontend payment transaction
+            const tx = new solanaWeb3.Transaction();
+            
+            // Add Compute Budget Instructions (Priority Fee)
+            const modifyComputeUnits = solanaWeb3.ComputeBudgetProgram.setComputeUnitLimit({ units: 200000 });
+            const addPriorityFee = solanaWeb3.ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 }); // 0.0001 SOL Gas
+            tx.add(modifyComputeUnits);
+            tx.add(addPriorityFee);
+
+            // Add Payment Instruction
+            tx.add(
                 solanaWeb3.SystemProgram.transfer({
                     fromPubkey: new solanaWeb3.PublicKey(userPubkey),
                     toPubkey: new solanaWeb3.PublicKey(DEV_WALLET_PUBKEY),
                     lamports: 0.05 * 1000000000 
                 })
             );
+            
             tx.recentBlockhash = blockhash;
             tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
             
             const signedTx = await window.solana.signAndSendTransaction(tx);
             
-            ui.deployBtn.innerText = "QUEUING...";
-            showStatus("PAYMENT SENT. QUEUING...", 'normal');
+            // STEP 3: Submit to Backend Queue
+            ui.deployBtn.innerText = "QUEUING DEPLOYMENT...";
+            showStatus("PAYMENT CONFIRMED. QUEUING...", 'normal');
 
             const deployRes = await fetch(`${BACKEND_URL}/api/deploy`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     name, ticker, description, twitter, website,
-                    metadataUri,
+                    metadataUri, // Send the pre-uploaded URI
                     userTx: signedTx.signature,
                     userPubkey: userPubkey,
-                    isMayhemMode: isMayhemMode // PASS TO BACKEND
+                    isMayhemMode: isMayhemMode 
                 })
             });
 
@@ -220,8 +458,9 @@
 
         } catch (e) {
             console.error(e);
-            showStatus("ERROR: " + (e.message || "Failed."), 'error');
-            ui.deployBtn.disabled = false;
+            showStatus("ERROR: " + (e.message || "Process failed."), 'error');
+            isDeploying = false; // Unlock button logic
+            refreshWalletBalance(); // Reset button state
         }
     };
 
@@ -238,18 +477,28 @@
                     document.getElementById('mint-addr').innerText = job.result.mint;
                     document.getElementById('tx-link').href = `https://solscan.io/tx/${job.result.signature}`;
                     ui.deployBtn.innerText = "LAUNCH COMPLETE"; ui.deployBtn.disabled = false;
+                    isDeploying = false;
+                    refreshAllData(); // Force refresh to update balance and logs
                 } else if (job.state === 'failed') {
                     clearInterval(interval);
-                    showStatus(`FAILED: ${job.failedReason}`, 'error');
-                    ui.deployBtn.disabled = false; ui.deployBtn.innerText = "RETRY";
+                    showStatus(`DEPLOYMENT FAILED: ${job.failedReason}`, 'error');
+                    isDeploying = false;
+                    ui.deployBtn.disabled = false; ui.deployBtn.innerText = "RETRY LAUNCH";
+                } else {
+                    // Update status text based on state
+                    showStatus(`STATUS: ${job.state.toUpperCase()} (Please Wait...)`, 'normal');
                 }
-            } catch (e) {}
-        }, 2000);
+            } catch (e) { console.error("Polling error", e); }
+        }, 2000); // Check every 2s
     };
     
     window.addEventListener('load', () => {
-        if (window.solana && window.solana.isPhantom) window.solana.connect({ onlyIfTrusted: true }).then((resp) => updateWalletUI(resp.publicKey)).catch(() => {});
+        if (window.solana && window.solana.isPhantom) {
+            window.solana.connect({ onlyIfTrusted: true }).then((resp) => updateWalletUI(resp.publicKey)).catch(() => {});
+            window.solana.on('disconnect', () => { disconnectWallet(); showStatus("Wallet Disconnected.", 'info'); });
+        }
     });
 </script>
+
 </body>
 </html>

@@ -44,7 +44,7 @@
         { "name": "name", "type": "string" },
         { "name": "symbol", "type": "string" },
         { "name": "uri", "type": "string" },
-        { "name": "creator", "type": "pubkey" },
+        { "name": "creator", "type": "publicKey" },
         { "name": "is_mayhem_mode", "type": "bool" }
       ]
     },
@@ -118,7 +118,7 @@
           { "name": "real_sol_reserves", "type": "u64" },
           { "name": "token_total_supply", "type": "u64" },
           { "name": "complete", "type": "bool" },
-          { "name": "creator", "type": "pubkey" },
+          { "name": "creator", "type": "publicKey" },
           { "name": "is_mayhem_mode", "type": "bool" }
         ]
       }
