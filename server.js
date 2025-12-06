@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.8";
+const VERSION = "v10.5.9";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -95,7 +95,6 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = safePublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xW
 const FEE_PROGRAM_ID = safePublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ", "11111111111111111111111111111111", "FEE_PROGRAM_ID");
 const FEE_RECIPIENT = safePublicKey("FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB", "11111111111111111111111111111111", "FEE_RECIPIENT");
 
-// FIXED: Using System Program as a safe placeholder. Replace with real ID when ready.
 const MAYHEM_PROGRAM_ID = safePublicKey("11111111111111111111111111111111", "11111111111111111111111111111111", "MAYHEM_PROGRAM_ID");
 
 // --- DB & Directories ---
@@ -304,6 +303,20 @@ app.get('/api/leaderboard', async (req, res) => { const { userPubkey } = req.que
 app.get('/api/recent-launches', async (req, res) => { try { const rows = await db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10'); res.json(rows.map(r => ({ userSnippet: r.userPubkey.slice(0, 5), ticker: r.ticker, mint: r.mint }))); } catch (e) { res.status(500).json([]); } });
 app.get('/api/debug/logs', (req, res) => { const logPath = path.join(DISK_ROOT, 'server_debug.log'); if (fs.existsSync(logPath)) { const stats = fs.statSync(logPath); const stream = fs.createReadStream(logPath, { start: Math.max(0, stats.size - 50000) }); stream.pipe(res); } else { res.send("No logs yet."); } });
 app.get('/api/job-status/:id', async (req, res) => { if (!deployQueue) return res.status(500).json({ error: "Queue not initialized" }); const job = await deployQueue.getJob(req.params.id); if (!job) return res.status(404).json({ error: "Job not found" }); const state = await job.getState(); res.json({ id: job.id, state, result: job.returnvalue, failedReason: job.failedReason }); });
+
+// NEW: Authenticated Balance Proxy
+app.get('/api/balance', async (req, res) => {
+    try {
+        const { pubkey } = req.query;
+        if (!pubkey) return res.status(400).json({ error: "Missing pubkey" });
+        // Uses the server's 'connection' object which is configured with HELIUS_API_KEY
+        const balance = await connection.getBalance(new PublicKey(pubkey));
+        res.json({ balance });
+    } catch (err) { 
+        logger.error("Balance Check Error", { error: err.message });
+        res.status(500).json({ error: err.message }); 
+    }
+});
 
 app.post('/api/prepare-metadata', async (req, res) => {
     try {

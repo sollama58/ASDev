@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.5.5</title>
+    <title>ASDev Launcher v10.5.9</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -178,10 +178,11 @@
 <div id="log-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeLogModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FULL BUYBACK LOGS</h3><div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2"></div></div></div>
 
 <script>
-    const FRONTEND_VERSION = "v10.5.5";
+    const FRONTEND_VERSION = "v10.5.9";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
-    // CHANGED: Use Public RPC endpoint
+    const DEPLOYMENT_FEE = 0.05;
+    // NOTE: Using Public RPC for generic calls, but Backend Proxy for Balance Check to use Helius
     const SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"; 
     const PUMPFUN_URL_BASE = "https://pump.fun/coin/";
     const PUMP_CONTRACT = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
@@ -190,6 +191,7 @@
     let allLogs = []; 
     let connection = new solanaWeb3.Connection(SOLANA_RPC_URL, "confirmed"); 
     let pumpPriceCache = 0.0;
+    let isDeploying = false;
 
     const ui = {
         connectBtn: document.getElementById('connect-btn'), walletUI: document.getElementById('wallet-ui'), walletAddr: document.getElementById('wallet-addr'), walletBal: document.getElementById('wallet-bal'),
@@ -290,7 +292,32 @@
     const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; };
     const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
 
-    const refreshWalletBalance = async () => { if (!userPubkey) return; try { const pubkey = new solanaWeb3.PublicKey(userPubkey); const bal = await connection.getBalance(pubkey); ui.walletBal.innerText = (bal / solanaWeb3.LAMPORTS_PER_SOL).toFixed(3) + " SOL"; } catch (e) {} };
+    const refreshWalletBalance = async () => { 
+        if (!userPubkey) return; 
+        try { 
+            // Use Backend Proxy to get Balance from Helius without exposing key
+            const res = await fetch(`${BACKEND_URL}/api/balance?pubkey=${userPubkey}`);
+            if (!res.ok) throw new Error("Balance fetch failed");
+            const data = await res.json();
+            const solBalance = data.balance / solanaWeb3.LAMPORTS_PER_SOL;
+            
+            ui.walletBal.innerText = solBalance.toFixed(3) + " SOL"; 
+
+            // Disable/Enable Launch Button based on balance (if not deploying)
+            if (!isDeploying) {
+                if (solBalance < DEPLOYMENT_FEE) {
+                    ui.deployBtn.disabled = true;
+                    ui.deployBtn.innerText = `INSUFFICIENT BALANCE (< ${DEPLOYMENT_FEE} SOL)`;
+                    ui.deployBtn.classList.add("opacity-50", "cursor-not-allowed");
+                } else {
+                    ui.deployBtn.disabled = false;
+                    ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE";
+                    ui.deployBtn.classList.remove("opacity-50", "cursor-not-allowed");
+                }
+            }
+        } catch (e) { console.error("Balance check error:", e); } 
+    };
+
     const updateWalletUI = async (pubkey) => { if (!pubkey) { ui.walletUI.classList.add('hidden'); ui.connectBtn.classList.remove('hidden'); return; } userPubkey = pubkey.toString(); ui.connectBtn.classList.add('hidden'); ui.walletUI.classList.remove('hidden'); ui.walletUI.classList.add('flex'); ui.walletAddr.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4); await refreshWalletBalance(); };
     const connectWallet = async () => { if (window.solana && window.solana.isPhantom) { try { const resp = await window.solana.connect(); await updateWalletUI(resp.publicKey); } catch (err) { console.error(err); } } else { window.open("https://phantom.app/", "_blank"); } };
     const disconnectWallet = async () => { if (window.solana) { try { await window.solana.disconnect(); } catch (e) {} userPubkey = null; updateWalletUI(null); } };
@@ -327,6 +354,7 @@
         let imageBase64;
         try { imageBase64 = await toBase64(fileInput.files[0]); } catch(e) { return showStatus("IMAGE PROCESSING FAILED", 'error'); }
 
+        isDeploying = true; // Lock button
         ui.deployBtn.disabled = true; 
         ui.deployBtn.innerText = "UPLOADING & VERIFYING METADATA..."; 
         showStatus("PREPARING METADATA...", 'normal');
@@ -387,8 +415,8 @@
         } catch (e) {
             console.error(e);
             showStatus("ERROR: " + (e.message || "Process failed."), 'error');
-            ui.deployBtn.disabled = false;
-            ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE";
+            isDeploying = false; // Unlock button logic
+            refreshWalletBalance(); // Reset button state
         }
     };
 
@@ -405,10 +433,12 @@
                     document.getElementById('mint-addr').innerText = job.result.mint;
                     document.getElementById('tx-link').href = `https://solscan.io/tx/${job.result.signature}`;
                     ui.deployBtn.innerText = "LAUNCH COMPLETE"; ui.deployBtn.disabled = false;
+                    isDeploying = false;
                     refreshWalletBalance();
                 } else if (job.state === 'failed') {
                     clearInterval(interval);
                     showStatus(`DEPLOYMENT FAILED: ${job.failedReason}`, 'error');
+                    isDeploying = false;
                     ui.deployBtn.disabled = false; ui.deployBtn.innerText = "RETRY LAUNCH";
                 } else {
                     // Update status text based on state
