@@ -152,11 +152,11 @@
         { "name": "program" }
       ],
       "args": [
-        { "name": "name", "type": { "kind": "string" } },
-        { "name": "symbol", "type": { "kind": "string" } },
-        { "name": "uri", "type": { "kind": "string" } },
-        { "name": "creator", "type": { "kind": "publicKey" } },
-        { "name": "isMayhemMode", "type": { "kind": "bool" } }
+        { "name": "name", "type": "string" },
+        { "name": "symbol", "type": "string" },
+        { "name": "uri", "type": "string" },
+        { "name": "creator", "type": "publicKey" },
+        { "name": "isMayhemMode", "type": "bool" }
       ]
     }
   ],
