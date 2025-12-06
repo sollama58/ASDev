@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.12";
+const VERSION = "v10.5.14";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -199,8 +199,45 @@ if (redisConnection) {
         const mayhemTokenVault = getATA(mint, solVault);
         const associatedUser = getATA(mint, creator);
 
-        const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, !!isMayhemMode).accounts({ mint, mintAuthority, bondingCurve, associatedBondingCurve, global, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, mayhemProgramId: MAYHEM_PROGRAM_ID, globalParams, solVault, mayhemState, mayhemTokenVault, eventAuthority, program: PUMP_PROGRAM_ID }).instruction();
-        const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), false).accounts({ global, feeRecipient: FEE_RECIPIENT, mint, bondingCurve, associatedBondingCurve, associatedUser, user: devKeypair.publicKey, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator: globalVolume, userVolumeAccumulator: userVolume, feeConfig, feeProgram: FEE_PROGRAM_ID }).instruction();
+        // UPDATED: Using explicit snake_case keys to match IDL strictly
+        const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, !!isMayhemMode).accounts({ 
+            mint: mint, 
+            mint_authority: mintAuthority, 
+            bonding_curve: bondingCurve, 
+            associated_bonding_curve: associatedBondingCurve, 
+            global: global, 
+            user: creator, 
+            system_program: SystemProgram.programId, 
+            token_program: TOKEN_PROGRAM_2022_ID, 
+            associated_token_program: ASSOCIATED_TOKEN_PROGRAM_ID, 
+            mayhem_program_id: MAYHEM_PROGRAM_ID, 
+            global_params: globalParams, 
+            sol_vault: solVault, 
+            mayhem_state: mayhemState, 
+            mayhem_token_vault: mayhemTokenVault, 
+            event_authority: eventAuthority, 
+            program: PUMP_PROGRAM_ID 
+        }).instruction();
+
+        // UPDATED: Using explicit snake_case keys here too
+        const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), false).accounts({ 
+            global: global, 
+            fee_recipient: FEE_RECIPIENT, 
+            mint: mint, 
+            bonding_curve: bondingCurve, 
+            associated_bonding_curve: associatedBondingCurve, 
+            associated_user: associatedUser, 
+            user: devKeypair.publicKey, 
+            system_program: SystemProgram.programId, 
+            token_program: TOKEN_PROGRAM_2022_ID, 
+            creator_vault: creatorVault, 
+            event_authority: eventAuthority, 
+            program: PUMP_PROGRAM_ID, 
+            global_volume_accumulator: globalVolume, 
+            user_volume_accumulator: userVolume, 
+            fee_config: feeConfig, 
+            fee_program: FEE_PROGRAM_ID 
+        }).instruction();
 
         const tx = new Transaction().add(createIx).add(buyIx);
         tx.feePayer = creator;
@@ -208,7 +245,7 @@ if (redisConnection) {
         
         await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
 
-        setTimeout(async () => { try { const bal = await connection.getTokenAccountBalance(associatedUser); if (bal.value.uiAmount > 0) { const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0)).accounts({ global, feeRecipient: FEE_RECIPIENT, mint, bondingCurve, associatedBondingCurve, associatedUser, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator: globalVolume, userVolumeAccumulator: userVolume, feeConfig, feeProgram: FEE_PROGRAM_ID }).instruction(); const sellTx = new Transaction().add(sellIx); await sendTxWithRetry(sellTx, [devKeypair]); } } catch (e) { logger.error("Sell error", {msg: e.message}); } }, 1500); 
+        setTimeout(async () => { try { const bal = await connection.getTokenAccountBalance(associatedUser); if (bal.value.uiAmount > 0) { const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0)).accounts({ global, fee_recipient: FEE_RECIPIENT, mint, bonding_curve: bondingCurve, associated_bonding_curve: associatedBondingCurve, associated_user: associatedUser, user: creator, system_program: SystemProgram.programId, token_program: TOKEN_PROGRAM_2022_ID, creator_vault: creatorVault, event_authority: eventAuthority, program: PUMP_PROGRAM_ID, global_volume_accumulator: globalVolume, user_volume_accumulator: userVolume, fee_config: feeConfig, fee_program: FEE_PROGRAM_ID }).instruction(); const sellTx = new Transaction().add(sellIx); await sendTxWithRetry(sellTx, [devKeypair]); } } catch (e) { logger.error("Sell error", {msg: e.message}); } }, 1500); 
 
         return { mint: mint.toString(), signature: sig };
     }, { connection: redisConnection, concurrency: 1 });
