@@ -14,11 +14,12 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.10.0-FIX-MANUAL-SELL";
+const VERSION = "v10.11.0-FEE-CHANGE-AND-BONDING-TRACK";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
 const PRIORITY_FEE_MICRO_LAMPORTS = 100000; 
+const DEPLOYMENT_FEE_SOL = 0.02; // [CHANGED] Fee updated to 0.02 SOL
 
 // AUTH STRATEGY
 const PINATA_JWT = process.env.PINATA_JWT ? process.env.PINATA_JWT.trim() : null; 
@@ -89,7 +90,8 @@ let db;
 async function initDB() {
     db = await open({ filename: DB_PATH, driver: sqlite3.Database });
     await db.exec('PRAGMA journal_mode = WAL;');
-    await db.exec(`CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0);
+    // [CHANGED] Added `complete` BOOLEAN field to tokens table to track bonding curve status
+    await db.exec(`CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0, complete BOOLEAN DEFAULT 0);
         CREATE TABLE IF NOT EXISTS transactions (signature TEXT PRIMARY KEY, userPubkey TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, data TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value REAL);
@@ -152,7 +154,8 @@ async function refundUser(userPubkeyStr, reason) {
         const userPubkey = new PublicKey(userPubkeyStr);
         const tx = new Transaction();
         addPriorityFee(tx); // Gas
-        tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: userPubkey, lamports: 0.049 * LAMPORTS_PER_SOL }));
+        // [CHANGED] Refund adjusted to 0.019 (0.02 - gas)
+        tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: userPubkey, lamports: (DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL }));
         const sig = await sendTxWithRetry(tx, [devKeypair]);
         logger.info(`💰 REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
         return sig;
@@ -428,7 +431,10 @@ async function uploadMetadataToPinata(n, s, d, t, w, i) {
 app.get('/api/version', (req, res) => res.json({ version: VERSION }));
 app.get('/api/health', async (req, res) => { try { const stats = await getStats(); const launches = await getTotalLaunches(); const logs = await db.all('SELECT * FROM logs ORDER BY timestamp DESC LIMIT 50'); res.json({ status: "online", wallet: devKeypair.publicKey.toString(), lifetimeFees: (stats.lifetimeFeesLamports / LAMPORTS_PER_SOL).toFixed(4), totalPumpBought: (stats.totalPumpBoughtLamports / LAMPORTS_PER_SOL).toFixed(4), totalLaunches: launches, recentLogs: logs.map(l => ({ ...JSON.parse(l.data), type: l.type, timestamp: l.timestamp })), headerImageUrl: HEADER_IMAGE_URL }); } catch (e) { res.status(500).json({ error: "DB Error" }); } });
 app.get('/api/check-holder', async (req, res) => { const { userPubkey } = req.query; if (!userPubkey) return res.json({ isHolder: false }); try { const result = await db.get('SELECT mint, rank FROM token_holders WHERE holderPubkey = ? LIMIT 1', userPubkey); res.json({ isHolder: !!result, ...(result || {}) }); } catch (e) { res.status(500).json({ error: "DB Error" }); } });
-app.get('/api/leaderboard', async (req, res) => { const { userPubkey } = req.query; try { const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10'); const leaderboard = await Promise.all(rows.map(async (r) => { let isUserTopHolder = false; if (userPubkey) { const holderEntry = await db.get('SELECT rank FROM token_holders WHERE mint = ? AND holderPubkey = ?', [r.mint, userPubkey]); if (holderEntry) isUserTopHolder = true; } return { mint: r.mint, name: r.name, ticker: r.ticker, image: r.image, price: (r.marketCap / 1000000000).toFixed(6), volume: r.volume24h, isUserTopHolder }; })); res.json(leaderboard); } catch (e) { res.status(500).json([]); } });
+app.get('/api/leaderboard', async (req, res) => { const { userPubkey } = req.query; try { const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10'); const leaderboard = await Promise.all(rows.map(async (r) => { let isUserTopHolder = false; if (userPubkey) { const holderEntry = await db.get('SELECT rank FROM token_holders WHERE mint = ? AND holderPubkey = ?', [r.mint, userPubkey]); if (holderEntry) isUserTopHolder = true; } 
+    // [CHANGED] return 'complete' field to frontend for bonding status
+    return { mint: r.mint, name: r.name, ticker: r.ticker, image: r.image, price: (r.marketCap / 1000000000).toFixed(6), volume: r.volume24h, isUserTopHolder, complete: !!r.complete }; 
+})); res.json(leaderboard); } catch (e) { res.status(500).json([]); } });
 app.get('/api/recent-launches', async (req, res) => { try { const rows = await db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10'); res.json(rows.map(r => ({ userSnippet: r.userPubkey.slice(0, 5), ticker: r.ticker, mint: r.mint }))); } catch (e) { res.status(500).json([]); } });
 app.get('/api/debug/logs', (req, res) => { const logPath = path.join(DISK_ROOT, 'server_debug.log'); if (fs.existsSync(logPath)) { const stats = fs.statSync(logPath); const stream = fs.createReadStream(logPath, { start: Math.max(0, stats.size - 50000) }); stream.pipe(res); } else { res.send("No logs yet."); } });
 app.get('/api/job-status/:id', async (req, res) => { if (!deployQueue) return res.status(500).json({ error: "Queue not initialized" }); const job = await deployQueue.getJob(req.params.id); if (!job) return res.status(404).json({ error: "Job not found" }); const state = await job.getState(); res.json({ id: job.id, state, result: job.returnvalue, failedReason: job.failedReason }); });
@@ -464,7 +470,8 @@ app.post('/api/deploy', async (req, res) => {
                 validPayment = txInfo.transaction.message.instructions.some(ix => { 
                     if (ix.programId.toString() !== '11111111111111111111111111111111') return false; 
                     if (ix.parsed.type !== 'transfer') return false; 
-                    return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL; 
+                    // [CHANGED] Fee Check: Ensure transaction is >= 0.02 SOL
+                    return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL; 
                 });
                 break;
             } else {
@@ -480,7 +487,7 @@ app.post('/api/deploy', async (req, res) => {
             return res.status(400).json({ error: "Payment verification failed or timed out." });
         }
 
-        await addFees(0.05 * LAMPORTS_PER_SOL);
+        await addFees(DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL);
         if (!deployQueue) return res.status(500).json({ error: "Deployment Queue Unavailable" });
         const job = await deployQueue.add('deployToken', { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode, metadataUri });
         res.json({ success: true, jobId: job.id, message: "Queued" });
@@ -516,7 +523,13 @@ setInterval(async () => {
     } catch(e) { console.error("Loop Error", e); }
 }, 60 * 60 * 1000); 
 
-setInterval(async () => { if (!db) return; const tokens = await db.all('SELECT mint FROM tokens'); for (let i = 0; i < tokens.length; i += 5) { const batch = tokens.slice(i, i + 5); await Promise.all(batch.map(async (t) => { try { const response = await axios.get(`https://frontend-api.pump.fun/coins/${t.mint}`, { timeout: 2000 }); const data = response.data; if (data) await db.run(`UPDATE tokens SET volume24h = ?, marketCap = ?, lastUpdated = ? WHERE mint = ?`, [data.usd_market_cap || 0, data.usd_market_cap || 0, Date.now(), t.mint]); } catch (e) {} })); await new Promise(r => setTimeout(r, 1000)); } }, 2 * 60 * 1000);
+setInterval(async () => { if (!db) return; const tokens = await db.all('SELECT mint FROM tokens'); for (let i = 0; i < tokens.length; i += 5) { const batch = tokens.slice(i, i + 5); await Promise.all(batch.map(async (t) => { try { const response = await axios.get(`https://frontend-api.pump.fun/coins/${t.mint}`, { timeout: 2000 }); const data = response.data; 
+    if (data) {
+        // [CHANGED] Update 'complete' status from API response (bonding status)
+        const isComplete = data.complete ? 1 : 0;
+        await db.run(`UPDATE tokens SET volume24h = ?, marketCap = ?, lastUpdated = ?, complete = ? WHERE mint = ?`, [data.usd_market_cap || 0, data.usd_market_cap || 0, Date.now(), isComplete, t.mint]); 
+    }
+} catch (e) {} })); await new Promise(r => setTimeout(r, 1000)); } }, 2 * 60 * 1000);
 
 let isBuybackRunning = false;
 async function runPurchaseAndFees() {
