@@ -12,6 +12,7 @@ const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
 
 // --- Configuration ---
+const VERSION = "v10.0.0";
 const PORT = process.env.PORT || 3000;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
@@ -19,71 +20,47 @@ const PINATA_JWT = process.env.PINATA_JWT;
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
 const TARGET_PUMP_TOKEN = new PublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn");
-const WALLET_19_5 = new PublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z");
-const WALLET_0_5 = new PublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g");
+const WALLET_19_5 = new PublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z"); // Fee Wallet
+const WALLET_0_5 = new PublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g"); // Upkeep Fee
 const FEE_THRESHOLD_SOL = 0.20;
 
-// --- DATABASE SETUP ---
-const DISK_ROOT = '/var/data';
-// Ensure disk root exists or fallback
+// --- PERSISTENT DISK CONFIGURATION ---
+const DISK_ROOT = '/var/data'; 
+const DATA_DIR = path.join(DISK_ROOT, 'tokens'); 
+const STATS_FILE = path.join(DISK_ROOT, 'stats.json');
+const PURCHASE_LOG = path.join(DISK_ROOT, 'purchase_logs.json');
+
+// Directory Setup
 if (!fs.existsSync(DISK_ROOT)) {
     console.warn(`⚠️ Warning: Disk root ${DISK_ROOT} does not exist. Fallback to local.`);
     if (!fs.existsSync('./data')) fs.mkdirSync('./data');
-}
+} 
+
+const ACTIVE_DATA_DIR = fs.existsSync(DISK_ROOT) ? DATA_DIR : './data/tokens';
+const ACTIVE_STATS_FILE = fs.existsSync(DISK_ROOT) ? STATS_FILE : './data/stats.json';
+const ACTIVE_LOG_FILE = fs.existsSync(DISK_ROOT) ? PURCHASE_LOG : './data/purchase_logs.json';
+
+// Ensure Directories
+const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); };
+ensureDir(ACTIVE_DATA_DIR);
 const DB_PATH = fs.existsSync(DISK_ROOT) ? path.join(DISK_ROOT, 'launcher.db') : './data/launcher.db';
 
+// --- Database Init ---
 let db;
-
 async function initDB() {
-    db = await open({
-        filename: DB_PATH,
-        driver: sqlite3.Database
-    });
-
+    db = await open({ filename: DB_PATH, driver: sqlite3.Database });
     await db.exec(`
-        CREATE TABLE IF NOT EXISTS tokens (
-            mint TEXT PRIMARY KEY,
-            userPubkey TEXT,
-            name TEXT,
-            ticker TEXT,
-            description TEXT,
-            twitter TEXT,
-            website TEXT,
-            image TEXT,
-            isMayhemMode BOOLEAN,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            volume24h REAL DEFAULT 0,
-            marketCap REAL DEFAULT 0,
-            lastUpdated INTEGER DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS transactions (
-            signature TEXT PRIMARY KEY,
-            userPubkey TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type TEXT,
-            data TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS stats (
-            key TEXT PRIMARY KEY,
-            value REAL
-        );
-        
+        CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS transactions (signature TEXT PRIMARY KEY, userPubkey TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, data TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value REAL);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('accumulatedFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeFeesLamports', 0);
     `);
     console.log(`✅ Database initialized at ${DB_PATH}`);
 }
-
 initDB();
 
-// --- Environment Checks ---
 if (!DEV_WALLET_PRIVATE_KEY || !HELIUS_API_KEY || !PINATA_JWT) {
     console.error("❌ ERROR: Missing Environment Variables.");
     process.exit(1);
@@ -119,15 +96,35 @@ const idl = JSON.parse(idlRaw);
 idl.address = PUMP_PROGRAM_ID.toString();
 const program = new Program(idl, PUMP_PROGRAM_ID, provider);
 
-// --- Database Helpers ---
+// --- Helpers ---
+
+// Retry Helper
+async function sendTxWithRetry(tx, signers, retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+            tx.recentBlockhash = blockhash;
+            tx.lastValidBlockHeight = lastValidBlockHeight;
+            const sig = await sendAndConfirmTransaction(connection, tx, signers, { commitment: 'confirmed', skipPreflight: true });
+            return sig;
+        } catch (err) {
+            console.warn(`⚠️ Tx attempt ${i + 1} failed:`, err.message);
+            if (i === retries - 1) throw err;
+            await new Promise(r => setTimeout(r, 2000));
+        }
+    }
+}
 
 async function saveTokenData(userPubkey, mint, metadata) {
     try {
-        await db.run(
-            `INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [mint, userPubkey, metadata.name, metadata.ticker, metadata.description, metadata.twitter, metadata.website, metadata.image, metadata.isMayhemMode]
-        );
+        await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [mint, userPubkey, metadata.name, metadata.ticker, metadata.description, metadata.twitter, metadata.website, metadata.image, metadata.isMayhemMode]);
+        
+        // Also save to disk for redundancy
+        const shard = userPubkey.slice(0, 2).toLowerCase();
+        const shardDir = path.join(ACTIVE_DATA_DIR, shard);
+        ensureDir(shardDir);
+        fs.writeFileSync(path.join(shardDir, `${mint}.json`), JSON.stringify({ userPubkey, mint, metadata, timestamp: new Date().toISOString() }, null, 2));
     } catch (e) { console.error("DB Save Token Error:", e); }
 }
 
@@ -148,67 +145,43 @@ async function addFees(amountLamports) {
 async function getStats() {
     const acc = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports');
     const life = await db.get('SELECT value FROM stats WHERE key = ?', 'lifetimeFeesLamports');
-    return { 
-        accumulatedFeesLamports: acc ? acc.value : 0, 
-        lifetimeFeesLamports: life ? life.value : 0 
-    };
+    return { accumulatedFeesLamports: acc ? acc.value : 0, lifetimeFeesLamports: life ? life.value : 0 };
 }
 
 async function resetAccumulatedFees(amountUsed) {
-    // Ensure we don't go below zero
     const current = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports');
     const newVal = Math.max(0, (current ? current.value : 0) - amountUsed);
     await db.run('UPDATE stats SET value = ? WHERE key = ?', [newVal, 'accumulatedFeesLamports']);
 }
 
 async function logPurchase(type, data) {
-    try {
-        await db.run('INSERT INTO logs (type, data) VALUES (?, ?)', [type, JSON.stringify(data)]);
-    } catch (e) { console.error("DB Log Error:", e); }
+    try { await db.run('INSERT INTO logs (type, data) VALUES (?, ?)', [type, JSON.stringify(data)]); } catch (e) {}
 }
 
 async function getRecentLogs(limit = 5) {
     const rows = await db.all('SELECT * FROM logs ORDER BY id DESC LIMIT ?', limit);
-    return rows.map(row => ({
-        ...JSON.parse(row.data),
-        type: row.type,
-        timestamp: row.timestamp
-    }));
+    return rows.map(row => ({ ...JSON.parse(row.data), type: row.type, timestamp: row.timestamp }));
 }
 
 // --- Leaderboard Indexer ---
-// Runs every 2 minutes to update volume/marketcap for tokens in DB
 setInterval(async () => {
     if (!db) return;
-    console.log("📊 Updating Token Stats...");
-    const tokens = await db.all('SELECT mint FROM tokens'); // Get all mints
-    
-    // Batch process (5 at a time to respect rate limits)
+    const tokens = await db.all('SELECT mint FROM tokens'); 
     for (let i = 0; i < tokens.length; i += 5) {
         const batch = tokens.slice(i, i + 5);
         await Promise.all(batch.map(async (t) => {
             try {
                 const response = await axios.get(`https://frontend-api.pump.fun/coins/${t.mint}`, { timeout: 2000 });
                 const data = response.data;
-                if (data) {
-                    await db.run(
-                        `UPDATE tokens SET volume24h = ?, marketCap = ?, lastUpdated = ? WHERE mint = ?`,
-                        [data.usd_market_cap || 0, data.usd_market_cap || 0, Date.now(), t.mint]
-                    );
-                }
-            } catch (e) { 
-                // Ignore 404/timeout
-            }
+                if (data) await db.run(`UPDATE tokens SET volume24h = ?, marketCap = ?, lastUpdated = ? WHERE mint = ?`, [data.usd_market_cap || 0, data.usd_market_cap || 0, Date.now(), t.mint]);
+            } catch (e) {}
         }));
-        // Small delay between batches
         await new Promise(r => setTimeout(r, 1000));
     }
 }, 2 * 60 * 1000);
 
-
 // --- Buyback Loop (5 Mins) ---
 let isBuybackRunning = false;
-
 async function runPurchaseAndFees() {
     if (isBuybackRunning) return;
     isBuybackRunning = true;
@@ -222,11 +195,7 @@ async function runPurchaseAndFees() {
         if (balanceLamports >= thresholdLamports) {
             const realBalance = await connection.getBalance(devKeypair.publicKey);
             const spendable = Math.min(balanceLamports, realBalance - 5000000); 
-            
-            if (spendable <= 0) {
-                await logPurchase('SKIPPED', { reason: 'Insufficient Real Balance', balance: (realBalance/LAMPORTS_PER_SOL).toFixed(4) });
-                return;
-            }
+            if (spendable <= 0) { await logPurchase('SKIPPED', { reason: 'Insufficient Real Balance', balance: (realBalance/LAMPORTS_PER_SOL).toFixed(4) }); return; }
 
             const buyAmount = new BN(Math.floor(spendable * 0.80));
             const transfer19_5 = Math.floor(spendable * 0.195);
@@ -238,46 +207,36 @@ async function runPurchaseAndFees() {
             const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), false)
             .accounts({
                 global: PublicKey.findProgramAddressSync([Buffer.from("global")], PUMP_PROGRAM_ID)[0],
-                feeRecipient: FEE_RECIPIENT, mint: TARGET_PUMP_TOKEN, bondingCurve, associatedBondingCurve,
-                associatedUser, user: devKeypair.publicKey, systemProgram: SystemProgram.programId,
-                tokenProgram: TOKEN_PROGRAM_2022_ID, 
+                feeRecipient: FEE_RECIPIENT, mint: TARGET_PUMP_TOKEN, bondingCurve, associatedBondingCurve, associatedUser, user: devKeypair.publicKey,
+                systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, 
                 creatorVault: PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), bondingCurve.toBuffer()], PUMP_PROGRAM_ID)[0],
                 eventAuthority: PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID)[0],
-                program: PUMP_PROGRAM_ID, 
-                globalVolumeAccumulator: PublicKey.findProgramAddressSync([Buffer.from("global_volume_accumulator")], PUMP_PROGRAM_ID)[0],
+                program: PUMP_PROGRAM_ID, globalVolumeAccumulator: PublicKey.findProgramAddressSync([Buffer.from("global_volume_accumulator")], PUMP_PROGRAM_ID)[0],
                 userVolumeAccumulator: PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_PROGRAM_ID)[0],
-                feeConfig: PublicKey.findProgramAddressSync([Buffer.from("fee_config")], FEE_PROGRAM_ID)[0],
-                feeProgram: FEE_PROGRAM_ID
+                feeConfig: PublicKey.findProgramAddressSync([Buffer.from("fee_config")], FEE_PROGRAM_ID)[0], feeProgram: FEE_PROGRAM_ID
             }).instruction();
 
-            const tx1 = SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_19_5, lamports: transfer19_5 });
-            const tx2 = SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 });
-
-            const tx = new Transaction().add(buyIx).add(tx1).add(tx2);
-            tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+            const tx = new Transaction().add(buyIx)
+                .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_19_5, lamports: transfer19_5 }))
+                .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
+            
             tx.feePayer = devKeypair.publicKey;
-
-            const sig = await sendAndConfirmTransaction(connection, tx, [devKeypair]);
+            const sig = await sendTxWithRetry(tx, [devKeypair]);
             console.log(`✅ Buyback Success: ${sig}`);
 
             await logPurchase('SUCCESS', { totalSpent: spendable, buyAmount: buyAmount.toString(), signature: sig });
             await resetAccumulatedFees(spendable);
-
         } else {
-            const currentSol = (balanceLamports / LAMPORTS_PER_SOL).toFixed(4);
-            await logPurchase('SKIPPED', { reason: 'Fees Under Limit', current: currentSol, target: FEE_THRESHOLD_SOL });
+            await logPurchase('SKIPPED', { reason: 'Fees Under Limit', current: (balanceLamports/LAMPORTS_PER_SOL).toFixed(4), target: FEE_THRESHOLD_SOL });
         }
     } catch (err) {
         console.error("❌ Buyback Routine Failed:", err);
         await logPurchase('ERROR', { message: err.message });
-    } finally {
-        isBuybackRunning = false;
-    }
+    } finally { isBuybackRunning = false; }
 }
-
 setInterval(runPurchaseAndFees, 5 * 60 * 1000);
 
-// --- PDAs (Unchanged) ---
+// --- PDAs & Helpers ---
 function getPumpPDAs(mint, programId = PUMP_PROGRAM_ID) {
     const [bondingCurve] = PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), mint.toBuffer()], programId);
     const associatedBondingCurve = PublicKey.findProgramAddressSync([bondingCurve.toBuffer(), TOKEN_PROGRAM_2022_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
@@ -303,7 +262,6 @@ function getMayhemPDAs(mint) {
 function getATA(mint, owner) {
     return PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN_PROGRAM_2022_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
 }
-
 async function uploadImageToPinata(base64Data) {
     try {
         const buffer = Buffer.from(base64Data.split(',')[1], 'base64');
@@ -324,16 +282,17 @@ async function uploadMetadataToPinata(name, symbol, description, twitter, websit
 }
 
 // --- Routes ---
+app.get('/api/version', (req, res) => res.json({ version: VERSION }));
 
 app.get('/api/health', async (req, res) => {
     try {
         const stats = await getStats();
-        const logs = await getRecentLogs(10);
+        const logs = await db.all('SELECT * FROM logs ORDER BY id DESC LIMIT 50'); 
         res.json({ 
             status: "online", 
             wallet: devKeypair.publicKey.toString(),
             lifetimeFees: (stats.lifetimeFeesLamports / LAMPORTS_PER_SOL).toFixed(4),
-            recentLogs: logs,
+            recentLogs: logs.map(l => ({ ...JSON.parse(l.data), type: l.type, timestamp: l.timestamp })),
             headerImageUrl: HEADER_IMAGE_URL 
         });
     } catch (e) { res.status(500).json({ error: "DB Error" }); }
@@ -341,30 +300,18 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/api/recent-launches', async (req, res) => {
     try {
-        // Now much faster with SQL
         const rows = await db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10');
-        const formatted = rows.map(r => ({
-            userSnippet: r.userPubkey.slice(0, 5),
-            ticker: r.ticker,
-            mint: r.mint
-        }));
-        res.json(formatted);
+        res.json(rows.map(r => ({ userSnippet: r.userPubkey.slice(0, 5), ticker: r.ticker, mint: r.mint })));
     } catch (e) { res.status(500).json([]); }
 });
 
 app.get('/api/leaderboard', async (req, res) => {
     try {
-        // Fetch top 10 by volume (which is updated by the indexer loop)
         const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10');
-        const leaderboard = rows.map(r => ({
-            mint: r.mint,
-            name: r.name,
-            ticker: r.ticker,
-            image: r.image,
-            price: (r.marketCap / 1000000000).toFixed(6), // Rough calc
-            volume: r.volume24h
-        }));
-        res.json(leaderboard);
+        res.json(rows.map(r => ({
+            mint: r.mint, name: r.name, ticker: r.ticker, image: r.image,
+            price: (r.marketCap / 1000000000).toFixed(6), volume: r.volume24h
+        })));
     } catch (e) { res.status(500).json([]); }
 });
 
@@ -376,7 +323,6 @@ app.post('/api/deploy', async (req, res) => {
         if (!ticker || ticker.length > 10) return res.status(400).json({ error: "Invalid Ticker" });
         if (!image) return res.status(400).json({ error: "Image required" });
 
-        // Security: Replay Attack Check
         const used = await checkTransactionUsed(userTx);
         if (used) return res.status(400).json({ error: "Transaction signature already used." });
 
@@ -384,14 +330,12 @@ app.post('/api/deploy', async (req, res) => {
         if (!txInfo) return res.status(400).json({ error: "Transaction not found." });
         
         const validPayment = txInfo.transaction.message.instructions.some(ix => {
-            if (ix.programId.toString() !== SystemProgram.programId.toString()) return false;
+            if (ix.programId.toString() !== '11111111111111111111111111111111') return false; 
             if (ix.parsed.type !== 'transfer') return false;
             return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL;
         });
-
         if (!validPayment) return res.status(400).json({ error: "Payment verification failed." });
 
-        // Mark TX as used
         await markTransactionUsed(userTx, userPubkey);
         await addFees(0.05 * LAMPORTS_PER_SOL);
 
@@ -400,7 +344,6 @@ app.post('/api/deploy', async (req, res) => {
         const mint = mintKeypair.publicKey;
         const creator = devKeypair.publicKey;
 
-        // Save to DB
         await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
 
         const { mintAuthority, bondingCurve, global, eventAuthority, globalVolume, userVolume, feeConfig, creatorVault } = getDeploymentPDAs(mint, creator);
@@ -416,9 +359,8 @@ app.post('/api/deploy', async (req, res) => {
             .accounts({ global, feeRecipient: FEE_RECIPIENT, mint, bondingCurve, associatedBondingCurve, associatedUser, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator: globalVolume, userVolumeAccumulator: userVolume, feeConfig, feeProgram: FEE_PROGRAM_ID }).instruction();
 
         const tx = new Transaction().add(createIx).add(buyIx);
-        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
         tx.feePayer = creator;
-        const sig = await sendAndConfirmTransaction(connection, tx, [devKeypair, mintKeypair]);
+        const sig = await sendTxWithRetry(tx, [devKeypair, mintKeypair]);
         
         setTimeout(async () => {
             try {
@@ -426,7 +368,7 @@ app.post('/api/deploy', async (req, res) => {
                 if (bal.value.uiAmount > 0) {
                     const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0)).accounts({ global, feeRecipient: FEE_RECIPIENT, mint, bondingCurve, associatedBondingCurve, associatedUser, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator: globalVolume, userVolumeAccumulator: userVolume, feeConfig, feeProgram: FEE_PROGRAM_ID }).instruction();
                     const sellTx = new Transaction().add(sellIx);
-                    await sendAndConfirmTransaction(connection, sellTx, [devKeypair]);
+                    await sendTxWithRetry(sellTx, [devKeypair]);
                 }
             } catch (e) { console.error("Sell error:", e.message); }
         }, 1500); 
