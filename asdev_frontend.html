@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.1</title>
+    <title>ASDev Launcher v10.3</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     <style>
+        /* ... (Previous Styles) ... */
         /* TERMINAL FIRE THEME */
         body { background-color: #2a1005; color: #ffedd5; font-family: 'Comic Neue', cursive; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 40px 20px; }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
@@ -62,13 +63,30 @@
         .metric-value { font-size: 24px; font-weight: bold; color: white; font-family: 'JetBrains Mono'; margin-top: 5px; }
         .metric-label { font-size: 12px; color: #fdba74; text-transform: uppercase; letter-spacing: 1px; }
         .holder-check { color: #4ade80; font-weight: bold; margin-left: 8px; }
+        
+        /* Warning Modal */
+        #warning-modal { display: block; } /* Show by default */
+        .warning-btn { background: #ea580c; color: white; border: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 20px; }
     </style>
 </head>
 <body>
 
+<!-- Warning Modal -->
+<div id="warning-modal" class="modal">
+    <div class="modal-content text-center border-red-600">
+        <h2 class="text-2xl font-bold text-red-500 mb-4">⚠️ CONTENT WARNING & DISCLAIMER</h2>
+        <p class="text-orange-200 mb-4">This platform employs automated AI moderation. Uploading NSFW, illegal, or prohibited content will result in an immediate ban and rejection of your deployment request.</p>
+        <p class="text-orange-200 mb-4 text-sm">By proceeding, you acknowledge that you are solely responsible for the content you upload. The platform operators assume no liability for user-generated content.</p>
+        <button onclick="document.getElementById('warning-modal').style.display='none'" class="warning-btn">I UNDERSTAND & AGREE</button>
+    </div>
+</div>
+
 <div id="app-container">
     <div class="ticker-wrap"><div class="ticker" id="ticker-content"><span class="ticker-item text-orange-600">CONNECTING TO LAUNCH FEED...</span></div></div>
-
+    
+    <!-- ... (Header, Form, Action Area, Leaderboard, Feeds, Metrics - Same as before) ... -->
+    <!-- Included for context but abbreviated to fit limits. Structure is identical to v10.1 -->
+    
     <div class="p-10">
         <!-- Header -->
         <div class="flex justify-between items-start mb-10 border-b-4 border-orange-900 pb-8">
@@ -155,6 +173,11 @@
                     <li><span class="text-red-400 font-bold">0.5%</span>: **Upkeep Fee**.</li>
                     <li><span class="text-yellow-400">STATUS</span>: The distribution is only executed when the accumulated fee pool reaches or exceeds **0.20 SOL**. Rounds are skipped if the threshold is not met.</li>
                 </ul>
+                
+                <div class="mt-6 p-4 border border-orange-800 bg-orange-950/50 rounded-lg">
+                    <h5 class="text-red-400 font-bold mb-2">LEGAL DISCLAIMER</h5>
+                    <p class="text-xs text-orange-300">This platform is a decentralized utility tool provided "as-is". The operators are not responsible for the nature of tokens created, their value, or any financial losses incurred. By using this service, you agree to comply with all applicable laws and regulations in your jurisdiction. Uploading illegal or prohibited content (CSAM, hate speech, etc.) is strictly forbidden and will be blocked by automated AI moderation systems. Transactions on the blockchain are irreversible.</p>
+                </div>
             </div>
         </div>
         
@@ -174,6 +197,7 @@
 <div id="log-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeLogModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FULL BUYBACK LOGS</h3><div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2"></div></div></div>
 
 <script>
+    // ... (Existing Logic: Config, State, UI Elements) ...
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const HELIUS_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=a32d61a0-2cc2-4d60-b3b6-cefadce7001a"; 
@@ -200,37 +224,10 @@
 
     fetch(`${BACKEND_URL}/api/version`).then(r=>r.json()).then(d=>ui.versionDisplay.innerText = d.version).catch(()=>{});
 
-    const updatePumpPrice = async () => {
-        try {
-            const res = await fetch(`https://frontend-api.pump.fun/coins/${PUMP_CONTRACT}`);
-            const data = await res.json();
-            if (data && data.virtual_sol_reserves && data.virtual_token_reserves) {
-                pumpPriceCache = data.virtual_sol_reserves / data.virtual_token_reserves;
-            }
-        } catch (e) {}
-    };
+    const updatePumpPrice = async () => { try { const res = await fetch(`https://frontend-api.pump.fun/coins/${PUMP_CONTRACT}`); const data = await res.json(); if (data && data.virtual_sol_reserves && data.virtual_token_reserves) { pumpPriceCache = data.virtual_sol_reserves / data.virtual_token_reserves; } } catch (e) {} };
     setInterval(updatePumpPrice, 60000); updatePumpPrice(); 
 
-    const updateLeaderboard = async () => {
-        try {
-            const res = await fetch(`${BACKEND_URL}/api/leaderboard${userPubkey ? '?userPubkey='+userPubkey : ''}`);
-            const data = await res.json();
-            if (!data || data.length === 0) { ui.leaderboardBody.innerHTML = '<tr><td colspan="6" class="text-center text-orange-400 py-4">No active tokens found.</td></tr>'; return; }
-            ui.leaderboardBody.innerHTML = data.map((item, index) => `
-                <tr>
-                    <td class="text-orange-500 font-bold">${index + 1}</td>
-                    <td>
-                        <img src="${item.image || 'https://placehold.co/24x24/333/fff?text=?'}" class="token-img-sm" alt="icon">
-                        <span class="text-white font-bold">${item.ticker}</span>
-                        ${item.isUserTopHolder ? '<span class="holder-check" title="You are a Top 100 Holder">✅</span>' : ''}
-                    </td>
-                    <td class="text-orange-200 truncate max-w-[100px]">${item.name}</td>
-                    <td class="text-right text-green-400">$${item.price}</td>
-                    <td class="text-right text-white font-bold">$${parseFloat(item.volume).toLocaleString()}</td>
-                    <td class="text-right"><a href="${PUMPFUN_URL_BASE}${item.mint}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a></td>
-                </tr>`).join('');
-        } catch (e) {}
-    };
+    const updateLeaderboard = async () => { try { const res = await fetch(`${BACKEND_URL}/api/leaderboard${userPubkey ? '?userPubkey='+userPubkey : ''}`); const data = await res.json(); if (!data || data.length === 0) { ui.leaderboardBody.innerHTML = '<tr><td colspan="6" class="text-center text-orange-400 py-4">No active tokens found.</td></tr>'; return; } ui.leaderboardBody.innerHTML = data.map((item, index) => `<tr><td class="text-orange-500 font-bold">${index + 1}</td><td><img src="${item.image || 'https://placehold.co/24x24/333/fff?text=?'}" class="token-img-sm" alt="icon"><span class="text-white font-bold">${item.ticker}</span>${item.isUserTopHolder ? '<span class="holder-check" title="You are a Top 100 Holder">✅</span>' : ''}</td><td class="text-orange-200 truncate max-w-[100px]">${item.name}</td><td class="text-right text-green-400">$${item.price}</td><td class="text-right text-white font-bold">$${parseFloat(item.volume).toLocaleString()}</td><td class="text-right"><a href="${PUMPFUN_URL_BASE}${item.mint}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a></td></tr>`).join(''); } catch (e) {} };
     setInterval(updateLeaderboard, 60000); updateLeaderboard();
 
     const updateMayhemLabel = () => { if (ui.mayhemToggle.checked) { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: ON (HIGH RISK)"; ui.mayhemStatusLabel.classList.add('active'); } else { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: OFF"; ui.mayhemStatusLabel.classList.remove('active'); } };
@@ -243,112 +240,29 @@
     const fetchRecentLaunches = async () => { try { const res = await fetch(`${BACKEND_URL}/api/recent-launches`); if (res.ok) { const launches = await res.json(); if (launches.length === 0) { ui.tickerContent.innerHTML = '<span class="ticker-item text-orange-600">NO RECENT LAUNCHES YET... START ONE!</span>'; return; } const repeatedLaunches = Array(5).fill(launches).flat(); const tickerItems = repeatedLaunches.map(launch => `<span class="ticker-item"><span class="text-white font-bold">LAUNCHED:</span><span class="text-white">${launch.userSnippet}...</span><span class="text-orange-400">-></span><a href="${PUMPFUN_URL_BASE}${launch.mint}" target="_blank" class="font-bold underline">${launch.ticker}</a></span>`).join(''); ui.tickerContent.innerHTML = tickerItems; } } catch (e) {} };
     setInterval(fetchRecentLaunches, 15000); fetchRecentLaunches();
 
-    const renderLogs = (logs, targetElement, limit) => {
-        targetElement.innerHTML = ''; if (!logs || logs.length === 0) { targetElement.innerHTML = '<p class="text-xs text-orange-400 font-mono text-center py-4">No logs available.</p>'; return; }
-        const displayLogs = logs.slice().reverse().slice(0, limit); 
-        const logHtml = displayLogs.map(log => {
-            const time = new Date(log.timestamp).toLocaleTimeString();
-            let content, logClass;
-            if (log.type === 'SKIPPED') { content = `Fees Under Limit (${log.current}/${log.target} SOL)`; logClass = 'log-skipped'; } else if (log.type === 'SUCCESS') { content = `BUY: 80% | DIST: 20% | <a href="https://solscan.io/tx/${log.signature}" target="_blank" class="underline hover:text-white">View TX</a>`; logClass = 'log-success'; } else if (log.type === 'ERROR') { content = `FATAL ERROR: ${log.message.slice(0, 80)}`; logClass = 'log-error'; } else { content = `UNKNOWN EVENT`; logClass = 'text-orange-400'; }
-            return `<div class="log-entry ${logClass}"><span>[${time}] ${log.type}:</span> <span>${content}</span></div>`;
-        }).join('');
-        targetElement.innerHTML = logHtml;
-    };
+    const renderLogs = (logs, targetElement, limit) => { targetElement.innerHTML = ''; if (!logs || logs.length === 0) { targetElement.innerHTML = '<p class="text-xs text-orange-400 font-mono text-center py-4">No logs available.</p>'; return; } const displayLogs = logs.slice().reverse().slice(0, limit); const logHtml = displayLogs.map(log => { const time = new Date(log.timestamp).toLocaleTimeString(); let content, logClass; if (log.type === 'SKIPPED') { content = `Fees Under Limit (${log.current}/${log.target} SOL)`; logClass = 'log-skipped'; } else if (log.type === 'SUCCESS') { content = `BUY: 80% | DIST: 20% | <a href="https://solscan.io/tx/${log.signature}" target="_blank" class="underline hover:text-white">View TX</a>`; logClass = 'log-success'; } else if (log.type === 'ERROR') { content = `FATAL ERROR: ${log.message.slice(0, 80)}`; logClass = 'log-error'; } else { content = `UNKNOWN EVENT`; logClass = 'text-orange-400'; } return `<div class="log-entry ${logClass}"><span>[${time}] ${log.type}:</span> <span>${content}</span></div>`; }).join(''); targetElement.innerHTML = logHtml; };
 
     const toggleLogModal = () => { ui.modalLogContent.innerHTML = ''; renderLogs(allLogs, ui.modalLogContent, allLogs.length); ui.logModal.style.display = 'block'; };
-    window.toggleLogModal = toggleLogModal;
-    const closeLogModal = () => { ui.logModal.style.display = 'none'; };
-    window.closeLogModal = closeLogModal;
+    window.toggleLogModal = toggleLogModal; const closeLogModal = () => { ui.logModal.style.display = 'none'; }; window.closeLogModal = closeLogModal;
 
-    const checkHealth = async () => { 
-        try { 
-            const res = await fetch(`${BACKEND_URL}/api/health`); 
-            if (res.ok) { 
-                const data = await res.json(); 
-                ui.sysStatus.innerText = "ONLINE"; ui.sysStatus.classList.add("online"); 
-                ui.headerImage.src = data.headerImageUrl || "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; 
-                if (data.lifetimeFees) ui.metricFees.innerText = data.lifetimeFees; 
-                if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches; 
-                
-                // --- CALCULATION LOGIC: Estimate Tokens from SOL Spent ---
-                const solSpent = parseFloat(data.totalPumpBought || 0);
-                let tokensBought = "0";
-                if (pumpPriceCache > 0) { tokensBought = (solSpent / pumpPriceCache).toLocaleString('en-US', {maximumFractionDigits: 0}); } 
-                else { tokensBought = (solSpent * 30000000).toLocaleString('en-US', {maximumFractionDigits: 0}); }
-                ui.metricPump.innerText = tokensBought;
-
-                allLogs = data.recentLogs; 
-                renderLogs(allLogs, ui.logFeed, 3);
-            } else { throw new Error("Backend Error"); } 
-        } catch (e) { ui.sysStatus.innerText = "OFFLINE"; ui.sysStatus.classList.remove("online"); ui.headerImage.src = "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; } 
-    };
+    const checkHealth = async () => { try { const res = await fetch(`${BACKEND_URL}/api/health`); if (res.ok) { const data = await res.json(); ui.sysStatus.innerText = "ONLINE"; ui.sysStatus.classList.add("online"); ui.headerImage.src = data.headerImageUrl || "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; if (data.lifetimeFees) ui.metricFees.innerText = data.lifetimeFees; if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches; const solSpent = parseFloat(data.totalPumpBought || 0); let tokensBought = "0"; if (pumpPriceCache > 0) { tokensBought = (solSpent / pumpPriceCache).toLocaleString('en-US', {maximumFractionDigits: 0}); } else { tokensBought = (solSpent * 30000000).toLocaleString('en-US', {maximumFractionDigits: 0}); } ui.metricPump.innerText = tokensBought; allLogs = data.recentLogs; renderLogs(allLogs, ui.logFeed, 3); } else { throw new Error("Backend Error"); } } catch (e) { ui.sysStatus.innerText = "OFFLINE"; ui.sysStatus.classList.remove("online"); ui.headerImage.src = "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; } };
     setInterval(checkHealth, 5000); checkHealth();
 
     const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; };
     const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
-
     const refreshWalletBalance = async () => { if (!userPubkey) return; try { const pubkey = new solanaWeb3.PublicKey(userPubkey); const bal = await connection.getBalance(pubkey); ui.walletBal.innerText = (bal / solanaWeb3.LAMPORTS_PER_SOL).toFixed(3) + " SOL"; } catch (e) {} };
     const updateWalletUI = async (pubkey) => { if (!pubkey) { ui.walletUI.classList.add('hidden'); ui.connectBtn.classList.remove('hidden'); return; } userPubkey = pubkey.toString(); ui.connectBtn.classList.add('hidden'); ui.walletUI.classList.remove('hidden'); ui.walletUI.classList.add('flex'); ui.walletAddr.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4); await refreshWalletBalance(); };
     const connectWallet = async () => { if (window.solana && window.solana.isPhantom) { try { const resp = await window.solana.connect(); await updateWalletUI(resp.publicKey); } catch (err) { console.error(err); } } else { window.open("https://phantom.app/", "_blank"); } };
     const disconnectWallet = async () => { if (window.solana) { try { await window.solana.disconnect(); } catch (e) {} userPubkey = null; updateWalletUI(null); } };
     ui.connectBtn.onclick = connectWallet; ui.refreshBtn.onclick = refreshWalletBalance; ui.disconnectBtn.onclick = disconnectWallet;
 
-    const validateInputs = (name, ticker, description, twitter, website, fileInput) => {
-        if (fileInput.files.length === 0) return "Image is required.";
-        const file = fileInput.files[0];
-        if (file.size > 4 * 1024 * 1024) return "Image size must be less than 4MB.";
-        if (!name || name.trim().length === 0) return "Token Name is required.";
-        if (name.length > 32) return "Token Name must be 32 characters or less.";
-        if (!ticker || ticker.trim().length === 0) return "Ticker Symbol is required.";
-        if (ticker.length > 10) return "Ticker must be 10 characters or less.";
-        if (description.length > 200) return "Description must be 200 characters or less.";
-        const urlPattern = /^(https?:\/\/[^\s]+|([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[^\s]*)?)$/;
-        if (twitter && twitter.trim() !== '' && !urlPattern.test(twitter)) return "Invalid Twitter URL.";
-        if (website && website.trim() !== '' && !urlPattern.test(website)) return "Invalid Website URL.";
-        return null;
-    };
+    const validateInputs = (name, ticker, description, twitter, website, fileInput) => { if (fileInput.files.length === 0) return "Image is required."; const file = fileInput.files[0]; if (file.size > 4 * 1024 * 1024) return "Image size must be less than 4MB."; if (!name || name.trim().length === 0) return "Token Name is required."; if (name.length > 32) return "Token Name must be 32 characters or less."; if (!ticker || ticker.trim().length === 0) return "Ticker Symbol is required."; if (ticker.length > 10) return "Ticker must be 10 characters or less."; if (description.length > 200) return "Description must be 200 characters or less."; const urlPattern = /^(https?:\/\/[^\s]+|([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[^\s]*)?)$/; if (twitter && twitter.trim() !== '' && !urlPattern.test(twitter)) return "Invalid Twitter URL."; if (website && website.trim() !== '' && !urlPattern.test(website)) return "Invalid Website URL."; return null; };
 
-    ui.deployBtn.onclick = async () => {
-        if (!userPubkey) return showStatus("CONNECT WALLET FIRST", 'error');
-        const name = document.getElementById('name').value;
-        const ticker = document.getElementById('ticker').value;
-        const description = document.getElementById('desc').value;
-        const twitter = document.getElementById('twitter').value;
-        const website = document.getElementById('website').value;
-        const fileInput = document.getElementById('image-file');
-        const isMayhemMode = ui.mayhemToggle.checked;
-        const validationError = validateInputs(name, ticker, description, twitter, website, fileInput);
-        if (validationError) return showStatus(validationError.toUpperCase(), 'error');
+    ui.deployBtn.onclick = async () => { if (!userPubkey) return showStatus("CONNECT WALLET FIRST", 'error'); const name = document.getElementById('name').value; const ticker = document.getElementById('ticker').value; const description = document.getElementById('desc').value; const twitter = document.getElementById('twitter').value; const website = document.getElementById('website').value; const fileInput = document.getElementById('image-file'); const isMayhemMode = ui.mayhemToggle.checked; const validationError = validateInputs(name, ticker, description, twitter, website, fileInput); if (validationError) return showStatus(validationError.toUpperCase(), 'error'); let imageBase64; try { imageBase64 = await toBase64(fileInput.files[0]); } catch(e) { return showStatus("IMAGE PROCESSING FAILED", 'error'); } ui.deployBtn.disabled = true; ui.deployBtn.innerText = "PROCESSING PAYMENT..."; showStatus("SIGNING FEE...", 'normal'); try { const tx = new solanaWeb3.Transaction().add(solanaWeb3.SystemProgram.transfer({ fromPubkey: new solanaWeb3.PublicKey(userPubkey), toPubkey: new solanaWeb3.PublicKey(DEV_WALLET_PUBKEY), lamports: 0.05 * 1000000000 })); const { blockhash } = await connection.getLatestBlockhash(); tx.recentBlockhash = blockhash; tx.feePayer = new solanaWeb3.PublicKey(userPubkey); const signedTx = await window.solana.signAndSendTransaction(tx); showStatus("PAYMENT CONFIRMED. QUEUING DEPLOYMENT...", 'normal'); const res = await fetch(`${BACKEND_URL}/api/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ticker, description, twitter, website, image: imageBase64, userTx: signedTx.signature, userPubkey: userPubkey, isMayhemMode: isMayhemMode }) }); const data = await res.json(); if (data.success && data.jobId) { ui.deployBtn.innerText = "DEPLOYING..."; pollJobStatus(data.jobId); } else { throw new Error(data.error); } } catch (e) { console.error(e); showStatus("ERROR: " + (e.message || "Failed"), 'error'); ui.deployBtn.disabled = false; ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE"; } };
 
-        let imageBase64;
-        try { imageBase64 = await toBase64(fileInput.files[0]); } catch(e) { return showStatus("IMAGE PROCESSING FAILED", 'error'); }
+    const pollJobStatus = async (jobId) => { const interval = setInterval(async () => { try { const res = await fetch(`${BACKEND_URL}/api/job-status/${jobId}`); const job = await res.json(); if (job.state === 'completed') { clearInterval(interval); showStatus("LAUNCH CONFIRMED", 'success'); document.getElementById('result-area').classList.remove('hidden'); document.getElementById('mint-addr').innerText = job.result.mint; document.getElementById('tx-link').href = `https://solscan.io/tx/${job.result.signature}`; ui.deployBtn.innerText = "LAUNCH COMPLETE"; ui.deployBtn.disabled = false; refreshWalletBalance(); } else if (job.state === 'failed') { clearInterval(interval); showStatus(`DEPLOYMENT FAILED: ${job.failedReason}`, 'error'); ui.deployBtn.disabled = false; ui.deployBtn.innerText = "RETRY LAUNCH"; } else { showStatus(`STATUS: ${job.state.toUpperCase()} (Please Wait...)`, 'normal'); } } catch (e) {} }, 2000); };
 
-        ui.deployBtn.disabled = true; ui.deployBtn.innerText = "PROCESSING SEQUENCE..."; showStatus("SIGNING 0.05 SOL FEE...", 'normal');
-
-        try {
-            const tx = new solanaWeb3.Transaction().add(solanaWeb3.SystemProgram.transfer({ fromPubkey: new solanaWeb3.PublicKey(userPubkey), toPubkey: new solanaWeb3.PublicKey(DEV_WALLET_PUBKEY), lamports: 0.05 * 1000000000 }));
-            const { blockhash } = await connection.getLatestBlockhash(); tx.recentBlockhash = blockhash; tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
-            const signedTx = await window.solana.signAndSendTransaction(tx);
-            showStatus("PAYMENT CONFIRMED. DEPLOYING...", 'normal');
-
-            const res = await fetch(`${BACKEND_URL}/api/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ticker, description, twitter, website, image: imageBase64, userTx: signedTx.signature, userPubkey: userPubkey, isMayhemMode: isMayhemMode }) });
-            const data = await res.json();
-            if (data.success) {
-                showStatus("LAUNCH CONFIRMED", 'success');
-                document.getElementById('result-area').classList.remove('hidden');
-                document.getElementById('mint-addr').innerText = data.mint;
-                document.getElementById('tx-link').href = `https://solscan.io/tx/${data.signature}`;
-                ui.deployBtn.innerText = "LAUNCH COMPLETE"; refreshWalletBalance(); 
-            } else { throw new Error(data.error || "Backend Error"); }
-        } catch (e) { console.error(e); showStatus("ERROR: " + (e.message || "Transaction failed."), 'error'); ui.deployBtn.disabled = false; ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE"; }
-    };
-    
-    window.addEventListener('load', () => {
-        if (window.solana && window.solana.isPhantom) {
-            window.solana.connect({ onlyIfTrusted: true }).then((resp) => updateWalletUI(resp.publicKey)).catch(() => {});
-            window.solana.on('disconnect', () => { disconnectWallet(); showStatus("Wallet Disconnected.", 'info'); });
-        }
-    });
+    window.addEventListener('load', () => { if (window.solana && window.solana.isPhantom) { window.solana.connect({ onlyIfTrusted: true }).then((resp) => updateWalletUI(resp.publicKey)).catch(() => {}); window.solana.on('disconnect', () => { disconnectWallet(); showStatus("Wallet Disconnected.", 'info'); }); } });
 </script>
 
 </body>

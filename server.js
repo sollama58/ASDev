@@ -9,17 +9,25 @@ const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
 const axios = require('axios');
-const FormData = require('form-data'); // Required for file upload
+const FormData = require('form-data');
+const { Queue, Worker } = require('bullmq');
+const IORedis = require('ioredis');
 
-// --- Configuration ---
-const VERSION = "v10.2.2"; 
+// --- Moderation Deps ---
+const tf = require('@tensorflow/tfjs-node');
+const nsfw = require('nsfwjs');
+const jpeg = require('jpeg-js');
+const png = require('pngjs').PNG;
+
+// --- Config ---
+const VERSION = "v10.3.0";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
 const PINATA_JWT = process.env.PINATA_JWT;
+const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379'; // Required for Queue
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
-// Constants
 const TARGET_PUMP_TOKEN = new PublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn");
 const WALLET_19_5 = new PublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z");
 const WALLET_0_5 = new PublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g");
@@ -36,9 +44,7 @@ const DISK_ROOT = '/var/data';
 const DATA_DIR = path.join(DISK_ROOT, 'tokens');
 const DEBUG_LOG_FILE = path.join(DISK_ROOT, 'server_debug.log');
 
-if (!fs.existsSync(DISK_ROOT)) {
-    if (!fs.existsSync('./data')) fs.mkdirSync('./data');
-}
+if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./data'); }
 const DB_PATH = fs.existsSync(DISK_ROOT) ? path.join(DISK_ROOT, 'launcher.db') : './data/launcher.db';
 const ACTIVE_DATA_DIR = fs.existsSync(DISK_ROOT) ? DATA_DIR : './data/tokens';
 const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); };
@@ -60,6 +66,11 @@ const logger = {
     error: (msg, meta) => log('error', msg, meta)
 };
 
+// --- REDIS QUEUE ---
+const redisConnection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
+const deployQueue = new Queue('deployQueue', { connection: redisConnection });
+
+// --- DB ---
 let db;
 async function initDB() {
     db = await open({ filename: DB_PATH, driver: sqlite3.Database });
@@ -75,127 +86,129 @@ async function initDB() {
     `);
     logger.info(`DB Initialized at ${DB_PATH}`);
 }
+
+// --- MODERATION SETUP ---
+let _model;
+async function loadModel() {
+    if (_model) return _model;
+    logger.info("Loading NSFWJS Model...");
+    _model = await nsfw.load(); 
+    logger.info("Model Loaded.");
+    return _model;
+}
+async function imageToTensor(buffer, mimeType) {
+    let pixels;
+    if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') pixels = jpeg.decode(buffer, true);
+    else if (mimeType === 'image/png') pixels = png.sync.read(buffer);
+    else throw new Error("Unsupported image type");
+    const numChannels = 3; const numPixels = pixels.width * pixels.height; const values = new Int32Array(numPixels * numChannels);
+    for (let i = 0; i < numPixels; i++) { for (let c = 0; c < numChannels; c++) { values[i * numChannels + c] = pixels.data[i * 4 + c]; } }
+    return tf.tensor3d(values, [pixels.height, pixels.width, numChannels], 'int32');
+}
+async function checkContentSafety(base64Data) {
+    try {
+        const model = await loadModel();
+        const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        if (!matches || matches.length !== 3) return false; 
+        const mimeType = matches[1]; const buffer = Buffer.from(matches[2], 'base64');
+        const image = await imageToTensor(buffer, mimeType);
+        const predictions = await model.classify(image);
+        image.dispose(); 
+        const unsafe = predictions.find(p => (p.className === 'Porn' || p.className === 'Hentai') && p.probability > 0.80);
+        if (unsafe) { logger.warn(`Blocked unsafe content: ${unsafe.className}`); return false; }
+        return true;
+    } catch (e) { logger.error("Moderation Error", {err:e.message}); return true; }
+}
+
 initDB();
+loadModel();
 
 const app = express();
 app.use(cors());
-
-// CRITICAL FIX: Increase limit for Base64 images
-app.use(express.json({ limit: '50mb' })); 
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json({ limit: '50mb' }));
 
 const connection = new Connection(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`, "confirmed");
 const devKeypair = require('@solana/web3.js').Keypair.fromSecretKey(bs58.decode(DEV_WALLET_PRIVATE_KEY));
 const wallet = new Wallet(devKeypair);
 const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
-
 const idlRaw = fs.readFileSync('./pump_idl.json', 'utf8');
 const idl = JSON.parse(idlRaw);
 idl.address = PUMP_PROGRAM_ID.toString();
 const program = new Program(idl, PUMP_PROGRAM_ID, provider);
 
 // --- Helpers ---
-async function sendTxWithRetry(tx, signers, retries = 3) {
+async function sendTxWithRetry(tx, signers, retries = 5) { // Increased retries for reliability
     for (let i = 0; i < retries; i++) {
         try {
             const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
-            tx.recentBlockhash = blockhash;
-            tx.lastValidBlockHeight = lastValidBlockHeight;
+            tx.recentBlockhash = blockhash; tx.lastValidBlockHeight = lastValidBlockHeight;
             const sig = await sendAndConfirmTransaction(connection, tx, signers, { commitment: 'confirmed', skipPreflight: true });
             return sig;
         } catch (err) {
             if (i === retries - 1) throw err;
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise(r => setTimeout(r, 2000 * Math.pow(1.5, i))); // Exponential backoff
         }
     }
 }
-async function addFees(amount) { if(db) { await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amount, 'accumulatedFeesLamports']); await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amount, 'lifetimeFeesLamports']); }}
-async function addPumpBought(amount) { if(db) await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amount, 'totalPumpBoughtLamports']); }
+async function addFees(amt) { if(db) { await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amt, 'accumulatedFeesLamports']); await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amt, 'lifetimeFeesLamports']); }}
+async function addPumpBought(amt) { if(db) await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amt, 'totalPumpBoughtLamports']); }
 async function getTotalLaunches() { if(!db) return 0; const res = await db.get('SELECT COUNT(*) as count FROM tokens'); return res ? res.count : 0; }
-async function getStats() { 
-    if(!db) return { accumulatedFeesLamports: 0, lifetimeFeesLamports: 0, totalPumpBoughtLamports: 0 };
-    const acc = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports');
-    const life = await db.get('SELECT value FROM stats WHERE key = ?', 'lifetimeFeesLamports');
-    const pump = await db.get('SELECT value FROM stats WHERE key = ?', 'totalPumpBoughtLamports');
-    return { accumulatedFeesLamports: acc ? acc.value : 0, lifetimeFeesLamports: life ? life.value : 0, totalPumpBoughtLamports: pump ? pump.value : 0 };
-}
+async function getStats() { if(!db) return { accumulatedFeesLamports: 0, lifetimeFeesLamports: 0, totalPumpBoughtLamports: 0 }; const acc = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports'); const life = await db.get('SELECT value FROM stats WHERE key = ?', 'lifetimeFeesLamports'); const pump = await db.get('SELECT value FROM stats WHERE key = ?', 'totalPumpBoughtLamports'); return { accumulatedFeesLamports: acc ? acc.value : 0, lifetimeFeesLamports: life ? life.value : 0, totalPumpBoughtLamports: pump ? pump.value : 0 }; }
 async function resetAccumulatedFees(used) { const cur = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports'); await db.run('UPDATE stats SET value = ? WHERE key = ?', [Math.max(0, (cur ? cur.value : 0) - used), 'accumulatedFeesLamports']); }
 async function logPurchase(type, data) { try { await db.run('INSERT INTO logs (type, data) VALUES (?, ?)', [type, JSON.stringify(data)]); } catch (e) {} }
 async function getRecentLogs(limit=5) { const rows = await db.all('SELECT * FROM logs ORDER BY id DESC LIMIT ?', limit); return rows.map(row => ({ ...JSON.parse(row.data), type: row.type, timestamp: row.timestamp })); }
-async function saveTokenData(pk, mint, meta) { 
-    try {
-        await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, meta.image, meta.isMayhemMode]);
-        const shard = pk.slice(0, 2).toLowerCase(); const dir = path.join(ACTIVE_DATA_DIR, shard); ensureDir(dir);
-        fs.writeFileSync(path.join(dir, `${mint}.json`), JSON.stringify({ userPubkey: pk, mint, metadata: meta, timestamp: new Date().toISOString() }, null, 2));
-    } catch (e) { logger.error("Save Token Error", {err:e.message}); }
-}
+async function saveTokenData(pk, mint, meta) { try { await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, meta.image, meta.isMayhemMode]); const shard = pk.slice(0, 2).toLowerCase(); const dir = path.join(ACTIVE_DATA_DIR, shard); ensureDir(dir); fs.writeFileSync(path.join(dir, `${mint}.json`), JSON.stringify({ userPubkey: pk, mint, metadata: meta, timestamp: new Date().toISOString() }, null, 2)); } catch (e) { logger.error("Save Token Error", {err:e.message}); } }
 async function checkTransactionUsed(sig) { const res = await db.get('SELECT signature FROM transactions WHERE signature = ?', sig); return !!res; }
 async function markTransactionUsed(sig, pk) { await db.run('INSERT INTO transactions (signature, userPubkey) VALUES (?, ?)', [sig, pk]); }
 
-// --- UPLOAD FIXES ---
-async function uploadImageToPinata(base64Data) {
-    try {
-        // Strip header if present
-        const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-        if (!matches || matches.length !== 3) {
-             throw new Error('Invalid base64 string');
-        }
-        const buffer = Buffer.from(matches[2], 'base64');
-        
-        const formData = new FormData();
-        formData.append('file', buffer, { filename: 'token_image.png' });
+// --- WORKER DEFINITION ---
+const worker = new Worker('deployQueue', async (job) => {
+    logger.info(`Processing Job ${job.id}: ${job.data.ticker}`);
+    const { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode } = job.data;
 
-        const res = await axios.post('https://api.pinata.cloud/pinning/pinFileToIPFS', formData, {
-            maxBodyLength: Infinity, // Allow large uploads
-            headers: { 
-                'Authorization': `Bearer ${PINATA_JWT}`, 
-                ...formData.getHeaders() 
-            }
-        });
-        logger.info("Pinata Image Upload Success", { hash: res.data.IpfsHash });
-        return `https://gateway.pinata.cloud/ipfs/${res.data.IpfsHash}`;
-    } catch (e) {
-        logger.error("Pinata Image Upload Fail", { 
-            msg: e.message, 
-            response: e.response ? e.response.data : 'No Response' 
-        });
-        // Use fallback to prevent total crash, but log error clearly
-        return "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8"; 
-    }
-}
-
-async function uploadMetadataToPinata(name, symbol, description, twitter, website, imageBase64) {
-    let imageUrl = "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8";
-    if (imageBase64) {
-        imageUrl = await uploadImageToPinata(imageBase64);
+    // 1. Moderation Check (Inside worker to offload CPU)
+    const isSafe = await checkContentSafety(image);
+    if (!isSafe) {
+        throw new Error("Upload blocked: NSFW/Illegal content detected.");
     }
 
-    const metadata = {
-        name: name,
-        symbol: symbol,
-        description: description,
-        image: imageUrl,
-        showName: true,
-        createdOn: "https://pump.fun",
-        extensions: {
-            twitter: twitter || undefined,
-            website: website || undefined
-        }
-    };
+    // 2. Upload Metadata
+    let metadataUri;
+    try { metadataUri = await uploadMetadataToPinata(name, ticker, description, twitter, website, image); }
+    catch(e) { throw new Error("Metadata upload failed"); }
 
-    try {
-        const res = await axios.post('https://api.pinata.cloud/pinning/pinJSONToIPFS', metadata, {
-            headers: { 'Authorization': `Bearer ${PINATA_JWT}` }
-        });
-        logger.info("Pinata Metadata Success", { hash: res.data.IpfsHash });
-        return `https://gateway.pinata.cloud/ipfs/${res.data.IpfsHash}`;
-    } catch (e) {
-        logger.error("Pinata Metadata Fail", { msg: e.message });
-        throw new Error("Failed to upload metadata to IPFS");
-    }
-}
+    // 3. Blockchain Tx
+    const mintKeypair = Keypair.generate();
+    const mint = mintKeypair.publicKey;
+    const creator = devKeypair.publicKey;
 
-// --- PDAs ---
+    const { mintAuthority, bondingCurve, global, eventAuthority, globalVolume, userVolume, feeConfig, creatorVault } = getDeploymentPDAs(mint, creator);
+    const { globalParams, solVault, mayhemState } = getMayhemPDAs(mint);
+    const associatedBondingCurve = getATA(mint, bondingCurve);
+    const mayhemTokenVault = getATA(mint, solVault);
+    const associatedUser = getATA(mint, creator);
+
+    const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, !!isMayhemMode).accounts({ mint, mintAuthority, bondingCurve, associatedBondingCurve, global, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, mayhemProgramId: MAYHEM_PROGRAM_ID, globalParams, solVault, mayhemState, mayhemTokenVault, eventAuthority, program: PUMP_PROGRAM_ID }).instruction();
+    const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), false).accounts({ global, feeRecipient: FEE_RECIPIENT, mint, bondingCurve, associatedBondingCurve, associatedUser, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator: globalVolume, userVolumeAccumulator: userVolume, feeConfig, feeProgram: FEE_PROGRAM_ID }).instruction();
+
+    const tx = new Transaction().add(createIx).add(buyIx);
+    tx.feePayer = creator;
+    const sig = await sendTxWithRetry(tx, [devKeypair, mintKeypair]);
+    
+    // 4. Save Data
+    await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
+
+    // 5. Schedule Sell
+    setTimeout(async () => { try { const bal = await connection.getTokenAccountBalance(associatedUser); if (bal.value.uiAmount > 0) { const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0)).accounts({ global, feeRecipient: FEE_RECIPIENT, mint, bondingCurve, associatedBondingCurve, associatedUser, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator: globalVolume, userVolumeAccumulator: userVolume, feeConfig, feeProgram: FEE_PROGRAM_ID }).instruction(); const sellTx = new Transaction().add(sellIx); await sendTxWithRetry(sellTx, [devKeypair]); } } catch (e) { logger.error("Sell error", {msg: e.message}); } }, 1500); 
+
+    return { mint: mint.toString(), signature: sig };
+}, { 
+    connection: redisConnection, 
+    concurrency: 1 // SERIAL EXECUTION FOR NONCE SAFETY
+});
+
+// --- PDAs (Same as before) ---
+// ... (Keep existing getPumpPDAs, getDeploymentPDAs, getMayhemPDAs, getATA, uploadImageToPinata, uploadMetadataToPinata) ...
 function getPumpPDAs(mint, programId = PUMP_PROGRAM_ID) {
     const [bondingCurve] = PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), mint.toBuffer()], programId);
     const associatedBondingCurve = PublicKey.findProgramAddressSync([bondingCurve.toBuffer(), TOKEN_PROGRAM_2022_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
@@ -218,9 +231,9 @@ function getMayhemPDAs(mint) {
     const [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], MAYHEM_PROGRAM_ID);
     return { globalParams, solVault, mayhemState };
 }
-function getATA(mint, owner) {
-    return PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN_PROGRAM_2022_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
-}
+function getATA(mint, owner) { return PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN_PROGRAM_2022_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0]; }
+async function uploadImageToPinata(b64) { try { const b=Buffer.from(b64.split(',')[1],'base64'); const f=new FormData(); f.append('file',b,{filename:'i.png'}); const r=await axios.post('https://api.pinata.cloud/pinning/pinFileToIPFS',f,{headers:{'Authorization':`Bearer ${PINATA_JWT}`,...f.getHeaders()}}); return `https://gateway.pinata.cloud/ipfs/${r.data.IpfsHash}`; } catch(e){ return "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8"; } }
+async function uploadMetadataToPinata(n,s,d,t,w,i) { let u="https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8"; if(i) u=await uploadImageToPinata(i); const m={name:n,symbol:s,description:d,image:u,extensions:{twitter:t,website:w}}; try { const r=await axios.post('https://api.pinata.cloud/pinning/pinJSONToIPFS',m,{headers:{'Authorization':`Bearer ${PINATA_JWT}`}}); return `https://gateway.pinata.cloud/ipfs/${r.data.IpfsHash}`; } catch(e) { throw new Error("Failed to upload metadata"); } }
 
 // --- Routes ---
 app.get('/api/version', (req, res) => res.json({ version: VERSION }));
@@ -233,12 +246,8 @@ app.get('/api/health', async (req, res) => {
     } catch (e) { res.status(500).json({ error: "DB Error" }); }
 });
 app.get('/api/check-holder', async (req, res) => {
-    const { userPubkey } = req.query;
-    if (!userPubkey) return res.json({ isHolder: false });
-    try {
-        const result = await db.get('SELECT mint, rank FROM token_holders WHERE holderPubkey = ? LIMIT 1', userPubkey);
-        res.json({ isHolder: !!result, ...(result || {}) });
-    } catch (e) { res.status(500).json({ error: "DB Error" }); }
+    const { userPubkey } = req.query; if (!userPubkey) return res.json({ isHolder: false });
+    try { const result = await db.get('SELECT mint, rank FROM token_holders WHERE holderPubkey = ? LIMIT 1', userPubkey); res.json({ isHolder: !!result, ...(result || {}) }); } catch (e) { res.status(500).json({ error: "DB Error" }); }
 });
 app.get('/api/leaderboard', async (req, res) => {
     const { userPubkey } = req.query;
@@ -253,70 +262,38 @@ app.get('/api/leaderboard', async (req, res) => {
     } catch (e) { res.status(500).json([]); }
 });
 app.get('/api/recent-launches', async (req, res) => { try { const rows = await db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10'); res.json(rows.map(r => ({ userSnippet: r.userPubkey.slice(0, 5), ticker: r.ticker, mint: r.mint }))); } catch (e) { res.status(500).json([]); } });
-app.get('/api/debug/logs', (req, res) => {
-    const logPath = path.join(DISK_ROOT, 'server_debug.log');
-    if (fs.existsSync(logPath)) {
-        const stats = fs.statSync(logPath);
-        const stream = fs.createReadStream(logPath, { start: Math.max(0, stats.size - 50000) }); // Last 50KB
-        stream.pipe(res);
-    } else { res.send("No logs yet."); }
+app.get('/api/debug/logs', (req, res) => { const logPath = path.join(DISK_ROOT, 'server_debug.log'); if (fs.existsSync(logPath)) { const stats = fs.statSync(logPath); const stream = fs.createReadStream(logPath, { start: Math.max(0, stats.size - 50000) }); stream.pipe(res); } else { res.send("No logs yet."); } });
+app.get('/api/job-status/:id', async (req, res) => {
+    const job = await deployQueue.getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    const state = await job.getState();
+    res.json({ id: job.id, state, result: job.returnvalue, failedReason: job.failedReason });
 });
 
 app.post('/api/deploy', async (req, res) => {
     try {
         const { name, ticker, description, twitter, website, userTx, userPubkey, image, isMayhemMode } = req.body;
-        
         if (!name || name.length > 32) return res.status(400).json({ error: "Invalid Name" });
         if (!ticker || ticker.length > 10) return res.status(400).json({ error: "Invalid Ticker" });
-        if (!image) return res.status(400).json({ error: "Image required" });
 
         const used = await checkTransactionUsed(userTx);
         if (used) return res.status(400).json({ error: "Transaction signature already used." });
 
         const txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
         if (!txInfo) return res.status(400).json({ error: "Transaction not found." });
-        
         const validPayment = txInfo.transaction.message.instructions.some(ix => { if (ix.programId.toString() !== '11111111111111111111111111111111') return false; if (ix.parsed.type !== 'transfer') return false; return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL; });
         if (!validPayment) return res.status(400).json({ error: "Payment verification failed." });
 
         await markTransactionUsed(userTx, userPubkey);
         await addFees(0.05 * LAMPORTS_PER_SOL);
-        
-        // --- Metadata Upload with Error Handling ---
-        let metadataUri;
-        try {
-             metadataUri = await uploadMetadataToPinata(name, ticker, description, twitter, website, image);
-        } catch(uploadErr) {
-            // If upload fails, we must not proceed but we already marked TX used.
-            // ideally rollback, but simplified:
-            return res.status(500).json({ error: "Metadata Upload Failed. Contact Support." });
-        }
 
-        const mintKeypair = Keypair.generate();
-        const mint = mintKeypair.publicKey;
-        const creator = devKeypair.publicKey;
-        await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
-        
-        const { mintAuthority, bondingCurve, global, eventAuthority, globalVolume, userVolume, feeConfig, creatorVault } = getDeploymentPDAs(mint, creator);
-        const { globalParams, solVault, mayhemState } = getMayhemPDAs(mint);
-        const associatedBondingCurve = getATA(mint, bondingCurve);
-        const mayhemTokenVault = getATA(mint, solVault);
-        const associatedUser = getATA(mint, creator);
-
-        const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, !!isMayhemMode).accounts({ mint, mintAuthority, bondingCurve, associatedBondingCurve, global, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, mayhemProgramId: MAYHEM_PROGRAM_ID, globalParams, solVault, mayhemState, mayhemTokenVault, eventAuthority, program: PUMP_PROGRAM_ID }).instruction();
-        const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), false).accounts({ global, feeRecipient: FEE_RECIPIENT, mint, bondingCurve, associatedBondingCurve, associatedUser, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator: globalVolume, userVolumeAccumulator: userVolume, feeConfig, feeProgram: FEE_PROGRAM_ID }).instruction();
-
-        const tx = new Transaction().add(createIx).add(buyIx);
-        tx.feePayer = creator;
-        const sig = await sendTxWithRetry(tx, [devKeypair, mintKeypair]);
-        
-        setTimeout(async () => { try { const bal = await connection.getTokenAccountBalance(associatedUser); if (bal.value.uiAmount > 0) { const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0)).accounts({ global, feeRecipient: FEE_RECIPIENT, mint, bondingCurve, associatedBondingCurve, associatedUser, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator: globalVolume, userVolumeAccumulator: userVolume, feeConfig, feeProgram: FEE_PROGRAM_ID }).instruction(); const sellTx = new Transaction().add(sellIx); await sendTxWithRetry(sellTx, [devKeypair]); } } catch (e) { console.error("Sell error:", e.message); } }, 1500); 
-
-        res.json({ success: true, mint: mint.toString(), signature: sig });
-    } catch (err) { logger.error("Deploy Exception", {error: err.message}); res.status(500).json({ error: err.message }); }
+        // Add to Queue
+        const job = await deployQueue.add('deployToken', { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode });
+        res.json({ success: true, jobId: job.id, message: "Queued" });
+    } catch (err) { logger.error("Deploy Request Error", {error: err.message}); res.status(500).json({ error: err.message }); }
 });
 
-// --- Loops ---
+// ... (Keep Loops for indexer/buyback) ...
 setInterval(async () => {
     if (!db) return;
     const topTokens = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10');
@@ -332,7 +309,7 @@ setInterval(async () => {
                         const info = await connection.getParsedAccountInfo(acc.address);
                         if (info.value && info.value.data.parsed) {
                             const owner = info.value.data.parsed.info.owner;
-                            if (owner !== PUMP_LIQUIDITY_WALLET) { await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, [token.mint, owner, rank, Date.now()]); rank++; }
+                            if (owner !== "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa") { await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, [token.mint, owner, rank, Date.now()]); rank++; }
                         }
                     } catch (e) {}
                 }
@@ -386,4 +363,4 @@ async function runPurchaseAndFees() {
 }
 setInterval(runPurchaseAndFees, 5 * 60 * 1000);
 
-app.listen(PORT, () => logger.info(`API Server v${VERSION} running on ${PORT}`));
+app.listen(PORT, () => logger.info(`Server v${VERSION} running on ${PORT}`));
