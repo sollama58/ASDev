@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.9.5-FIX-VOL-TRACK";
+const VERSION = "v10.9.6-FIX-SIMPLE-BUY";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -172,6 +172,24 @@ async function saveTokenData(pk, mint, meta) {
     } catch (e) { logger.error("Save Token Error", { err: e.message }); }
 }
 
+// --- Bonding Curve Calc ---
+function calculateTokensForSol(solAmountLamports) {
+    const virtualSolReserves = new BN(30000000000); // 30 SOL
+    const virtualTokenReserves = new BN(1073000000000000); // 1.073 Billion
+    
+    // k = virtualSol * virtualTokens
+    // newVirtualSol = virtualSol + solIn
+    // newVirtualTokens = k / newVirtualSol
+    // tokensOut = virtualTokens - newVirtualTokens
+
+    const solIn = new BN(solAmountLamports);
+    const k = virtualSolReserves.mul(virtualTokenReserves);
+    const newVirtualSol = virtualSolReserves.add(solIn);
+    const newVirtualTokens = k.div(newVirtualSol);
+    const tokensOut = virtualTokenReserves.sub(newVirtualTokens);
+    
+    return tokensOut;
+}
 
 // --- WORKER ---
 if (redisConnection) {
@@ -194,8 +212,6 @@ if (redisConnection) {
             const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PUMP_PROGRAM_ID);
             const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), MPL_TOKEN_METADATA_PROGRAM_ID.toBuffer(), mint.toBuffer()], MPL_TOKEN_METADATA_PROGRAM_ID);
             const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PUMP_PROGRAM_ID);
-            
-            // [FIXED] Explicitly derive userVolumeAccumulator for buy instruction
             const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PUMP_PROGRAM_ID);
 
             // Mayhem PDAs
@@ -241,15 +257,20 @@ if (redisConnection) {
             const feeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
             const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
             
-            // Manual buy_exact_sol_in
-            const buyDiscriminator = Buffer.from([56, 252, 116, 8, 158, 223, 205, 95]);
-            const amountBuf = new BN(Math.floor(0.01 * LAMPORTS_PER_SOL)).toArrayLike(Buffer, 'le', 8);
-            const minSolBuf = new BN(1).toArrayLike(Buffer, 'le', 8);
-            // [FIXED] Set trackVolume to 0 (false) to avoid 3012 error on uninitialized accumulator
-            // [FIXED] Using 1 byte for bool
-            const trackVolumeBuf = Buffer.from([0]); 
+            // [FIX] Use Simple Buy (Instruction 'buy' not 'buy_exact_sol_in')
+            // Calculates tokens for 0.01 SOL
+            const solBuyAmount = Math.floor(0.01 * LAMPORTS_PER_SOL);
+            const tokenBuyAmount = calculateTokensForSol(solBuyAmount);
             
-            const buyData = Buffer.concat([buyDiscriminator, amountBuf, minSolBuf, trackVolumeBuf]);
+            // buy discriminator: [102, 6, 61, 18, 1, 218, 235, 234]
+            const buyDiscriminator = Buffer.from([102, 6, 61, 18, 1, 218, 235, 234]);
+            const amountBuf = tokenBuyAmount.toArrayLike(Buffer, 'le', 8);
+            // maxSolCost = solBuyAmount + 1% slippage
+            const maxSolCostBuf = new BN(Math.floor(solBuyAmount * 1.05)).toArrayLike(Buffer, 'le', 8);
+            // trackVolume = 0 (false) - optional, likely not needed for simple buy but added to be safe
+            const trackVolumeBuf = Buffer.from([0]); 
+
+            const buyData = Buffer.concat([buyDiscriminator, amountBuf, maxSolCostBuf, trackVolumeBuf]);
 
             const buyKeys = [
                 { pubkey: global, isSigner: false, isWritable: false },
@@ -272,8 +293,7 @@ if (redisConnection) {
 
             const buyIx = new TransactionInstruction({ keys: buyKeys, programId: PUMP_PROGRAM_ID, data: buyData });
 
-            // [FIX] Create Associated Token Account Instruction (Instruction #3 in 0-index, #4 in 1-index)
-            // The Buy instruction expects this account to exist. Since the mint is new, we MUST create it here.
+            // Create User ATA Instruction (Required for Buy)
             const createATAIx = new TransactionInstruction({
                 keys: [
                     { pubkey: creator, isSigner: true, isWritable: true }, // Payer
@@ -281,7 +301,7 @@ if (redisConnection) {
                     { pubkey: creator, isSigner: false, isWritable: false }, // Owner
                     { pubkey: mint, isSigner: false, isWritable: false }, // Mint
                     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // System
-                    { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false }, // Token Program (Must be Token2022)
+                    { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false }, // Token Program
                 ],
                 programId: ASSOCIATED_TOKEN_PROGRAM_ID,
                 data: Buffer.alloc(0),
@@ -290,12 +310,12 @@ if (redisConnection) {
             const tx = new Transaction();
             addPriorityFee(tx); // Gas
             
-            // ORDER: [Create Mint] -> [Create User ATA] -> [Buy Tokens]
+            // ORDER: [Create Mint] -> [Create User ATA] -> [Simple Buy]
             tx.add(createIx).add(createATAIx).add(buyIx);
             
             tx.feePayer = creator;
             
-            logger.info("Sending Transaction...");
+            logger.info(`Sending Transaction... Buy Amount: ${tokenBuyAmount.toString()} tokens`);
             const sig = await sendTxWithRetry(tx, [devKeypair, mintKeypair]);
             logger.info(`Transaction Confirmed: ${sig}`);
             
