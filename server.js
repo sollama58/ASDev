@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram, sendAndConfirmTransaction, Keypair, TransactionInstruction } = require('@solana/web3.js');
+const { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram, sendAndConfirmTransaction, Keypair, TransactionInstruction, ComputeBudgetProgram, SYSVAR_RENT_PUBKEY } = require('@solana/web3.js');
 const { Program, AnchorProvider, Wallet, BN } = require('@coral-xyz/anchor');
 const bs58 = require('bs58');
 const fs = require('fs');
@@ -14,12 +14,13 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.38-TOKEN2022";
+const VERSION = "v10.7.0-PRIORITY-FEES";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
+const PRIORITY_FEE_MICRO_LAMPORTS = 100000; // 0.0001 SOL Gas Payment
 
-// AUTH STRATEGY: Prefer JWT, fallback to Legacy Keys
+// AUTH STRATEGY
 const PINATA_JWT = process.env.PINATA_JWT ? process.env.PINATA_JWT.trim() : null; 
 const PINATA_API_KEY_LEGACY = process.env.API_KEY ? process.env.API_KEY.trim() : null;
 const PINATA_SECRET_KEY_LEGACY = process.env.SECRET_KEY ? process.env.SECRET_KEY.trim() : null;
@@ -28,45 +29,25 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY; 
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
-// --- LOGGER ---
-const DISK_ROOT = '/var/data'; // ENSURE THIS IS A MOUNTED DISK ON RENDER
+const DISK_ROOT = '/var/data'; 
 const DEBUG_LOG_FILE = path.join(DISK_ROOT, 'server_debug.log');
-// Ensure data root exists
-if (!fs.existsSync(DISK_ROOT)) { 
-    // Fallback for local dev if /var/data doesn't exist
-    if (!fs.existsSync('./data')) fs.mkdirSync('./data'); 
-}
+if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./data'); }
 
 const logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
-
 function log(level, message, meta = {}) {
     const timestamp = new Date().toISOString();
-    const metaString = Object.keys(meta).length ? JSON.stringify(meta) : '';
-    const logLine = `[${timestamp}] [${level.toUpperCase()}] ${message} ${metaString}\n`;
-    logStream.write(logLine);
+    logStream.write(`[${timestamp}] [${level.toUpperCase()}] ${message} ${JSON.stringify(meta)}\n`);
     const consoleMethod = level === 'error' ? console.error : console.log;
-    consoleMethod(`[${level.toUpperCase()}] ${message}`, metaString ? meta : '');
+    consoleMethod(`[${level.toUpperCase()}] ${message}`, meta);
 }
-const logger = {
-    info: (msg, meta) => log('info', msg, meta),
-    warn: (msg, meta) => log('warn', msg, meta),
-    error: (msg, meta) => log('error', msg, meta)
-};
+const logger = { info: (m, d) => log('info', m, d), warn: (m, d) => log('warn', m, d), error: (m, d) => log('error', m, d) };
 
-// --- RPC CONFIGURATION ---
+// --- RPC ---
 let SOLANA_CONNECTION_URL = "https://api.mainnet-beta.solana.com"; 
-if (HELIUS_API_KEY) {
-    SOLANA_CONNECTION_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
-    logger.info("✅ RPC: Using Helius High-Performance Node");
-} else {
-    logger.warn("⚠️ WARNING: HELIUS_API_KEY missing. Using Public RPC.");
-}
+if (HELIUS_API_KEY) { SOLANA_CONNECTION_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`; logger.info("✅ RPC: Helius"); }
 
 // --- CONSTANTS ---
-const safePublicKey = (val, fallback, name) => {
-    try { return new PublicKey(val); } 
-    catch (e) { logger.warn(`⚠️ Invalid ${name}. Using fallback.`); return new PublicKey(fallback); }
-};
+const safePublicKey = (val, f, n) => { try { return new PublicKey(val); } catch (e) { logger.warn(`⚠️ Invalid ${n}`); return new PublicKey(f); } };
 
 const TARGET_PUMP_TOKEN = safePublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn", "11111111111111111111111111111111", "TARGET_PUMP_TOKEN");
 const WALLET_9_5 = safePublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z", "11111111111111111111111111111111", "WALLET_9_5"); 
@@ -75,72 +56,61 @@ const PUMP_LIQUIDITY_WALLET = "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa";
 const FEE_THRESHOLD_SOL = 0.20;
 const PUMP_PROGRAM_ID = safePublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "11111111111111111111111111111111", "PUMP_PROGRAM_ID");
 
-// [CHANGED BACK] Using Token 2022 Program
+// --- CREATE V2 CONSTANTS ---
 const TOKEN_PROGRAM_2022_ID = safePublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TOKEN_PROGRAM_2022_ID");
-
 const ASSOCIATED_TOKEN_PROGRAM_ID = safePublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", "11111111111111111111111111111111", "ASSOCIATED_TOKEN_PROGRAM_ID");
 const FEE_PROGRAM_ID = safePublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ", "11111111111111111111111111111111", "FEE_PROGRAM_ID");
-const FEE_RECIPIENT = safePublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM", "11111111111111111111111111111111", "FEE_RECIPIENT"); 
-const MAYHEM_PROGRAM_ID = safePublicKey("MAyhSmzXzV1pTf7LsNkrNwkWKTo4ougAJ1PPg47MD4e", "11111111111111111111111111111111", "MAYHEM_PROGRAM_ID");
-const MAYHEM_FEE_RECIPIENT = safePublicKey("GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS", "11111111111111111111111111111111", "MAYHEM_FEE_RECIPIENT");
+const FEE_RECIPIENT_STANDARD = safePublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM", "11111111111111111111111111111111", "FEE_RECIPIENT_STANDARD"); 
+const MPL_TOKEN_METADATA_PROGRAM_ID = safePublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s", "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s", "MPL_TOKEN_METADATA_PROGRAM_ID");
+
+// --- MAYHEM MODE CONSTANTS ---
+const MAYHEM_PROGRAM_ID = safePublicKey("MAyhSmzXzV1pTf7LsNkrNwkWKTo4ougAJ1PPg47MD4e", "MAyhSmzXzV1pTf7LsNkrNwkWKTo4ougAJ1PPg47MD4e", "MAYHEM_PROGRAM_ID");
+const GLOBAL_PARAMS = safePublicKey("13ec7XdrjF3h3YcqBTFDSReRcUFwbCnJaAQspM4j6DDJ", "13ec7XdrjF3h3YcqBTFDSReRcUFwbCnJaAQspM4j6DDJ", "GLOBAL_PARAMS");
+const SOL_VAULT = safePublicKey("BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s", "BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s", "SOL_VAULT");
+const MAYHEM_FEE_RECIPIENT = safePublicKey("GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS", "GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS", "MAYHEM_FEE_RECIPIENT");
 
 // --- DB & Directories ---
 const DATA_DIR = path.join(DISK_ROOT, 'tokens');
-// Prefer DISK_ROOT if available (Render Persistent Disk), else local
 const DB_PATH = fs.existsSync(DISK_ROOT) ? path.join(DISK_ROOT, 'launcher.db') : './data/launcher.db';
 const ACTIVE_DATA_DIR = fs.existsSync(DISK_ROOT) ? DATA_DIR : './data/tokens';
 const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); };
 ensureDir(ACTIVE_DATA_DIR);
 
-// --- REDIS QUEUE ---
 let deployQueue;
 let redisConnection;
 try {
     redisConnection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
-    redisConnection.on('error', (err) => logger.error("Redis Connection Error", { msg: err.message }));
     deployQueue = new Queue('deployQueue', { connection: redisConnection });
     logger.info("✅ Redis Queue Initialized");
 } catch (e) { logger.error("❌ Redis Init Fail", { error: e.message }); }
 
-// --- DB ---
 let db;
 async function initDB() {
     db = await open({ filename: DB_PATH, driver: sqlite3.Database });
-    // [OPTIMIZATION] Use WAL mode for better concurrency
     await db.exec('PRAGMA journal_mode = WAL;');
-    
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0);
+    await db.exec(`CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0);
         CREATE TABLE IF NOT EXISTS transactions (signature TEXT PRIMARY KEY, userPubkey TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, data TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value REAL);
         CREATE TABLE IF NOT EXISTS token_holders (mint TEXT, holderPubkey TEXT, rank INTEGER, lastUpdated INTEGER, PRIMARY KEY (mint, holderPubkey));
         INSERT OR IGNORE INTO stats (key, value) VALUES ('accumulatedFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeFeesLamports', 0);
-        INSERT OR IGNORE INTO stats (key, value) VALUES ('totalPumpBoughtLamports', 0);
-    `);
+        INSERT OR IGNORE INTO stats (key, value) VALUES ('totalPumpBoughtLamports', 0);`);
     logger.info(`DB Initialized at ${DB_PATH}`);
 }
 
-// --- MODERATION ---
 async function checkContentSafety(base64Data) {
     if (!CLARIFAI_API_KEY) return true;
     try {
         const base64Content = base64Data.replace(/^data:image\/(.*);base64,/, '');
-        const response = await axios.post(
-            `https://api.clarifai.com/v2/models/d16f390eb32cad478c7ae150069bd2c6/versions/aa8be956dbaa4b7a858826a84253cab9/outputs`, 
-            { inputs: [{ data: { image: { base64: base64Content } } }] }, 
-            { headers: { "Authorization": `Key ${CLARIFAI_API_KEY}`, "Content-Type": "application/json" } }
-        );
+        const response = await axios.post(`https://api.clarifai.com/v2/models/d16f390eb32cad478c7ae150069bd2c6/versions/aa8be956dbaa4b7a858826a84253cab9/outputs`, { inputs: [{ data: { image: { base64: base64Content } } }] }, { headers: { "Authorization": `Key ${CLARIFAI_API_KEY}`, "Content-Type": "application/json" } });
         const concepts = response.data.outputs[0].data.concepts;
         const unsafe = concepts.find(c => (c.name === 'gore' || c.name === 'explicit' || c.name === 'drug') && c.value > 0.85);
-        if (unsafe) { logger.warn(`🚫 Blocked unsafe content: ${unsafe.name}`); return false; }
-        return true;
-    } catch (e) { logger.error("Moderation API Error", { err: e.message }); return true; }
+        return !unsafe;
+    } catch (e) { return true; }
 }
 
 initDB();
-
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -159,6 +129,12 @@ try {
 } catch (e) { logger.error("Failed to load pump_idl.json", { error: e.message }); }
 
 // --- Helpers ---
+const addPriorityFee = (tx) => {
+    tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICRO_LAMPORTS }));
+    tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 300000 }));
+    return tx;
+};
+
 async function sendTxWithRetry(tx, signers, retries = 5) {
     for (let i = 0; i < retries; i++) {
         try {
@@ -173,12 +149,13 @@ async function sendTxWithRetry(tx, signers, retries = 5) {
 async function refundUser(userPubkeyStr, reason) {
     try {
         const userPubkey = new PublicKey(userPubkeyStr);
-        const refundAmount = 0.049 * LAMPORTS_PER_SOL; 
-        const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: userPubkey, lamports: refundAmount }));
+        const tx = new Transaction();
+        addPriorityFee(tx); // Gas
+        tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: userPubkey, lamports: 0.049 * LAMPORTS_PER_SOL }));
         const sig = await sendTxWithRetry(tx, [devKeypair]);
         logger.info(`💰 REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
         return sig;
-    } catch (e) { logger.error(`❌ REFUND FAILED for ${userPubkeyStr}: ${e.message}`); return null; }
+    } catch (e) { logger.error(`❌ REFUND FAILED: ${e.message}`); return null; }
 }
 
 async function addFees(amt) { if(db) { await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amt, 'accumulatedFeesLamports']); await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amt, 'lifetimeFeesLamports']); }}
@@ -189,121 +166,82 @@ async function resetAccumulatedFees(used) { const cur = await db.get('SELECT val
 async function logPurchase(type, data) { try { await db.run('INSERT INTO logs (type, data) VALUES (?, ?)', [type, JSON.stringify(data)]); } catch (e) {} }
 async function saveTokenData(pk, mint, meta) {
     try {
-        await db.run(
-            `INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, meta.image, meta.isMayhemMode]
-        );
-        const shard = pk.slice(0, 2).toLowerCase();
-        const dir = path.join(ACTIVE_DATA_DIR, shard);
-        ensureDir(dir);
+        await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, meta.image, meta.isMayhemMode]);
+        const shard = pk.slice(0, 2).toLowerCase(); const dir = path.join(ACTIVE_DATA_DIR, shard); ensureDir(dir);
         fs.writeFileSync(path.join(dir, `${mint}.json`), JSON.stringify({ userPubkey: pk, mint, metadata: meta, timestamp: new Date().toISOString() }, null, 2));
     } catch (e) { logger.error("Save Token Error", { err: e.message }); }
 }
 
 
 // --- WORKER ---
-let worker;
 if (redisConnection) {
     worker = new Worker('deployQueue', async (job) => {
-        logger.info(`Processing Job ${job.id}: ${job.data.ticker}`);
+        logger.info(`Job ${job.id}: ${job.data.ticker} [Mayhem: ${job.data.isMayhemMode}]`);
         const { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode, metadataUri } = job.data;
 
         try {
-            if (!metadataUri) throw new Error("Metadata URI missing in job payload");
+            if (!metadataUri) throw new Error("Metadata URI missing");
 
             const mintKeypair = Keypair.generate();
             const mint = mintKeypair.publicKey;
             const creator = devKeypair.publicKey;
 
-            // [FIX] Use getPumpPDAs helper
+            // PDAs
             const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = getPumpPDAs(mint);
-
             const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PUMP_PROGRAM_ID);
-            
-            // Mayhem PDAs
-            const [globalParams] = PublicKey.findProgramAddressSync([Buffer.from("global-params")], MAYHEM_PROGRAM_ID);
-            const [solVault] = PublicKey.findProgramAddressSync([Buffer.from("sol-vault")], MAYHEM_PROGRAM_ID);
-            const [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], MAYHEM_PROGRAM_ID);
-            const mayhemTokenVault = getATA(mint, solVault, TOKEN_PROGRAM_2022_ID);
-
-            // Manual Creator Vault Derivations
+            const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), MPL_TOKEN_METADATA_PROGRAM_ID.toBuffer(), mint.toBuffer()], MPL_TOKEN_METADATA_PROGRAM_ID);
             const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PUMP_PROGRAM_ID);
             const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PUMP_PROGRAM_ID);
 
-            // --- create_v2 ---
-            const discriminator = Buffer.from([214, 144, 76, 236, 95, 139, 49, 180]);
-            const serializeString = (str) => { const b = Buffer.from(str, 'utf8'); const len = Buffer.alloc(4); len.writeUInt32LE(b.length, 0); return Buffer.concat([len, b]); };
-            
-            const data = Buffer.concat([discriminator, serializeString(name), serializeString(ticker), serializeString(metadataUri), creator.toBuffer(), Buffer.from([isMayhemMode ? 1 : 0])]);
+            // Mayhem PDAs
+            let mayhemState, mayhemTokenVault;
+            if (isMayhemMode) {
+                [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], MAYHEM_PROGRAM_ID);
+                mayhemTokenVault = getATA(mint, SOL_VAULT, TOKEN_PROGRAM_2022_ID);
+            }
 
-            const keys = [
-                { pubkey: mint, isSigner: true, isWritable: true },
-                { pubkey: mintAuthority, isSigner: false, isWritable: false },
-                { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-                { pubkey: global, isSigner: false, isWritable: false },
-                { pubkey: creator, isSigner: true, isWritable: true }, 
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false }, // [CHANGED] Token 2022
-                { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                { pubkey: MAYHEM_PROGRAM_ID, isSigner: false, isWritable: true },
-                { pubkey: globalParams, isSigner: false, isWritable: false },
-                { pubkey: solVault, isSigner: false, isWritable: true },
-                { pubkey: mayhemState, isSigner: false, isWritable: true },
-                { pubkey: mayhemTokenVault, isSigner: false, isWritable: true },
-                { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                { pubkey: PUMP_PROGRAM_ID, isSigner: false, isWritable: false },
-            ];
-
-            const createIx = new TransactionInstruction({ keys, programId: PUMP_PROGRAM_ID, data });
-
-            // --- INSTRUCTION 2: Buy Initial Supply ---
-            const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
-            const targetFeeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT;
-            
-            // [CRITICAL FIX] Use buyExactSolIn instead of buy. 
-            // Spending 0.01 SOL to buy "some amount" of tokens.
-            const buyIx = await program.methods.buyExactSolIn(
-                new BN(0.01 * LAMPORTS_PER_SOL), // amount of SOL to spend
-                new BN(1), // Min tokens out (slippage protection, set low for guaranteed exec)
-                [false]
-            ).accounts({
-                global,
-                feeRecipient: targetFeeRecipient,
-                mint,
-                bondingCurve,
-                associatedBondingCurve,
-                associatedUser,
-                user: creator,
-                systemProgram: SystemProgram.programId,
-                tokenProgram: TOKEN_PROGRAM_2022_ID, // [CHANGED] Token 2022
-                creatorVault,
-                eventAuthority,
-                program: PUMP_PROGRAM_ID,
-                globalVolumeAccumulator,
-                userVolumeAccumulator,
-                feeConfig,
-                feeProgram: FEE_PROGRAM_ID
+            // Create V2
+            const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, isMayhemMode).accounts({
+                mint, mintAuthority, bondingCurve, associatedBondingCurve, global,
+                user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID,
+                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, mayhemProgramId: MAYHEM_PROGRAM_ID,
+                globalParams: GLOBAL_PARAMS, solVault: SOL_VAULT,
+                mayhemState: isMayhemMode ? mayhemState : PublicKey.default,
+                mayhemTokenVault: isMayhemMode ? mayhemTokenVault : PublicKey.default,
+                eventAuthority, program: PUMP_PROGRAM_ID
             }).instruction();
 
-            const tx = new Transaction().add(createIx).add(buyIx);
+            // Buy
+            const feeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
+            const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
+            
+            const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), [false]).accounts({
+                global, feeRecipient, mint, bondingCurve, associatedBondingCurve, associatedUser,
+                user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID,
+                creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator, userVolumeAccumulator,
+                feeConfig, feeProgram: FEE_PROGRAM_ID
+            }).instruction();
+
+            const tx = new Transaction();
+            addPriorityFee(tx); // Gas
+            tx.add(createIx).add(buyIx);
             tx.feePayer = creator;
             const sig = await sendTxWithRetry(tx, [devKeypair, mintKeypair]);
             
             await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
 
-            // Sell logic
+            // Sell (Delayed)
             setTimeout(async () => { try { 
                 const bal = await connection.getTokenAccountBalance(associatedUser); 
                 if (bal.value && bal.value.uiAmount > 0) { 
-                    const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0))
-                        .accounts({ 
-                            global, feeRecipient: targetFeeRecipient, mint, bondingCurve, associatedBondingCurve, associatedUser, 
-                            user: creator, systemProgram: SystemProgram.programId, 
-                            tokenProgram: TOKEN_PROGRAM_2022_ID, // [CHANGED] Token 2022
-                            creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, feeConfig, feeProgram: FEE_PROGRAM_ID
-                        }).instruction(); 
-                    const sellTx = new Transaction().add(sellIx); 
+                    const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0)).accounts({ 
+                        global, feeRecipient, mint, bondingCurve, associatedBondingCurve, associatedUser, 
+                        user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, 
+                        creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, feeConfig, feeProgram: FEE_PROGRAM_ID
+                    }).instruction(); 
+                    const sellTx = new Transaction();
+                    addPriorityFee(sellTx); // Gas
+                    sellTx.add(sellIx); 
                     await sendTxWithRetry(sellTx, [devKeypair]); 
                 } 
             } catch (e) { logger.error("Sell error", {msg: e.message}); } }, 1500); 
@@ -315,7 +253,6 @@ if (redisConnection) {
             if (userPubkey) await refundUser(userPubkey, "Deployment Failed: " + jobError.message);
             throw jobError;
         }
-
     }, { connection: redisConnection, concurrency: 1 });
 }
 
@@ -327,12 +264,10 @@ function getATA(mint, owner, tokenProgramId = TOKEN_PROGRAM_2022_ID) {
 function getPumpPDAs(mint) {
     const [global] = PublicKey.findProgramAddressSync([Buffer.from("global")], PUMP_PROGRAM_ID);
     const [bondingCurve] = PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), mint.toBuffer()], PUMP_PROGRAM_ID);
-    // [CHANGED] Uses getATA which defaults to Token 2022
     const associatedBondingCurve = getATA(mint, bondingCurve); 
     const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID);
     const [feeConfig] = PublicKey.findProgramAddressSync([Buffer.from("fee_config"), FEE_PROGRAM_ID.toBuffer()], FEE_PROGRAM_ID);
     const [globalVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("global_volume_accumulator")], PUMP_PROGRAM_ID);
-    
     return { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator };
 }
 
@@ -379,13 +314,8 @@ app.get('/api/recent-launches', async (req, res) => { try { const rows = await d
 app.get('/api/debug/logs', (req, res) => { const logPath = path.join(DISK_ROOT, 'server_debug.log'); if (fs.existsSync(logPath)) { const stats = fs.statSync(logPath); const stream = fs.createReadStream(logPath, { start: Math.max(0, stats.size - 50000) }); stream.pipe(res); } else { res.send("No logs yet."); } });
 app.get('/api/job-status/:id', async (req, res) => { if (!deployQueue) return res.status(500).json({ error: "Queue not initialized" }); const job = await deployQueue.getJob(req.params.id); if (!job) return res.status(404).json({ error: "Job not found" }); const state = await job.getState(); res.json({ id: job.id, state, result: job.returnvalue, failedReason: job.failedReason }); });
 
-app.get('/api/balance', async (req, res) => {
-    try { const { pubkey } = req.query; if (!pubkey) return res.status(400).json({ error: "Missing pubkey" }); const balance = await connection.getBalance(new PublicKey(pubkey)); res.json({ balance }); } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/blockhash', async (req, res) => {
-    try { const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized'); res.json({ blockhash, lastValidBlockHeight }); } catch (err) { res.status(500).json({ error: "Failed to get blockhash" }); }
-});
+app.get('/api/balance', async (req, res) => { try { const { pubkey } = req.query; if (!pubkey) return res.status(400).json({ error: "Missing pubkey" }); const balance = await connection.getBalance(new PublicKey(pubkey)); res.json({ balance }); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.get('/api/blockhash', async (req, res) => { try { const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized'); res.json({ blockhash, lastValidBlockHeight }); } catch (err) { res.status(500).json({ error: "Failed to get blockhash" }); } });
 
 app.post('/api/prepare-metadata', async (req, res) => {
     try {
@@ -409,7 +339,6 @@ app.post('/api/deploy', async (req, res) => {
         catch (dbErr) { if (dbErr.message.includes('UNIQUE')) return res.status(400).json({ error: "Tx already used." }); throw dbErr; }
 
         let validPayment = false;
-        // [OPTIMIZATION] Fallback to getSignatureStatuses if parsed tx fails
         for (let i = 0; i < 15; i++) {
             const txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
             if (txInfo) {
@@ -417,58 +346,21 @@ app.post('/api/deploy', async (req, res) => {
                     if (ix.programId.toString() !== '11111111111111111111111111111111') return false; 
                     if (ix.parsed.type !== 'transfer') return false; 
                     return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL; 
-                });
-                break;
-            } else {
-                 const { value } = await connection.getSignatureStatus(userTx);
-                 if (value?.confirmationStatus === 'confirmed' || value?.confirmationStatus === 'finalized') {
-                     // We know it exists, but can't parse inputs yet. Wait one more cycle.
-                 }
-            }
+                }); break;
+            } else { const { value } = await connection.getSignatureStatus(userTx); if (value?.confirmationStatus === 'confirmed' || value?.confirmationStatus === 'finalized') { } }
             await new Promise(r => setTimeout(r, 2000));
         }
 
-        if (!validPayment) {
-            await db.run('DELETE FROM transactions WHERE signature = ?', [userTx]);
-            return res.status(400).json({ error: "Payment verification failed or timed out." });
-        }
+        if (!validPayment) { await db.run('DELETE FROM transactions WHERE signature = ?', [userTx]); return res.status(400).json({ error: "Payment verification failed or timed out." }); }
 
         await addFees(0.05 * LAMPORTS_PER_SOL);
-        if (!deployQueue) return res.status(500).json({ error: "Deployment Queue Unavailable" });
+        if (!deployQueue) return res.status(500).json({ error: "Queue Unavailable" });
         const job = await deployQueue.add('deployToken', { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode, metadataUri });
         res.json({ success: true, jobId: job.id, message: "Queued" });
     } catch (err) { logger.error("Deploy API Error", { error: err.message }); res.status(500).json({ error: err.message }); }
 });
 
-// Loops
-setInterval(async () => { 
-    if (!db) return; 
-    try {
-        const topTokens = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10'); 
-        for (const token of topTokens) { 
-            try { 
-                if (!token.mint) continue;
-                const accounts = await connection.getTokenLargestAccounts(new PublicKey(token.mint)); 
-                if (accounts.value) { 
-                    const top20 = accounts.value.slice(0, 20); 
-                    let rank = 1; 
-                    await db.run('DELETE FROM token_holders WHERE mint = ?', token.mint); 
-                    for (const acc of top20) { 
-                        try { 
-                            const info = await connection.getParsedAccountInfo(acc.address); 
-                            if (info.value?.data?.parsed) { 
-                                const owner = info.value.data.parsed.info.owner; 
-                                if (owner !== PUMP_LIQUIDITY_WALLET) { await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, [token.mint, owner, rank, Date.now()]); rank++; } 
-                            } 
-                        } catch (e) {} 
-                    } 
-                } 
-            } catch (e) { console.error("Error processing token", token.mint, e.message); } 
-            await new Promise(r => setTimeout(r, 2000)); 
-        } 
-    } catch(e) { console.error("Loop Error", e); }
-}, 60 * 60 * 1000); 
-
+setInterval(async () => { if (!db) return; try { const topTokens = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10'); for (const token of topTokens) { try { if (!token.mint) continue; const accounts = await connection.getTokenLargestAccounts(new PublicKey(token.mint)); if (accounts.value) { const top20 = accounts.value.slice(0, 20); let rank = 1; await db.run('DELETE FROM token_holders WHERE mint = ?', token.mint); for (const acc of top20) { try { const info = await connection.getParsedAccountInfo(acc.address); if (info.value?.data?.parsed) { const owner = info.value.data.parsed.info.owner; if (owner !== PUMP_LIQUIDITY_WALLET) { await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, [token.mint, owner, rank, Date.now()]); rank++; } } } catch (e) {} } } } catch (e) { console.error("Error processing token", token.mint, e.message); } await new Promise(r => setTimeout(r, 2000)); } } catch(e) {} }, 60 * 60 * 1000); 
 setInterval(async () => { if (!db) return; const tokens = await db.all('SELECT mint FROM tokens'); for (let i = 0; i < tokens.length; i += 5) { const batch = tokens.slice(i, i + 5); await Promise.all(batch.map(async (t) => { try { const response = await axios.get(`https://frontend-api.pump.fun/coins/${t.mint}`, { timeout: 2000 }); const data = response.data; if (data) await db.run(`UPDATE tokens SET volume24h = ?, marketCap = ?, lastUpdated = ? WHERE mint = ?`, [data.usd_market_cap || 0, data.usd_market_cap || 0, Date.now(), t.mint]); } catch (e) {} })); await new Promise(r => setTimeout(r, 1000)); } }, 2 * 60 * 1000);
 
 let isBuybackRunning = false;
@@ -492,15 +384,18 @@ async function runPurchaseAndFees() {
                  const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_PROGRAM_ID);
                  const associatedUser = getATA(TARGET_PUMP_TOKEN, devKeypair.publicKey, TOKEN_PROGRAM_2022_ID);
                  
-                 const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), [false])
-                    .accounts({ 
-                        global, feeRecipient: FEE_RECIPIENT, mint: TARGET_PUMP_TOKEN, bondingCurve, associatedBondingCurve, associatedUser, 
-                        user: devKeypair.publicKey, systemProgram: SystemProgram.programId, 
-                        tokenProgram: TOKEN_PROGRAM_2022_ID, // [CHANGED] Token 2022
+                 // [FIX] Correct Fee Recipient for Buyback based on TARGET Token Mode
+                 const feeRecipient = bondingCurveAccount.isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
+
+                 const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), [false]).accounts({ 
+                        global, feeRecipient, mint: TARGET_PUMP_TOKEN, bondingCurve, associatedBondingCurve, associatedUser, 
+                        user: devKeypair.publicKey, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, 
                         creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator, userVolumeAccumulator, feeConfig, feeProgram: FEE_PROGRAM_ID 
                     }).instruction();
                  
-                 const tx = new Transaction().add(buyIx)
+                 const tx = new Transaction();
+                 addPriorityFee(tx); // Gas
+                 tx.add(buyIx)
                     .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 }))
                     .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
                  
