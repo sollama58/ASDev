@@ -16,27 +16,39 @@ const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const PINATA_JWT = process.env.PINATA_JWT;
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
-
 const TARGET_PUMP_TOKEN = new PublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn");
 const WALLET_19_5 = new PublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z");
 const WALLET_0_5 = new PublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g");
 const FEE_THRESHOLD_SOL = 0.20;
 
+// --- PERSISTENT DISK CONFIGURATION ---
 const DISK_ROOT = '/var/data'; 
 const DATA_DIR = path.join(DISK_ROOT, 'tokens'); 
 const STATS_FILE = path.join(DISK_ROOT, 'stats.json');
 const PURCHASE_LOG = path.join(DISK_ROOT, 'purchase_logs.json');
 
-if (!fs.existsSync(DISK_ROOT)) {
-    console.warn(`⚠️ Warning: Disk root ${DISK_ROOT} does not exist. Fallback to local.`);
-    if (!fs.existsSync('./data')) fs.mkdirSync('./data');
-} 
+// Directory handling (read-write helper)
+const getActivePath = (baseName) => {
+    const isDiskAvailable = fs.existsSync(DISK_ROOT);
+    
+    if (baseName === 'tokens') {
+        const diskPath = path.join(DISK_ROOT, 'tokens');
+        const fallbackPath = path.join(__dirname, 'data', 'tokens');
+        const activePath = isDiskAvailable ? diskPath : fallbackPath;
+        if (!fs.existsSync(activePath)) fs.mkdirSync(activePath, { recursive: true });
+        return activePath;
+    }
+    
+    const diskPath = path.join(DISK_ROOT, baseName);
+    const fallbackPath = path.join(__dirname, 'data', baseName);
+    const activePath = isDiskAvailable ? diskPath : fallbackPath;
+    if (!fs.existsSync(path.dirname(activePath))) fs.mkdirSync(path.dirname(activePath), { recursive: true });
+    return activePath;
+};
 
-const ACTIVE_DATA_DIR = fs.existsSync(DISK_ROOT) ? DATA_DIR : './data/tokens';
-const ACTIVE_STATS_FILE = fs.existsSync(DISK_ROOT) ? STATS_FILE : './data/stats.json';
-const ACTIVE_LOG_FILE = fs.existsSync(DISK_ROOT) ? PURCHASE_LOG : './data/purchase_logs.json';
-
-if (!fs.existsSync(path.dirname(ACTIVE_DATA_DIR))) fs.mkdirSync(path.dirname(ACTIVE_DATA_DIR), { recursive: true });
+const ACTIVE_DATA_DIR = getActivePath('tokens');
+const ACTIVE_STATS_FILE = getActivePath('stats.json');
+const ACTIVE_LOG_FILE = getActivePath('purchase_logs.json');
 
 if (!DEV_WALLET_PRIVATE_KEY || !HELIUS_API_KEY || !PINATA_JWT) {
     console.error("❌ ERROR: Missing Environment Variables.");
@@ -73,7 +85,7 @@ const idl = JSON.parse(idlRaw);
 idl.address = PUMP_PROGRAM_ID.toString();
 const program = new Program(idl, PUMP_PROGRAM_ID, provider);
 
-// --- Storage Helpers ---
+// --- Storage & Fee Helpers ---
 
 function saveTokenData(userPubkey, mint, metadata) {
     try {
@@ -126,8 +138,8 @@ function logPurchase(type, data) {
     } catch (e) { console.error("Logging error:", e); }
 }
 
-// --- Automated Buyback Loop (5 Mins) ---
-
+// --- Automated Buyback Loop (5 Mins) (Unchanged) ---
+// ... (runPurchaseAndFees implementation remains the same) ...
 async function runPurchaseAndFees() {
     console.log("🔄 Running PurchaseAndFees Routine...");
     const stats = getStats();
@@ -240,6 +252,7 @@ function getATA(mint, owner) {
     return PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN_PROGRAM_2022_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
 }
 
+
 // --- Routes ---
 app.get('/api/health', (req, res) => {
     const stats = getStats();
@@ -249,9 +262,50 @@ app.get('/api/health', (req, res) => {
         status: "online", 
         wallet: devKeypair.publicKey.toString(),
         lifetimeFees: (stats.lifetimeFeesLamports / LAMPORTS_PER_SOL).toFixed(4),
-        recentLogs: logs, // Send ALL logs now, frontend handles slicing/modal
+        recentLogs: logs, // Send all logs
         headerImageUrl: HEADER_IMAGE_URL 
     });
+});
+
+// NEW: Endpoint to retrieve the last 10 launches from sharded disk storage
+app.get('/api/recent-launches', async (req, res) => {
+    try {
+        let allLaunches = [];
+        
+        // 1. Get all shard directories (first 2 chars of pubkey)
+        const shardDirs = fs.readdirSync(ACTIVE_DATA_DIR, { withFileTypes: true })
+            .filter(dirent => dirent.isDirectory())
+            .map(dirent => path.join(ACTIVE_DATA_DIR, dirent.name));
+
+        // 2. Read all JSON files from all shards
+        for (const shardPath of shardDirs) {
+            const files = fs.readdirSync(shardPath).filter(file => file.endsWith('.json'));
+            for (const file of files) {
+                const filePath = path.join(shardPath, file);
+                const content = fs.readFileSync(filePath, 'utf8');
+                try {
+                    allLaunches.push(JSON.parse(content));
+                } catch (e) {
+                    console.error(`Error parsing launch file ${filePath}:`, e);
+                }
+            }
+        }
+
+        // 3. Sort by timestamp and return the latest 10
+        allLaunches.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        
+        // Map to a cleaner format for the frontend ticker
+        const formattedLaunches = allLaunches.slice(0, 10).map(launch => ({
+            userSnippet: launch.userPubkey.slice(0, 5),
+            ticker: launch.metadata.ticker,
+            mint: launch.mint
+        }));
+        
+        res.json(formattedLaunches);
+    } catch (e) {
+        console.error("Error retrieving recent launches:", e);
+        res.status(500).json([]);
+    }
 });
 
 app.post('/api/deploy', async (req, res) => {
@@ -289,7 +343,6 @@ app.post('/api/deploy', async (req, res) => {
         const mayhemTokenVault = getATA(mint, solVault);
         const associatedUser = getATA(mint, creator);
         
-        // Pass the boolean Mayhem Mode state
         const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, !!isMayhemMode)
             .accounts({ mint, mintAuthority, bondingCurve, associatedBondingCurve, global, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, mayhemProgramId: MAYHEM_PROGRAM_ID, globalParams, solVault, mayhemState, mayhemTokenVault, eventAuthority, program: PUMP_PROGRAM_ID }).instruction();
 
