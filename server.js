@@ -332,8 +332,8 @@ if (redisConnection) {
             const targetFeeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT;
             
             // NOTE: 'buy' instruction takes 3 args (amount, maxSolCost, trackVolume) in IDL
-            // FIX: Changed [false] to { value: false } to match the corrected Anchor IDL structure for optionBool
-            const buyIx = await program.methods.buy(new BN(0.01 * LAMPORTS_PER_SOL), new BN(LAMPORTS_PER_SOL), { value: false })
+            // FIX: Changed {value: false} back to [false] to match the standard Option argument serialization for Enum IDL.
+            const buyIx = await program.methods.buy(new BN(0.01 * LAMPORTS_PER_SOL), new BN(LAMPORTS_PER_SOL), [false])
                 .accounts({
                     global,
                     feeRecipient: targetFeeRecipient,
@@ -672,8 +672,8 @@ async function runPurchaseAndFees() {
                  const [feeConfig] = PublicKey.findProgramAddressSync([Buffer.from("fee_config"), FEE_PROGRAM_ID.toBuffer()], FEE_PROGRAM_ID);
                  
                  // UPDATED: buyExactSolIn signature and accounts
-                 // FIX: Changed [false] to { value: false } to match the corrected Anchor IDL structure for optionBool
-                 const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), { value: false })
+                 // FIX: Reverted to [false] array syntax to match Anchor Option Enum IDL format.
+                 const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), [false])
                     .accounts({ 
                         global: PublicKey.findProgramAddressSync([Buffer.from("global")], PUMP_PROGRAM_ID)[0], 
                         feeRecipient: FEE_RECIPIENT, 
