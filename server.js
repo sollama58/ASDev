@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.16";
+const VERSION = "v10.5.17";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -91,7 +91,7 @@ const FEE_THRESHOLD_SOL = 0.20;
 
 const PUMP_PROGRAM_ID = safePublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "11111111111111111111111111111111", "PUMP_PROGRAM_ID");
 
-// CHANGED: Reverted to Token 2022 for create_v2 support
+// CHANGED: Using Token 2022 for create_v2 support
 const TOKEN_PROGRAM_2022_ID = safePublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TOKEN_PROGRAM_2022_ID");
 
 const ASSOCIATED_TOKEN_PROGRAM_ID = safePublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", "11111111111111111111111111111111", "ASSOCIATED_TOKEN_PROGRAM_ID");
@@ -180,6 +180,31 @@ async function sendTxWithRetry(tx, signers, retries = 5) {
         } catch (err) { if (i === retries - 1) throw err; await new Promise(r => setTimeout(r, 2000)); }
     }
 }
+
+// NEW: Refund Function
+async function refundUser(userPubkeyStr, reason) {
+    try {
+        const userPubkey = new PublicKey(userPubkeyStr);
+        // Refund 0.049 SOL (keeping 0.001 for gas/effort)
+        const refundAmount = 0.049 * LAMPORTS_PER_SOL; 
+        
+        const tx = new Transaction().add(
+            SystemProgram.transfer({
+                fromPubkey: devKeypair.publicKey,
+                toPubkey: userPubkey,
+                lamports: refundAmount
+            })
+        );
+        
+        const sig = await sendTxWithRetry(tx, [devKeypair]);
+        logger.info(`💰 REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
+        return sig;
+    } catch (e) {
+        logger.error(`❌ REFUND FAILED for ${userPubkeyStr}: ${e.message}`);
+        return null;
+    }
+}
+
 async function addFees(amt) { if(db) { await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amt, 'accumulatedFeesLamports']); await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amt, 'lifetimeFeesLamports']); }}
 async function addPumpBought(amt) { if(db) await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amt, 'totalPumpBoughtLamports']); }
 async function getTotalLaunches() { if(!db) return 0; const res = await db.get('SELECT COUNT(*) as count FROM tokens'); return res ? res.count : 0; }
@@ -195,70 +220,81 @@ if (redisConnection) {
         logger.info(`Processing Job ${job.id}: ${job.data.ticker}`);
         const { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode, metadataUri } = job.data;
 
-        if (!metadataUri) throw new Error("Metadata URI missing in job payload");
+        try {
+            if (!metadataUri) throw new Error("Metadata URI missing in job payload");
 
-        const mintKeypair = Keypair.generate();
-        const mint = mintKeypair.publicKey;
-        const creator = devKeypair.publicKey;
+            const mintKeypair = Keypair.generate();
+            const mint = mintKeypair.publicKey;
+            const creator = devKeypair.publicKey;
 
-        const { mintAuthority, bondingCurve, global, eventAuthority, globalVolume, userVolume, feeConfig, creatorVault } = getDeploymentPDAs(mint, creator);
-        const { globalParams, solVault, mayhemState } = getMayhemPDAs(mint);
-        
-        // FIXED: Using Token2022 ID for ATA derivation for create_v2
-        const associatedBondingCurve = getATA(mint, bondingCurve, TOKEN_PROGRAM_2022_ID);
-        const mayhemTokenVault = getATA(mint, solVault, TOKEN_PROGRAM_2022_ID);
-        const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
+            const { mintAuthority, bondingCurve, global, eventAuthority, globalVolume, userVolume, feeConfig, creatorVault } = getDeploymentPDAs(mint, creator);
+            const { globalParams, solVault, mayhemState } = getMayhemPDAs(mint);
+            
+            // FIXED: Using Token2022 ID for ATA derivation for create_v2
+            const associatedBondingCurve = getATA(mint, bondingCurve, TOKEN_PROGRAM_2022_ID);
+            const mayhemTokenVault = getATA(mint, solVault, TOKEN_PROGRAM_2022_ID);
+            const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
 
-        const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, !!isMayhemMode).accounts({ 
-            mint: mint, 
-            mint_authority: mintAuthority, 
-            bonding_curve: bondingCurve, 
-            associated_bonding_curve: associatedBondingCurve, 
-            global: global, 
-            user: creator, 
-            system_program: SystemProgram.programId, 
-            token_program: TOKEN_PROGRAM_2022_ID, // Use Token2022
-            associated_token_program: ASSOCIATED_TOKEN_PROGRAM_ID, 
-            mayhem_program_id: MAYHEM_PROGRAM_ID, // Correct Mayhem ID
-            global_params: globalParams, 
-            sol_vault: solVault, 
-            mayhem_state: mayhemState, 
-            mayhem_token_vault: mayhemTokenVault, 
-            event_authority: eventAuthority, 
-            program: PUMP_PROGRAM_ID 
-        }).instruction();
+            const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, !!isMayhemMode).accounts({ 
+                mint: mint, 
+                mint_authority: mintAuthority, 
+                bonding_curve: bondingCurve, 
+                associated_bonding_curve: associatedBondingCurve, 
+                global: global, 
+                user: creator, 
+                system_program: SystemProgram.programId, 
+                token_program: TOKEN_PROGRAM_2022_ID, // Use Token2022
+                associated_token_program: ASSOCIATED_TOKEN_PROGRAM_ID, 
+                mayhem_program_id: MAYHEM_PROGRAM_ID, // Correct Mayhem ID
+                global_params: globalParams, 
+                sol_vault: solVault, 
+                mayhem_state: mayhemState, 
+                mayhem_token_vault: mayhemTokenVault, 
+                event_authority: eventAuthority, 
+                program: PUMP_PROGRAM_ID 
+            }).instruction();
 
-        // FIXED: Switch Fee Recipient if Mayhem Mode is Active
-        const targetFeeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT;
+            // FIXED: Switch Fee Recipient if Mayhem Mode is Active
+            const targetFeeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT;
 
-        const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), false).accounts({ 
-            global: global, 
-            fee_recipient: targetFeeRecipient, 
-            mint: mint, 
-            bonding_curve: bondingCurve, 
-            associated_bonding_curve: associatedBondingCurve, 
-            associated_user: associatedUser, 
-            user: devKeypair.publicKey, 
-            system_program: SystemProgram.programId, 
-            token_program: TOKEN_PROGRAM_2022_ID, // Use Token2022
-            creator_vault: creatorVault, 
-            event_authority: eventAuthority, 
-            program: PUMP_PROGRAM_ID, 
-            global_volume_accumulator: globalVolume, 
-            user_volume_accumulator: userVolume, 
-            fee_config: feeConfig, 
-            fee_program: FEE_PROGRAM_ID 
-        }).instruction();
+            const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), false).accounts({ 
+                global: global, 
+                fee_recipient: targetFeeRecipient, 
+                mint: mint, 
+                bonding_curve: bondingCurve, 
+                associated_bonding_curve: associatedBondingCurve, 
+                associated_user: associatedUser, 
+                user: devKeypair.publicKey, 
+                system_program: SystemProgram.programId, 
+                token_program: TOKEN_PROGRAM_2022_ID, // Use Token2022
+                creator_vault: creatorVault, 
+                event_authority: eventAuthority, 
+                program: PUMP_PROGRAM_ID, 
+                global_volume_accumulator: globalVolume, 
+                user_volume_accumulator: userVolume, 
+                fee_config: feeConfig, 
+                fee_program: FEE_PROGRAM_ID 
+            }).instruction();
 
-        const tx = new Transaction().add(createIx).add(buyIx);
-        tx.feePayer = creator;
-        const sig = await sendTxWithRetry(tx, [devKeypair, mintKeypair]);
-        
-        await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
+            const tx = new Transaction().add(createIx).add(buyIx);
+            tx.feePayer = creator;
+            const sig = await sendTxWithRetry(tx, [devKeypair, mintKeypair]);
+            
+            await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
 
-        setTimeout(async () => { try { const bal = await connection.getTokenAccountBalance(associatedUser); if (bal.value.uiAmount > 0) { const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0)).accounts({ global, fee_recipient: targetFeeRecipient, mint, bonding_curve: bondingCurve, associated_bonding_curve: associatedBondingCurve, associated_user: associatedUser, user: creator, system_program: SystemProgram.programId, token_program: TOKEN_PROGRAM_2022_ID, creator_vault: creatorVault, event_authority: eventAuthority, program: PUMP_PROGRAM_ID, global_volume_accumulator: globalVolume, user_volume_accumulator: userVolume, fee_config: feeConfig, fee_program: FEE_PROGRAM_ID }).instruction(); const sellTx = new Transaction().add(sellIx); await sendTxWithRetry(sellTx, [devKeypair]); } } catch (e) { logger.error("Sell error", {msg: e.message}); } }, 1500); 
+            setTimeout(async () => { try { const bal = await connection.getTokenAccountBalance(associatedUser); if (bal.value.uiAmount > 0) { const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0)).accounts({ global, fee_recipient: targetFeeRecipient, mint, bonding_curve: bondingCurve, associated_bonding_curve: associatedBondingCurve, associated_user: associatedUser, user: creator, system_program: SystemProgram.programId, token_program: TOKEN_PROGRAM_2022_ID, creator_vault: creatorVault, event_authority: eventAuthority, program: PUMP_PROGRAM_ID, global_volume_accumulator: globalVolume, user_volume_accumulator: userVolume, fee_config: feeConfig, fee_program: FEE_PROGRAM_ID }).instruction(); const sellTx = new Transaction().add(sellIx); await sendTxWithRetry(sellTx, [devKeypair]); } } catch (e) { logger.error("Sell error", {msg: e.message}); } }, 1500); 
 
-        return { mint: mint.toString(), signature: sig };
+            return { mint: mint.toString(), signature: sig };
+
+        } catch (jobError) {
+            logger.error(`❌ Job Failed: ${jobError.message}`);
+            // AUTOMATIC REFUND ON FAILURE
+            if (userPubkey) {
+                await refundUser(userPubkey, "Deployment Failed: " + jobError.message);
+            }
+            throw jobError;
+        }
+
     }, { connection: redisConnection, concurrency: 1 });
 }
 
