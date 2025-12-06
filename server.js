@@ -22,8 +22,8 @@ const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
 
 // AUTH STRATEGY: Prefer JWT, fallback to Legacy Keys
 const PINATA_JWT = process.env.PINATA_JWT ? process.env.PINATA_JWT.trim() : null; 
-const PINATA_API_KEY_LEGACY = process.env.PINATA_API_KEY ? process.env.PINATA_API_KEY.trim() : null;
-const PINATA_SECRET_KEY_LEGACY = process.env.PINATA_SECRET_KEY ? process.env.PINATA_SECRET_KEY.trim() : null;
+const PINATA_API_KEY_LEGACY = process.env.API_KEY ? process.env.API_KEY.trim() : null;
+const PINATA_SECRET_KEY_LEGACY = process.env.SECRET_KEY ? process.env.SECRET_KEY.trim() : null;
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY; 
@@ -327,12 +327,14 @@ if (redisConnection) {
                 data
             });
 
-            // --- INSTRUCTION 2: Buy Initial Supply ---
+            // --- INSTRUCTION 2: Buy Initial Supply (Pre-Bond) ---
             const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
+            // The fee recipient is the launcher's designated account for collecting fees (FEE_RECIPIENT or MAYHEM_FEE_RECIPIENT)
             const targetFeeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT;
             
-            // NOTE: 'buy' instruction takes 3 args (amount, maxSolCost, trackVolume) in IDL
-            // FIX: Changed {value: false} back to [false] to match the standard Option argument serialization for Enum IDL.
+            // Using buy instruction for pre-bond/initial liquidity injection.
+            // Argument for trackVolume: We use {some: false} or null if the native object syntax were desired.
+            // Using [false] array syntax is the most stable method for Option<T> arguments in Anchor 0.29.
             const buyIx = await program.methods.buy(new BN(0.01 * LAMPORTS_PER_SOL), new BN(LAMPORTS_PER_SOL), [false])
                 .accounts({
                     global,
@@ -401,9 +403,6 @@ if (redisConnection) {
 
 // --- PDAs/Uploads ---
 function getATA(mint, owner, tokenProgramId = TOKEN_PROGRAM_2022_ID) { return PublicKey.findProgramAddressSync([owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0]; }
-
-// ... (Rest of ENHANCED PINATA FUNCTIONS and Routes remain unchanged) ...
-// ... (getPinataHeaders, getPinataJSONHeaders, uploadImageToPinata, uploadMetadataToPinata) ...
 
 function getPinataHeaders(formData) {
     const headers = { ...formData.getHeaders() };
@@ -672,7 +671,7 @@ async function runPurchaseAndFees() {
                  const [feeConfig] = PublicKey.findProgramAddressSync([Buffer.from("fee_config"), FEE_PROGRAM_ID.toBuffer()], FEE_PROGRAM_ID);
                  
                  // UPDATED: buyExactSolIn signature and accounts
-                 // FIX: Reverted to [false] array syntax to match Anchor Option Enum IDL format.
+                 // FIX: Argument is set to [false] for the Option<bool> type.
                  const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), [false])
                     .accounts({ 
                         global: PublicKey.findProgramAddressSync([Buffer.from("global")], PUMP_PROGRAM_ID)[0], 

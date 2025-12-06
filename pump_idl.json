@@ -43,7 +43,7 @@
       "args": [
         { "name": "amount", "type": "u64" },
         { "name": "maxSolCost", "type": "u64" },
-        { "name": "trackVolume", "type": { "defined": { "name": "optionBool" } } }
+        { "name": "trackVolume", "type": { "option": "bool" } }
       ]
     },
     {
@@ -82,7 +82,7 @@
       "args": [
         { "name": "spendableSolIn", "type": "u64" },
         { "name": "minTokensOut", "type": "u64" },
-        { "name": "trackVolume", "type": { "defined": { "name": "optionBool" } } }
+        { "name": "trackVolume", "type": { "option": "bool" } }
       ]
     },
     {
@@ -161,16 +161,6 @@
     }
   ],
   "types": [
-    {
-      "name": "optionBool",
-      "type": {
-        "kind": "enum",
-        "variants": [
-          { "name": "None" },
-          { "name": "Some", "fields": [ { "name": "value", "type": "bool" } ] }
-        ]
-      }
-    },
     {
       "name": "BondingCurve",
       "type": {
