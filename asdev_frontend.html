@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.7.0</title>
+    <title>ASDev Launcher v10.7.2</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -183,7 +183,7 @@
 </div></div>
 
 <script>
-    const FRONTEND_VERSION = "v10.7.0";
+    const FRONTEND_VERSION = "v10.7.2";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.05;
@@ -323,9 +323,19 @@
 
     const renderLogs = (logs, targetElement, limit) => {
         targetElement.innerHTML = ''; if (!logs || logs.length === 0) { targetElement.innerHTML = '<p class="text-xs text-orange-400 font-mono text-center py-4">No logs available.</p>'; return; }
-        const displayLogs = logs.slice().reverse().slice(0, limit); 
+        
+        // SORT LOGS: Most recent first
+        // Assuming logs have a timestamp field (string ISO or number)
+        const sortedLogs = [...logs].sort((a, b) => {
+            const timeA = new Date(a.timestamp).getTime();
+            const timeB = new Date(b.timestamp).getTime();
+            return timeB - timeA;
+        });
+
+        const displayLogs = sortedLogs.slice(0, limit); 
         const logHtml = displayLogs.map(log => {
-            const time = new Date(log.timestamp).toLocaleTimeString();
+            // FORMAT: Local time
+            const time = new Date(log.timestamp).toLocaleTimeString(); 
             let content, logClass;
             if (log.type === 'SKIPPED') { content = `Fees Under Limit (${log.current}/${log.target} SOL)`; logClass = 'log-skipped'; } else if (log.type === 'SUCCESS') { content = `BUY: 80% | DIST: 20% | <a href="https://solscan.io/tx/${log.signature}" target="_blank" class="underline hover:text-white">View TX</a>`; logClass = 'log-success'; } else if (log.type === 'ERROR') { content = `FATAL ERROR: ${log.message.slice(0, 80)}`; logClass = 'log-error'; } else { content = `UNKNOWN EVENT`; logClass = 'text-orange-400'; }
             return `<div class="log-entry ${logClass}"><span>[${time}] ${log.type}:</span> <span>${content}</span></div>`;
@@ -434,7 +444,7 @@
             
             const signedTx = await window.solana.signAndSendTransaction(tx);
             
-            // STEP 3: Submit to Backend Queueue
+            // STEP 3: Submit to Backend Queue
             ui.deployBtn.innerText = "QUEUING DEPLOYMENT...";
             showStatus("PAYMENT CONFIRMED. QUEUING...", 'normal');
 
