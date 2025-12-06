@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.7.4-TRACK-VOLUME-FIX";
+const VERSION = "v10.8.1-CREATE-V2-DEBUG";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -181,6 +181,10 @@ if (redisConnection) {
 
         try {
             if (!metadataUri) throw new Error("Metadata URI missing");
+            // [STRICT VALIDATION] Ensure no argument passed to createV2 is undefined
+            if (!name) throw new Error("Name missing");
+            if (!ticker) throw new Error("Ticker missing");
+            if (typeof isMayhemMode !== 'boolean') throw new Error("Mayhem Mode flag invalid");
 
             const mintKeypair = Keypair.generate();
             const mint = mintKeypair.publicKey;
@@ -201,7 +205,14 @@ if (redisConnection) {
             }
 
             // Create V2
-            const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, isMayhemMode).accounts({
+            // [STRICT] Ensure all arguments are passed clearly
+            const createIx = await program.methods.createV2(
+                name, 
+                ticker, 
+                metadataUri, 
+                creator, 
+                isMayhemMode
+            ).accounts({
                 mint, mintAuthority, bondingCurve, associatedBondingCurve, global,
                 user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID,
                 associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, mayhemProgramId: MAYHEM_PROGRAM_ID,
@@ -215,7 +226,6 @@ if (redisConnection) {
             const feeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
             const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
             
-            // [FIX] Changed [false] to false for new IDL (bool type)
             const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), false).accounts({
                 global, feeRecipient, mint, bondingCurve, associatedBondingCurve, associatedUser,
                 user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID,
@@ -437,7 +447,6 @@ async function runPurchaseAndFees() {
                  // [FIX] Ensure correct fee recipient for Mayhem Mode if applicable
                  const feeRecipient = isMayhem ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
 
-                 // [FIXED] Passed boolean `false` instead of array `[false]` for `track_volume`
                  const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), false)
                     .accounts({ 
                         global, 
