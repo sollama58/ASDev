@@ -226,7 +226,7 @@ if (redisConnection) {
                 { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                 { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false },
                 { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                { pubkey: MAYHEM_PROGRAM_ID, isSigner: false, isWritable: false }, 
+                { pubkey: MAYHEM_PROGRAM_ID, isSigner: false, isWritable: true }, 
                 { pubkey: GLOBAL_PARAMS, isSigner: false, isWritable: false },
                 { pubkey: SOL_VAULT, isSigner: false, isWritable: true },
                 { pubkey: mayhemState, isSigner: false, isWritable: true },
