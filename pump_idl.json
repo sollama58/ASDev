@@ -91,11 +91,12 @@
       ]
     }
   ],
-  "types": [
-    {
-      "name": "BondingCurve",
-      "type": {
-        "kind": "struct",
+  "accounts": [
+    { 
+      "name": "BondingCurve", 
+      "discriminator": [ 23, 183, 248, 55, 96, 216, 172, 96 ], 
+      "type": { 
+        "kind": "struct", 
         "fields": [
           { "name": "virtual_token_reserves", "type": "u64" },
           { "name": "virtual_sol_reserves", "type": "u64" },
@@ -106,10 +107,8 @@
           { "name": "creator", "type": "publicKey" },
           { "name": "is_mayhem_mode", "type": "bool" }
         ]
-      }
+      } 
     }
   ],
-  "accounts": [
-    { "name": "BondingCurve", "discriminator": [ 23, 183, 248, 55, 96, 216, 172, 96 ], "type": { "defined": "BondingCurve" } }
-  ]
+  "types": []
 }
