@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.17";
+const VERSION = "v10.5.18";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -231,8 +231,14 @@ if (redisConnection) {
             const { globalParams, solVault, mayhemState } = getMayhemPDAs(mint);
             
             // FIXED: Using Token2022 ID for ATA derivation for create_v2
+            
+            // 1. Associated Bonding Curve: Seeds = [bondingCurve, token2022, mint]
             const associatedBondingCurve = getATA(mint, bondingCurve, TOKEN_PROGRAM_2022_ID);
+            
+            // 2. Mayhem Token Vault: Seeds = [solVault, token2022, mint]
             const mayhemTokenVault = getATA(mint, solVault, TOKEN_PROGRAM_2022_ID);
+            
+            // 3. User ATA: Seeds = [creator, token2022, mint]
             const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
 
             const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, !!isMayhemMode).accounts({ 
