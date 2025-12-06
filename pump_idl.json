@@ -155,7 +155,7 @@
         { "name": "name", "type": "string" },
         { "name": "symbol", "type": "string" },
         { "name": "uri", "type": "string" },
-        { "name": "creator", "type": "pubkey" },
+        { "name": "creator", "type": "publicKey" },
         { "name": "isMayhemMode", "type": "bool" }
       ]
     }
@@ -172,7 +172,7 @@
           { "name": "realSolReserves", "type": "u64" },
           { "name": "tokenTotalSupply", "type": "u64" },
           { "name": "complete", "type": "bool" },
-          { "name": "creator", "type": "pubkey" },
+          { "name": "creator", "type": "publicKey" },
           { "name": "isMayhemMode", "type": "bool" }
         ]
       }
