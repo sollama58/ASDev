@@ -9,19 +9,8 @@
   "instructions": [
     {
       "name": "create_v2",
-      "docs": [
-        "Creates a new spl-22 coin and bonding curve."
-      ],
-      "discriminator": [
-        214,
-        144,
-        76,
-        236,
-        95,
-        139,
-        49,
-        180
-      ],
+      "docs": [ "Creates a new spl-22 coin and bonding curve." ],
+      "discriminator": [ 214, 144, 76, 236, 95, 139, 49, 180 ],
       "accounts": [
         { "name": "mint", "writable": true, "signer": true },
         { "name": "mint_authority", "pda": { "seeds": [ { "kind": "const", "value": [ 109, 105, 110, 116, 45, 97, 117, 116, 104, 111, 114, 105, 116, 121 ] } ] } },
@@ -50,9 +39,7 @@
     },
     {
       "name": "buy_exact_sol_in",
-      "docs": [
-        "Given a budget of spendable SOL, buy at least min_tokens_out"
-      ],
+      "docs": [ "Given a budget of spendable SOL, buy at least min_tokens_out" ],
       "discriminator": [ 56, 252, 116, 8, 158, 223, 205, 95 ],
       "accounts": [
         { "name": "global", "pda": { "seeds": [ { "kind": "const", "value": [ 103, 108, 111, 98, 97, 108 ] } ] } },
@@ -75,14 +62,12 @@
       "args": [
         { "name": "amount", "type": "u64" },
         { "name": "min_sol_output", "type": "u64" },
-        { "name": "track_volume", "type": { "option": "bool" } }
+        { "name": "track_volume", "type": "bool" }
       ]
     },
     {
       "name": "sell",
-      "docs": [
-        "Sells tokens into a bonding curve."
-      ],
+      "docs": [ "Sells tokens into a bonding curve." ],
       "discriminator": [ 51, 230, 133, 164, 1, 127, 131, 173 ],
       "accounts": [
         { "name": "global", "pda": { "seeds": [ { "kind": "const", "value": [ 103, 108, 111, 98, 97, 108 ] } ] } },
@@ -125,10 +110,6 @@
     }
   ],
   "accounts": [
-    { 
-      "name": "BondingCurve", 
-      "discriminator": [ 23, 183, 248, 55, 96, 216, 172, 96 ], 
-      "type": { "defined": "BondingCurve" } 
-    }
+    { "name": "BondingCurve", "discriminator": [ 23, 183, 248, 55, 96, 216, 172, 96 ], "type": { "defined": "BondingCurve" } }
   ]
 }
