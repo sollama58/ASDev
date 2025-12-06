@@ -224,8 +224,6 @@ if (redisConnection) {
                 { pubkey: bondingCurve, isSigner: false, isWritable: true },
                 { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
                 { pubkey: global, isSigner: false, isWritable: false },
-                { pubkey: MPL_TOKEN_METADATA_PROGRAM_ID, isSigner: false, isWritable: false }, 
-                { pubkey: metadata, isSigner: false, isWritable: true },
                 { pubkey: creator, isSigner: true, isWritable: true },
                 { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                 { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false },
