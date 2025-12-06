@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.8.1-CREATE-V2-DEBUG";
+const VERSION = "v10.8.2-DEBUG-VERBOSE";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -36,9 +36,11 @@ if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./d
 const logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
 function log(level, message, meta = {}) {
     const timestamp = new Date().toISOString();
-    logStream.write(`[${timestamp}] [${level.toUpperCase()}] ${message} ${JSON.stringify(meta)}\n`);
+    const logMsg = `[${timestamp}] [${level.toUpperCase()}] ${message} ${JSON.stringify(meta)}`;
+    logStream.write(logMsg + '\n');
     const consoleMethod = level === 'error' ? console.error : console.log;
-    consoleMethod(`[${level.toUpperCase()}] ${message}`, meta);
+    // Log to console for realtime visibility
+    consoleMethod(logMsg);
 }
 const logger = { info: (m, d) => log('info', m, d), warn: (m, d) => log('warn', m, d), error: (m, d) => log('error', m, d) };
 
@@ -176,7 +178,7 @@ async function saveTokenData(pk, mint, meta) {
 // --- WORKER ---
 if (redisConnection) {
     worker = new Worker('deployQueue', async (job) => {
-        logger.info(`Job ${job.id}: ${job.data.ticker} [Mayhem: ${job.data.isMayhemMode}]`);
+        logger.info(`STARTING JOB ${job.id}: ${job.data.ticker}`);
         const { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode, metadataUri } = job.data;
 
         try {
@@ -190,21 +192,31 @@ if (redisConnection) {
             const mint = mintKeypair.publicKey;
             const creator = devKeypair.publicKey;
 
+            logger.info("Keys Generated", { mint: mint.toString(), creator: creator.toString() });
+
             // PDAs
+            logger.info("Deriving PDAs...");
             const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = getPumpPDAs(mint);
             const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PUMP_PROGRAM_ID);
             const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), MPL_TOKEN_METADATA_PROGRAM_ID.toBuffer(), mint.toBuffer()], MPL_TOKEN_METADATA_PROGRAM_ID);
             const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PUMP_PROGRAM_ID);
             const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PUMP_PROGRAM_ID);
 
+            logger.info("PDAs Derived", { bondingCurve: bondingCurve.toString(), metadata: metadata.toString() });
+
             // Mayhem PDAs
             let mayhemState, mayhemTokenVault;
             if (isMayhemMode) {
+                logger.info("Mayhem Mode Enabled - Deriving Mayhem PDAs");
                 [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], MAYHEM_PROGRAM_ID);
                 mayhemTokenVault = getATA(mint, SOL_VAULT, TOKEN_PROGRAM_2022_ID);
             }
 
             // Create V2
+            logger.info("Building createV2 Instruction", {
+                name, ticker, metadataUri, creator: creator.toString(), isMayhemMode
+            });
+
             // [STRICT] Ensure all arguments are passed clearly
             const createIx = await program.methods.createV2(
                 name, 
@@ -222,10 +234,13 @@ if (redisConnection) {
                 eventAuthority, program: PUMP_PROGRAM_ID
             }).instruction();
 
+            logger.info("createV2 Instruction Built");
+
             // Buy
             const feeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
             const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
             
+            logger.info("Building buyExactSolIn Instruction");
             const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), false).accounts({
                 global, feeRecipient, mint, bondingCurve, associatedBondingCurve, associatedUser,
                 user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID,
@@ -233,11 +248,16 @@ if (redisConnection) {
                 feeConfig, feeProgram: FEE_PROGRAM_ID
             }).instruction();
 
+            logger.info("buyExactSolIn Instruction Built");
+
             const tx = new Transaction();
             addPriorityFee(tx); // Gas
             tx.add(createIx).add(buyIx);
             tx.feePayer = creator;
+            
+            logger.info("Sending Transaction...");
             const sig = await sendTxWithRetry(tx, [devKeypair, mintKeypair]);
+            logger.info(`Transaction Confirmed: ${sig}`);
             
             await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
 
@@ -447,6 +467,7 @@ async function runPurchaseAndFees() {
                  // [FIX] Ensure correct fee recipient for Mayhem Mode if applicable
                  const feeRecipient = isMayhem ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
 
+                 // [FIXED] Passed boolean `false` instead of array `[false]` for `track_volume`
                  const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), false)
                     .accounts({ 
                         global, 
