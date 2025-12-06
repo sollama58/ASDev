@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.3</title>
+    <title>ASDev Launcher v10.5.1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -150,12 +150,11 @@
                 <p class="text-orange-200 text-sm leading-relaxed font-sans mb-4">The platform implements an automated flywheel mechanism designed for ecosystem stability and growth, funded by the mandatory <span class="text-white font-mono">0.05 SOL</span> deployment fee. This fee is automatically added to a reserve pool.</p>
                 <h4 class="text-white text-base mb-2">Autoclaim & Distribution Breakdown (Every 5 Minutes, Threshold: 0.20 SOL)</h4>
                 <ul class="list-disc list-inside text-orange-300 text-sm font-mono space-y-2">
-                    <li><span class="text-green-400 font-bold">80.0%</span>: Utilized for immediate buyback of the **$PUMP** token (Contract: `pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn`), **accumulating for airdrops**.</li>
-                    <li><span class="text-red-400 font-bold">19.5%</span>: **Sent to the Fee Wallet for Buybacks and Burns of $ASDFASDFA**.</li>
+                    <li><span class="text-green-400 font-bold">90.0%</span>: Utilized for immediate buyback of the **$PUMP** token (Contract: `pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn`), **accumulating for airdrops**.</li>
+                    <li><span class="text-red-400 font-bold">9.5%</span>: **Sent to the Fee Wallet for Buybacks and Burns of $ASDFASDFA**.</li>
                     <li><span class="text-red-400 font-bold">0.5%</span>: **Upkeep Fee**.</li>
                     <li><span class="text-yellow-400">STATUS</span>: The distribution is only executed when the accumulated fee pool reaches or exceeds **0.20 SOL**. Rounds are skipped if the threshold is not met.</li>
                 </ul>
-                
                 <div class="mt-6 p-4 border border-orange-800 bg-orange-950/50 rounded-lg">
                     <h5 class="text-red-400 font-bold mb-2">LEGAL DISCLAIMER</h5>
                     <p class="text-xs text-orange-300">This platform is a decentralized utility tool provided "as-is". The operators are not responsible for the nature of tokens created, their value, or any financial losses incurred. By using this service, you agree to comply with all applicable laws and regulations in your jurisdiction. Uploading illegal or prohibited content is strictly forbidden and will be blocked by automated AI moderation systems. Transactions on the blockchain are irreversible.</p>
@@ -179,6 +178,7 @@
 <div id="log-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeLogModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FULL BUYBACK LOGS</h3><div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2"></div></div></div>
 
 <script>
+    const FRONTEND_VERSION = "v10.5.1";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const HELIUS_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=a32d61a0-2cc2-4d60-b3b6-cefadce7001a"; 
@@ -203,7 +203,7 @@
 
     lucide.createIcons();
 
-    fetch(`${BACKEND_URL}/api/version`).then(r=>r.json()).then(d=>ui.versionDisplay.innerText = d.version).catch(()=>{});
+    fetch(`${BACKEND_URL}/api/version`).then(r=>r.json()).then(d=>ui.versionDisplay.innerText = `${FRONTEND_VERSION} | BE: ${d.version}`).catch(()=>{});
 
     const updatePumpPrice = async () => {
         try {
@@ -319,30 +319,102 @@
         const website = document.getElementById('website').value;
         const fileInput = document.getElementById('image-file');
         const isMayhemMode = ui.mayhemToggle.checked;
+        
         const validationError = validateInputs(name, ticker, description, twitter, website, fileInput);
         if (validationError) return showStatus(validationError.toUpperCase(), 'error');
 
         let imageBase64;
         try { imageBase64 = await toBase64(fileInput.files[0]); } catch(e) { return showStatus("IMAGE PROCESSING FAILED", 'error'); }
 
-        ui.deployBtn.disabled = true; ui.deployBtn.innerText = "PROCESSING SEQUENCE..."; showStatus("SIGNING 0.05 SOL FEE...", 'normal');
+        ui.deployBtn.disabled = true; 
+        ui.deployBtn.innerText = "UPLOADING & VERIFYING METADATA..."; 
+        showStatus("PREPARING METADATA...", 'normal');
 
         try {
-            const tx = new solanaWeb3.Transaction().add(solanaWeb3.SystemProgram.transfer({ fromPubkey: new solanaWeb3.PublicKey(userPubkey), toPubkey: new solanaWeb3.PublicKey(DEV_WALLET_PUBKEY), lamports: 0.05 * 1000000000 }));
-            const { blockhash } = await connection.getLatestBlockhash(); tx.recentBlockhash = blockhash; tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
-            const signedTx = await window.solana.signAndSendTransaction(tx);
-            showStatus("PAYMENT CONFIRMED. DEPLOYING...", 'normal');
+            // STEP 1: Upload Metadata & Moderate
+            const prepRes = await fetch(`${BACKEND_URL}/api/prepare-metadata`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, ticker, description, twitter, website, image: imageBase64 })
+            });
+            
+            if (!prepRes.ok) {
+                const errData = await prepRes.json();
+                throw new Error(errData.error || "Metadata upload failed");
+            }
+            const { metadataUri } = await prepRes.json();
+            
+            // STEP 2: Sign Transaction
+            ui.deployBtn.innerText = "SIGNING FEE TRANSACTION...";
+            showStatus("METADATA READY. PLEASE SIGN WALLET...", 'normal');
 
-            const res = await fetch(`${BACKEND_URL}/api/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ticker, description, twitter, website, image: imageBase64, userTx: signedTx.signature, userPubkey: userPubkey, isMayhemMode: isMayhemMode }) });
-            const data = await res.json();
-            if (data.success) {
-                showStatus("LAUNCH CONFIRMED", 'success');
-                document.getElementById('result-area').classList.remove('hidden');
-                document.getElementById('mint-addr').innerText = data.mint;
-                document.getElementById('tx-link').href = `https://solscan.io/tx/${data.signature}`;
-                ui.deployBtn.innerText = "LAUNCH COMPLETE"; refreshWalletBalance(); 
-            } else { throw new Error(data.error || "Backend Error"); }
-        } catch (e) { console.error(e); showStatus("ERROR: " + (e.message || "Transaction failed."), 'error'); ui.deployBtn.disabled = false; ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE"; }
+            const tx = new solanaWeb3.Transaction().add(
+                solanaWeb3.SystemProgram.transfer({
+                    fromPubkey: new solanaWeb3.PublicKey(userPubkey),
+                    toPubkey: new solanaWeb3.PublicKey(DEV_WALLET_PUBKEY),
+                    lamports: 0.05 * 1000000000 
+                })
+            );
+            
+            const { blockhash } = await connection.getLatestBlockhash();
+            tx.recentBlockhash = blockhash;
+            tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
+            const signedTx = await window.solana.signAndSendTransaction(tx);
+            
+            // STEP 3: Submit to Backend Queue
+            ui.deployBtn.innerText = "QUEUING DEPLOYMENT...";
+            showStatus("PAYMENT CONFIRMED. QUEUING...", 'normal');
+
+            const deployRes = await fetch(`${BACKEND_URL}/api/deploy`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name, ticker, description, twitter, website,
+                    metadataUri, // Send the pre-uploaded URI
+                    userTx: signedTx.signature,
+                    userPubkey: userPubkey,
+                    isMayhemMode: isMayhemMode 
+                })
+            });
+
+            const data = await deployRes.json();
+            if (data.success && data.jobId) {
+                ui.deployBtn.innerText = "DEPLOYING...";
+                pollJobStatus(data.jobId);
+            } else { throw new Error(data.error); }
+
+        } catch (e) {
+            console.error(e);
+            showStatus("ERROR: " + (e.message || "Process failed."), 'error');
+            ui.deployBtn.disabled = false;
+            ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE";
+        }
+    };
+
+    const pollJobStatus = async (jobId) => {
+        const interval = setInterval(async () => {
+            try {
+                const res = await fetch(`${BACKEND_URL}/api/job-status/${jobId}`);
+                const job = await res.json();
+                
+                if (job.state === 'completed') {
+                    clearInterval(interval);
+                    showStatus("LAUNCH CONFIRMED", 'success');
+                    document.getElementById('result-area').classList.remove('hidden');
+                    document.getElementById('mint-addr').innerText = job.result.mint;
+                    document.getElementById('tx-link').href = `https://solscan.io/tx/${job.result.signature}`;
+                    ui.deployBtn.innerText = "LAUNCH COMPLETE"; ui.deployBtn.disabled = false;
+                    refreshWalletBalance();
+                } else if (job.state === 'failed') {
+                    clearInterval(interval);
+                    showStatus(`DEPLOYMENT FAILED: ${job.failedReason}`, 'error');
+                    ui.deployBtn.disabled = false; ui.deployBtn.innerText = "RETRY LAUNCH";
+                } else {
+                    // Update status text based on state
+                    showStatus(`STATUS: ${job.state.toUpperCase()} (Please Wait...)`, 'normal');
+                }
+            } catch (e) { console.error("Polling error", e); }
+        }, 2000); // Check every 2s
     };
     
     window.addEventListener('load', () => {
