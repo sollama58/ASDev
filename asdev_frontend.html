@@ -17,7 +17,7 @@
             min-height: 100vh; 
             display: flex; 
             justify-content: center; 
-            align-items: center; 
+            align-items: flex-start; /* Align to top */
             padding: 40px 20px; 
         }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
@@ -107,18 +107,42 @@
         .log-entry:last-child { border-bottom: none; }
         .log-skipped { color: #fdba74; opacity: 0.8; }
         .log-success { color: #4ade80; font-weight: bold; }
+        .log-error { color: #ef4444; }
 
+        /* Toggle Switch */
+        .toggle-switch input { display: none; }
+        .toggle-switch .slider { 
+            cursor: pointer; width: 60px; height: 34px; background-color: #7c2d12; 
+            transition: .4s; border-radius: 34px; position: relative; 
+            box-shadow: inset 0 0 4px rgba(0,0,0,0.5);
+        }
+        .toggle-switch .slider:before {
+            position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px;
+            background-color: white; transition: .4s; border-radius: 50%;
+        }
+        .toggle-switch input:checked + .slider { background-color: #ef4444; } /* Changed to RED for MAYHEM */
+        .toggle-switch input:checked + .slider:before { transform: translateX(26px); }
+        .mayhem-label { transition: color 0.4s; }
+        .mayhem-label.active { color: #ef4444; font-weight: bold; }
+
+        /* Header Image Animation/Sizing */
         #header-image {
             width: 60px;
             height: 60px;
             border-radius: 8px;
             object-fit: cover;
-            animation: bounce 1s infinite alternate;
+            animation: bounce 1s infinite alternate; /* Reapplied bounce */
         }
         @keyframes bounce {
             from { transform: translateY(0); }
             to { transform: translateY(-5px); }
         }
+
+        /* Modal Styles */
+        .modal { display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); }
+        .modal-content { background-color: #2a1005; margin: 10% auto; padding: 30px; border: 4px solid #ea580c; width: 80%; max-width: 800px; border-radius: 12px; box-shadow: 0 0 20px rgba(234, 88, 12, 0.5); }
+        .close-btn { color: #aaa; float: right; font-size: 28px; font-weight: bold; }
+        .close-btn:hover, .close-btn:focus { color: #fff; text-decoration: none; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -131,7 +155,6 @@
         <!-- Header -->
         <div class="flex justify-between items-start mb-10 border-b-4 border-orange-900 pb-8">
             <div class="flex items-center gap-6">
-                <!-- Image placeholder -->
                 <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
                 
                 <div>
@@ -210,6 +233,22 @@
 
         <!-- Action Area -->
         <div class="panel bg-gradient-to-r from-orange-950 to-[#2a1005] border-2 border-orange-800">
+            
+            <!-- Mayhem Toggle -->
+            <div class="flex justify-between items-center mb-6 border-b border-orange-900 pb-4">
+                <div class="flex flex-col">
+                    <span class="mayhem-label text-orange-400 text-xs tracking-widest mb-1 transition-colors duration-300" id="mayhem-status-label">MAYHEM MODE: OFF</span>
+                    <span class="text-white text-base">
+                        <span class="font-bold">Mayhem Mode</span> 
+                        <span class="text-xs text-orange-400 ml-2">(Enables advanced features/risks)</span>
+                    </span>
+                </div>
+                <label class="toggle-switch ml-4">
+                    <input type="checkbox" id="mayhem-toggle">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            
             <div class="flex justify-center items-center mb-6 font-mono text-sm border-b border-orange-900 pb-6">
                 <div class="flex flex-col items-center">
                     <span class="text-orange-400 text-xs tracking-widest mb-1">DEPLOYMENT FEE</span>
@@ -225,23 +264,31 @@
 
         <!-- Buyback Feed -->
         <div class="panel bg-orange-950/30 border border-orange-900 mt-8">
-            <h3 class="text-orange-500 font-mono text-sm mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">BUYBACK OPERATIONS FEED (5 MIN CYCLE)</h3>
-            <div id="log-feed" class="flex flex-col gap-1 max-h-[200px] overflow-y-auto">
+            <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
+                <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">BUYBACK OPERATIONS FEED (LAST 5)</h3>
+                <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-xs underline p-1">VIEW ALL</button>
+            </div>
+            <div id="log-feed" class="flex flex-col gap-1 max-h-[160px] overflow-y-auto">
                 <p class="text-xs text-orange-400 font-mono text-center py-4">Waiting for next synchronization...</p>
             </div>
         </div>
 
-        <!-- About -->
+        <!-- About Section (Non-Collapsible, moved to bottom) -->
         <div class="panel bg-orange-900/20 mt-8">
-            <h3 class="text-orange-500 font-mono text-sm mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">About the System</h3>
-            <p class="text-orange-200 text-sm leading-relaxed font-sans mb-4">
-                The <span class="text-white font-bold">ASDev Airdrop and Flywheel Pumpfun Launcher</span> is a specialized deployment terminal designed for high-velocity token launches on the Solana blockchain.
-            </p>
-            <ul class="list-disc list-inside text-orange-300 text-sm font-mono space-y-2">
-                <li>Automated Metadata Upload via Pinata IPFS.</li>
-                <li>Direct Pump.fun Contract Integration (Token2022 Standard).</li>
-                <li>Optimized Fee Handling & Transaction Routing.</li>
-            </ul>
+            <div class="border-b border-orange-900/50 pb-2 mb-4">
+                <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">ABOUT THE SYSTEM</h3>
+            </div>
+            <div id="about-content-static">
+                <p class="text-orange-200 text-sm leading-relaxed font-sans mb-4">
+                    The <span class="text-white font-bold">ASDev Airdrop and Flywheel Pumpfun Launcher</span> is a specialized deployment terminal designed for high-velocity token launches on the Solana blockchain.
+                </p>
+                <ul class="list-disc list-inside text-orange-300 text-sm font-mono space-y-2">
+                    <li>Automated Metadata Upload via Pinata IPFS.</li>
+                    <li>Direct Pump.fun Contract Integration (Token2022 Standard).</li>
+                    <li>Optimized Fee Handling & Transaction Routing.</li>
+                    <li class="text-red-400 font-bold">Automated Flywheel: System purchases $PUMP and distributes remaining fees when $0.20 SOL fee threshold is met.</li>
+                </ul>
+            </div>
         </div>
         
         <!-- Result Overlay -->
@@ -267,6 +314,17 @@
     </div>
 </div>
 
+<!-- Log Modal -->
+<div id="log-modal" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="closeLogModal()">&times;</span>
+        <h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FULL BUYBACK LOGS</h3>
+        <div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2">
+            <!-- Logs injected here -->
+        </div>
+    </div>
+</div>
+
 <script>
     // --- CONFIGURATION ---
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
@@ -275,6 +333,7 @@
 
     // --- STATE ---
     let userPubkey = null;
+    let allLogs = []; 
     let connection = new solanaWeb3.Connection(HELIUS_RPC_URL, "confirmed"); 
 
     // --- UI ELEMENTS ---
@@ -293,13 +352,32 @@
         previewTicker: document.getElementById('preview-ticker'),
         lifetimeFees: document.getElementById('lifetime-fees'),
         logFeed: document.getElementById('log-feed'),
-        headerImage: document.getElementById('header-image')
+        headerImage: document.getElementById('header-image'),
+        mayhemToggle: document.getElementById('mayhem-toggle'),
+        mayhemStatusLabel: document.getElementById('mayhem-status-label'),
+        logModal: document.getElementById('log-modal'),
+        modalLogContent: document.getElementById('modal-log-content')
     };
 
     // --- ICONS ---
     lucide.createIcons();
 
-    // --- PREVIEW LOGIC ---
+    // --- UI INTERACTION LOGIC ---
+
+    // 1. Mayhem Toggle Label Update
+    const updateMayhemLabel = () => {
+        if (ui.mayhemToggle.checked) {
+            ui.mayhemStatusLabel.innerText = "MAYHEM MODE: ON (HIGH RISK)";
+            ui.mayhemStatusLabel.classList.add('active');
+        } else {
+            ui.mayhemStatusLabel.innerText = "MAYHEM MODE: OFF";
+            ui.mayhemStatusLabel.classList.remove('active');
+        }
+    };
+    ui.mayhemToggle.addEventListener('change', updateMayhemLabel);
+    updateMayhemLabel(); // Initial call
+
+    // 2. Preview Logic
     const updatePreview = () => {
         ui.previewName.innerText = document.getElementById('name').value || "Token Name";
         ui.previewTicker.innerText = document.getElementById('ticker').value ? `$${document.getElementById('ticker').value.toUpperCase()}` : "$TICKER";
@@ -308,17 +386,7 @@
     const previewImage = (event) => {
         const file = event.target.files[0];
         if (file) {
-            if (file.size > 4 * 1024 * 1024) {
-                alert("File size exceeds 4MB limit.");
-                event.target.value = "";
-                return;
-            }
-            if (!['image/png', 'image/jpeg', 'image/gif'].includes(file.type)) {
-                alert("Invalid file type. Only PNG, JPG, GIF allowed.");
-                event.target.value = "";
-                return;
-            }
-
+            // No need to validate size here since it's checked in validateInputs
             const reader = new FileReader();
             reader.onload = (e) => {
                 ui.imgPreview.innerHTML = `<img src="${e.target.result}" alt="Preview" class="rounded-lg w-full h-full object-cover">`;
@@ -333,6 +401,53 @@
     window.previewImage = previewImage;
     window.updatePreview = updatePreview;
 
+    // 3. Log Modal
+    const renderLogs = (logs, targetElement, limit) => {
+        targetElement.innerHTML = '';
+        if (!logs || logs.length === 0) {
+            targetElement.innerHTML = '<p class="text-xs text-orange-400 font-mono text-center py-4">No logs available.</p>';
+            return;
+        }
+
+        const displayLogs = logs.slice().reverse().slice(0, limit); 
+
+        const logHtml = displayLogs.map(log => {
+            const time = new Date(log.timestamp).toLocaleTimeString();
+            let content;
+            let logClass;
+
+            if (log.type === 'SKIPPED') {
+                content = `Fees Under Limit (${log.current}/${log.target} SOL)`;
+                logClass = 'log-skipped';
+            } else if (log.type === 'SUCCESS') {
+                content = `BUY: 80% | DIST: 20% | <a href="https://solscan.io/tx/${log.signature}" target="_blank" class="underline hover:text-white">View TX</a>`;
+                logClass = 'log-success';
+            } else if (log.type === 'ERROR') {
+                 content = `FATAL ERROR: ${log.message.slice(0, 80)}`;
+                 logClass = 'log-error';
+            } else {
+                content = `UNKNOWN EVENT`;
+                logClass = 'text-orange-400';
+            }
+
+            return `<div class="log-entry ${logClass}"><span>[${time}] ${log.type}:</span> <span>${content}</span></div>`;
+        }).join('');
+        targetElement.innerHTML = logHtml;
+    };
+
+    const toggleLogModal = () => {
+        ui.modalLogContent.innerHTML = '';
+        renderLogs(allLogs, ui.modalLogContent, allLogs.length); 
+        ui.logModal.style.display = 'block';
+    };
+    window.toggleLogModal = toggleLogModal;
+
+    const closeLogModal = () => {
+        ui.logModal.style.display = 'none';
+    };
+    window.closeLogModal = closeLogModal;
+
+
     // --- HEALTH CHECK & LOGS ---
     const checkHealth = async () => {
         try {
@@ -342,37 +457,18 @@
                 ui.sysStatus.innerText = "ONLINE";
                 ui.sysStatus.classList.add("online");
                 
-                // Update Header Image
                 ui.headerImage.src = data.headerImageUrl || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
+                if (data.lifetimeFees) ui.lifetimeFees.innerText = data.lifetimeFees;
                 
-                // Update Fees
-                if (data.lifetimeFees) {
-                    ui.lifetimeFees.innerText = data.lifetimeFees;
-                }
-                
-                // Update Logs
-                if (data.recentLogs && data.recentLogs.length > 0) {
-                    ui.logFeed.innerHTML = data.recentLogs.map(log => {
-                        const time = new Date(log.timestamp).toLocaleTimeString();
-                        if (log.type === 'SKIPPED') {
-                            return `<div class="log-entry log-skipped"><span>[${time}] SKIPPING ROUND:</span> <span>Fees Under Limit (${log.current}/${log.target} SOL)</span></div>`;
-                        } else if (log.type === 'SUCCESS') {
-                            return `<div class="log-entry log-success"><span>[${time}] BUYBACK EXECUTED:</span> <span><a href="https://solscan.io/tx/${log.signature}" target="_blank" class="underline hover:text-white">View TX</a></span></div>`;
-                        } else if (log.type === 'ERROR') {
-                            return `<div class="log-entry text-red-400"><span>[${time}] ERROR:</span> <span>${log.message.slice(0, 40)}...</span></div>`;
-                        }
-                        return `<div class="log-entry text-orange-400"><span>[${time}] UNKNOWN EVENT</span></div>`;
-                    }).join('');
-                } else {
-                    ui.logFeed.innerHTML = '<p class="text-xs text-orange-400 font-mono text-center py-4">Waiting for next synchronization...</p>';
-                }
+                allLogs = data.recentLogs; 
+                renderLogs(allLogs, ui.logFeed, 5); 
             } else {
                 throw new Error("Backend Error");
             }
         } catch (e) {
             ui.sysStatus.innerText = "OFFLINE";
             ui.sysStatus.classList.remove("online");
-            ui.headerImage.src = "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; // Fallback placeholder
+            ui.headerImage.src = "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
         }
     };
     setInterval(checkHealth, 5000); 
@@ -454,9 +550,11 @@
         if (!ticker || ticker.trim().length === 0) return "Ticker Symbol is required.";
         if (ticker.length > 10) return "Ticker must be 10 characters or less.";
         if (description.length > 200) return "Description must be 200 characters or less.";
-        const urlPattern = /^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?$/;
-        if (twitter && !urlPattern.test(twitter)) return "Invalid Twitter URL.";
-        if (website && !urlPattern.test(website)) return "Invalid Website URL.";
+        
+        const urlPattern = /^(https?:\/\/[^\s]+|([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[^\s]*)?)$/;
+        
+        if (twitter && twitter.trim() !== '' && !urlPattern.test(twitter)) return "Invalid Twitter URL.";
+        if (website && website.trim() !== '' && !urlPattern.test(website)) return "Invalid Website URL.";
         return null;
     };
 
@@ -470,6 +568,7 @@
         const twitter = document.getElementById('twitter').value;
         const website = document.getElementById('website').value;
         const fileInput = document.getElementById('image-file');
+        const isMayhemMode = ui.mayhemToggle.checked;
         
         const validationError = validateInputs(name, ticker, description, twitter, website, fileInput);
         if (validationError) return showStatus(validationError.toUpperCase(), 'error');
@@ -505,7 +604,8 @@
                     name, ticker, description, twitter, website,
                     image: imageBase64, 
                     userTx: signedTx.signature, 
-                    userPubkey: userPubkey
+                    userPubkey: userPubkey,
+                    isMayhemMode: isMayhemMode 
                 })
             });
 

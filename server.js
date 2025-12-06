@@ -14,7 +14,6 @@ const PORT = process.env.PORT || 3000;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const PINATA_JWT = process.env.PINATA_JWT;
-// NEW: Header Image URL from environment
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
 
@@ -75,6 +74,7 @@ idl.address = PUMP_PROGRAM_ID.toString();
 const program = new Program(idl, PUMP_PROGRAM_ID, provider);
 
 // --- Storage Helpers ---
+
 function saveTokenData(userPubkey, mint, metadata) {
     try {
         const shard = userPubkey.slice(0, 2).toLowerCase();
@@ -176,12 +176,7 @@ async function runPurchaseAndFees() {
             const sig = await sendAndConfirmTransaction(connection, tx, [devKeypair]);
             console.log(`✅ Buyback Success: ${sig}`);
 
-            logPurchase('SUCCESS', {
-                totalSpent: spendable,
-                buyAmount: buyAmount.toString(),
-                signature: sig
-            });
-
+            logPurchase('SUCCESS', { totalSpent: spendable, buyAmount: buyAmount.toString(), signature: sig });
             resetAccumulatedFees(spendable);
 
         } catch (err) {
@@ -245,7 +240,6 @@ function getATA(mint, owner) {
     return PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN_PROGRAM_2022_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
 }
 
-
 // --- Routes ---
 app.get('/api/health', (req, res) => {
     const stats = getStats();
@@ -255,14 +249,14 @@ app.get('/api/health', (req, res) => {
         status: "online", 
         wallet: devKeypair.publicKey.toString(),
         lifetimeFees: (stats.lifetimeFeesLamports / LAMPORTS_PER_SOL).toFixed(4),
-        recentLogs: logs.reverse().slice(0, 5),
-        headerImageUrl: HEADER_IMAGE_URL // Pass the image URL here
+        recentLogs: logs, // Send ALL logs now, frontend handles slicing/modal
+        headerImageUrl: HEADER_IMAGE_URL 
     });
 });
 
 app.post('/api/deploy', async (req, res) => {
     try {
-        const { name, ticker, description, twitter, website, userTx, userPubkey, image } = req.body;
+        const { name, ticker, description, twitter, website, userTx, userPubkey, image, isMayhemMode } = req.body;
         
         if (!name || name.length > 32) return res.status(400).json({ error: "Invalid Name" });
         if (!ticker || ticker.length > 10) return res.status(400).json({ error: "Invalid Ticker" });
@@ -287,15 +281,16 @@ app.post('/api/deploy', async (req, res) => {
         const mint = mintKeypair.publicKey;
         const creator = devKeypair.publicKey;
         
-        saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website });
+        saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, isMayhemMode });
 
         const { mintAuthority, bondingCurve, global, eventAuthority, globalVolume, userVolume, feeConfig, creatorVault } = getDeploymentPDAs(mint, creator);
         const { globalParams, solVault, mayhemState } = getMayhemPDAs(mint);
         const associatedBondingCurve = getATA(mint, bondingCurve);
         const mayhemTokenVault = getATA(mint, solVault);
         const associatedUser = getATA(mint, creator);
-
-        const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, false)
+        
+        // Pass the boolean Mayhem Mode state
+        const createIx = await program.methods.createV2(name, ticker, metadataUri, creator, !!isMayhemMode)
             .accounts({ mint, mintAuthority, bondingCurve, associatedBondingCurve, global, user: creator, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, mayhemProgramId: MAYHEM_PROGRAM_ID, globalParams, solVault, mayhemState, mayhemTokenVault, eventAuthority, program: PUMP_PROGRAM_ID }).instruction();
 
         const buyIx = await program.methods.buyExactSolIn(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1), false)
