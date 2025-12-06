@@ -14,11 +14,11 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.7.0-PRIORITY-FEES";
+const VERSION = "v10.7.1-IDL-FIX";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
-const PRIORITY_FEE_MICRO_LAMPORTS = 100000; // 0.0001 SOL Gas Payment
+const PRIORITY_FEE_MICRO_LAMPORTS = 100000; 
 
 // AUTH STRATEGY
 const PINATA_JWT = process.env.PINATA_JWT ? process.env.PINATA_JWT.trim() : null; 
@@ -346,21 +346,57 @@ app.post('/api/deploy', async (req, res) => {
                     if (ix.programId.toString() !== '11111111111111111111111111111111') return false; 
                     if (ix.parsed.type !== 'transfer') return false; 
                     return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL; 
-                }); break;
-            } else { const { value } = await connection.getSignatureStatus(userTx); if (value?.confirmationStatus === 'confirmed' || value?.confirmationStatus === 'finalized') { } }
+                });
+                break;
+            } else {
+                 const { value } = await connection.getSignatureStatus(userTx);
+                 if (value?.confirmationStatus === 'confirmed' || value?.confirmationStatus === 'finalized') {
+                 }
+            }
             await new Promise(r => setTimeout(r, 2000));
         }
 
-        if (!validPayment) { await db.run('DELETE FROM transactions WHERE signature = ?', [userTx]); return res.status(400).json({ error: "Payment verification failed or timed out." }); }
+        if (!validPayment) {
+            await db.run('DELETE FROM transactions WHERE signature = ?', [userTx]);
+            return res.status(400).json({ error: "Payment verification failed or timed out." });
+        }
 
         await addFees(0.05 * LAMPORTS_PER_SOL);
-        if (!deployQueue) return res.status(500).json({ error: "Queue Unavailable" });
+        if (!deployQueue) return res.status(500).json({ error: "Deployment Queue Unavailable" });
         const job = await deployQueue.add('deployToken', { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode, metadataUri });
         res.json({ success: true, jobId: job.id, message: "Queued" });
     } catch (err) { logger.error("Deploy API Error", { error: err.message }); res.status(500).json({ error: err.message }); }
 });
 
-setInterval(async () => { if (!db) return; try { const topTokens = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10'); for (const token of topTokens) { try { if (!token.mint) continue; const accounts = await connection.getTokenLargestAccounts(new PublicKey(token.mint)); if (accounts.value) { const top20 = accounts.value.slice(0, 20); let rank = 1; await db.run('DELETE FROM token_holders WHERE mint = ?', token.mint); for (const acc of top20) { try { const info = await connection.getParsedAccountInfo(acc.address); if (info.value?.data?.parsed) { const owner = info.value.data.parsed.info.owner; if (owner !== PUMP_LIQUIDITY_WALLET) { await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, [token.mint, owner, rank, Date.now()]); rank++; } } } catch (e) {} } } } catch (e) { console.error("Error processing token", token.mint, e.message); } await new Promise(r => setTimeout(r, 2000)); } } catch(e) {} }, 60 * 60 * 1000); 
+// Loops
+setInterval(async () => { 
+    if (!db) return; 
+    try {
+        const topTokens = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10'); 
+        for (const token of topTokens) { 
+            try { 
+                if (!token.mint) continue;
+                const accounts = await connection.getTokenLargestAccounts(new PublicKey(token.mint)); 
+                if (accounts.value) { 
+                    const top20 = accounts.value.slice(0, 20); 
+                    let rank = 1; 
+                    await db.run('DELETE FROM token_holders WHERE mint = ?', token.mint); 
+                    for (const acc of top20) { 
+                        try { 
+                            const info = await connection.getParsedAccountInfo(acc.address); 
+                            if (info.value?.data?.parsed) { 
+                                const owner = info.value.data.parsed.info.owner; 
+                                if (owner !== PUMP_LIQUIDITY_WALLET) { await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, [token.mint, owner, rank, Date.now()]); rank++; } 
+                            } 
+                        } catch (e) {} 
+                    } 
+                } 
+            } catch (e) { console.error("Error processing token", token.mint, e.message); } 
+            await new Promise(r => setTimeout(r, 2000)); 
+        } 
+    } catch(e) { console.error("Loop Error", e); }
+}, 60 * 60 * 1000); 
+
 setInterval(async () => { if (!db) return; const tokens = await db.all('SELECT mint FROM tokens'); for (let i = 0; i < tokens.length; i += 5) { const batch = tokens.slice(i, i + 5); await Promise.all(batch.map(async (t) => { try { const response = await axios.get(`https://frontend-api.pump.fun/coins/${t.mint}`, { timeout: 2000 }); const data = response.data; if (data) await db.run(`UPDATE tokens SET volume24h = ?, marketCap = ?, lastUpdated = ? WHERE mint = ?`, [data.usd_market_cap || 0, data.usd_market_cap || 0, Date.now(), t.mint]); } catch (e) {} })); await new Promise(r => setTimeout(r, 1000)); } }, 2 * 60 * 1000);
 
 let isBuybackRunning = false;
@@ -384,17 +420,31 @@ async function runPurchaseAndFees() {
                  const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_PROGRAM_ID);
                  const associatedUser = getATA(TARGET_PUMP_TOKEN, devKeypair.publicKey, TOKEN_PROGRAM_2022_ID);
                  
-                 // [FIX] Correct Fee Recipient for Buyback based on TARGET Token Mode
+                 // [FIX] Ensure correct fee recipient for Mayhem Mode if applicable
                  const feeRecipient = bondingCurveAccount.isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
 
-                 const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), [false]).accounts({ 
-                        global, feeRecipient, mint: TARGET_PUMP_TOKEN, bondingCurve, associatedBondingCurve, associatedUser, 
-                        user: devKeypair.publicKey, systemProgram: SystemProgram.programId, tokenProgram: TOKEN_PROGRAM_2022_ID, 
-                        creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator, userVolumeAccumulator, feeConfig, feeProgram: FEE_PROGRAM_ID 
+                 const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), [false])
+                    .accounts({ 
+                        global, 
+                        feeRecipient: feeRecipient, 
+                        mint: TARGET_PUMP_TOKEN, 
+                        bondingCurve, 
+                        associatedBondingCurve, 
+                        associatedUser, 
+                        user: devKeypair.publicKey, 
+                        systemProgram: SystemProgram.programId, 
+                        tokenProgram: TOKEN_PROGRAM_2022_ID, // [DOCS] Always Token2022 now
+                        creatorVault, 
+                        eventAuthority, 
+                        program: PUMP_PROGRAM_ID, 
+                        globalVolumeAccumulator, 
+                        userVolumeAccumulator, 
+                        feeConfig, 
+                        feeProgram: FEE_PROGRAM_ID 
                     }).instruction();
                  
                  const tx = new Transaction();
-                 addPriorityFee(tx); // Gas
+                 addPriorityFee(tx); // Add Gas
                  tx.add(buyIx)
                     .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 }))
                     .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
