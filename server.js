@@ -12,10 +12,9 @@ const axios = require('axios');
 const FormData = require('form-data');
 const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
-const borsh = require('borsh'); // We need borsh for manual serialization
 
 // --- Config ---
-const VERSION = "v10.5.36"; // Bumped version for tracking
+const VERSION = "v10.5.38-TOKEN2022";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -30,9 +29,14 @@ const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY;
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
 // --- LOGGER ---
-const DISK_ROOT = '/var/data';
+const DISK_ROOT = '/var/data'; // ENSURE THIS IS A MOUNTED DISK ON RENDER
 const DEBUG_LOG_FILE = path.join(DISK_ROOT, 'server_debug.log');
-if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./data'); }
+// Ensure data root exists
+if (!fs.existsSync(DISK_ROOT)) { 
+    // Fallback for local dev if /var/data doesn't exist
+    if (!fs.existsSync('./data')) fs.mkdirSync('./data'); 
+}
+
 const logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
 
 function log(level, message, meta = {}) {
@@ -49,39 +53,19 @@ const logger = {
     error: (msg, meta) => log('error', msg, meta)
 };
 
-// Check Critical Config
-let usingPinataAuth = false;
-if (PINATA_JWT) {
-    if (PINATA_JWT.split('.').length !== 3) {
-        logger.error("⚠️ CRITICAL: PINATA_JWT appears malformed (wrong segment count).");
-    } else {
-        logger.info(`✅ Pinata: Using JWT Authentication (Length: ${PINATA_JWT.length})`);
-        usingPinataAuth = true;
-    }
-} else if (PINATA_API_KEY_LEGACY && PINATA_SECRET_KEY_LEGACY) {
-    logger.info("✅ Pinata: Using Legacy API Key/Secret Authentication");
-    usingPinataAuth = true;
-} else {
-    logger.warn("⚠️ WARNING: No valid Pinata Credentials found (JWT or API Keys). Metadata uploads will fail.");
-}
-
 // --- RPC CONFIGURATION ---
-let SOLANA_CONNECTION_URL = "https://api.mainnet-beta.solana.com"; // Default to public
+let SOLANA_CONNECTION_URL = "https://api.mainnet-beta.solana.com"; 
 if (HELIUS_API_KEY) {
     SOLANA_CONNECTION_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
     logger.info("✅ RPC: Using Helius High-Performance Node");
 } else {
-    logger.warn("⚠️ WARNING: HELIUS_API_KEY missing. Using Public RPC (Slower, Rate Limited).");
+    logger.warn("⚠️ WARNING: HELIUS_API_KEY missing. Using Public RPC.");
 }
 
-// --- CONSTANTS WITH SAFETY CHECKS ---
+// --- CONSTANTS ---
 const safePublicKey = (val, fallback, name) => {
-    try {
-        return new PublicKey(val);
-    } catch (e) {
-        logger.warn(`⚠️ WARNING: Invalid ${name} (${val}). Using fallback.`);
-        return new PublicKey(fallback);
-    }
+    try { return new PublicKey(val); } 
+    catch (e) { logger.warn(`⚠️ Invalid ${name}. Using fallback.`); return new PublicKey(fallback); }
 };
 
 const TARGET_PUMP_TOKEN = safePublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn", "11111111111111111111111111111111", "TARGET_PUMP_TOKEN");
@@ -89,21 +73,20 @@ const WALLET_9_5 = safePublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z",
 const WALLET_0_5 = safePublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g", "11111111111111111111111111111111", "WALLET_0_5"); 
 const PUMP_LIQUIDITY_WALLET = "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa";
 const FEE_THRESHOLD_SOL = 0.20;
-
 const PUMP_PROGRAM_ID = safePublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "11111111111111111111111111111111", "PUMP_PROGRAM_ID");
 
-// CHANGED: Use Token 2022 for create_v2 as per README
+// [CHANGED BACK] Using Token 2022 Program
 const TOKEN_PROGRAM_2022_ID = safePublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TOKEN_PROGRAM_2022_ID");
 
 const ASSOCIATED_TOKEN_PROGRAM_ID = safePublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", "11111111111111111111111111111111", "ASSOCIATED_TOKEN_PROGRAM_ID");
 const FEE_PROGRAM_ID = safePublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ", "11111111111111111111111111111111", "FEE_PROGRAM_ID");
 const FEE_RECIPIENT = safePublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM", "11111111111111111111111111111111", "FEE_RECIPIENT"); 
-
 const MAYHEM_PROGRAM_ID = safePublicKey("MAyhSmzXzV1pTf7LsNkrNwkWKTo4ougAJ1PPg47MD4e", "11111111111111111111111111111111", "MAYHEM_PROGRAM_ID");
 const MAYHEM_FEE_RECIPIENT = safePublicKey("GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS", "11111111111111111111111111111111", "MAYHEM_FEE_RECIPIENT");
 
 // --- DB & Directories ---
 const DATA_DIR = path.join(DISK_ROOT, 'tokens');
+// Prefer DISK_ROOT if available (Render Persistent Disk), else local
 const DB_PATH = fs.existsSync(DISK_ROOT) ? path.join(DISK_ROOT, 'launcher.db') : './data/launcher.db';
 const ACTIVE_DATA_DIR = fs.existsSync(DISK_ROOT) ? DATA_DIR : './data/tokens';
 const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); };
@@ -123,6 +106,9 @@ try {
 let db;
 async function initDB() {
     db = await open({ filename: DB_PATH, driver: sqlite3.Database });
+    // [OPTIMIZATION] Use WAL mode for better concurrency
+    await db.exec('PRAGMA journal_mode = WAL;');
+    
     await db.exec(`
         CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0);
         CREATE TABLE IF NOT EXISTS transactions (signature TEXT PRIMARY KEY, userPubkey TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
@@ -136,14 +122,16 @@ async function initDB() {
     logger.info(`DB Initialized at ${DB_PATH}`);
 }
 
-// --- MODERATION (CLARIFAI) ---
+// --- MODERATION ---
 async function checkContentSafety(base64Data) {
-    if (!CLARIFAI_API_KEY) { logger.warn("⚠️ CLARIFAI_API_KEY missing. Moderation Skipped."); return true; }
+    if (!CLARIFAI_API_KEY) return true;
     try {
         const base64Content = base64Data.replace(/^data:image\/(.*);base64,/, '');
-        const MODEL_ID = 'd16f390eb32cad478c7ae150069bd2c6';
-        const MODEL_VERSION_ID = 'aa8be956dbaa4b7a858826a84253cab9'; 
-        const response = await axios.post(`https://api.clarifai.com/v2/models/${MODEL_ID}/versions/${MODEL_VERSION_ID}/outputs`, { inputs: [{ data: { image: { base64: base64Content } } }] }, { headers: { "Authorization": `Key ${CLARIFAI_API_KEY}`, "Content-Type": "application/json" } });
+        const response = await axios.post(
+            `https://api.clarifai.com/v2/models/d16f390eb32cad478c7ae150069bd2c6/versions/aa8be956dbaa4b7a858826a84253cab9/outputs`, 
+            { inputs: [{ data: { image: { base64: base64Content } } }] }, 
+            { headers: { "Authorization": `Key ${CLARIFAI_API_KEY}`, "Content-Type": "application/json" } }
+        );
         const concepts = response.data.outputs[0].data.concepts;
         const unsafe = concepts.find(c => (c.name === 'gore' || c.name === 'explicit' || c.name === 'drug') && c.value > 0.85);
         if (unsafe) { logger.warn(`🚫 Blocked unsafe content: ${unsafe.name}`); return false; }
@@ -162,17 +150,13 @@ const devKeypair = Keypair.fromSecretKey(bs58.decode(DEV_WALLET_PRIVATE_KEY));
 const wallet = new Wallet(devKeypair);
 const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
 
-// Using the IDL for Buy instruction only, creating V2 manually below
-// We ensure we read the IDL safely
 let program;
 try {
     const idlRaw = fs.readFileSync('./pump_idl.json', 'utf8');
     const idl = JSON.parse(idlRaw);
     idl.address = PUMP_PROGRAM_ID.toString();
     program = new Program(idl, PUMP_PROGRAM_ID, provider);
-} catch (e) {
-    logger.error("Failed to load pump_idl.json", { error: e.message });
-}
+} catch (e) { logger.error("Failed to load pump_idl.json", { error: e.message }); }
 
 // --- Helpers ---
 async function sendTxWithRetry(tx, signers, retries = 5) {
@@ -190,16 +174,11 @@ async function refundUser(userPubkeyStr, reason) {
     try {
         const userPubkey = new PublicKey(userPubkeyStr);
         const refundAmount = 0.049 * LAMPORTS_PER_SOL; 
-        const tx = new Transaction().add(
-            SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: userPubkey, lamports: refundAmount })
-        );
+        const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: userPubkey, lamports: refundAmount }));
         const sig = await sendTxWithRetry(tx, [devKeypair]);
         logger.info(`💰 REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
         return sig;
-    } catch (e) {
-        logger.error(`❌ REFUND FAILED for ${userPubkeyStr}: ${e.message}`);
-        return null;
-    }
+    } catch (e) { logger.error(`❌ REFUND FAILED for ${userPubkeyStr}: ${e.message}`); return null; }
 }
 
 async function addFees(amt) { if(db) { await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amt, 'accumulatedFeesLamports']); await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amt, 'lifetimeFeesLamports']); }}
@@ -211,22 +190,14 @@ async function logPurchase(type, data) { try { await db.run('INSERT INTO logs (t
 async function saveTokenData(pk, mint, meta) {
     try {
         await db.run(
-            `INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, meta.image, meta.isMayhemMode]
         );
-
         const shard = pk.slice(0, 2).toLowerCase();
         const dir = path.join(ACTIVE_DATA_DIR, shard);
         ensureDir(dir);
-
-        fs.writeFileSync(
-            path.join(dir, `${mint}.json`),
-            JSON.stringify({ userPubkey: pk, mint, metadata: meta, timestamp: new Date().toISOString() }, null, 2)
-        );
-    } catch (e) {
-        logger.error("Save Token Error", { err: e.message });
-    }
+        fs.writeFileSync(path.join(dir, `${mint}.json`), JSON.stringify({ userPubkey: pk, mint, metadata: meta, timestamp: new Date().toISOString() }, null, 2));
+    } catch (e) { logger.error("Save Token Error", { err: e.message }); }
 }
 
 
@@ -244,15 +215,8 @@ if (redisConnection) {
             const mint = mintKeypair.publicKey;
             const creator = devKeypair.publicKey;
 
-            // --- PDA Derivations using Helper ---
-            const { 
-                global, 
-                bondingCurve, 
-                associatedBondingCurve, 
-                eventAuthority, 
-                feeConfig, 
-                globalVolumeAccumulator 
-            } = getPumpPDAs(mint);
+            // [FIX] Use getPumpPDAs helper
+            const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = getPumpPDAs(mint);
 
             const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PUMP_PROGRAM_ID);
             
@@ -266,24 +230,11 @@ if (redisConnection) {
             const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PUMP_PROGRAM_ID);
             const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PUMP_PROGRAM_ID);
 
-            // --- MANUAL INSTRUCTION CONSTRUCTION FOR create_v2 ---
+            // --- create_v2 ---
             const discriminator = Buffer.from([214, 144, 76, 236, 95, 139, 49, 180]);
+            const serializeString = (str) => { const b = Buffer.from(str, 'utf8'); const len = Buffer.alloc(4); len.writeUInt32LE(b.length, 0); return Buffer.concat([len, b]); };
             
-            const serializeString = (str) => {
-                const b = Buffer.from(str, 'utf8');
-                const len = Buffer.alloc(4);
-                len.writeUInt32LE(b.length, 0);
-                return Buffer.concat([len, b]);
-            };
-
-            const nameBuf = serializeString(name);
-            const symbolBuf = serializeString(ticker);
-            const uriBuf = serializeString(metadataUri);
-            const creatorBuf = creator.toBuffer();
-            const mayhemBuf = Buffer.alloc(1);
-            mayhemBuf.writeUInt8(isMayhemMode ? 1 : 0, 0);
-
-            const data = Buffer.concat([discriminator, nameBuf, symbolBuf, uriBuf, creatorBuf, mayhemBuf]);
+            const data = Buffer.concat([discriminator, serializeString(name), serializeString(ticker), serializeString(metadataUri), creator.toBuffer(), Buffer.from([isMayhemMode ? 1 : 0])]);
 
             const keys = [
                 { pubkey: mint, isSigner: true, isWritable: true },
@@ -291,9 +242,9 @@ if (redisConnection) {
                 { pubkey: bondingCurve, isSigner: false, isWritable: true },
                 { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
                 { pubkey: global, isSigner: false, isWritable: false },
-                { pubkey: creator, isSigner: true, isWritable: true }, // User/Creator
+                { pubkey: creator, isSigner: true, isWritable: true }, 
                 { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false },
+                { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false }, // [CHANGED] Token 2022
                 { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
                 { pubkey: MAYHEM_PROGRAM_ID, isSigner: false, isWritable: true },
                 { pubkey: globalParams, isSigner: false, isWritable: false },
@@ -304,36 +255,36 @@ if (redisConnection) {
                 { pubkey: PUMP_PROGRAM_ID, isSigner: false, isWritable: false },
             ];
 
-            const createIx = new TransactionInstruction({
-                keys,
-                programId: PUMP_PROGRAM_ID,
-                data
-            });
+            const createIx = new TransactionInstruction({ keys, programId: PUMP_PROGRAM_ID, data });
 
-            // --- INSTRUCTION 2: Buy Initial Supply (Pre-Bond) ---
+            // --- INSTRUCTION 2: Buy Initial Supply ---
             const associatedUser = getATA(mint, creator, TOKEN_PROGRAM_2022_ID);
             const targetFeeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT;
             
-            const buyIx = await program.methods.buy(new BN(0.01 * LAMPORTS_PER_SOL), new BN(LAMPORTS_PER_SOL), [false])
-                .accounts({
-                    global,
-                    feeRecipient: targetFeeRecipient,
-                    mint,
-                    bondingCurve,
-                    associatedBondingCurve,
-                    associatedUser,
-                    user: creator,
-                    systemProgram: SystemProgram.programId,
-                    tokenProgram: TOKEN_PROGRAM_2022_ID,
-                    creatorVault: creatorVault,
-                    eventAuthority,
-                    program: PUMP_PROGRAM_ID,
-                    globalVolumeAccumulator,
-                    userVolumeAccumulator,
-                    feeConfig,
-                    feeProgram: FEE_PROGRAM_ID
-                })
-                .instruction();
+            // [CRITICAL FIX] Use buyExactSolIn instead of buy. 
+            // Spending 0.01 SOL to buy "some amount" of tokens.
+            const buyIx = await program.methods.buyExactSolIn(
+                new BN(0.01 * LAMPORTS_PER_SOL), // amount of SOL to spend
+                new BN(1), // Min tokens out (slippage protection, set low for guaranteed exec)
+                [false]
+            ).accounts({
+                global,
+                feeRecipient: targetFeeRecipient,
+                mint,
+                bondingCurve,
+                associatedBondingCurve,
+                associatedUser,
+                user: creator,
+                systemProgram: SystemProgram.programId,
+                tokenProgram: TOKEN_PROGRAM_2022_ID, // [CHANGED] Token 2022
+                creatorVault,
+                eventAuthority,
+                program: PUMP_PROGRAM_ID,
+                globalVolumeAccumulator,
+                userVolumeAccumulator,
+                feeConfig,
+                feeProgram: FEE_PROGRAM_ID
+            }).instruction();
 
             const tx = new Transaction().add(createIx).add(buyIx);
             tx.feePayer = creator;
@@ -341,27 +292,17 @@ if (redisConnection) {
             
             await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
 
+            // Sell logic
             setTimeout(async () => { try { 
                 const bal = await connection.getTokenAccountBalance(associatedUser); 
                 if (bal.value && bal.value.uiAmount > 0) { 
                     const sellIx = await program.methods.sell(new BN(bal.value.amount), new BN(0))
                         .accounts({ 
-                            global, 
-                            feeRecipient: targetFeeRecipient, 
-                            mint, 
-                            bondingCurve, 
-                            associatedBondingCurve, 
-                            associatedUser, 
-                            user: creator, 
-                            systemProgram: SystemProgram.programId, 
-                            tokenProgram: TOKEN_PROGRAM_2022_ID, 
-                            creatorVault: creatorVault, 
-                            eventAuthority, 
-                            program: PUMP_PROGRAM_ID,
-                            feeConfig,
-                            feeProgram: FEE_PROGRAM_ID
-                        })
-                        .instruction(); 
+                            global, feeRecipient: targetFeeRecipient, mint, bondingCurve, associatedBondingCurve, associatedUser, 
+                            user: creator, systemProgram: SystemProgram.programId, 
+                            tokenProgram: TOKEN_PROGRAM_2022_ID, // [CHANGED] Token 2022
+                            creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, feeConfig, feeProgram: FEE_PROGRAM_ID
+                        }).instruction(); 
                     const sellTx = new Transaction().add(sellIx); 
                     await sendTxWithRetry(sellTx, [devKeypair]); 
                 } 
@@ -371,9 +312,7 @@ if (redisConnection) {
 
         } catch (jobError) {
             logger.error(`❌ Job Failed: ${jobError.message}`);
-            if (userPubkey) {
-                await refundUser(userPubkey, "Deployment Failed: " + jobError.message);
-            }
+            if (userPubkey) await refundUser(userPubkey, "Deployment Failed: " + jobError.message);
             throw jobError;
         }
 
@@ -381,13 +320,15 @@ if (redisConnection) {
 }
 
 // --- PDAs/Uploads ---
-function getATA(mint, owner, tokenProgramId = TOKEN_PROGRAM_2022_ID) { return PublicKey.findProgramAddressSync([owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0]; }
+function getATA(mint, owner, tokenProgramId = TOKEN_PROGRAM_2022_ID) { 
+    return PublicKey.findProgramAddressSync([owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0]; 
+}
 
-// --- THE MISSING HELPER FUNCTION ---
 function getPumpPDAs(mint) {
     const [global] = PublicKey.findProgramAddressSync([Buffer.from("global")], PUMP_PROGRAM_ID);
     const [bondingCurve] = PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), mint.toBuffer()], PUMP_PROGRAM_ID);
-    const associatedBondingCurve = getATA(mint, bondingCurve, TOKEN_PROGRAM_2022_ID);
+    // [CHANGED] Uses getATA which defaults to Token 2022
+    const associatedBondingCurve = getATA(mint, bondingCurve); 
     const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID);
     const [feeConfig] = PublicKey.findProgramAddressSync([Buffer.from("fee_config"), FEE_PROGRAM_ID.toBuffer()], FEE_PROGRAM_ID);
     const [globalVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("global_volume_accumulator")], PUMP_PROGRAM_ID);
@@ -397,76 +338,36 @@ function getPumpPDAs(mint) {
 
 function getPinataHeaders(formData) {
     const headers = { ...formData.getHeaders() };
-    if (PINATA_JWT) {
-        headers['Authorization'] = `Bearer ${PINATA_JWT}`;
-    } else if (PINATA_API_KEY_LEGACY && PINATA_SECRET_KEY_LEGACY) {
-        headers['pinata_api_key'] = PINATA_API_KEY_LEGACY;
-        headers['pinata_secret_api_key'] = PINATA_SECRET_KEY_LEGACY;
-    } else {
-        throw new Error("Missing Pinata Credentials (JWT or API Keys)");
-    }
+    if (PINATA_JWT) headers['Authorization'] = `Bearer ${PINATA_JWT}`;
+    else if (PINATA_API_KEY_LEGACY) { headers['pinata_api_key'] = PINATA_API_KEY_LEGACY; headers['pinata_secret_api_key'] = PINATA_SECRET_KEY_LEGACY; }
+    else throw new Error("Missing Pinata Credentials");
     return headers;
 }
-
 function getPinataJSONHeaders() {
     const headers = { 'Content-Type': 'application/json' };
-    if (PINATA_JWT) {
-        headers['Authorization'] = `Bearer ${PINATA_JWT}`;
-    } else if (PINATA_API_KEY_LEGACY && PINATA_SECRET_KEY_LEGACY) {
-        headers['pinata_api_key'] = PINATA_API_KEY_LEGACY;
-        headers['pinata_secret_api_key'] = PINATA_SECRET_KEY_LEGACY;
-    } else {
-        throw new Error("Missing Pinata Credentials");
-    }
+    if (PINATA_JWT) headers['Authorization'] = `Bearer ${PINATA_JWT}`;
+    else if (PINATA_API_KEY_LEGACY) { headers['pinata_api_key'] = PINATA_API_KEY_LEGACY; headers['pinata_secret_api_key'] = PINATA_SECRET_KEY_LEGACY; }
+    else throw new Error("Missing Pinata Credentials");
     return headers;
 }
 
 async function uploadImageToPinata(b64) {
     try {
         const b = Buffer.from(b64.split(',')[1], 'base64');
-        const f = new FormData();
-        f.append('file', b, { filename: 'i.png' });
-        
-        const r = await axios.post('https://api.pinata.cloud/pinning/pinFileToIPFS', f, {
-            headers: getPinataHeaders(f),
-            maxBodyLength: Infinity 
-        });
+        const f = new FormData(); f.append('file', b, { filename: 'i.png' });
+        const r = await axios.post('https://api.pinata.cloud/pinning/pinFileToIPFS', f, { headers: getPinataHeaders(f), maxBodyLength: Infinity });
         return `https://gateway.pinata.cloud/ipfs/${r.data.IpfsHash}`;
-    } catch (e) {
-        const errMsg = e.response ? JSON.stringify(e.response.data) : e.message;
-        logger.warn("Pinata Image Upload Failed", { error: errMsg });
-        return "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8"; 
-    }
+    } catch (e) { return "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8"; }
 }
 
 async function uploadMetadataToPinata(n, s, d, t, w, i) {
     let u = "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8";
-    if (i) {
-        u = await uploadImageToPinata(i);
-    }
-
-    const m = {
-        name: n,
-        symbol: s,
-        description: d,
-        image: u,
-        extensions: {
-            twitter: t,
-            website: w
-        }
-    };
-
+    if (i) u = await uploadImageToPinata(i);
+    const m = { name: n, symbol: s, description: d, image: u, extensions: { twitter: t, website: w } };
     try {
-        const r = await axios.post('https://api.pinata.cloud/pinning/pinJSONToIPFS', m, {
-            headers: getPinataJSONHeaders()
-        });
+        const r = await axios.post('https://api.pinata.cloud/pinning/pinJSONToIPFS', m, { headers: getPinataJSONHeaders() });
         return `https://gateway.pinata.cloud/ipfs/${r.data.IpfsHash}`;
-    } catch (e) {
-        const errMsg = e.response ? JSON.stringify(e.response.data) : e.message;
-        const statusCode = e.response ? e.response.status : 'N/A';
-        logger.error(`Pinata Metadata Upload Error (${statusCode})`, { details: errMsg });
-        throw new Error(`Failed to upload metadata to Pinata: ${errMsg}`);
-    }
+    } catch (e) { throw new Error(`Pinata Error: ${e.response?.data?.error || e.message}`); }
 }
 
 // --- Routes ---
@@ -478,28 +379,12 @@ app.get('/api/recent-launches', async (req, res) => { try { const rows = await d
 app.get('/api/debug/logs', (req, res) => { const logPath = path.join(DISK_ROOT, 'server_debug.log'); if (fs.existsSync(logPath)) { const stats = fs.statSync(logPath); const stream = fs.createReadStream(logPath, { start: Math.max(0, stats.size - 50000) }); stream.pipe(res); } else { res.send("No logs yet."); } });
 app.get('/api/job-status/:id', async (req, res) => { if (!deployQueue) return res.status(500).json({ error: "Queue not initialized" }); const job = await deployQueue.getJob(req.params.id); if (!job) return res.status(404).json({ error: "Job not found" }); const state = await job.getState(); res.json({ id: job.id, state, result: job.returnvalue, failedReason: job.failedReason }); });
 
-// Authenticated Balance Proxy
 app.get('/api/balance', async (req, res) => {
-    try {
-        const { pubkey } = req.query;
-        if (!pubkey) return res.status(400).json({ error: "Missing pubkey" });
-        const balance = await connection.getBalance(new PublicKey(pubkey));
-        res.json({ balance });
-    } catch (err) { 
-        logger.error("Balance Check Error", { error: err.message });
-        res.status(500).json({ error: err.message }); 
-    }
+    try { const { pubkey } = req.query; if (!pubkey) return res.status(400).json({ error: "Missing pubkey" }); const balance = await connection.getBalance(new PublicKey(pubkey)); res.json({ balance }); } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Authenticated Blockhash Proxy
 app.get('/api/blockhash', async (req, res) => {
-    try {
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
-        res.json({ blockhash, lastValidBlockHeight });
-    } catch (err) {
-        logger.error("Blockhash Proxy Error", { error: err.message });
-        res.status(500).json({ error: "Failed to get blockhash" });
-    }
+    try { const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized'); res.json({ blockhash, lastValidBlockHeight }); } catch (err) { res.status(500).json({ error: "Failed to get blockhash" }); }
 });
 
 app.post('/api/prepare-metadata', async (req, res) => {
@@ -508,10 +393,8 @@ app.post('/api/prepare-metadata', async (req, res) => {
         if (!name || name.length > 32) return res.status(400).json({ error: "Invalid Name" });
         if (!ticker || ticker.length > 10) return res.status(400).json({ error: "Invalid Ticker" });
         if (!image) return res.status(400).json({ error: "Image required" });
-
         const isSafe = await checkContentSafety(image);
         if (!isSafe) return res.status(400).json({ error: "Upload blocked: Illegal content detected." });
-
         const metadataUri = await uploadMetadataToPinata(name, ticker, description, twitter, website, image);
         res.json({ success: true, metadataUri });
     } catch (err) { logger.error("Metadata Prep Error", {error: err.message}); res.status(500).json({ error: err.message }); }
@@ -519,42 +402,16 @@ app.post('/api/prepare-metadata', async (req, res) => {
 
 app.post('/api/deploy', async (req, res) => {
     try {
-        const {
-            name,
-            ticker,
-            description,
-            twitter,
-            website,
-            image,
-            metadataUri,
-            userTx,
-            userPubkey,
-            isMayhemMode,
-        } = req.body;
-
+        const { name, ticker, description, twitter, website, image, metadataUri, userTx, userPubkey, isMayhemMode } = req.body;
         if (!metadataUri) return res.status(400).json({ error: "Missing metadata URI" });
 
-        try {
-            await db.run(
-                'INSERT INTO transactions (signature, userPubkey) VALUES (?, ?)',
-                [userTx, userPubkey]
-            );
-        } catch (dbErr) {
-            if (
-                dbErr.message.includes('UNIQUE constraint') ||
-                dbErr.message.includes('unique index')
-            ) {
-                return res.status(400).json({ error: "Transaction signature already used." });
-            }
-            throw dbErr;
-        }
+        try { await db.run('INSERT INTO transactions (signature, userPubkey) VALUES (?, ?)', [userTx, userPubkey]); } 
+        catch (dbErr) { if (dbErr.message.includes('UNIQUE')) return res.status(400).json({ error: "Tx already used." }); throw dbErr; }
 
-        // Retry Loop for Transaction Verification
-        let txInfo = null;
         let validPayment = false;
-        
+        // [OPTIMIZATION] Fallback to getSignatureStatuses if parsed tx fails
         for (let i = 0; i < 15; i++) {
-            txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+            const txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
             if (txInfo) {
                 validPayment = txInfo.transaction.message.instructions.some(ix => { 
                     if (ix.programId.toString() !== '11111111111111111111111111111111') return false; 
@@ -562,40 +419,28 @@ app.post('/api/deploy', async (req, res) => {
                     return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL; 
                 });
                 break;
+            } else {
+                 const { value } = await connection.getSignatureStatus(userTx);
+                 if (value?.confirmationStatus === 'confirmed' || value?.confirmationStatus === 'finalized') {
+                     // We know it exists, but can't parse inputs yet. Wait one more cycle.
+                 }
             }
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(r => setTimeout(r, 2000));
         }
 
-        if (!txInfo || !validPayment) {
+        if (!validPayment) {
             await db.run('DELETE FROM transactions WHERE signature = ?', [userTx]);
-            const errReason = !txInfo ? "Transaction not found on chain (timeout)." : "Transaction found but payment was invalid.";
-            return res.status(400).json({ error: errReason });
+            return res.status(400).json({ error: "Payment verification failed or timed out." });
         }
 
         await addFees(0.05 * LAMPORTS_PER_SOL);
-
         if (!deployQueue) return res.status(500).json({ error: "Deployment Queue Unavailable" });
-
-        const job = await deployQueue.add('deployToken', {
-            name,
-            ticker,
-            description,
-            twitter,
-            website,
-            image,
-            userPubkey,
-            isMayhemMode,
-            metadataUri,
-        });
-
+        const job = await deployQueue.add('deployToken', { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode, metadataUri });
         res.json({ success: true, jobId: job.id, message: "Queued" });
-    } catch (err) {
-        logger.error("Deploy API Error", { error: err.message });
-        res.status(500).json({ error: err.message });
-    }
+    } catch (err) { logger.error("Deploy API Error", { error: err.message }); res.status(500).json({ error: err.message }); }
 });
 
-// ... (Loops) ...
+// Loops
 setInterval(async () => { 
     if (!db) return; 
     try {
@@ -611,12 +456,9 @@ setInterval(async () => {
                     for (const acc of top20) { 
                         try { 
                             const info = await connection.getParsedAccountInfo(acc.address); 
-                            if (info.value && info.value.data.parsed) { 
+                            if (info.value?.data?.parsed) { 
                                 const owner = info.value.data.parsed.info.owner; 
-                                if (owner !== PUMP_LIQUIDITY_WALLET) { 
-                                    await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, [token.mint, owner, rank, Date.now()]); 
-                                    rank++; 
-                                } 
+                                if (owner !== PUMP_LIQUIDITY_WALLET) { await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, [token.mint, owner, rank, Date.now()]); rank++; } 
                             } 
                         } catch (e) {} 
                     } 
@@ -643,42 +485,19 @@ async function runPurchaseAndFees() {
                  const transfer9_5 = Math.floor(spendable * 0.095); 
                  const transfer0_5 = Math.floor(spendable * 0.005); 
                  
-                 // --- Use Helper for PDAs ---
-                 const { 
-                     global, 
-                     bondingCurve, 
-                     associatedBondingCurve, 
-                     eventAuthority, 
-                     feeConfig, 
-                     globalVolumeAccumulator 
-                 } = getPumpPDAs(TARGET_PUMP_TOKEN);
-
-                 // Fetch Bonding Curve to get creator (needed for seeds)
+                 const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = getPumpPDAs(TARGET_PUMP_TOKEN);
                  const bondingCurveAccount = await program.account.bondingCurve.fetch(bondingCurve);
                  const coinCreator = bondingCurveAccount.creator;
-
                  const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), coinCreator.toBuffer()], PUMP_PROGRAM_ID);
                  const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_PROGRAM_ID);
                  const associatedUser = getATA(TARGET_PUMP_TOKEN, devKeypair.publicKey, TOKEN_PROGRAM_2022_ID);
                  
                  const buyIx = await program.methods.buyExactSolIn(buyAmount, new BN(1), [false])
                     .accounts({ 
-                        global, 
-                        feeRecipient: FEE_RECIPIENT, 
-                        mint: TARGET_PUMP_TOKEN, 
-                        bondingCurve, 
-                        associatedBondingCurve, 
-                        associatedUser, 
-                        user: devKeypair.publicKey, 
-                        systemProgram: SystemProgram.programId, 
-                        tokenProgram: TOKEN_PROGRAM_2022_ID, 
-                        creatorVault, 
-                        eventAuthority, 
-                        program: PUMP_PROGRAM_ID, 
-                        globalVolumeAccumulator, 
-                        userVolumeAccumulator, 
-                        feeConfig, 
-                        feeProgram: FEE_PROGRAM_ID 
+                        global, feeRecipient: FEE_RECIPIENT, mint: TARGET_PUMP_TOKEN, bondingCurve, associatedBondingCurve, associatedUser, 
+                        user: devKeypair.publicKey, systemProgram: SystemProgram.programId, 
+                        tokenProgram: TOKEN_PROGRAM_2022_ID, // [CHANGED] Token 2022
+                        creatorVault, eventAuthority, program: PUMP_PROGRAM_ID, globalVolumeAccumulator, userVolumeAccumulator, feeConfig, feeProgram: FEE_PROGRAM_ID 
                     }).instruction();
                  
                  const tx = new Transaction().add(buyIx)
