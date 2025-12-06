@@ -27,7 +27,7 @@ const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/6
 if (!PINATA_JWT) console.warn("⚠️ WARNING: PINATA_JWT is missing. Metadata uploads will fail.");
 
 const TARGET_PUMP_TOKEN = new PublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn");
-const WALLET_19_5 = new PublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z"); // Fee Wallet (9.5%)
+const WALLET_9_5 = new PublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z"); // Fee Wallet (9.5%)
 const WALLET_0_5 = new PublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g"); // Upkeep (0.5%)
 const FEE_THRESHOLD_SOL = 0.20;
 
@@ -36,7 +36,7 @@ const TOKEN_PROGRAM_2022_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqC
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const FEE_PROGRAM_ID = new PublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ");
 const FEE_RECIPIENT = new PublicKey("FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB");
-const MAYHEM_PROGRAM_ID = new PublicKey("Mq3xTBfFv2ph4b5sA4WpWq3sA4WpWq3sA4WpWq3sA4"); 
+const PUMP_LIQUIDITY_WALLET = "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa";
 
 // --- DB & Directories ---
 const DISK_ROOT = '/var/data';
