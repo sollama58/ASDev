@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.30";
+const VERSION = "v10.5.28";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -90,8 +90,12 @@ const PUMP_LIQUIDITY_WALLET = "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa";
 const FEE_THRESHOLD_SOL = 0.20;
 
 const PUMP_PROGRAM_ID = safePublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "11111111111111111111111111111111", "PUMP_PROGRAM_ID");
-const TOKEN_PROGRAM_ID = safePublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TOKEN_PROGRAM_ID");
+
+// CHANGED: UPGRADE TO TOKEN 2022 PROGRAM FOR CREATE_V2 LOGIC
+const TOKEN_PROGRAM_ID = safePublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TOKEN_PROGRAM_ID");
+
 const ASSOCIATED_TOKEN_PROGRAM_ID = safePublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", "11111111111111111111111111111111", "ASSOCIATED_TOKEN_PROGRAM_ID");
+const FEE_PROGRAM_ID = safePublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ", "11111111111111111111111111111111", "FEE_PROGRAM_ID");
 const FEE_RECIPIENT = safePublicKey("CebN5WGQ4vvepcovs24O1bJIRfD567TE81P9j2k8qB8", "11111111111111111111111111111111", "FEE_RECIPIENT"); 
 
 const MAYHEM_PROGRAM_ID = safePublicKey("MAyhSmzXzV1pTf7LsNkrNwkWKTo4ougAJ1PPg47MD4e", "11111111111111111111111111111111", "MAYHEM_PROGRAM_ID");
@@ -221,10 +225,9 @@ if (redisConnection) {
             const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s").toBuffer(), mint.toBuffer()], new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"));
             const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID);
 
-            // --- INSTRUCTION 1: Create (Standard Pump - Correct args & accounts) ---
-            // Arguments: name, symbol, uri, creator
-            // Note: isMayhemMode is NOT passed here as it's not in the standard IDL 'create' args
-            const createIx = await program.methods.create(name, ticker, metadataUri, creator) 
+            // --- INSTRUCTION 1: Create (Standard Pump) ---
+            // FIXED: Using standard 'create' instruction which matches IDL method 'create'
+            const createIx = await program.methods.create(name, ticker, metadataUri) 
                 .accounts({
                     mint: mint,
                     mintAuthority: mintAuthority,
@@ -245,10 +248,7 @@ if (redisConnection) {
 
             // --- INSTRUCTION 2: Buy Initial Supply ---
             const associatedUser = getATA(mint, creator);
-            // Standard Pump Buy doesn't usually take fee_recipient account explicitly in IDL unless it's 'buyExactSolIn'
-            // Checking IDL for 'buy':
-            // Accounts: global, feeRecipient, mint, bondingCurve, associatedBondingCurve, associatedUser, user, system, token, rent, event, program
-            const targetFeeRecipient = FEE_RECIPIENT; // Default for standard create
+            const targetFeeRecipient = isMayhemMode ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT;
 
             const buyIx = await program.methods.buy(new BN(0.01 * LAMPORTS_PER_SOL), new BN(1))
                 .accounts({
@@ -291,9 +291,7 @@ if (redisConnection) {
 // --- PDAs/Uploads ---
 function getATA(mint, owner) { return PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0]; }
 
-// ... (Rest of ENHANCED PINATA FUNCTIONS and Routes remain unchanged) ...
-// ... (getPinataHeaders, getPinataJSONHeaders, uploadImageToPinata, uploadMetadataToPinata) ...
-
+// --- ENHANCED PINATA FUNCTIONS (Support JWT or Legacy Keys) ---
 function getPinataHeaders(formData) {
     const headers = { ...formData.getHeaders() };
     if (PINATA_JWT) {
