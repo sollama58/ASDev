@@ -14,6 +14,9 @@ const PORT = process.env.PORT || 3000;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const PINATA_JWT = process.env.PINATA_JWT;
+// NEW: Header Image URL from environment
+const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
+
 
 const TARGET_PUMP_TOKEN = new PublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn");
 const WALLET_19_5 = new PublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z");
@@ -25,13 +28,10 @@ const DATA_DIR = path.join(DISK_ROOT, 'tokens');
 const STATS_FILE = path.join(DISK_ROOT, 'stats.json');
 const PURCHASE_LOG = path.join(DISK_ROOT, 'purchase_logs.json');
 
-// Ensure Directory Structure
 if (!fs.existsSync(DISK_ROOT)) {
     console.warn(`⚠️ Warning: Disk root ${DISK_ROOT} does not exist. Fallback to local.`);
     if (!fs.existsSync('./data')) fs.mkdirSync('./data');
-} else {
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+} 
 
 const ACTIVE_DATA_DIR = fs.existsSync(DISK_ROOT) ? DATA_DIR : './data/tokens';
 const ACTIVE_STATS_FILE = fs.existsSync(DISK_ROOT) ? STATS_FILE : './data/stats.json';
@@ -74,8 +74,7 @@ const idl = JSON.parse(idlRaw);
 idl.address = PUMP_PROGRAM_ID.toString();
 const program = new Program(idl, PUMP_PROGRAM_ID, provider);
 
-// --- Helpers ---
-
+// --- Storage Helpers ---
 function saveTokenData(userPubkey, mint, metadata) {
     try {
         const shard = userPubkey.slice(0, 2).toLowerCase();
@@ -119,13 +118,7 @@ function logPurchase(type, data) {
         let logs = [];
         if (fs.existsSync(ACTIVE_LOG_FILE)) logs = JSON.parse(fs.readFileSync(ACTIVE_LOG_FILE));
         
-        const entry = {
-            timestamp: new Date().toISOString(),
-            type: type, // 'SUCCESS' or 'SKIPPED'
-            ...data
-        };
-        
-        // Keep only last 50 logs to prevent file explosion
+        const entry = { timestamp: new Date().toISOString(), type: type, ...data };
         if (logs.length > 50) logs.shift(); 
         logs.push(entry);
         
@@ -133,7 +126,7 @@ function logPurchase(type, data) {
     } catch (e) { console.error("Logging error:", e); }
 }
 
-// --- Buyback Loop ---
+// --- Automated Buyback Loop (5 Mins) ---
 
 async function runPurchaseAndFees() {
     console.log("🔄 Running PurchaseAndFees Routine...");
@@ -147,7 +140,7 @@ async function runPurchaseAndFees() {
             const spendable = Math.min(balanceLamports, realBalance - 5000000); 
             
             if (spendable <= 0) {
-                logPurchase('SKIPPED', { reason: 'Insufficient Real Balance', balance: realBalance });
+                logPurchase('SKIPPED', { reason: 'Insufficient Real Balance', balance: (realBalance/LAMPORTS_PER_SOL).toFixed(4) });
                 return;
             }
 
@@ -197,8 +190,6 @@ async function runPurchaseAndFees() {
         }
     } else {
         const currentSol = (balanceLamports / LAMPORTS_PER_SOL).toFixed(4);
-        console.log(`⏳ Threshold not met (${currentSol} / ${FEE_THRESHOLD_SOL} SOL).`);
-        // Log Skipped round for Frontend Display
         logPurchase('SKIPPED', { 
             reason: 'Fees Under Limit', 
             current: currentSol, 
@@ -209,7 +200,7 @@ async function runPurchaseAndFees() {
 
 setInterval(runPurchaseAndFees, 5 * 60 * 1000);
 
-// --- Helpers (PDAs, Uploads) ---
+// --- PDAs and Uploads Helpers (Unchanged) ---
 function getPumpPDAs(mint, programId = PUMP_PROGRAM_ID) {
     const [bondingCurve] = PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), mint.toBuffer()], programId);
     const associatedBondingCurve = PublicKey.findProgramAddressSync([bondingCurve.toBuffer(), TOKEN_PROGRAM_2022_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
@@ -254,6 +245,7 @@ function getATA(mint, owner) {
     return PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN_PROGRAM_2022_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
 }
 
+
 // --- Routes ---
 app.get('/api/health', (req, res) => {
     const stats = getStats();
@@ -263,28 +255,34 @@ app.get('/api/health', (req, res) => {
         status: "online", 
         wallet: devKeypair.publicKey.toString(),
         lifetimeFees: (stats.lifetimeFeesLamports / LAMPORTS_PER_SOL).toFixed(4),
-        recentLogs: logs.reverse().slice(0, 5) // Send last 5 logs
+        recentLogs: logs.reverse().slice(0, 5),
+        headerImageUrl: HEADER_IMAGE_URL // Pass the image URL here
     });
 });
 
 app.post('/api/deploy', async (req, res) => {
     try {
         const { name, ticker, description, twitter, website, userTx, userPubkey, image } = req.body;
+        
         if (!name || name.length > 32) return res.status(400).json({ error: "Invalid Name" });
         if (!ticker || ticker.length > 10) return res.status(400).json({ error: "Invalid Ticker" });
         if (!image) return res.status(400).json({ error: "Image required" });
 
         const txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
         if (!txInfo) return res.status(400).json({ error: "Transaction not found." });
+        
         const validPayment = txInfo.transaction.message.instructions.some(ix => {
             if (ix.programId.toString() !== SystemProgram.programId.toString()) return false;
             if (ix.parsed.type !== 'transfer') return false;
             return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL;
         });
+
         if (!validPayment) return res.status(400).json({ error: "Payment verification failed." });
 
         addFees(0.05 * LAMPORTS_PER_SOL);
+        
         const metadataUri = await uploadMetadataToPinata(name, ticker, description, twitter, website, image);
+        
         const mintKeypair = Keypair.generate();
         const mint = mintKeypair.publicKey;
         const creator = devKeypair.publicKey;

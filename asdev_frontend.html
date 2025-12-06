@@ -99,7 +99,6 @@
         }
         #image-preview img { width: 100%; height: 100%; object-fit: cover; }
 
-        /* Log Table */
         .log-entry { 
             border-bottom: 1px solid rgba(234, 88, 12, 0.3); 
             padding: 8px 0; font-family: 'JetBrains Mono'; font-size: 12px; 
@@ -108,6 +107,18 @@
         .log-entry:last-child { border-bottom: none; }
         .log-skipped { color: #fdba74; opacity: 0.8; }
         .log-success { color: #4ade80; font-weight: bold; }
+
+        #header-image {
+            width: 60px;
+            height: 60px;
+            border-radius: 8px;
+            object-fit: cover;
+            animation: bounce 1s infinite alternate;
+        }
+        @keyframes bounce {
+            from { transform: translateY(0); }
+            to { transform: translateY(-5px); }
+        }
     </style>
 </head>
 <body>
@@ -116,52 +127,83 @@
     <div class="ticker-wrap"><div class="ticker">ASDEV LAUNCH SEQUENCE INITIATED... SECURE UPLINK ESTABLISHED... WAITING FOR DEPLOYMENT PARAMETERS...</div></div>
 
     <div class="p-10">
+        
         <!-- Header -->
         <div class="flex justify-between items-start mb-10 border-b-4 border-orange-900 pb-8">
             <div class="flex items-center gap-6">
-                <div class="text-6xl animate-bounce">🚀</div>
+                <!-- Image placeholder -->
+                <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
+                
                 <div>
                     <h1 class="text-4xl md:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1>
                     <p class="text-orange-400 text-sm font-mono uppercase tracking-widest mt-2">ASDev Airdrop and Flywheel Pumpfun Launcher</p>
                 </div>
             </div>
+            
             <!-- Wallet Panel -->
             <div class="flex flex-col items-end gap-3">
                 <div id="wallet-ui" class="hidden flex items-center gap-3 bg-orange-950 border border-orange-800 p-3 rounded-lg shadow-xl">
                     <span class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span>
                     <span id="wallet-addr" class="font-mono text-sm text-orange-200"></span>
                     <span id="wallet-bal" class="font-mono text-sm text-white font-bold ml-2 bg-orange-900/50 px-3 py-1 rounded">0.00 SOL</span>
-                    <button id="refresh-btn" class="ml-2 text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded"><i data-lucide="refresh-cw" width="16"></i></button>
-                    <button id="disconnect-btn" class="ml-1 text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded"><i data-lucide="log-out" width="16"></i></button>
+                    
+                    <button id="refresh-btn" title="Refresh Balance" class="ml-2 text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded">
+                        <i data-lucide="refresh-cw" width="16"></i>
+                    </button>
+                    <button id="disconnect-btn" title="Disconnect" class="ml-1 text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded">
+                        <i data-lucide="log-out" width="16"></i>
+                    </button>
                 </div>
-                <button id="connect-btn" class="bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-8 py-3 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg hover:shadow-orange-900/40">Connect Wallet</button>
+                <button id="connect-btn" class="bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-8 py-3 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg hover:shadow-orange-900/40">
+                    Connect Wallet
+                </button>
             </div>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
-            <!-- Preview -->
+            
+            <!-- Left Col: Preview -->
             <div class="panel col-span-1 flex flex-col items-center justify-start h-full">
                 <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest w-full text-center border-b-2 border-orange-900/50 pb-3">Token Preview</h3>
+                
                 <div class="text-center mb-4 min-h-[60px]">
                     <h2 id="preview-name" class="text-2xl font-bold text-white break-words">Token Name</h2>
                     <p id="preview-ticker" class="text-orange-400 font-mono text-lg uppercase">$TICKER</p>
                 </div>
+
                 <div id="image-preview" class="mb-6 shadow-2xl shadow-orange-900/30 transition-all duration-300">NO IMAGE</div>
+                
                 <input type="file" id="image-file" class="input-field text-sm" accept="image/png, image/jpeg, image/gif" onchange="previewImage(event)">
                 <p class="text-xs text-orange-400 font-mono text-center mt-2">Required: PNG, JPG, GIF.<br>Max size 4MB.</p>
             </div>
 
-            <!-- Form -->
+            <!-- Right Col: Form -->
             <div class="panel col-span-2">
                 <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-orange-900/50 pb-3">Token Metadata</h3>
+                
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div><label class="block text-sm text-orange-300 font-mono mb-2">NAME <span class="text-red-500">*</span></label><input type="text" id="name" class="input-field" placeholder="e.g. Infernal Coin" maxlength="32" oninput="updatePreview()"></div>
-                    <div><label class="block text-sm text-orange-300 font-mono mb-2">TICKER <span class="text-red-500">*</span></label><input type="text" id="ticker" class="input-field" placeholder="e.g. BURN" maxlength="10" oninput="updatePreview()"></div>
+                    <div>
+                        <label class="block text-sm text-orange-300 font-mono mb-2">NAME <span class="text-red-500">*</span></label>
+                        <input type="text" id="name" class="input-field" placeholder="e.g. Infernal Coin" maxlength="32" oninput="updatePreview()">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-orange-300 font-mono mb-2">TICKER <span class="text-red-500">*</span></label>
+                        <input type="text" id="ticker" class="input-field" placeholder="e.g. BURN" maxlength="10" oninput="updatePreview()">
+                    </div>
                 </div>
-                <label class="block text-sm text-orange-300 font-mono mb-2">DESCRIPTION</label><textarea id="desc" class="input-field h-32" placeholder="Description of the asset (Max 200 chars)..." maxlength="200"></textarea>
+
+                <label class="block text-sm text-orange-300 font-mono mb-2">DESCRIPTION</label>
+                <textarea id="desc" class="input-field h-32" placeholder="Description of the asset (Max 200 chars)..." maxlength="200"></textarea>
+
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div><label class="block text-sm text-orange-300 font-mono mb-2">TWITTER (OPTIONAL)</label><input type="url" id="twitter" class="input-field" placeholder="https://x.com/username"></div>
-                    <div><label class="block text-sm text-orange-300 font-mono mb-2">WEBSITE (OPTIONAL)</label><input type="url" id="website" class="input-field" placeholder="https://project.io"></div>
+                    <div>
+                        <label class="block text-sm text-orange-300 font-mono mb-2">TWITTER (OPTIONAL)</label>
+                        <input type="url" id="twitter" class="input-field" placeholder="https://x.com/username">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-orange-300 font-mono mb-2">WEBSITE (OPTIONAL)</label>
+                        <input type="url" id="website" class="input-field" placeholder="https://project.io">
+                    </div>
                 </div>
             </div>
         </div>
@@ -174,13 +216,16 @@
                     <span class="text-white font-bold text-2xl">0.05 SOL</span>
                 </div>
             </div>
-            <button id="deploy-btn" class="btn-action w-full hover:scale-[1.01] active:scale-[0.99] transition-transform">INITIATE LAUNCH SEQUENCE</button>
+            
+            <button id="deploy-btn" class="btn-action w-full hover:scale-[1.01] active:scale-[0.99] transition-transform">
+                INITIATE LAUNCH SEQUENCE
+            </button>
             <div id="status-msg" class="status-box"></div>
         </div>
 
         <!-- Buyback Feed -->
         <div class="panel bg-orange-950/30 border border-orange-900 mt-8">
-            <h3 class="text-orange-500 font-mono text-sm mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">BUYBACK OPERATIONS FEED</h3>
+            <h3 class="text-orange-500 font-mono text-sm mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">BUYBACK OPERATIONS FEED (5 MIN CYCLE)</h3>
             <div id="log-feed" class="flex flex-col gap-1 max-h-[200px] overflow-y-auto">
                 <p class="text-xs text-orange-400 font-mono text-center py-4">Waiting for next synchronization...</p>
             </div>
@@ -189,7 +234,9 @@
         <!-- About -->
         <div class="panel bg-orange-900/20 mt-8">
             <h3 class="text-orange-500 font-mono text-sm mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">About the System</h3>
-            <p class="text-orange-200 text-sm leading-relaxed font-sans mb-4">The <span class="text-white font-bold">ASDev Airdrop and Flywheel Pumpfun Launcher</span> is a specialized deployment terminal designed for high-velocity token launches on the Solana blockchain.</p>
+            <p class="text-orange-200 text-sm leading-relaxed font-sans mb-4">
+                The <span class="text-white font-bold">ASDev Airdrop and Flywheel Pumpfun Launcher</span> is a specialized deployment terminal designed for high-velocity token launches on the Solana blockchain.
+            </p>
             <ul class="list-disc list-inside text-orange-300 text-sm font-mono space-y-2">
                 <li>Automated Metadata Upload via Pinata IPFS.</li>
                 <li>Direct Pump.fun Contract Integration (Token2022 Standard).</li>
@@ -204,125 +251,264 @@
                 <p class="text-xs text-green-200 font-mono uppercase tracking-wider">MINT ADDRESS</p>
                 <p id="mint-addr" class="text-white font-mono text-lg break-all font-bold select-all"></p>
             </div>
-            <a id="tx-link" href="#" target="_blank" class="block text-center text-base font-mono text-black bg-green-500 hover:bg-green-400 py-4 rounded-lg font-bold transition shadow-lg hover:shadow-green-500/20">VIEW TRANSACTION ON SOLSCAN</a>
+            <a id="tx-link" href="#" target="_blank" class="block text-center text-base font-mono text-black bg-green-500 hover:bg-green-400 py-4 rounded-lg font-bold transition shadow-lg hover:shadow-green-500/20">
+                VIEW TRANSACTION ON SOLSCAN
+            </a>
         </div>
 
         <!-- Footer -->
         <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
-            <div><span class="text-orange-600">RPC UPLINK: HELIUS MAINNET</span> | <span class="text-orange-600 ml-2">LIFETIME PROTOCOL REVENUE: <span id="lifetime-fees" class="text-green-400 font-bold">0.00</span> SOL</span></div>
+            <div>
+                <span class="text-orange-600">RPC UPLINK: HELIUS MAINNET</span> | 
+                <span class="text-orange-600 ml-2">LIFETIME PROTOCOL REVENUE: <span id="lifetime-fees" class="text-green-400 font-bold">0.00</span> SOL</span>
+            </div>
             <span>SYSTEM STATUS: <span id="sys-status" class="sys-status">OFFLINE</span></span>
         </div>
     </div>
 </div>
 
 <script>
+    // --- CONFIGURATION ---
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const HELIUS_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=a32d61a0-2cc2-4d60-b3b6-cefadce7001a"; 
 
+    // --- STATE ---
     let userPubkey = null;
     let connection = new solanaWeb3.Connection(HELIUS_RPC_URL, "confirmed"); 
 
+    // --- UI ELEMENTS ---
     const ui = {
-        connectBtn: document.getElementById('connect-btn'), walletUI: document.getElementById('wallet-ui'), walletAddr: document.getElementById('wallet-addr'), walletBal: document.getElementById('wallet-bal'),
-        refreshBtn: document.getElementById('refresh-btn'), disconnectBtn: document.getElementById('disconnect-btn'), deployBtn: document.getElementById('deploy-btn'),
-        statusBox: document.getElementById('status-msg'), sysStatus: document.getElementById('sys-status'), imgPreview: document.getElementById('image-preview'),
-        previewName: document.getElementById('preview-name'), previewTicker: document.getElementById('preview-ticker'), lifetimeFees: document.getElementById('lifetime-fees'),
-        logFeed: document.getElementById('log-feed')
+        connectBtn: document.getElementById('connect-btn'),
+        walletUI: document.getElementById('wallet-ui'),
+        walletAddr: document.getElementById('wallet-addr'),
+        walletBal: document.getElementById('wallet-bal'),
+        refreshBtn: document.getElementById('refresh-btn'),
+        disconnectBtn: document.getElementById('disconnect-btn'),
+        deployBtn: document.getElementById('deploy-btn'),
+        statusBox: document.getElementById('status-msg'),
+        sysStatus: document.getElementById('sys-status'),
+        imgPreview: document.getElementById('image-preview'),
+        previewName: document.getElementById('preview-name'),
+        previewTicker: document.getElementById('preview-ticker'),
+        lifetimeFees: document.getElementById('lifetime-fees'),
+        logFeed: document.getElementById('log-feed'),
+        headerImage: document.getElementById('header-image')
     };
 
+    // --- ICONS ---
     lucide.createIcons();
 
-    // --- PREVIEW & VALIDATION ---
+    // --- PREVIEW LOGIC ---
     const updatePreview = () => {
         ui.previewName.innerText = document.getElementById('name').value || "Token Name";
         ui.previewTicker.innerText = document.getElementById('ticker').value ? `$${document.getElementById('ticker').value.toUpperCase()}` : "$TICKER";
     };
+
     const previewImage = (event) => {
         const file = event.target.files[0];
         if (file) {
+            if (file.size > 4 * 1024 * 1024) {
+                alert("File size exceeds 4MB limit.");
+                event.target.value = "";
+                return;
+            }
+            if (!['image/png', 'image/jpeg', 'image/gif'].includes(file.type)) {
+                alert("Invalid file type. Only PNG, JPG, GIF allowed.");
+                event.target.value = "";
+                return;
+            }
+
             const reader = new FileReader();
-            reader.onload = (e) => { ui.imgPreview.innerHTML = `<img src="${e.target.result}" alt="Preview" class="rounded-lg w-full h-full object-cover">`; ui.imgPreview.style.border = "2px solid #ea580c"; }
+            reader.onload = (e) => {
+                ui.imgPreview.innerHTML = `<img src="${e.target.result}" alt="Preview" class="rounded-lg w-full h-full object-cover">`;
+                ui.imgPreview.style.border = "2px solid #ea580c";
+            }
             reader.readAsDataURL(file);
+        } else {
+            ui.imgPreview.innerHTML = "NO IMAGE";
+            ui.imgPreview.style.border = "2px dashed #7c2d12";
         }
     };
-    window.previewImage = previewImage; window.updatePreview = updatePreview;
+    window.previewImage = previewImage;
+    window.updatePreview = updatePreview;
 
-    const validateInputs = (name, ticker, description, twitter, website, fileInput) => {
-        if (fileInput.files.length === 0) return "Image is required.";
-        if (fileInput.files[0].size > 4*1024*1024) return "Image max 4MB.";
-        if (!name || name.length > 32) return "Name max 32 chars.";
-        if (!ticker || ticker.length > 10) return "Ticker max 10 chars.";
-        return null;
-    };
-
-    // --- HEALTH & LOGS ---
+    // --- HEALTH CHECK & LOGS ---
     const checkHealth = async () => {
         try {
             const res = await fetch(`${BACKEND_URL}/api/health`);
             if (res.ok) {
                 const data = await res.json();
-                ui.sysStatus.innerText = "ONLINE"; ui.sysStatus.classList.add("online");
-                if (data.lifetimeFees) ui.lifetimeFees.innerText = data.lifetimeFees;
+                ui.sysStatus.innerText = "ONLINE";
+                ui.sysStatus.classList.add("online");
+                
+                // Update Header Image
+                ui.headerImage.src = data.headerImageUrl || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
+                
+                // Update Fees
+                if (data.lifetimeFees) {
+                    ui.lifetimeFees.innerText = data.lifetimeFees;
+                }
                 
                 // Update Logs
                 if (data.recentLogs && data.recentLogs.length > 0) {
                     ui.logFeed.innerHTML = data.recentLogs.map(log => {
                         const time = new Date(log.timestamp).toLocaleTimeString();
                         if (log.type === 'SKIPPED') {
-                            return `<div class="log-entry log-skipped"><span>[${time}] ROUND SKIPPED:</span> <span>Fees Under Limit (${log.current}/${log.target} SOL)</span></div>`;
+                            return `<div class="log-entry log-skipped"><span>[${time}] SKIPPING ROUND:</span> <span>Fees Under Limit (${log.current}/${log.target} SOL)</span></div>`;
                         } else if (log.type === 'SUCCESS') {
                             return `<div class="log-entry log-success"><span>[${time}] BUYBACK EXECUTED:</span> <span><a href="https://solscan.io/tx/${log.signature}" target="_blank" class="underline hover:text-white">View TX</a></span></div>`;
+                        } else if (log.type === 'ERROR') {
+                            return `<div class="log-entry text-red-400"><span>[${time}] ERROR:</span> <span>${log.message.slice(0, 40)}...</span></div>`;
                         }
-                        return `<div class="log-entry text-red-400"><span>[${time}] ERROR:</span> <span>${log.message}</span></div>`;
+                        return `<div class="log-entry text-orange-400"><span>[${time}] UNKNOWN EVENT</span></div>`;
                     }).join('');
+                } else {
+                    ui.logFeed.innerHTML = '<p class="text-xs text-orange-400 font-mono text-center py-4">Waiting for next synchronization...</p>';
                 }
-            } else { throw new Error("Backend Error"); }
-        } catch (e) { ui.sysStatus.innerText = "OFFLINE"; ui.sysStatus.classList.remove("online"); }
+            } else {
+                throw new Error("Backend Error");
+            }
+        } catch (e) {
+            ui.sysStatus.innerText = "OFFLINE";
+            ui.sysStatus.classList.remove("online");
+            ui.headerImage.src = "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; // Fallback placeholder
+        }
     };
-    setInterval(checkHealth, 5000); checkHealth();
+    setInterval(checkHealth, 5000); 
+    checkHealth();
 
-    // --- WALLET ---
+    // --- UTILS ---
+    const showStatus = (msg, type) => {
+        ui.statusBox.innerText = msg;
+        ui.statusBox.style.display = 'block';
+        if (type === 'error') ui.statusBox.className = 'status-box status-error';
+        else if (type === 'success') ui.statusBox.className = 'status-box status-success';
+        else ui.statusBox.className = 'status-box';
+    };
+
+    const toBase64 = file => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = error => reject(error);
+    });
+
+    // --- WALLET LOGIC ---
     const refreshWalletBalance = async () => {
         if (!userPubkey) return;
-        try { const bal = await connection.getBalance(new solanaWeb3.PublicKey(userPubkey)); ui.walletBal.innerText = (bal / solanaWeb3.LAMPORTS_PER_SOL).toFixed(3) + " SOL"; } catch (e) {}
+        try {
+            const pubkey = new solanaWeb3.PublicKey(userPubkey);
+            const bal = await connection.getBalance(pubkey);
+            ui.walletBal.innerText = (bal / solanaWeb3.LAMPORTS_PER_SOL).toFixed(3) + " SOL";
+        } catch (e) {
+            console.error("Balance fetch error.", e);
+            ui.walletBal.innerText = "Error";
+        }
     };
+
     const updateWalletUI = async (pubkey) => {
-        if (!pubkey) { ui.walletUI.classList.add('hidden'); ui.connectBtn.classList.remove('hidden'); return; }
-        userPubkey = pubkey.toString(); ui.connectBtn.classList.add('hidden'); ui.walletUI.classList.remove('hidden'); ui.walletUI.classList.add('flex');
+        if (!pubkey) {
+            ui.walletUI.classList.add('hidden');
+            ui.connectBtn.classList.remove('hidden');
+            return;
+        }
+        userPubkey = pubkey.toString();
+        ui.connectBtn.classList.add('hidden');
+        ui.walletUI.classList.remove('hidden');
+        ui.walletUI.classList.add('flex');
         ui.walletAddr.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4);
         await refreshWalletBalance();
     };
-    const connectWallet = async () => { if (window.solana) { const resp = await window.solana.connect(); await updateWalletUI(resp.publicKey); } else window.open("https://phantom.app/", "_blank"); };
-    const disconnectWallet = async () => { if (window.solana) { try{await window.solana.disconnect();}catch(e){} userPubkey = null; updateWalletUI(null); } };
-    
-    ui.connectBtn.onclick = connectWallet; ui.refreshBtn.onclick = refreshWalletBalance; ui.disconnectBtn.onclick = disconnectWallet;
 
-    // --- DEPLOY ---
-    const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; ui.statusBox.className = type === 'error' ? 'status-box status-error' : (type === 'success' ? 'status-box status-success' : 'status-box'); };
-    const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
+    const connectWallet = async () => {
+        if (window.solana && window.solana.isPhantom) {
+            try {
+                const resp = await window.solana.connect();
+                await updateWalletUI(resp.publicKey);
+            } catch (err) { console.error(err); }
+        } else {
+            window.open("https://phantom.app/", "_blank");
+        }
+    };
 
+    const disconnectWallet = async () => {
+        if (window.solana) {
+            try { await window.solana.disconnect(); } catch (e) {}
+            userPubkey = null;
+            updateWalletUI(null);
+        }
+    };
+
+    ui.connectBtn.onclick = connectWallet;
+    ui.refreshBtn.onclick = refreshWalletBalance;
+    ui.disconnectBtn.onclick = disconnectWallet;
+
+    // --- VALIDATION LOGIC ---
+    const validateInputs = (name, ticker, description, twitter, website, fileInput) => {
+        if (fileInput.files.length === 0) return "Image is required.";
+        const file = fileInput.files[0];
+        if (file.size > 4 * 1024 * 1024) return "Image size must be less than 4MB.";
+        if (!name || name.trim().length === 0) return "Token Name is required.";
+        if (name.length > 32) return "Token Name must be 32 characters or less.";
+        if (!ticker || ticker.trim().length === 0) return "Ticker Symbol is required.";
+        if (ticker.length > 10) return "Ticker must be 10 characters or less.";
+        if (description.length > 200) return "Description must be 200 characters or less.";
+        const urlPattern = /^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?$/;
+        if (twitter && !urlPattern.test(twitter)) return "Invalid Twitter URL.";
+        if (website && !urlPattern.test(website)) return "Invalid Website URL.";
+        return null;
+    };
+
+    // --- DEPLOY LOGIC ---
     ui.deployBtn.onclick = async () => {
         if (!userPubkey) return showStatus("CONNECT WALLET FIRST", 'error');
+        
         const name = document.getElementById('name').value;
         const ticker = document.getElementById('ticker').value;
+        const description = document.getElementById('desc').value;
+        const twitter = document.getElementById('twitter').value;
+        const website = document.getElementById('website').value;
         const fileInput = document.getElementById('image-file');
         
-        const err = validateInputs(name, ticker, null, null, null, fileInput);
-        if (err) return showStatus(err.toUpperCase(), 'error');
+        const validationError = validateInputs(name, ticker, description, twitter, website, fileInput);
+        if (validationError) return showStatus(validationError.toUpperCase(), 'error');
 
         let imageBase64;
-        try { imageBase64 = await toBase64(fileInput.files[0]); } catch(e) { return showStatus("IMAGE ERROR", 'error'); }
+        try { imageBase64 = await toBase64(fileInput.files[0]); } 
+        catch(e) { return showStatus("IMAGE PROCESSING FAILED", 'error'); }
 
-        ui.deployBtn.disabled = true; ui.deployBtn.innerText = "PROCESSING..."; showStatus("SIGNING 0.05 SOL FEE...", 'normal');
+        ui.deployBtn.disabled = true;
+        ui.deployBtn.innerText = "PROCESSING SEQUENCE...";
+        showStatus("SIGNING 0.05 SOL FEE...", 'normal');
 
         try {
-            const tx = new solanaWeb3.Transaction().add(solanaWeb3.SystemProgram.transfer({ fromPubkey: new solanaWeb3.PublicKey(userPubkey), toPubkey: new solanaWeb3.PublicKey(DEV_WALLET_PUBKEY), lamports: 0.05 * 1000000000 }));
-            const { blockhash } = await connection.getLatestBlockhash(); tx.recentBlockhash = blockhash; tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
-            const signed = await window.solana.signAndSendTransaction(tx);
-            showStatus("PAYMENT SENT. DEPLOYING...", 'normal');
+            const tx = new solanaWeb3.Transaction().add(
+                solanaWeb3.SystemProgram.transfer({
+                    fromPubkey: new solanaWeb3.PublicKey(userPubkey),
+                    toPubkey: new solanaWeb3.PublicKey(DEV_WALLET_PUBKEY),
+                    lamports: 0.05 * 1000000000 
+                })
+            );
+            
+            const { blockhash } = await connection.getLatestBlockhash();
+            tx.recentBlockhash = blockhash;
+            tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
 
-            const res = await fetch(`${BACKEND_URL}/api/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ticker, description: document.getElementById('desc').value, twitter: document.getElementById('twitter').value, website: document.getElementById('website').value, image: imageBase64, userTx: signed.signature, userPubkey }) });
+            const signedTx = await window.solana.signAndSendTransaction(tx);
+            showStatus("PAYMENT CONFIRMED. DEPLOYING...", 'normal');
+
+            const res = await fetch(`${BACKEND_URL}/api/deploy`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name, ticker, description, twitter, website,
+                    image: imageBase64, 
+                    userTx: signedTx.signature, 
+                    userPubkey: userPubkey
+                })
+            });
+
             const data = await res.json();
 
             if (data.success) {
@@ -330,12 +516,29 @@
                 document.getElementById('result-area').classList.remove('hidden');
                 document.getElementById('mint-addr').innerText = data.mint;
                 document.getElementById('tx-link').href = `https://solscan.io/tx/${data.signature}`;
-                ui.deployBtn.innerText = "LAUNCH COMPLETE"; refreshWalletBalance();
-            } else { throw new Error(data.error); }
-        } catch (e) { showStatus("ERROR: " + (e.message || "Failed"), 'error'); ui.deployBtn.disabled = false; ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE"; }
-    };
+                ui.deployBtn.innerText = "LAUNCH COMPLETE";
+                refreshWalletBalance(); 
+            } else {
+                throw new Error(data.error || "Backend Error");
+            }
 
-    window.addEventListener('load', () => { if (window.solana && window.solana.isPhantom) window.solana.connect({ onlyIfTrusted: true }).then((r)=>updateWalletUI(r.publicKey)).catch(()=>{}); });
+        } catch (e) {
+            console.error(e);
+            showStatus("ERROR: " + (e.message || "Transaction failed."), 'error');
+            ui.deployBtn.disabled = false;
+            ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE";
+        }
+    };
+    
+    window.addEventListener('load', () => {
+        if (window.solana && window.solana.isPhantom) {
+            window.solana.connect({ onlyIfTrusted: true })
+                .then((resp) => updateWalletUI(resp.publicKey))
+                .catch(() => {});
+            window.solana.on('disconnect', () => { disconnectWallet(); showStatus("Wallet Disconnected.", 'info'); });
+        }
+    });
 </script>
+
 </body>
 </html>
