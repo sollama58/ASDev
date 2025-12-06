@@ -268,7 +268,7 @@ if (redisConnection) {
             const [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], MAYHEM_PROGRAM_ID);
             const mayhemTokenVault = getATA(mint, solVault, TOKEN_PROGRAM_2022_ID);
 
-            const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event-authority")], PUMP_PROGRAM_ID);
+            const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID);
 
             // Manual Creator Vault Derivations (New Requirement)
             const [creatorVault] = PublicKey.findProgramAddressSync(
