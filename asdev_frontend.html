@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.5.10</title>
+    <title>ASDev Launcher v10.5.12</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -178,7 +178,7 @@
 <div id="log-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeLogModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FULL BUYBACK LOGS</h3><div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2"></div></div></div>
 
 <script>
-    const FRONTEND_VERSION = "v10.5.10";
+    const FRONTEND_VERSION = "v10.5.12";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.05;
@@ -206,6 +206,7 @@
 
     fetch(`${BACKEND_URL}/api/version`).then(r=>r.json()).then(d=>ui.versionDisplay.innerText = `${FRONTEND_VERSION} | BE: ${d.version}`).catch(()=>{});
 
+    // --- OPTIMIZED DATA FETCHING (Unified 60s Loop) ---
     const updatePumpPrice = async () => {
         try {
             const res = await fetch(`https://frontend-api.pump.fun/coins/${PUMP_CONTRACT}`);
@@ -215,7 +216,6 @@
             }
         } catch (e) {}
     };
-    setInterval(updatePumpPrice, 60000); updatePumpPrice(); 
 
     const updateLeaderboard = async () => {
         try {
@@ -237,34 +237,8 @@
                 </tr>`).join('');
         } catch (e) {}
     };
-    setInterval(updateLeaderboard, 60000); updateLeaderboard();
-
-    const updateMayhemLabel = () => { if (ui.mayhemToggle.checked) { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: ON (HIGH RISK)"; ui.mayhemStatusLabel.classList.add('active'); } else { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: OFF"; ui.mayhemStatusLabel.classList.remove('active'); } };
-    ui.mayhemToggle.addEventListener('change', updateMayhemLabel); updateMayhemLabel(); 
-
-    const updatePreview = () => { ui.previewName.innerText = document.getElementById('name').value || "Token Name"; ui.previewTicker.innerText = document.getElementById('ticker').value ? `$${document.getElementById('ticker').value.toUpperCase()}` : "$TICKER"; };
-    const previewImage = (event) => { const file = event.target.files[0]; if (file) { const reader = new FileReader(); reader.onload = (e) => { ui.imgPreview.innerHTML = `<img src="${e.target.result}" alt="Preview" class="rounded-lg w-full h-full object-cover">`; ui.imgPreview.style.border = "2px solid #ea580c"; }; reader.readAsDataURL(file); } else { ui.imgPreview.innerHTML = "NO IMAGE"; ui.imgPreview.style.border = "2px dashed #7c2d12"; } };
-    window.previewImage = previewImage; window.updatePreview = updatePreview;
 
     const fetchRecentLaunches = async () => { try { const res = await fetch(`${BACKEND_URL}/api/recent-launches`); if (res.ok) { const launches = await res.json(); if (launches.length === 0) { ui.tickerContent.innerHTML = '<span class="ticker-item text-orange-600">NO RECENT LAUNCHES YET... START ONE!</span>'; return; } const repeatedLaunches = Array(5).fill(launches).flat(); const tickerItems = repeatedLaunches.map(launch => `<span class="ticker-item"><span class="text-white font-bold">LAUNCHED:</span><span class="text-white">${launch.userSnippet}...</span><span class="text-orange-400">-></span><a href="${PUMPFUN_URL_BASE}${launch.mint}" target="_blank" class="font-bold underline">${launch.ticker}</a></span>`).join(''); ui.tickerContent.innerHTML = tickerItems; } } catch (e) {} };
-    setInterval(fetchRecentLaunches, 15000); fetchRecentLaunches();
-
-    const renderLogs = (logs, targetElement, limit) => {
-        targetElement.innerHTML = ''; if (!logs || logs.length === 0) { targetElement.innerHTML = '<p class="text-xs text-orange-400 font-mono text-center py-4">No logs available.</p>'; return; }
-        const displayLogs = logs.slice().reverse().slice(0, limit); 
-        const logHtml = displayLogs.map(log => {
-            const time = new Date(log.timestamp).toLocaleTimeString();
-            let content, logClass;
-            if (log.type === 'SKIPPED') { content = `Fees Under Limit (${log.current}/${log.target} SOL)`; logClass = 'log-skipped'; } else if (log.type === 'SUCCESS') { content = `BUY: 80% | DIST: 20% | <a href="https://solscan.io/tx/${log.signature}" target="_blank" class="underline hover:text-white">View TX</a>`; logClass = 'log-success'; } else if (log.type === 'ERROR') { content = `FATAL ERROR: ${log.message.slice(0, 80)}`; logClass = 'log-error'; } else { content = `UNKNOWN EVENT`; logClass = 'text-orange-400'; }
-            return `<div class="log-entry ${logClass}"><span>[${time}] ${log.type}:</span> <span>${content}</span></div>`;
-        }).join('');
-        targetElement.innerHTML = logHtml;
-    };
-
-    const toggleLogModal = () => { ui.modalLogContent.innerHTML = ''; renderLogs(allLogs, ui.modalLogContent, allLogs.length); ui.logModal.style.display = 'block'; };
-    window.toggleLogModal = toggleLogModal;
-    const closeLogModal = () => { ui.logModal.style.display = 'none'; };
-    window.closeLogModal = closeLogModal;
 
     const checkHealth = async () => { 
         try { 
@@ -285,41 +259,84 @@
             } else { throw new Error("Backend Error"); } 
         } catch (e) { ui.sysStatus.innerText = "OFFLINE"; ui.sysStatus.classList.remove("online"); ui.headerImage.src = "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; } 
     };
-    setInterval(checkHealth, 5000); checkHealth();
-
-    const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; };
-    const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
 
     const refreshWalletBalance = async () => { 
         if (!userPubkey) return; 
         try { 
-            // Use Backend Proxy to get Balance from Helius without exposing key
             const res = await fetch(`${BACKEND_URL}/api/balance?pubkey=${userPubkey}`);
             if (!res.ok) throw new Error("Balance fetch failed");
             const data = await res.json();
             const solBalance = data.balance / solanaWeb3.LAMPORTS_PER_SOL;
-            
             ui.walletBal.innerText = solBalance.toFixed(3) + " SOL"; 
-
-            // Disable/Enable Launch Button based on balance (if not deploying)
             if (!isDeploying) {
                 if (solBalance < DEPLOYMENT_FEE) {
-                    ui.deployBtn.disabled = true;
-                    ui.deployBtn.innerText = `INSUFFICIENT BALANCE (< ${DEPLOYMENT_FEE} SOL)`;
-                    ui.deployBtn.classList.add("opacity-50", "cursor-not-allowed");
+                    ui.deployBtn.disabled = true; ui.deployBtn.innerText = `INSUFFICIENT BALANCE (< ${DEPLOYMENT_FEE} SOL)`; ui.deployBtn.classList.add("opacity-50", "cursor-not-allowed");
                 } else {
-                    ui.deployBtn.disabled = false;
-                    ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE";
-                    ui.deployBtn.classList.remove("opacity-50", "cursor-not-allowed");
+                    ui.deployBtn.disabled = false; ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE"; ui.deployBtn.classList.remove("opacity-50", "cursor-not-allowed");
                 }
             }
         } catch (e) { console.error("Balance check error:", e); } 
     };
 
+    // Unified Refresh Function
+    const refreshAllData = async () => {
+        // Visual feedback on button
+        if (ui.refreshBtn) ui.refreshBtn.classList.add('opacity-50', 'cursor-wait');
+        
+        try {
+            await Promise.allSettled([
+                updatePumpPrice(),
+                updateLeaderboard(),
+                fetchRecentLaunches(),
+                checkHealth(),
+                refreshWalletBalance()
+            ]);
+        } catch (e) { console.error("Auto-Refresh Error", e); }
+        
+        if (ui.refreshBtn) ui.refreshBtn.classList.remove('opacity-50', 'cursor-wait');
+    };
+
+    // Set Interval to 60s (1 Minute) for everything
+    setInterval(refreshAllData, 60000);
+    // Initial Load
+    refreshAllData();
+
+    // Bind Button
+    ui.refreshBtn.onclick = () => refreshAllData();
+
+    // --- End Unified Fetching ---
+
+    const updateMayhemLabel = () => { if (ui.mayhemToggle.checked) { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: ON (HIGH RISK)"; ui.mayhemStatusLabel.classList.add('active'); } else { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: OFF"; ui.mayhemStatusLabel.classList.remove('active'); } };
+    ui.mayhemToggle.addEventListener('change', updateMayhemLabel); updateMayhemLabel(); 
+
+    const updatePreview = () => { ui.previewName.innerText = document.getElementById('name').value || "Token Name"; ui.previewTicker.innerText = document.getElementById('ticker').value ? `$${document.getElementById('ticker').value.toUpperCase()}` : "$TICKER"; };
+    const previewImage = (event) => { const file = event.target.files[0]; if (file) { const reader = new FileReader(); reader.onload = (e) => { ui.imgPreview.innerHTML = `<img src="${e.target.result}" alt="Preview" class="rounded-lg w-full h-full object-cover">`; ui.imgPreview.style.border = "2px solid #ea580c"; }; reader.readAsDataURL(file); } else { ui.imgPreview.innerHTML = "NO IMAGE"; ui.imgPreview.style.border = "2px dashed #7c2d12"; } };
+    window.previewImage = previewImage; window.updatePreview = updatePreview;
+
+    const renderLogs = (logs, targetElement, limit) => {
+        targetElement.innerHTML = ''; if (!logs || logs.length === 0) { targetElement.innerHTML = '<p class="text-xs text-orange-400 font-mono text-center py-4">No logs available.</p>'; return; }
+        const displayLogs = logs.slice().reverse().slice(0, limit); 
+        const logHtml = displayLogs.map(log => {
+            const time = new Date(log.timestamp).toLocaleTimeString();
+            let content, logClass;
+            if (log.type === 'SKIPPED') { content = `Fees Under Limit (${log.current}/${log.target} SOL)`; logClass = 'log-skipped'; } else if (log.type === 'SUCCESS') { content = `BUY: 80% | DIST: 20% | <a href="https://solscan.io/tx/${log.signature}" target="_blank" class="underline hover:text-white">View TX</a>`; logClass = 'log-success'; } else if (log.type === 'ERROR') { content = `FATAL ERROR: ${log.message.slice(0, 80)}`; logClass = 'log-error'; } else { content = `UNKNOWN EVENT`; logClass = 'text-orange-400'; }
+            return `<div class="log-entry ${logClass}"><span>[${time}] ${log.type}:</span> <span>${content}</span></div>`;
+        }).join('');
+        targetElement.innerHTML = logHtml;
+    };
+
+    const toggleLogModal = () => { ui.modalLogContent.innerHTML = ''; renderLogs(allLogs, ui.modalLogContent, allLogs.length); ui.logModal.style.display = 'block'; };
+    window.toggleLogModal = toggleLogModal;
+    const closeLogModal = () => { ui.logModal.style.display = 'none'; };
+    window.closeLogModal = closeLogModal;
+
+    const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; };
+    const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
+
     const updateWalletUI = async (pubkey) => { if (!pubkey) { ui.walletUI.classList.add('hidden'); ui.connectBtn.classList.remove('hidden'); return; } userPubkey = pubkey.toString(); ui.connectBtn.classList.add('hidden'); ui.walletUI.classList.remove('hidden'); ui.walletUI.classList.add('flex'); ui.walletAddr.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4); await refreshWalletBalance(); };
     const connectWallet = async () => { if (window.solana && window.solana.isPhantom) { try { const resp = await window.solana.connect(); await updateWalletUI(resp.publicKey); } catch (err) { console.error(err); } } else { window.open("https://phantom.app/", "_blank"); } };
     const disconnectWallet = async () => { if (window.solana) { try { await window.solana.disconnect(); } catch (e) {} userPubkey = null; updateWalletUI(null); } };
-    ui.connectBtn.onclick = connectWallet; ui.refreshBtn.onclick = refreshWalletBalance; ui.disconnectBtn.onclick = disconnectWallet;
+    ui.connectBtn.onclick = connectWallet; ui.disconnectBtn.onclick = disconnectWallet;
 
     const validateInputs = (name, ticker, description, twitter, website, fileInput) => {
         if (fileInput.files.length === 0) return "Image is required.";

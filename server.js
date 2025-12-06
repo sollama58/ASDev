@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.10";
+const VERSION = "v10.5.12";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -317,7 +317,7 @@ app.get('/api/balance', async (req, res) => {
     }
 });
 
-// NEW: Authenticated Blockhash Proxy (Fixes 403 Forbidden on Frontend)
+// Authenticated Blockhash Proxy
 app.get('/api/blockhash', async (req, res) => {
     try {
         const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
@@ -357,20 +357,30 @@ app.post('/api/deploy', async (req, res) => {
             throw dbErr; 
         }
 
-        const txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-        
+        // NEW: Retry Loop for Transaction Verification
+        let txInfo = null;
         let validPayment = false;
-        if (txInfo) {
-            validPayment = txInfo.transaction.message.instructions.some(ix => { 
-                if (ix.programId.toString() !== '11111111111111111111111111111111') return false; 
-                if (ix.parsed.type !== 'transfer') return false; 
-                return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL; 
-            });
+        
+        // Try up to 15 times (approx 30 seconds)
+        for (let i = 0; i < 15; i++) {
+            txInfo = await connection.getParsedTransaction(userTx, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+            if (txInfo) {
+                // Check if payment is valid inside the loop
+                validPayment = txInfo.transaction.message.instructions.some(ix => { 
+                    if (ix.programId.toString() !== '11111111111111111111111111111111') return false; 
+                    if (ix.parsed.type !== 'transfer') return false; 
+                    return ix.parsed.info.destination === devKeypair.publicKey.toString() && ix.parsed.info.lamports >= 0.05 * LAMPORTS_PER_SOL; 
+                });
+                break; // Found it, stop looping
+            }
+            // Wait 2 seconds before retrying
+            await new Promise(resolve => setTimeout(resolve, 2000));
         }
 
-        if (!validPayment) {
+        if (!txInfo || !validPayment) {
             await db.run('DELETE FROM transactions WHERE signature = ?', [userTx]);
-            return res.status(400).json({ error: "Payment verification failed or transaction not found." });
+            const errReason = !txInfo ? "Transaction not found on chain (timeout)." : "Transaction found but payment was invalid.";
+            return res.status(400).json({ error: errReason });
         }
 
         await addFees(0.05 * LAMPORTS_PER_SOL);
