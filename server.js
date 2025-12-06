@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.5.9";
+const VERSION = "v10.5.10";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -64,7 +64,7 @@ if (PINATA_JWT) {
     logger.warn("⚠️ WARNING: No valid Pinata Credentials found (JWT or API Keys). Metadata uploads will fail.");
 }
 
-// --- RPC CONFIGURATION (Fixed 403 Error) ---
+// --- RPC CONFIGURATION ---
 let SOLANA_CONNECTION_URL = "https://api.mainnet-beta.solana.com"; // Default to public
 if (HELIUS_API_KEY) {
     SOLANA_CONNECTION_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
@@ -304,17 +304,27 @@ app.get('/api/recent-launches', async (req, res) => { try { const rows = await d
 app.get('/api/debug/logs', (req, res) => { const logPath = path.join(DISK_ROOT, 'server_debug.log'); if (fs.existsSync(logPath)) { const stats = fs.statSync(logPath); const stream = fs.createReadStream(logPath, { start: Math.max(0, stats.size - 50000) }); stream.pipe(res); } else { res.send("No logs yet."); } });
 app.get('/api/job-status/:id', async (req, res) => { if (!deployQueue) return res.status(500).json({ error: "Queue not initialized" }); const job = await deployQueue.getJob(req.params.id); if (!job) return res.status(404).json({ error: "Job not found" }); const state = await job.getState(); res.json({ id: job.id, state, result: job.returnvalue, failedReason: job.failedReason }); });
 
-// NEW: Authenticated Balance Proxy
+// Authenticated Balance Proxy
 app.get('/api/balance', async (req, res) => {
     try {
         const { pubkey } = req.query;
         if (!pubkey) return res.status(400).json({ error: "Missing pubkey" });
-        // Uses the server's 'connection' object which is configured with HELIUS_API_KEY
         const balance = await connection.getBalance(new PublicKey(pubkey));
         res.json({ balance });
     } catch (err) { 
         logger.error("Balance Check Error", { error: err.message });
         res.status(500).json({ error: err.message }); 
+    }
+});
+
+// NEW: Authenticated Blockhash Proxy (Fixes 403 Forbidden on Frontend)
+app.get('/api/blockhash', async (req, res) => {
+    try {
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+        res.json({ blockhash, lastValidBlockHeight });
+    } catch (err) {
+        logger.error("Blockhash Proxy Error", { error: err.message });
+        res.status(500).json({ error: "Failed to get blockhash" });
     }
 });
 
