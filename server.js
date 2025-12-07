@@ -16,7 +16,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.9-HOTFIX-AIRDROP-ZERO";
+const VERSION = "v10.26.10-FEE-TRACKER-UPDATE";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -510,6 +510,23 @@ app.get('/api/health', async (req, res) => {
             // RPC Calls to Cache
             const currentBalance = await connection.getBalance(devKeypair.publicKey);
             
+            // NEW: Fetch Creator Vault Balances (Pending Fees)
+            const { bcVault, ammVaultAta } = getCreatorFeeVaults(devKeypair.publicKey);
+            let totalPendingFees = 0;
+            
+            // 1. Bonding Curve Vault (SOL)
+            try {
+                const bcInfo = await connection.getAccountInfo(bcVault);
+                if (bcInfo) totalPendingFees += bcInfo.lamports;
+            } catch(e) {}
+
+            // 2. AMM Vault (WSOL)
+            try {
+                const ammVaultAtaKey = await ammVaultAta; 
+                const wsolBal = await connection.getTokenAccountBalance(ammVaultAtaKey);
+                if (wsolBal.value.amount) totalPendingFees += Number(wsolBal.value.amount);
+            } catch (e) {}
+
             let pumpHoldings = 0;
             try {
                 const tokenAccounts = await connection.getParsedTokenAccountsByOwner(devKeypair.publicKey, { mint: TARGET_PUMP_TOKEN });
@@ -519,7 +536,7 @@ app.get('/api/health', async (req, res) => {
             } catch (e) { }
 
             return {
-                stats, launches, logs, currentBalance, pumpHoldings
+                stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees
             };
         });
 
@@ -536,7 +553,8 @@ app.get('/api/health', async (req, res) => {
             totalLaunches: cachedHealth.launches, 
             recentLogs: cachedHealth.logs.map(l => ({ ...JSON.parse(l.data), type: l.type, timestamp: l.timestamp })), 
             headerImageUrl: HEADER_IMAGE_URL,
-            currentFeeBalance: (cachedHealth.currentBalance / LAMPORTS_PER_SOL).toFixed(4),
+            // UPDATED: Now showing the sum of Bonding Curve + AMM Vaults
+            currentFeeBalance: (cachedHealth.totalPendingFees / LAMPORTS_PER_SOL).toFixed(4),
             lastClaimTime: cachedHealth.stats.lastClaimTimestamp || 0,
             lastClaimAmount: (cachedHealth.stats.lastClaimAmountLamports / LAMPORTS_PER_SOL).toFixed(4),
             nextCheckTime: cachedHealth.stats.nextCheckTimestamp || (Date.now() + 5*60*1000)
@@ -865,7 +883,7 @@ async function updateGlobalState() {
 
         // --- UPDATE GLOBAL CACHE FOR EXPECTED AIRDROP ---
         globalUserExpectedAirdrops.clear();
-        if (globalTotalPoints > 0 && distributableAmount > 0) {
+        if (globalTotalPoints > 0) {
             for (const [pubkey, points] of userPointMap.entries()) {
                 const share = points / globalTotalPoints;
                 const expectedAirdrop = share * distributableAmount;
