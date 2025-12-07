@@ -17,7 +17,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.17-RECLAIM-RENT-VOL";
+const VERSION = "v10.26.17-TOKEN2022-FIX";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -543,11 +543,16 @@ app.get('/api/health', async (req, res) => {
 
             let pumpHoldings = 0;
             try {
-                const tokenAccounts = await connection.getParsedTokenAccountsByOwner(devKeypair.publicKey, { mint: TARGET_PUMP_TOKEN });
-                if (tokenAccounts.value.length > 0) {
-                    pumpHoldings = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount;
+                // FIXED: Direct lookup using Token-2022 derived address for dev wallet
+                const devPumpAta = await getAssociatedTokenAddress(TARGET_PUMP_TOKEN, devKeypair.publicKey, false, TOKEN_PROGRAM_2022_ID);
+                const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
+                if (tokenBal.value.uiAmount) {
+                    pumpHoldings = tokenBal.value.uiAmount;
                 }
-            } catch (e) { }
+            } catch (e) { 
+                // Silently fail if account doesn't exist yet (0 balance)
+                pumpHoldings = 0;
+            }
 
             return {
                 stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume
@@ -811,21 +816,23 @@ async function updateGlobalState() {
         // 1A. Cache Dev Wallet Pump Holdings
         // FIX: Replaced getAssociatedTokenAddress + getTokenAccountBalance with robust scan
         try {
-            const tokenAccounts = await connection.getParsedTokenAccountsByOwner(devKeypair.publicKey, { mint: TARGET_PUMP_TOKEN });
-            if (tokenAccounts.value.length > 0) {
-                devPumpHoldings = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount;
+            // FIXED: Direct lookup using Token-2022 derived address
+            const devPumpAta = await getAssociatedTokenAddress(TARGET_PUMP_TOKEN, devKeypair.publicKey, false, TOKEN_PROGRAM_2022_ID);
+            const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
+            
+            if (tokenBal.value.uiAmount) {
+                devPumpHoldings = tokenBal.value.uiAmount;
             } else {
                 devPumpHoldings = 0;
             }
         } catch(e) { 
-            console.error("Failed to fetch dev holdings", e);
+            // console.error("Failed to fetch dev holdings", e);
             devPumpHoldings = 0; 
         }
         const distributableAmount = devPumpHoldings * 0.99;
         
         // DEBUG: LOG CRITICAL VALUES
-        logger.info("DEBUG: Dev Pump Holdings:", devPumpHoldings);
-        logger.info("DEBUG: Distributable Amount:", distributableAmount);
+        // logger.info("DEBUG: Dev Pump Holdings:", devPumpHoldings);
         
         // 1B. Update Individual Token Holders
         for (const token of topTokens) { 
@@ -924,7 +931,7 @@ async function updateGlobalState() {
             }
         }
         
-        logger.info(`DEBUG: User Map Size: ${globalUserExpectedAirdrops.size}`);
+        // logger.info(`DEBUG: User Map Size: ${globalUserExpectedAirdrops.size}`);
         // No DB transaction needed for expectedAirdrop calculation, as it's cached in memory map.
 
     } catch(e) { console.error("Loop Error", e); }
