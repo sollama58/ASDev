@@ -16,7 +16,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.1-AIRDROP-LOGS";
+const VERSION = "v10.26.2-SAFE-BUFFER";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -1033,21 +1033,28 @@ async function runPurchaseAndFees() {
         } catch(e) {}
 
         const threshold = new BN(FEE_THRESHOLD_SOL * LAMPORTS_PER_SOL);
-
+        
+        // 1. Always Claim if threshold met (Income generation)
         if (totalPendingFees.gte(threshold)) {
-             logger.info(`CLAIM TRIGGERED. Pending: ${totalPendingFees.toString()} lamports`);
-             
-             // 2. Execute Claim
+             logger.info(`CLAIM TRIGGERED...`);
              await claimCreatorFees();
-             
-             // Wait briefly for confirmation sync
              await new Promise(r => setTimeout(r, 2000));
+        }
 
-             // 3. Execute Buyback (Check real wallet balance now)
-             const realBalance = await connection.getBalance(devKeypair.publicKey);
-             const spendable = Math.min(totalPendingFees.toNumber(), realBalance - 5000000); // Leave some gas
+        // 2. Check Balance & Buffer
+        const realBalance = await connection.getBalance(devKeypair.publicKey);
+        const SAFETY_BUFFER = 500000000; // 0.5 SOL
 
-             if (spendable > 0) {
+        if (realBalance < SAFETY_BUFFER) {
+            logger.warn(`⚠️ LOW BALANCE: ${(realBalance/LAMPORTS_PER_SOL).toFixed(4)} SOL < 0.50 SOL Buffer. Skipping Buyback/Airdrop to preserve gas/rent.`);
+            return; 
+        }
+
+        // 3. Execute Buyback
+        if (totalPendingFees.gte(threshold)) {
+             const spendable = realBalance - SAFETY_BUFFER; 
+             
+             if (spendable > 0.05 * LAMPORTS_PER_SOL) { 
                  const transfer9_5 = Math.floor(spendable * 0.095); 
                  const transfer0_5 = Math.floor(spendable * 0.005); 
                  const solBuyAmountLamports = Math.floor(spendable * 0.90);
@@ -1056,7 +1063,7 @@ async function runPurchaseAndFees() {
              }
         } 
         
-        // --- RUN AIRDROP CHECK ---
+        // 4. Run Airdrop (Safe now)
         await processAirdrop();
 
     } catch(e) { logPurchase('ERROR', { message: e.message }); } 
