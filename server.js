@@ -16,7 +16,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.11-DEBUG-AIRDROP-ZERO";
+const VERSION = "v10.26.12-FIX-BALANCE-FETCH";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -792,11 +792,18 @@ async function updateGlobalState() {
         const top10Mints = topTokens.map(t => t.mint);
 
         // 1A. Cache Dev Wallet Pump Holdings
-        const devPumpAta = await getAssociatedTokenAddress(TARGET_PUMP_TOKEN, devKeypair.publicKey);
+        // FIX: Replaced getAssociatedTokenAddress + getTokenAccountBalance with robust scan
         try {
-            const info = await connection.getTokenAccountBalance(devPumpAta);
-            devPumpHoldings = info.value.uiAmount;
-        } catch(e) { devPumpHoldings = 0; }
+            const tokenAccounts = await connection.getParsedTokenAccountsByOwner(devKeypair.publicKey, { mint: TARGET_PUMP_TOKEN });
+            if (tokenAccounts.value.length > 0) {
+                devPumpHoldings = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount;
+            } else {
+                devPumpHoldings = 0;
+            }
+        } catch(e) { 
+            console.error("Failed to fetch dev holdings", e);
+            devPumpHoldings = 0; 
+        }
         const distributableAmount = devPumpHoldings * 0.99;
         
         // DEBUG: LOG CRITICAL VALUES
