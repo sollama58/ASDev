@@ -16,7 +16,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.6-BONDING-CURVE-EXCLUSION";
+const VERSION = "v10.26.7-HOTFIX-AIRDROP-CALC";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -762,7 +762,8 @@ app.post('/api/deploy', async (req, res) => {
 // Loops
 
 // 1. Holder Scanner Loop (Internal Launches) + GLOBAL POINTS CALCULATION + ATOMIC UPDATES
-setInterval(async () => { 
+// REFACTORED: Extracted loop logic into named function to allow immediate execution
+async function updateGlobalState() {
     if (!db) return; 
     try {
         const topTokens = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10'); 
@@ -873,7 +874,13 @@ setInterval(async () => {
         // No DB transaction needed for expectedAirdrop calculation, as it's cached in memory map.
 
     } catch(e) { console.error("Loop Error", e); }
-}, HOLDER_UPDATE_INTERVAL); 
+}
+
+// Execute loop on standard interval
+setInterval(updateGlobalState, HOLDER_UPDATE_INTERVAL);
+// Execute ONCE immediately after startup (with 5s delay to let DB/Connections settle)
+setTimeout(updateGlobalState, 5000);
+
 
 // 2. Token Metadata Loop - [UPDATED] Uses DexScreener first, fallbacks to Pump
 setInterval(async () => { 
