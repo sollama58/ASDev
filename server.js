@@ -16,7 +16,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.7-HOTFIX-AIRDROP-CALC";
+const VERSION = "v10.26.9-HOTFIX-AIRDROP-ZERO";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -255,7 +255,8 @@ async function logPurchase(type, data) {
 
 async function saveTokenData(pk, mint, meta) {
     try {
-        await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, metadataUri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, 
+        // FIXED: Removed types (TEXT, BOOLEAN) from INSERT statement
+        await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode, metadataUri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, 
             [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, meta.image, meta.isMayhemMode, meta.metadataUri]);
         const shard = pk.slice(0, 2).toLowerCase(); const dir = path.join(ACTIVE_DATA_DIR, shard); ensureDir(dir);
         fs.writeFileSync(path.join(dir, `${mint}.json`), JSON.stringify({ userPubkey: pk, mint, metadata: meta, timestamp: new Date().toISOString() }, null, 2));
@@ -860,7 +861,7 @@ async function updateGlobalState() {
             }
         }
         globalTotalPoints = tempTotalPoints;
-        logger.info(`Updated Global Points: ${globalTotalPoints}`);
+        logger.info(`Updated Global Points: ${globalTotalPoints} | Distributable: ${distributableAmount}`);
 
         // --- UPDATE GLOBAL CACHE FOR EXPECTED AIRDROP ---
         globalUserExpectedAirdrops.clear();
@@ -929,7 +930,7 @@ setInterval(async () => {
 }, METADATA_UPDATE_INTERVAL);
 
 // 3. ASDF Token Top 50 Loop - CACHED PERSISTENCE
-setInterval(async () => {
+async function syncAsdfHolders() {
     try {
         // Cached fetch logic
         const fetchAsdfHolders = async () => {
@@ -959,16 +960,11 @@ setInterval(async () => {
     } catch (e) {
         logger.error(`❌ ASDF Sync Failed: ${e.message}`);
     }
-}, ASDF_UPDATE_INTERVAL);
+}
+setInterval(syncAsdfHolders, ASDF_UPDATE_INTERVAL);
 
 // Run ASDF sync immediately on startup
-setTimeout(async () => {
-    // Initial Run
-    try {
-        // Use the same logic, maybe trigger the interval function manually or just copy-paste safe logic
-        // We will just wait for the interval or let the cache handle it if restart happened quickly
-    } catch(e) {}
-}, 5000);
+setTimeout(syncAsdfHolders, 5000);
 
 
 // --- Helper for fee addresses ---
