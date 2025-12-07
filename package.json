@@ -1,12 +1,12 @@
 {
   "name": "pump-launcher",
-  "version": "10.7.1",
+  "version": "10.22.0",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "0.29.0",
+    "@coral-xyz/anchor": "^0.29.0",
     "@solana/web3.js": "^1.91.0",
     "axios": "^1.6.8",
     "bs58": "^5.0.0",
@@ -18,6 +18,9 @@
     "sqlite3": "^5.1.6",
     "bullmq": "^5.7.0",
     "ioredis": "^5.4.0",
-    "typescript": ">=5.3.3"
+    "node-addon-api": "^7.1.0" 
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
