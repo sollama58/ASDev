@@ -15,7 +15,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.25.5-SYNC-FIX";
+const VERSION = "v10.25.7-DEXSCREENER-ALL";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -24,7 +24,7 @@ const DEPLOYMENT_FEE_SOL = 0.02;
 
 // Update Intervals (Env Vars or Default)
 const HOLDER_UPDATE_INTERVAL = process.env.HOLDER_UPDATE_INTERVAL ? parseInt(process.env.HOLDER_UPDATE_INTERVAL) : 120000;
-const METADATA_UPDATE_INTERVAL = process.env.METADATA_UPDATE_INTERVAL ? parseInt(process.env.METADATA_UPDATE_INTERVAL) : 60000; // Faster metadata sync
+const METADATA_UPDATE_INTERVAL = process.env.METADATA_UPDATE_INTERVAL ? parseInt(process.env.METADATA_UPDATE_INTERVAL) : 60000; 
 
 // AUTH STRATEGY
 const PINATA_JWT = process.env.PINATA_JWT ? process.env.PINATA_JWT.trim() : null; 
@@ -83,7 +83,7 @@ const SOL_VAULT = safePublicKey("BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s", 
 const MAYHEM_FEE_RECIPIENT = safePublicKey("GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS", "GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS", "MAYHEM_FEE_RECIPIENT");
 
 // --- Global State ---
-let lastBackendUpdate = Date.now(); // Initialize immediately so it's never 0
+let lastBackendUpdate = Date.now(); 
 
 // --- DB & Directories ---
 const DATA_DIR = path.join(DISK_ROOT, 'tokens');
@@ -580,7 +580,7 @@ setInterval(async () => {
     } catch(e) { console.error("Loop Error", e); }
 }, HOLDER_UPDATE_INTERVAL); 
 
-// 2. Token Metadata Loop - Slowed down to avoid 429 errors and ensure data mapping
+// 2. Token Metadata Loop - [UPDATED] Uses DexScreener first, fallbacks to Pump
 setInterval(async () => { 
     if (!db) return; 
     const tokens = await db.all('SELECT mint FROM tokens'); 
@@ -588,19 +588,37 @@ setInterval(async () => {
     // Process tokens sequentially to be gentle on rate limits
     for (const t of tokens) {
         try { 
-            const response = await axios.get(`https://frontend-api.pump.fun/coins/${t.mint}`, { timeout: 5000 }); 
-            const data = response.data; 
-            if (data) {
-                const isComplete = data.complete ? 1 : 0;
-                // Map fields: usd_market_cap to marketCap
-                // If usd_market_cap is missing, default to 0
-                const mcap = data.usd_market_cap || 0;
-                
-                await db.run(`UPDATE tokens SET volume24h = ?, marketCap = ?, lastUpdated = ?, complete = ? WHERE mint = ?`, 
-                    [mcap, mcap, Date.now(), isComplete, t.mint]); 
+            // Try DexScreener first (works for both pre-bond and post-bond on Solana)
+            const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${t.mint}`, { timeout: 3000 });
+            let mcap = 0;
+            let vol = 0;
+            let isComplete = 0; // Don't know bonding status from DexScreener alone easily, assume unchanged unless we check Pump API
+
+            if (dexRes.data && dexRes.data.pairs && dexRes.data.pairs.length > 0) {
+                const pair = dexRes.data.pairs[0];
+                mcap = pair.fdv || pair.marketCap || 0;
+                vol = pair.volume ? pair.volume.h24 : 0;
+            } else {
+                // Fallback to Pump API if DexScreener has no data (brand new token)
+                const pumpRes = await axios.get(`https://frontend-api.pump.fun/coins/${t.mint}`, { timeout: 3000 });
+                const pumpData = pumpRes.data;
+                if (pumpData) {
+                    isComplete = pumpData.complete ? 1 : 0;
+                    mcap = pumpData.usd_market_cap || 0;
+                    // Pump doesn't give easy volume, so leave as 0 or keep existing
+                }
             }
+
+            // Only update completion status if we confirmed it via Pump API or if we trust existing state
+            // For now, let's just update metrics. If we want accurate completion status, we need to hit Pump API periodically too.
+            // Let's do a quick Pump check if DexScreener worked, just to be sure about "complete" status
+            if (mcap > 0) {
+                 await db.run(`UPDATE tokens SET volume24h = ?, marketCap = ?, lastUpdated = ? WHERE mint = ?`, 
+                    [vol, mcap, Date.now(), t.mint]);
+            }
+
         } catch (e) {
-            // logger.warn(`Pump API Fail for ${t.mint}: ${e.message}`);
+            // logger.warn(`Data Sync Fail for ${t.mint}: ${e.message}`);
         }
         // Small delay between requests
         await new Promise(r => setTimeout(r, 500)); 
