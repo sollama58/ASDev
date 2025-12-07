@@ -22,8 +22,8 @@ const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
 const PRIORITY_FEE_MICRO_LAMPORTS = 100000; 
 const DEPLOYMENT_FEE_SOL = 0.02;
-// NEW: Define Fee Threshold used by Flywheel logic
-const FEE_THRESHOLD_SOL = 0.20; 
+// CHANGE 1: Define Fee Threshold used by Flywheel logic (0.01 SOL)
+const FEE_THRESHOLD_SOL = 0.01; 
 
 // Update Intervals (Env Vars or Default)
 const HOLDER_UPDATE_INTERVAL = process.env.HOLDER_UPDATE_INTERVAL ? parseInt(process.env.HOLDER_UPDATE_INTERVAL) : 120000;
@@ -93,6 +93,7 @@ let asdfTop50Holders = new Set();
 let isBuybackRunning = false;
 let isAirdropping = false;
 let globalTotalPoints = 0; // Tracks total score of all users for airdrop calculation
+let devPumpHoldings = 0; // Cached dev wallet pump holdings
 
 // --- DB & Directories ---
 if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./data'); }
@@ -133,11 +134,12 @@ let db;
 async function initDB() {
     db = await open({ filename: DB_PATH, driver: sqlite3.Database });
     await db.exec('PRAGMA journal_mode = WAL;');
+    // UPDATED TABLE: Added expectedAirdrop column to token_holders
     await db.exec(`CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0, complete BOOLEAN DEFAULT 0, metadataUri TEXT);
         CREATE TABLE IF NOT EXISTS transactions (signature TEXT PRIMARY KEY, userPubkey TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, data TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value REAL);
-        CREATE TABLE IF NOT EXISTS token_holders (mint TEXT, holderPubkey TEXT, rank INTEGER, lastUpdated INTEGER, PRIMARY KEY (mint, holderPubkey));
+        CREATE TABLE IF NOT EXISTS token_holders (mint TEXT, holderPubkey TEXT, rank INTEGER, expectedAirdrop REAL DEFAULT 0, lastUpdated INTEGER, PRIMARY KEY (mint, holderPubkey));
         CREATE TABLE IF NOT EXISTS airdrops (id INTEGER PRIMARY KEY AUTOINCREMENT, amount REAL, recipients INTEGER, totalPoints REAL, signatures TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('accumulatedFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeFeesLamports', 0);
@@ -151,6 +153,7 @@ async function initDB() {
     try { await db.exec('ALTER TABLE tokens ADD COLUMN metadataUri TEXT'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN totalPoints REAL'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN signatures TEXT'); } catch(e) {}
+    try { await db.exec('ALTER TABLE token_holders ADD COLUMN expectedAirdrop REAL DEFAULT 0'); } catch(e) {} // New column for expected Airdrop
     
     // Ensure new stat key exists for existing DBs
     try { await db.run("INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeCreatorFeesLamports', 0)"); } catch(e) {}
@@ -391,7 +394,7 @@ if (redisConnection) {
                     const sellDiscriminator = Buffer.from([51, 230, 133, 164, 1, 127, 131, 173]);
                     const sellAmountBuf = new BN(bal.value.amount).toArrayLike(Buffer, 'le', 8);
                     const minSolOutputBuf = new BN(0).toArrayLike(Buffer, 'le', 8);
-                    const sellData = Buffer.concat([sellDiscriminator, sellAmountBuf, minAmountOutBuf]);
+                    const sellData = Buffer.concat([sellDiscriminator, sellAmountBuf, minSolOutputBuf]);
 
                     const sellKeys = [
                         { pubkey: global, isSigner: false, isWritable: false },
@@ -576,7 +579,7 @@ app.get('/api/all-eligible-users', async (req, res) => {
         // 2. Fetch all holders who hold a top 10 token
         const placeholders = top10Mints.map(() => '?').join(',');
         const rows = await db.all(`
-            SELECT holderPubkey, COUNT(*) as positionCount 
+            SELECT holderPubkey, expectedAirdrop, COUNT(*) as positionCount 
             FROM token_holders 
             WHERE mint IN (${placeholders}) 
             GROUP BY holderPubkey
@@ -600,7 +603,9 @@ app.get('/api/all-eligible-users', async (req, res) => {
                     pubkey: row.holderPubkey,
                     points: points,
                     positions: row.positionCount,
-                    isAsdfTop50: isAsdfTop50
+                    isAsdfTop50: isAsdfTop50,
+                    // Use the expectedAirdrop calculated and stored in the database during the last scan
+                    expectedAirdrop: row.expectedAirdrop || 0
                 });
                 calculatedTotalPoints += points;
             }
@@ -627,31 +632,33 @@ app.get('/api/airdrop-logs', async (req, res) => {
 // [UPDATED] Check Holder Status - Includes ASDF Top 50 Check & Points Calculation
 app.get('/api/check-holder', async (req, res) => { 
     const { userPubkey } = req.query; 
-    if (!userPubkey) return res.json({ isHolder: false, isAsdfTop50: false, points: 0, multiplier: 1, heldPositionsCount: 0 }); 
+    // New default: Include expectedAirdrop = 0
+    if (!userPubkey) return res.json({ isHolder: false, isAsdfTop50: false, points: 0, multiplier: 1, heldPositionsCount: 0, expectedAirdrop: 0 }); 
     
     try { 
-        // 1. Get List of Top 10 Leaderboard Mints (Active)
         const top10 = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10');
         const top10Mints = top10.map(t => t.mint);
 
         let heldPositionsCount = 0;
+        let totalExpectedAirdrop = 0;
 
         if (top10Mints.length > 0) {
-            // 2. Count how many of these specific leaderboard tokens the user is a top holder of
-            // NOTE: The `token_holders` table already excludes PUMP_LIQUIDITY_WALLET during insertion (see Loop 1)
             const placeholders = top10Mints.map(() => '?').join(',');
-            const query = `SELECT count(*) as count FROM token_holders WHERE holderPubkey = ? AND mint IN (${placeholders})`;
+            
+            // Query for aggregate information: count positions and SUM the expectedAirdrop from token_holders
+            const query = `SELECT COUNT(*) as count, SUM(expectedAirdrop) as totalExpectedAirdrop FROM token_holders WHERE holderPubkey = ? AND mint IN (${placeholders})`;
             const params = [userPubkey, ...top10Mints];
             
             const result = await db.get(query, params);
             heldPositionsCount = result ? result.count : 0;
+            // Retrieve the summed expected airdrop from the pre-calculated field
+            totalExpectedAirdrop = result ? result.totalExpectedAirdrop || 0 : 0;
         }
         
         // 3. Check ASDF Top 50 Status (from Memory Set)
         const isAsdfTop50 = asdfTop50Holders.has(userPubkey);
 
-        // 4. Calculate Points
-        // LP wallets and Dev wallet are excluded prior to this point.
+        // 4. Calculate Points (still needed for the points field, even though drop amount is pre-calculated)
         const multiplier = isAsdfTop50 ? 2 : 1;
         const points = heldPositionsCount * multiplier;
 
@@ -660,11 +667,12 @@ app.get('/api/check-holder', async (req, res) => {
             isAsdfTop50: isAsdfTop50, 
             points: points,
             multiplier: multiplier,
-            heldPositionsCount: heldPositionsCount
+            heldPositionsCount: heldPositionsCount,
+            expectedAirdrop: totalExpectedAirdrop // Return the aggregated, pre-calculated expected drop
         }); 
     } catch (e) { 
         logger.error("Check Holder Error", {msg: e.message});
-        res.status(500).json({ error: "DB Error" }); 
+        res.status(500).json({ error: "DB Error", expectedAirdrop: 0 }); 
     } 
 });
 
@@ -753,8 +761,16 @@ setInterval(async () => {
     try {
         const topTokens = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10'); 
         const top10Mints = topTokens.map(t => t.mint);
+
+        // 1A. Cache Dev Wallet Pump Holdings
+        const devPumpAta = await getAssociatedTokenAddress(TARGET_PUMP_TOKEN, devKeypair.publicKey);
+        try {
+            const info = await connection.getTokenAccountBalance(devPumpAta);
+            devPumpHoldings = info.value.uiAmount;
+        } catch(e) { devPumpHoldings = 0; }
+        const distributableAmount = devPumpHoldings * 0.99;
         
-        // Update Individual Token Holders
+        // 1B. Update Individual Token Holders
         for (const token of topTokens) { 
             try { 
                 if (!token.mint) continue;
@@ -770,17 +786,16 @@ setInterval(async () => {
                 const holdersToInsert = [];
 
                 if (accounts.value) { 
-                    const top20 = accounts.value.slice(0, 20); 
+                    // Fetch top 50
+                    const topHolders = accounts.value.slice(0, 50); 
 
-                    for (const acc of top20) { 
+                    for (const acc of topHolders) { 
                         try { 
                             const info = await connection.getParsedAccountInfo(acc.address); 
                             if (info.value?.data?.parsed) { 
                                 const owner = info.value.data.parsed.info.owner; 
                                 
                                 // REFINED EXCLUSION LOGIC: 
-                                // Exclude 1. PUMP Liquidity Wallet (Constant)
-                                // Exclude 2. The Bonding Curve PDA (the owner of the pre-bond LP tokens)
                                 if (owner !== PUMP_LIQUIDITY_WALLET && owner !== bondingCurvePDAStr) { 
                                     holdersToInsert.push({ mint: token.mint, owner: owner }); 
                                 } 
@@ -796,10 +811,10 @@ setInterval(async () => {
                         // Clear old holders for this specific mint
                         await db.run('DELETE FROM token_holders WHERE mint = ?', token.mint);
                         
-                        // Insert new holders 
+                        // Insert new holders (expectedAirdrop remains 0 temporarily)
                         let rank = 1;
                         for (const h of holdersToInsert) {
-                            await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, 
+                            await db.run(`INSERT OR IGNORE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, 
                                 [h.mint, h.owner, rank, Date.now()]);
                             rank++;
                         }
@@ -817,25 +832,50 @@ setInterval(async () => {
         }
 
         // --- CALCULATE GLOBAL TOTAL POINTS ---
+        let userPointMap = new Map();
+        let tempTotalPoints = 0;
+        
         if (top10Mints.length > 0) {
             const placeholders = top10Mints.map(() => '?').join(',');
-            // The table now strictly contains only user holders (excluding LPs/Bonding Curve/Dev Wallet)
+            // Fetch all point-eligible entries (already filtered for LPs/BCs)
             const rows = await db.all(`SELECT holderPubkey, COUNT(*) as positionCount FROM token_holders WHERE mint IN (${placeholders}) GROUP BY holderPubkey`, top10Mints);
             
-            let tempTotalPoints = 0;
             for (const row of rows) {
                 const isTop50 = asdfTop50Holders.has(row.holderPubkey);
-                // EXCLUDE DEV WALLET FROM ACCRUING POINTS FOR ITS RESERVES (Safety check, though filtered above too)
                 if (row.holderPubkey !== devKeypair.publicKey.toString()) {
                     const points = row.positionCount * (isTop50 ? 2 : 1);
-                    tempTotalPoints += points;
+                    if (points > 0) {
+                        userPointMap.set(row.holderPubkey, points);
+                        tempTotalPoints += points;
+                    }
                 }
             }
-            globalTotalPoints = tempTotalPoints;
-            logger.info(`Updated Global Points: ${globalTotalPoints}`);
-        } else {
-            globalTotalPoints = 0;
         }
+        globalTotalPoints = tempTotalPoints;
+        logger.info(`Updated Global Points: ${globalTotalPoints}`);
+
+        // --- UPDATE EXPECTED AIRDROP FOR EACH USER ---
+        if (globalTotalPoints > 0 && distributableAmount > 0) {
+            await db.run('BEGIN TRANSACTION');
+            try {
+                for (const [pubkey, points] of userPointMap.entries()) {
+                    const share = points / globalTotalPoints;
+                    const expectedAirdrop = share * distributableAmount;
+                    
+                    // Update ALL rows for this holderPubkey with the calculated expectedAirdrop
+                    await db.run(`UPDATE token_holders SET expectedAirdrop = ? WHERE holderPubkey = ?`, 
+                        [expectedAirdrop, pubkey]);
+                }
+                await db.run('COMMIT');
+            } catch (err) {
+                console.error("Airdrop Update Transaction Error", err);
+                await db.run('ROLLBACK');
+            }
+        } else {
+             // If no points or no holdings, set expected airdrop to 0 for all
+             await db.run(`UPDATE token_holders SET expectedAirdrop = 0`);
+        }
+
 
     } catch(e) { console.error("Loop Error", e); }
 }, HOLDER_UPDATE_INTERVAL); 
@@ -1006,14 +1046,8 @@ async function processAirdrop() {
     if (isAirdropping) return;
     isAirdropping = true;
     try {
-        // 1. Check Balance
-        const devPumpAta = await getAssociatedTokenAddress(TARGET_PUMP_TOKEN, devKeypair.publicKey);
-        let balance = 0;
-        try {
-            const info = await connection.getTokenAccountBalance(devPumpAta);
-            balance = info.value.uiAmount; // Float
-        } catch(e) { return; } // No ATA or error
-
+        // 1. Check Balance (Use cached devPumpHoldings from the interval loop)
+        const balance = devPumpHoldings;
         if (balance <= 10000) return;
 
         logger.info(`🔥 AIRDROP TRIGGERED: Balance ${balance} PUMP > 10,000`);
@@ -1022,14 +1056,15 @@ async function processAirdrop() {
         const amountToDistribute = balance * 0.99;
         const amountToDistributeInt = new BN(amountToDistribute * 1000000); // 6 decimals
 
-        // 3. Get Eligible Users
+        // 3. Get Eligible Users (Fetch aggregated points from the database, already calculated in Loop 1)
+        
+        // Fetch users and their calculated points (must recalculate points here to be safe, but can rely on the data used to calculate globalTotalPoints)
         const top10 = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10');
         if (top10.length === 0) return;
         
         const top10Mints = top10.map(t => t.mint);
         const placeholders = top10Mints.map(() => '?').join(',');
         
-        // Rows contains ALL non-LP holders of top 10 tokens
         const rows = await db.all(`
             SELECT holderPubkey, COUNT(*) as positionCount 
             FROM token_holders 
@@ -1039,28 +1074,27 @@ async function processAirdrop() {
 
         if (rows.length === 0) return;
 
-        // 4. Calculate Points
-        let totalPoints = 0;
+        // 4. Recalculate Points and use the cached global total point value
+        let currentTotalPoints = 0; // Local check
         const userPoints = [];
 
         for (const row of rows) {
             const isTop50 = asdfTop50Holders.has(row.holderPubkey);
-            
-            // EXCLUDE DEV WALLET FROM AIRDROP POINTS
-            if (row.holderPubkey === devKeypair.publicKey.toString()) {
-                continue; 
-            }
+            if (row.holderPubkey === devKeypair.publicKey.toString()) { continue; }
             
             const points = row.positionCount * (isTop50 ? 2 : 1);
             if (points > 0) {
                 userPoints.push({ pubkey: new PublicKey(row.holderPubkey), points });
-                totalPoints += points;
+                currentTotalPoints += points;
             }
         }
 
-        if (totalPoints === 0) return;
+        // Use the globally calculated point total
+        if (currentTotalPoints === 0) return;
 
-        logger.info(` distributing ${amountToDistribute} PUMP to ${userPoints.length} users (Total Points: ${totalPoints})`);
+        logger.info(` distributing ${amountToDistribute} PUMP to ${userPoints.length} users (Total Points: ${globalTotalPoints})`);
+
+        const devPumpAta = await getAssociatedTokenAddress(TARGET_PUMP_TOKEN, devKeypair.publicKey);
 
         // 5. Build Transactions
         const BATCH_SIZE = 8; 
@@ -1068,7 +1102,7 @@ async function processAirdrop() {
         let allSignatures = [];
         
         for (const user of userPoints) {
-            const share = amountToDistributeInt.mul(new BN(user.points)).div(new BN(totalPoints));
+            const share = amountToDistributeInt.mul(new BN(user.points)).div(new BN(globalTotalPoints));
             if (share.eqn(0)) continue;
 
             currentBatch.push({ user: user.pubkey, amount: share });
@@ -1089,7 +1123,7 @@ async function processAirdrop() {
         // Log Airdrop with signatures
         const signaturesStr = allSignatures.join(',');
         await db.run('INSERT INTO airdrops (amount, recipients, totalPoints, signatures, timestamp) VALUES (?, ?, ?, ?, ?)', 
-            [amountToDistribute, userPoints.length, totalPoints, signaturesStr, new Date().toISOString()]);
+            [amountToDistribute, userPoints.length, globalTotalPoints, signaturesStr, new Date().toISOString()]);
 
     } catch (e) {
         logger.error("Airdrop Failed", { error: e.message });
@@ -1159,10 +1193,11 @@ async function runPurchaseAndFees() {
 
         // 2. Check Balance & Buffer
         const realBalance = await connection.getBalance(devKeypair.publicKey);
-        const SAFETY_BUFFER = 500000000; // 0.5 SOL
+        // CHANGE 2: Updated SAFETY_BUFFER to 0.05 SOL (50,000,000 lamports)
+        const SAFETY_BUFFER = 50000000; 
 
         if (realBalance < SAFETY_BUFFER) {
-            logger.warn(`⚠️ LOW BALANCE: ${(realBalance/LAMPORTS_PER_SOL).toFixed(4)} SOL < 0.50 SOL Buffer. Skipping Buyback/Airdrop to preserve gas/rent.`);
+            logger.warn(`⚠️ LOW BALANCE: ${(realBalance/LAMPORTS_PER_SOL).toFixed(4)} SOL < 0.05 SOL Buffer. Skipping Buyback/Airdrop to preserve gas/rent.`);
             return; 
         }
 
