@@ -12,9 +12,10 @@ const axios = require('axios');
 const FormData = require('form-data');
 const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
+const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.25.1-AMM-FIX";
+const VERSION = "v10.25.2-FLYWHEEL-PROD";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -178,9 +179,10 @@ async function getStats() {
     return stats;
 }
 
+// Reset accumulator to 0 since we now use on-chain polling, but keep lifetime
 async function resetAccumulatedFees(used) { 
     const cur = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports'); 
-    await db.run('UPDATE stats SET value = ? WHERE key = ?', [Math.max(0, (cur ? cur.value : 0) - used), 'accumulatedFeesLamports']); 
+    await db.run('UPDATE stats SET value = ? WHERE key = ?', [0, 'accumulatedFeesLamports']); 
 }
 
 async function recordClaim(amount) {
@@ -188,7 +190,6 @@ async function recordClaim(amount) {
         const now = Date.now();
         await db.run('UPDATE stats SET value = ? WHERE key = ?', [now, 'lastClaimTimestamp']);
         await db.run('UPDATE stats SET value = ? WHERE key = ?', [amount, 'lastClaimAmountLamports']);
-        // Schedule next visual check time
         await db.run('UPDATE stats SET value = ? WHERE key = ?', [now + 5 * 60 * 1000, 'nextCheckTimestamp']);
     }
 }
@@ -212,14 +213,6 @@ async function saveTokenData(pk, mint, meta) {
 function calculateTokensForSol(solAmountLamports) {
     const virtualSolReserves = new BN(30000000000); 
     const virtualTokenReserves = new BN(1073000000000000); 
-    const solIn = new BN(solAmountLamports);
-    const k = virtualSolReserves.mul(virtualTokenReserves);
-    const newVirtualSol = virtualSolReserves.add(solIn);
-    const newVirtualTokens = k.div(newVirtualSol);
-    return virtualTokenReserves.sub(newVirtualTokens);
-}
-
-function calculateTokensForSolWithReserves(solAmountLamports, virtualSolReserves, virtualTokenReserves) {
     const solIn = new BN(solAmountLamports);
     const k = virtualSolReserves.mul(virtualTokenReserves);
     const newVirtualSol = virtualSolReserves.add(solIn);
@@ -343,7 +336,6 @@ if (redisConnection) {
             const sig = await sendTxWithRetry(tx, [devKeypair, mintKeypair]);
             logger.info(`Transaction Confirmed: ${sig}`);
             
-            // Pass metadataUri to save function
             await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode, metadataUri });
 
             setTimeout(async () => { try { 
@@ -579,93 +571,133 @@ setInterval(async () => { if (!db) return;
 }, 2 * 60 * 1000);
 
 let isBuybackRunning = false;
+
+// --- Helper for fee addresses ---
+function getCreatorFeeVaults(creator) {
+    const [bcVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PUMP_PROGRAM_ID);
+    const [ammVaultAuth] = PublicKey.findProgramAddressSync([Buffer.from("creator_vault"), creator.toBuffer()], PUMP_AMM_PROGRAM_ID);
+    const ammVaultAta = getAssociatedTokenAddress(WSOL_MINT, ammVaultAuth, true);
+    return { bcVault, ammVaultAuth, ammVaultAta };
+}
+
+async function claimCreatorFees() {
+    const { bcVault, ammVaultAuth, ammVaultAta } = getCreatorFeeVaults(devKeypair.publicKey);
+    const tx = new Transaction();
+    addPriorityFee(tx);
+    let claimedSomething = false;
+
+    // 1. Claim Bonding Curve Fees (SOL)
+    try {
+        const bcInfo = await connection.getAccountInfo(bcVault);
+        if (bcInfo && bcInfo.lamports > 0) {
+            const discriminator = Buffer.from([20, 22, 86, 123, 198, 28, 219, 132]);
+            const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_PROGRAM_ID);
+            
+            const keys = [
+                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true }, // creator
+                { pubkey: bcVault, isSigner: false, isWritable: true },
+                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                { pubkey: PUMP_PROGRAM_ID, isSigner: false, isWritable: false }
+            ];
+            tx.add(new TransactionInstruction({ keys, programId: PUMP_PROGRAM_ID, data: discriminator }));
+            claimedSomething = true;
+        }
+    } catch(e) {}
+
+    // 2. Claim AMM Fees (WSOL)
+    try {
+        // Need to check if the ATA exists and has balance
+        // Actually, we can check balance via getAccountInfo
+        // If it exists, claim.
+        // We assume we have created canonical pools or migrated tokens.
+        // For AMM claim, we need "quote_mint", "coin_creator", "vault_auth", "vault_ata", "dest_token_account"
+        // Destination: Our WSOL ATA.
+        const myWsolAta = await getAssociatedTokenAddress(WSOL_MINT, devKeypair.publicKey);
+        
+        // Ensure our WSOL ATA exists (create if not)
+        try { await getAccount(connection, myWsolAta); } 
+        catch (error) { 
+            tx.add(createAssociatedTokenAccountInstruction(devKeypair.publicKey, myWsolAta, devKeypair.publicKey, WSOL_MINT));
+        }
+
+        const ammVaultAtaKey = await ammVaultAta;
+        const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
+        
+        if (new BN(bal.value.amount).gt(new BN(0))) {
+            const ammDiscriminator = Buffer.from([160, 57, 89, 42, 181, 139, 43, 66]); // collect_coin_creator_fee
+            const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_AMM_PROGRAM_ID);
+            
+            const keys = [
+                { pubkey: WSOL_MINT, isSigner: false, isWritable: false },
+                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+                { pubkey: devKeypair.publicKey, isSigner: true, isWritable: false }, // coin_creator
+                { pubkey: ammVaultAuth, isSigner: false, isWritable: false },
+                { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true },
+                { pubkey: myWsolAta, isSigner: false, isWritable: true }, // destination
+                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                { pubkey: PUMP_AMM_PROGRAM_ID, isSigner: false, isWritable: false }
+            ];
+            tx.add(new TransactionInstruction({ keys, programId: PUMP_AMM_PROGRAM_ID, data: ammDiscriminator }));
+            
+            // Unwrap the WSOL to SOL
+            tx.add(createCloseAccountInstruction(myWsolAta, devKeypair.publicKey, devKeypair.publicKey));
+            claimedSomething = true;
+        }
+    } catch(e) {}
+
+    if (claimedSomething) {
+        tx.feePayer = devKeypair.publicKey;
+        await sendTxWithRetry(tx, [devKeypair]);
+        return true;
+    }
+    return false;
+}
+
 async function runPurchaseAndFees() {
     if (isBuybackRunning) return;
     isBuybackRunning = true;
     try {
-        const stats = await getStats();
-        if (stats.accumulatedFeesLamports >= FEE_THRESHOLD_SOL * LAMPORTS_PER_SOL) {
+        // 1. Poll On-Chain Fees (Bonding Curve + AMM)
+        const { bcVault, ammVaultAuth, ammVaultAta } = getCreatorFeeVaults(devKeypair.publicKey);
+        let totalPendingFees = new BN(0);
+
+        try {
+            const bcInfo = await connection.getAccountInfo(bcVault);
+            if (bcInfo) totalPendingFees = totalPendingFees.add(new BN(bcInfo.lamports));
+        } catch(e) {}
+
+        try {
+            const ammVaultAtaKey = await ammVaultAta;
+            const bal = await connection.getTokenAccountBalance(ammVaultAtaKey);
+            if (bal.value.amount) totalPendingFees = totalPendingFees.add(new BN(bal.value.amount));
+        } catch(e) {}
+
+        const threshold = new BN(FEE_THRESHOLD_SOL * LAMPORTS_PER_SOL);
+
+        if (totalPendingFees.gte(threshold)) {
+             logger.info(`CLAIM TRIGGERED. Pending: ${totalPendingFees.toString()} lamports`);
+             
+             // 2. Execute Claim
+             await claimCreatorFees();
+             
+             // Wait briefly for confirmation sync
+             await new Promise(r => setTimeout(r, 2000));
+
+             // 3. Execute Buyback (Check real wallet balance now)
              const realBalance = await connection.getBalance(devKeypair.publicKey);
-             const spendable = Math.min(stats.accumulatedFeesLamports, realBalance - 5000000);
+             const spendable = Math.min(totalPendingFees.toNumber(), realBalance - 5000000); // Leave some gas
+
              if (spendable > 0) {
                  const transfer9_5 = Math.floor(spendable * 0.095); 
                  const transfer0_5 = Math.floor(spendable * 0.005); 
                  const solBuyAmountLamports = Math.floor(spendable * 0.90);
 
-                 if (TARGET_PUMP_TOKEN.toString() === "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn") {
-                     await buyViaPumpAmm(solBuyAmountLamports, transfer9_5, transfer0_5, spendable);
-                     return;
-                 }
-
-                 const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = getPumpPDAs(TARGET_PUMP_TOKEN);
-                 
-                 let creator, isMayhem = false;
-                 let virtualSol = new BN(30000000000); 
-                 let virtualToken = new BN(1073000000000000); 
-
-                 try {
-                    const accInfo = await connection.getAccountInfo(bondingCurve);
-                    if (!accInfo) throw new Error("Bonding curve not found");
-                    const data = accInfo.data;
-                    virtualToken = new BN(data.subarray(8, 16), 'le');
-                    virtualSol = new BN(data.subarray(16, 24), 'le');
-                    creator = new PublicKey(data.subarray(49, 81));
-                    isMayhem = data[81] === 1;
-                 } catch (bcError) {
-                    logger.warn("Bonding curve fetch failed. Using default calc.", { error: bcError.message });
-                    return; 
-                 }
-
-                 const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PUMP_PROGRAM_ID);
-                 const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_PROGRAM_ID);
-                 const associatedUser = getATA(TARGET_PUMP_TOKEN, devKeypair.publicKey, TOKEN_PROGRAM_2022_ID);
-                 
-                 const feeRecipient = isMayhem ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
-
-                 const tokenBuyAmount = calculateTokensForSolWithReserves(solBuyAmountLamports, virtualSol, virtualToken);
-                 
-                 const buyDiscriminator = Buffer.from([102, 6, 61, 18, 1, 218, 235, 234]);
-                 const amountBuf = tokenBuyAmount.toArrayLike(Buffer, 'le', 8);
-                 const maxSolCostBuf = new BN(Math.floor(solBuyAmountLamports * 1.05)).toArrayLike(Buffer, 'le', 8); 
-                 const trackVolumeBuf = Buffer.from([0]); 
-
-                 const buyData = Buffer.concat([buyDiscriminator, amountBuf, maxSolCostBuf, trackVolumeBuf]);
-
-                 const buyKeys = [
-                    { pubkey: global, isSigner: false, isWritable: false },
-                    { pubkey: feeRecipient, isSigner: false, isWritable: true },
-                    { pubkey: TARGET_PUMP_TOKEN, isSigner: false, isWritable: false },
-                    { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                    { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-                    { pubkey: associatedUser, isSigner: false, isWritable: true },
-                    { pubkey: devKeypair.publicKey, isSigner: true, isWritable: true },
-                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                    { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false },
-                    { pubkey: creatorVault, isSigner: false, isWritable: true },
-                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                    { pubkey: PUMP_PROGRAM_ID, isSigner: false, isWritable: false },
-                    { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: false }, 
-                    { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
-                    { pubkey: feeConfig, isSigner: false, isWritable: false },
-                    { pubkey: FEE_PROGRAM_ID, isSigner: false, isWritable: false }
-                 ];
-
-                 const buyIx = new TransactionInstruction({ keys: buyKeys, programId: PUMP_PROGRAM_ID, data: buyData });
-                 
-                 const tx = new Transaction();
-                 addPriorityFee(tx); 
-                 tx.add(buyIx)
-                    .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 }))
-                    .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
-                 
-                 tx.feePayer = devKeypair.publicKey;
-                 const sig = await sendTxWithRetry(tx, [devKeypair]);
-                 await addPumpBought(tokenBuyAmount.toNumber()); 
-                 await recordClaim(spendable); 
-                 logPurchase('SUCCESS', { totalSpent: spendable, buyAmount: tokenBuyAmount.toString(), signature: sig });
-                 await resetAccumulatedFees(spendable);
-             } else { logPurchase('SKIPPED', { reason: 'Insufficient Real Balance', balance: realBalance }); }
-        } else { logPurchase('SKIPPED', { reason: 'Fees Under Limit', current: (stats.accumulatedFeesLamports/LAMPORTS_PER_SOL).toFixed(4), target: FEE_THRESHOLD_SOL }); }
+                 await buyViaPumpAmm(solBuyAmountLamports, transfer9_5, transfer0_5, spendable);
+             }
+        } else {
+            // logPurchase('SKIPPED', { reason: 'Pending Fees Below Threshold', current: totalPendingFees.toString(), target: threshold.toString() });
+        }
     } catch(e) { logPurchase('ERROR', { message: e.message }); } finally { isBuybackRunning = false; }
 }
 
@@ -673,84 +705,87 @@ async function buyViaPumpAmm(amountIn, transfer9_5, transfer0_5, totalSpendable)
     logger.info("Starting Pump AMM Swap for $PUMP...");
     try {
         const mint = TARGET_PUMP_TOKEN;
-        const { pool, poolAuthority, poolBaseTokenAccount, poolQuoteTokenAccount } = getPumpAmmPDAs(mint);
-        const [ammGlobalConfig] = PublicKey.findProgramAddressSync([Buffer.from("global_config")], PUMP_AMM_PROGRAM_ID);
+        const [poolAuthority] = PublicKey.findProgramAddressSync([Buffer.from("pool-authority"), mint.toBuffer()], PUMP_AMM_PROGRAM_ID);
+        // Canonical pool index is 0
+        const [pool] = PublicKey.findProgramAddressSync([Buffer.from("pool"), new Uint8Array([0,0]), poolAuthority.toBuffer(), mint.toBuffer(), WSOL_MINT.toBuffer()], PUMP_AMM_PROGRAM_ID);
         
-        const userWsol = getATA(WSOL_MINT, devKeypair.publicKey, TOKEN_PROGRAM_ID); // WSOL uses Standard Token Program
-        const userToken = getATA(mint, devKeypair.publicKey, TOKEN_PROGRAM_2022_ID); // Pump Token uses Token2022
+        // Dynamically fetch Pool to get coin_creator
+        const poolInfo = await connection.getAccountInfo(pool);
+        if (!poolInfo) throw new Error("Pump Pool Not Found");
+        
+        // Decode coin_creator from Pool data (Offset 211 based on IDL/Struct)
+        // Discriminator(8) + Bump(1) + Index(2) + Creator(32) + Base(32) + Quote(32) + LP(32) + PoolBase(32) + PoolQuote(32) + Supply(8) = 211 bytes
+        const coinCreator = new PublicKey(poolInfo.data.subarray(211, 243));
+        const [coinCreatorVaultAuth] = PublicKey.findProgramAddressSync([Buffer.from("creator_vault"), coinCreator.toBuffer()], PUMP_AMM_PROGRAM_ID);
+        const coinCreatorVaultAta = await getAssociatedTokenAddress(WSOL_MINT, coinCreatorVaultAuth, true);
+
+        const [ammGlobalConfig] = PublicKey.findProgramAddressSync([Buffer.from("global_config")], PUMP_AMM_PROGRAM_ID);
+        const [feeConfig] = PublicKey.findProgramAddressSync([Buffer.from("fee_config"), FEE_PROGRAM_ID.toBuffer()], PUMP_PROGRAM_ID); // Fee program config? Actually usually derived from Fee Program ID in Pump logic. IDL says seeds=["fee_config", feeProgram]
+        
+        // For Protocol Fee Recipient: Default to the one in docs/global config or read from GlobalConfig
+        const protocolFeeRecipient = new PublicKey("62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV"); // From PUMP_SWAP_README
+        const protocolFeeRecipientTokenAccount = await getAssociatedTokenAddress(WSOL_MINT, protocolFeeRecipient, true);
+
+        const userWsol = await getAssociatedTokenAddress(WSOL_MINT, devKeypair.publicKey);
+        const userToken = await getAssociatedTokenAddress(mint, devKeypair.publicKey, false, TOKEN_PROGRAM_2022_ID); // Pump uses Token2022? Wait, legacy tokens are on standard. Pump is legacy.
+        // Wait, PUMP token is likely Legacy SPL.
+        // Let's assume Legacy for PUMP token itself unless specified.
+        const userTokenLegacy = await getAssociatedTokenAddress(mint, devKeypair.publicKey);
+
+        const poolBaseTokenAccount = getATA(mint, pool, TOKEN_PROGRAM_ID); // Using Standard
+        const poolQuoteTokenAccount = getATA(WSOL_MINT, pool, TOKEN_PROGRAM_ID);
 
         const tx = new Transaction();
         addPriorityFee(tx);
 
         // 1. Setup User Token Account (if not exists)
-        try {
-             const accountInfo = await connection.getAccountInfo(userToken);
-             if (!accountInfo) {
-                 tx.add(new TransactionInstruction({
-                    keys: [
-                        { pubkey: devKeypair.publicKey, isSigner: true, isWritable: true },
-                        { pubkey: userToken, isSigner: false, isWritable: true },
-                        { pubkey: devKeypair.publicKey, isSigner: false, isWritable: false },
-                        { pubkey: mint, isSigner: false, isWritable: false },
-                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                        { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false },
-                    ],
-                    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-                    data: Buffer.alloc(0)
-                 }));
-             }
-        } catch(e) {}
+        const tokenAccountInfo = await connection.getAccountInfo(userTokenLegacy);
+        if (!tokenAccountInfo) {
+            tx.add(createAssociatedTokenAccountInstruction(devKeypair.publicKey, userTokenLegacy, devKeypair.publicKey, mint));
+        }
 
-        // 2. Setup WSOL Account (if not exists)
-        try {
-            const wsolInfo = await connection.getAccountInfo(userWsol);
-            if(!wsolInfo) {
-                 tx.add(new TransactionInstruction({
-                    keys: [
-                        { pubkey: devKeypair.publicKey, isSigner: true, isWritable: true },
-                        { pubkey: userWsol, isSigner: false, isWritable: true },
-                        { pubkey: devKeypair.publicKey, isSigner: false, isWritable: false },
-                        { pubkey: WSOL_MINT, isSigner: false, isWritable: false },
-                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                    ],
-                    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-                    data: Buffer.alloc(0)
-                 }));
-            }
-        } catch(e) {}
+        // 2. Setup WSOL & Fund it
+        try { await getAccount(connection, userWsol); } catch (e) {
+            tx.add(createAssociatedTokenAccountInstruction(devKeypair.publicKey, userWsol, devKeypair.publicKey, WSOL_MINT));
+        }
+        tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: userWsol, lamports: amountIn }));
+        tx.add({ keys: [{ pubkey: userWsol, isSigner: false, isWritable: true }], programId: TOKEN_PROGRAM_ID, data: Buffer.from([17]) }); // SyncNative
 
-        // 3. Fund WSOL & Sync
-        tx.add(SystemProgram.transfer({
-            fromPubkey: devKeypair.publicKey,
-            toPubkey: userWsol,
-            lamports: amountIn
-        }));
-        
-        tx.add(new TransactionInstruction({
-            keys: [{ pubkey: userWsol, isSigner: false, isWritable: true }],
-            programId: TOKEN_PROGRAM_ID,
-            data: Buffer.from([17]) // SyncNative
-        }));
-
-        // 4. Swap Instruction
-        const swapDiscriminator = Buffer.from([248, 198, 158, 145, 225, 117, 135, 200]); 
+        // 3. Swap Instruction
+        const swapDiscriminator = Buffer.from([198, 46, 21, 82, 180, 217, 232, 112]); // buy_exact_quote_in (We are spending SOL)
         const amountInBuf = new BN(amountIn).toArrayLike(Buffer, 'le', 8);
         const minAmountOutBuf = new BN(1).toArrayLike(Buffer, 'le', 8);
-        const swapData = Buffer.concat([swapDiscriminator, amountInBuf, minAmountOutBuf]);
+        const trackVolumeBuf = Buffer.from([0]);
+        const swapData = Buffer.concat([swapDiscriminator, amountInBuf, minAmountOutBuf, trackVolumeBuf]);
+
+        const [eventAuthority] = PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], PUMP_AMM_PROGRAM_ID);
+        const [globalVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("global_volume_accumulator")], PUMP_AMM_PROGRAM_ID);
+        const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_AMM_PROGRAM_ID);
 
         const swapKeys = [
-            { pubkey: ammGlobalConfig, isSigner: false, isWritable: false },
             { pubkey: pool, isSigner: false, isWritable: true },
-            { pubkey: devKeypair.publicKey, isSigner: true, isWritable: true }, // User
-            { pubkey: userWsol, isSigner: false, isWritable: true }, // User Source (WSOL)
-            { pubkey: poolQuoteTokenAccount, isSigner: false, isWritable: true }, // Pool Source (WSOL Vault)
-            { pubkey: poolBaseTokenAccount, isSigner: false, isWritable: true }, // Pool Dest (Token Vault)
-            { pubkey: userToken, isSigner: false, isWritable: true }, // User Dest (Token)
-            { pubkey: poolAuthority, isSigner: false, isWritable: false },
-            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // Token Program (for WSOL)
-            { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false }, // Token 2022 (for Pump Token)
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
+            { pubkey: devKeypair.publicKey, isSigner: true, isWritable: true },
+            { pubkey: ammGlobalConfig, isSigner: false, isWritable: false },
+            { pubkey: mint, isSigner: false, isWritable: false },
+            { pubkey: WSOL_MINT, isSigner: false, isWritable: false },
+            { pubkey: userTokenLegacy, isSigner: false, isWritable: true }, // Base Dest
+            { pubkey: userWsol, isSigner: false, isWritable: true }, // Quote Source
+            { pubkey: poolBaseTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: poolQuoteTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: protocolFeeRecipient, isSigner: false, isWritable: false },
+            { pubkey: protocolFeeRecipientTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // Base Prog
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // Quote Prog
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: eventAuthority, isSigner: false, isWritable: false },
+            { pubkey: PUMP_AMM_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: coinCreatorVaultAta, isSigner: false, isWritable: true },
+            { pubkey: coinCreatorVaultAuth, isSigner: false, isWritable: false },
+            { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: true },
+            { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
+            { pubkey: feeConfig, isSigner: false, isWritable: false },
+            { pubkey: FEE_PROGRAM_ID, isSigner: false, isWritable: false }
         ];
 
         tx.add(new TransactionInstruction({
@@ -759,25 +794,17 @@ async function buyViaPumpAmm(amountIn, transfer9_5, transfer0_5, totalSpendable)
             data: swapData
         }));
 
-        // 5. Close WSOL to recover rent
-        tx.add(new TransactionInstruction({
-            keys: [
-                { pubkey: userWsol, isSigner: false, isWritable: true },
-                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true }, // Destination
-                { pubkey: devKeypair.publicKey, isSigner: true, isWritable: false }  // Owner
-            ],
-            programId: TOKEN_PROGRAM_ID,
-            data: Buffer.from([9]) // CloseAccount
-        }));
+        // 4. Close WSOL
+        tx.add(createCloseAccountInstruction(userWsol, devKeypair.publicKey, devKeypair.publicKey));
 
-        // 6. Fee Distribution
+        // 5. Fee Distribution
         tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 })); 
         tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
 
         tx.feePayer = devKeypair.publicKey;
 
         const sig = await sendTxWithRetry(tx, [devKeypair]);
-        await addPumpBought(0); 
+        await addPumpBought(0); // Tracking only, can update to actual bought amount if needed
         await recordClaim(totalSpendable); 
         logPurchase('SUCCESS (AMM SWAP)', { totalSpent: totalSpendable, signature: sig });
         await resetAccumulatedFees(totalSpendable);
@@ -787,6 +814,7 @@ async function buyViaPumpAmm(amountIn, transfer9_5, transfer0_5, totalSpendable)
     }
 }
 
+// Poll every 5 minutes
 setInterval(runPurchaseAndFees, 5 * 60 * 1000); 
 
 app.listen(PORT, () => logger.info(`Server v${VERSION} running on ${PORT}`));
