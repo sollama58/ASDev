@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.25.0-BACKEND-SYNC-TIME";
+const VERSION = "v10.25.1-AMM-FIX";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -78,7 +78,7 @@ const SOL_VAULT = safePublicKey("BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s", 
 const MAYHEM_FEE_RECIPIENT = safePublicKey("GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS", "GesfTA3X2arioaHp8bbKdjG9vJtskViWACZoYvxp4twS", "MAYHEM_FEE_RECIPIENT");
 
 // --- Global State ---
-let lastBackendUpdate = 0; // [ADDED] Track when the scraper loop last ran
+let lastBackendUpdate = 0; 
 
 // --- DB & Directories ---
 const DATA_DIR = path.join(DISK_ROOT, 'tokens');
@@ -99,7 +99,6 @@ let db;
 async function initDB() {
     db = await open({ filename: DB_PATH, driver: sqlite3.Database });
     await db.exec('PRAGMA journal_mode = WAL;');
-    // [CHANGED] Added `metadataUri` to schema
     await db.exec(`CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0, complete BOOLEAN DEFAULT 0, metadataUri TEXT);
         CREATE TABLE IF NOT EXISTS transactions (signature TEXT PRIMARY KEY, userPubkey TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, data TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
@@ -471,7 +470,7 @@ app.get('/api/health', async (req, res) => { try { const stats = await getStats(
     }); } catch (e) { res.status(500).json({ error: "DB Error" }); } });
 app.get('/api/check-holder', async (req, res) => { const { userPubkey } = req.query; if (!userPubkey) return res.json({ isHolder: false }); try { const result = await db.get('SELECT mint, rank FROM token_holders WHERE holderPubkey = ? LIMIT 1', userPubkey); res.json({ isHolder: !!result, ...(result || {}) }); } catch (e) { res.status(500).json({ error: "DB Error" }); } });
 app.get('/api/leaderboard', async (req, res) => { const { userPubkey } = req.query; try { const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10'); const leaderboard = await Promise.all(rows.map(async (r) => { let isUserTopHolder = false; if (userPubkey) { const holderEntry = await db.get('SELECT rank FROM token_holders WHERE mint = ? AND holderPubkey = ?', [r.mint, userPubkey]); if (holderEntry) isUserTopHolder = true; } 
-    return { mint: r.mint, name: r.name, ticker: r.ticker, image: r.image, metadataUri: r.metadataUri, price: (r.marketCap / 1000000000).toFixed(6), volume: r.volume24h, isUserTopHolder, complete: !!r.complete, lastBackendUpdate: lastBackendUpdate }; // [CHANGED] Add lastBackendUpdate
+    return { mint: r.mint, name: r.name, ticker: r.ticker, image: r.image, metadataUri: r.metadataUri, price: (r.marketCap / 1000000000).toFixed(6), volume: r.volume24h, isUserTopHolder, complete: !!r.complete, lastBackendUpdate: lastBackendUpdate }; 
 })); res.json(leaderboard); } catch (e) { res.status(500).json([]); } });
 app.get('/api/recent-launches', async (req, res) => { try { const rows = await db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10'); res.json(rows.map(r => ({ userSnippet: r.userPubkey.slice(0, 5), ticker: r.ticker, mint: r.mint }))); } catch (e) { res.status(500).json([]); } });
 app.get('/api/debug/logs', (req, res) => { const logPath = path.join(DISK_ROOT, 'server_debug.log'); if (fs.existsSync(logPath)) { const stats = fs.statSync(logPath); const stream = fs.createReadStream(logPath, { start: Math.max(0, stats.size - 50000) }); stream.pipe(res); } else { res.send("No logs yet."); } });
@@ -532,7 +531,6 @@ app.post('/api/deploy', async (req, res) => {
 });
 
 // Loops
-// [CHANGED] Loop updates lastBackendUpdate timestamp
 setInterval(async () => { 
     if (!db) return; 
     try {
@@ -577,7 +575,6 @@ setInterval(async () => { if (!db) return;
         })); 
         await new Promise(r => setTimeout(r, 1000)); 
     } 
-    // [CHANGED] Set global timestamp after loop finishes
     lastBackendUpdate = Date.now();
 }, 2 * 60 * 1000);
 
@@ -675,22 +672,114 @@ async function runPurchaseAndFees() {
 async function buyViaPumpAmm(amountIn, transfer9_5, transfer0_5, totalSpendable) {
     logger.info("Starting Pump AMM Swap for $PUMP...");
     try {
+        const mint = TARGET_PUMP_TOKEN;
+        const { pool, poolAuthority, poolBaseTokenAccount, poolQuoteTokenAccount } = getPumpAmmPDAs(mint);
+        const [ammGlobalConfig] = PublicKey.findProgramAddressSync([Buffer.from("global_config")], PUMP_AMM_PROGRAM_ID);
+        
+        const userWsol = getATA(WSOL_MINT, devKeypair.publicKey, TOKEN_PROGRAM_ID); // WSOL uses Standard Token Program
+        const userToken = getATA(mint, devKeypair.publicKey, TOKEN_PROGRAM_2022_ID); // Pump Token uses Token2022
+
+        const tx = new Transaction();
+        addPriorityFee(tx);
+
+        // 1. Setup User Token Account (if not exists)
+        try {
+             const accountInfo = await connection.getAccountInfo(userToken);
+             if (!accountInfo) {
+                 tx.add(new TransactionInstruction({
+                    keys: [
+                        { pubkey: devKeypair.publicKey, isSigner: true, isWritable: true },
+                        { pubkey: userToken, isSigner: false, isWritable: true },
+                        { pubkey: devKeypair.publicKey, isSigner: false, isWritable: false },
+                        { pubkey: mint, isSigner: false, isWritable: false },
+                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                        { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false },
+                    ],
+                    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+                    data: Buffer.alloc(0)
+                 }));
+             }
+        } catch(e) {}
+
+        // 2. Setup WSOL Account (if not exists)
+        try {
+            const wsolInfo = await connection.getAccountInfo(userWsol);
+            if(!wsolInfo) {
+                 tx.add(new TransactionInstruction({
+                    keys: [
+                        { pubkey: devKeypair.publicKey, isSigner: true, isWritable: true },
+                        { pubkey: userWsol, isSigner: false, isWritable: true },
+                        { pubkey: devKeypair.publicKey, isSigner: false, isWritable: false },
+                        { pubkey: WSOL_MINT, isSigner: false, isWritable: false },
+                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+                    ],
+                    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+                    data: Buffer.alloc(0)
+                 }));
+            }
+        } catch(e) {}
+
+        // 3. Fund WSOL & Sync
+        tx.add(SystemProgram.transfer({
+            fromPubkey: devKeypair.publicKey,
+            toPubkey: userWsol,
+            lamports: amountIn
+        }));
+        
+        tx.add(new TransactionInstruction({
+            keys: [{ pubkey: userWsol, isSigner: false, isWritable: true }],
+            programId: TOKEN_PROGRAM_ID,
+            data: Buffer.from([17]) // SyncNative
+        }));
+
+        // 4. Swap Instruction
         const swapDiscriminator = Buffer.from([248, 198, 158, 145, 225, 117, 135, 200]); 
         const amountInBuf = new BN(amountIn).toArrayLike(Buffer, 'le', 8);
         const minAmountOutBuf = new BN(1).toArrayLike(Buffer, 'le', 8);
         const swapData = Buffer.concat([swapDiscriminator, amountInBuf, minAmountOutBuf]);
 
-        logger.info("AMM Swap not fully constructed (Missing Keys). Distributing fees directly.");
-        
-        const distTx = new Transaction();
-        addPriorityFee(distTx);
-        distTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 + amountIn })); 
-        distTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
-        
-        const sig = await sendTxWithRetry(distTx, [devKeypair]);
+        const swapKeys = [
+            { pubkey: ammGlobalConfig, isSigner: false, isWritable: false },
+            { pubkey: pool, isSigner: false, isWritable: true },
+            { pubkey: devKeypair.publicKey, isSigner: true, isWritable: true }, // User
+            { pubkey: userWsol, isSigner: false, isWritable: true }, // User Source (WSOL)
+            { pubkey: poolQuoteTokenAccount, isSigner: false, isWritable: true }, // Pool Source (WSOL Vault)
+            { pubkey: poolBaseTokenAccount, isSigner: false, isWritable: true }, // Pool Dest (Token Vault)
+            { pubkey: userToken, isSigner: false, isWritable: true }, // User Dest (Token)
+            { pubkey: poolAuthority, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // Token Program (for WSOL)
+            { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false }, // Token 2022 (for Pump Token)
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
+        ];
+
+        tx.add(new TransactionInstruction({
+            keys: swapKeys,
+            programId: PUMP_AMM_PROGRAM_ID,
+            data: swapData
+        }));
+
+        // 5. Close WSOL to recover rent
+        tx.add(new TransactionInstruction({
+            keys: [
+                { pubkey: userWsol, isSigner: false, isWritable: true },
+                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true }, // Destination
+                { pubkey: devKeypair.publicKey, isSigner: true, isWritable: false }  // Owner
+            ],
+            programId: TOKEN_PROGRAM_ID,
+            data: Buffer.from([9]) // CloseAccount
+        }));
+
+        // 6. Fee Distribution
+        tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 })); 
+        tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
+
+        tx.feePayer = devKeypair.publicKey;
+
+        const sig = await sendTxWithRetry(tx, [devKeypair]);
         await addPumpBought(0); 
         await recordClaim(totalSpendable); 
-        logPurchase('SUCCESS (MANUAL DIST)', { totalSpent: totalSpendable, signature: sig });
+        logPurchase('SUCCESS (AMM SWAP)', { totalSpent: totalSpendable, signature: sig });
         await resetAccumulatedFees(totalSpendable);
 
     } catch (e) {
