@@ -14,7 +14,7 @@
         .font-mono { font-family: 'JetBrains Mono', monospace; }
         #app-container { width: 100%; max-width: 1100px; background-color: #451a03; border: 6px solid #7c2d12; border-radius: 20px; overflow: hidden; box-shadow: 0 40px 80px rgba(0,0,0,0.95); position: relative; }
         .ticker-wrap { width: 100%; background-color: #2a1005; border-bottom: 2px solid #7c2d12; overflow: hidden; height: 40px; display: flex; align-items: center; position: relative; }
-        .ticker { display: flex; gap: 2rem; white-space: nowrap; animation: marquee 160s linear infinite; /* SLOWED DOWN: 40s / 0.25 = 160s */ font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #fb923c; }
+        .ticker { display: flex; gap: 2rem; white-space: nowrap; animation: marquee 80s linear infinite; /* Adjusted to 80s (50% slower than 40s) for smoother, visible scrolling */ font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #fb923c; }
         .ticker-item { display: inline-flex; align-items: center; gap: 6px; }
         .ticker-item a { color: #4ade80; text-decoration: underline; transition: color 0.2s; }
         .ticker-item a:hover { color: #ffffff; }

@@ -15,7 +15,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.25.7-DEXSCREENER-ALL";
+const VERSION = "v10.25.8-AIRDROP-READY";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -457,11 +457,22 @@ async function uploadMetadataToPinata(n, s, d, t, w, i) {
 app.get('/api/version', (req, res) => res.json({ version: VERSION }));
 app.get('/api/health', async (req, res) => { try { const stats = await getStats(); const launches = await getTotalLaunches(); const logs = await db.all('SELECT * FROM logs ORDER BY timestamp DESC LIMIT 50'); 
     const currentBalance = await connection.getBalance(devKeypair.publicKey);
+    
+    // FETCH PUMP TOKEN HOLDINGS
+    let pumpHoldings = 0;
+    try {
+        const tokenAccounts = await connection.getParsedTokenAccountsByOwner(devKeypair.publicKey, { mint: TARGET_PUMP_TOKEN });
+        if (tokenAccounts.value.length > 0) {
+            pumpHoldings = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount;
+        }
+    } catch (e) { }
+
     res.json({ 
         status: "online", 
         wallet: devKeypair.publicKey.toString(), 
         lifetimeFees: (stats.lifetimeFeesLamports / LAMPORTS_PER_SOL).toFixed(4), 
         totalPumpBought: (stats.totalPumpBoughtLamports / LAMPORTS_PER_SOL).toFixed(4), 
+        pumpHoldings: pumpHoldings,
         totalLaunches: launches, 
         recentLogs: logs.map(l => ({ ...JSON.parse(l.data), type: l.type, timestamp: l.timestamp })), 
         headerImageUrl: HEADER_IMAGE_URL,
