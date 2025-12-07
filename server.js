@@ -1,7 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram, sendAndConfirmTransaction, Keypair, TransactionInstruction, ComputeBudgetProgram, SYSVAR_RENT_PUBKEY } = require('@solana/web3.js');
+// ADDED VersionedTransaction to imports for Jupiter Support
+const { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, VersionedTransaction, SystemProgram, sendAndConfirmTransaction, Keypair, TransactionInstruction, ComputeBudgetProgram, SYSVAR_RENT_PUBKEY } = require('@solana/web3.js');
 const { Wallet, BN } = require('@coral-xyz/anchor');
 const bs58 = require('bs58');
 const fs = require('fs');
@@ -16,7 +17,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.13-MODERATION-RELAXED";
+const VERSION = "v10.26.16-LOGIC-FIX";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -75,6 +76,7 @@ const PUMP_AMM_PROGRAM_ID = safePublicKey("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52
 const TOKEN_PROGRAM_2022_ID = safePublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TOKEN_PROGRAM_2022_ID");
 // Note: TOKEN_PROGRAM_ID and ASSOCIATED_TOKEN_PROGRAM_ID are now imported from @solana/spl-token
 const WSOL_MINT = safePublicKey("So11111111111111111111111111111111111111112", "So11111111111111111111111111111111111111112", "WSOL_MINT");
+const USDC_MINT = safePublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "USDC_MINT");
 
 // Fee & Metaplex
 const FEE_PROGRAM_ID = safePublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ", "11111111111111111111111111111111", "FEE_PROGRAM_ID");
@@ -735,7 +737,7 @@ app.post('/api/prepare-metadata', async (req, res) => {
     try {
         const { name, ticker, description, twitter, website, image } = req.body;
         if (!name || name.length > 32) return res.status(400).json({ error: "Invalid Name" });
-        if (!ticker || ticker.length > 10) return res.status(400).json({ error: "Invalid Ticker" });
+        if (!ticker || ticker.length >= 12) return res.status(400).json({ error: "Invalid Ticker" });
         if (!image) return res.status(400).json({ error: "Image required" });
         const isSafe = await checkContentSafety(image);
         if (!isSafe) return res.status(400).json({ error: "Upload blocked: Illegal content detected." });
@@ -1270,38 +1272,90 @@ async function runPurchaseAndFees() {
     }
 }
 
-async function buyViaPumpAmm(amountIn, transfer9_5, transfer0_5, totalSpendable) {
-    logger.info("Starting Pump AMM Swap for $PUMP...");
+// NEW HELPER: Swap SOL to USDC via Jupiter Aggregator v6
+async function swapSolToUsdc(amountLamports) {
+    try {
+        const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${USDC_MINT.toString()}&amount=${amountLamports}&slippageBps=100`;
+        const quoteRes = await axios.get(quoteUrl);
+        const swapRes = await axios.post('https://quote-api.jup.ag/v6/swap', {
+            quoteResponse: quoteRes.data,
+            userPublicKey: devKeypair.publicKey.toString(),
+            wrapAndUnwrapSol: true
+        });
+        const swapTransactionBuf = Buffer.from(swapRes.data.swapTransaction, 'base64');
+        const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+        transaction.sign([devKeypair]);
+        const sig = await connection.sendTransaction(transaction, { skipPreflight: true, maxRetries: 2 });
+        await connection.confirmTransaction(sig, 'confirmed');
+        return sig;
+    } catch (e) {
+        logger.error("Jupiter Swap Error", { error: e.message });
+        return null;
+    }
+}
+
+async function buyViaPumpAmm(solAmountIn, transfer9_5, transfer0_5, totalSpendable) {
+    logger.info("Executing Fee Distribution and SOL -> USDC -> PUMP Buyback...");
+    
+    // 1. Distribute Fees (SOL)
+    // We send fees FIRST so the fee wallets receive native SOL (as expected), not USDC.
+    try {
+        const feeTx = new Transaction();
+        addPriorityFee(feeTx);
+        feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 })); 
+        feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
+        await sendTxWithRetry(feeTx, [devKeypair]);
+        logger.info("✅ Fees Distributed (SOL)");
+    } catch(e) {
+        logger.error("Fee Distribution Failed", { error: e.message });
+        return null; 
+    }
+
+    // 2. Swap SOL -> USDC
+    // Now we swap the REMAINING portion (the 90% allocated for buyback)
+    logger.info(`💱 Swapping ${solAmountIn / LAMPORTS_PER_SOL} SOL to USDC...`);
+    const jupSig = await swapSolToUsdc(solAmountIn);
+    if (!jupSig) return null;
+    logger.info("✅ USDC Acquired");
+
+    // 3. Buy PUMP with USDC
+    // Logic: Check how much USDC we actually have now and use that entire balance for the Pump buy.
     try {
         const mint = TARGET_PUMP_TOKEN;
         const [poolAuthority] = PublicKey.findProgramAddressSync([Buffer.from("pool-authority"), mint.toBuffer()], PUMP_AMM_PROGRAM_ID);
-        // Canonical pool index is 0
-        const [pool] = PublicKey.findProgramAddressSync([Buffer.from("pool"), new Uint8Array([0,0]), poolAuthority.toBuffer(), mint.toBuffer(), WSOL_MINT.toBuffer()], PUMP_AMM_PROGRAM_ID);
+        // Canonical pool index is 0, Quote is USDC
+        const [pool] = PublicKey.findProgramAddressSync([Buffer.from("pool"), new Uint8Array([0,0]), poolAuthority.toBuffer(), mint.toBuffer(), USDC_MINT.toBuffer()], PUMP_AMM_PROGRAM_ID);
         
+        // Check USDC Balance
+        const userUsdc = await getAssociatedTokenAddress(USDC_MINT, devKeypair.publicKey);
+        const bal = await connection.getTokenAccountBalance(userUsdc);
+        const usdcAmount = new BN(bal.value.amount);
+        
+        if (usdcAmount.eqn(0)) {
+            logger.error("No USDC found after swap.");
+            return null;
+        }
+
+        logger.info(`💎 Buying PUMP with ${bal.value.uiAmount} USDC...`);
+
         // Dynamically fetch Pool to get coin_creator
         const poolInfo = await connection.getAccountInfo(pool);
         if (!poolInfo) throw new Error("Pump Pool Not Found");
         
-        // Decode coin_creator from Pool data (Offset 211 based on IDL/Struct)
-        // Discriminator(8) + Bump(1) + Index(2) + Creator(32) + Base(32) + Quote(32) + LP(32) + PoolBase(32) + PoolQuote(32) + Supply(8) = 211 bytes
+        // Decode coin_creator from Pool data
         const coinCreator = new PublicKey(poolInfo.data.subarray(211, 243));
         const [coinCreatorVaultAuth] = PublicKey.findProgramAddressSync([Buffer.from("creator_vault"), coinCreator.toBuffer()], PUMP_AMM_PROGRAM_ID);
-        const coinCreatorVaultAta = await getAssociatedTokenAddress(WSOL_MINT, coinCreatorVaultAuth, true);
+        const coinCreatorVaultAta = await getAssociatedTokenAddress(USDC_MINT, coinCreatorVaultAuth, true);
 
         const [ammGlobalConfig] = PublicKey.findProgramAddressSync([Buffer.from("global_config")], PUMP_AMM_PROGRAM_ID);
-        const [feeConfig] = PublicKey.findProgramAddressSync([Buffer.from("fee_config"), FEE_PROGRAM_ID.toBuffer()], PUMP_PROGRAM_ID); // Fee program config? Actually usually derived from Fee Program ID in Pump logic. IDL says seeds=["fee_config", feeProgram]
+        const [feeConfig] = PublicKey.findProgramAddressSync([Buffer.from("fee_config"), FEE_PROGRAM_ID.toBuffer()], PUMP_PROGRAM_ID); 
         
-        // For Protocol Fee Recipient: Default to the one in docs/global config or read from GlobalConfig
-        const protocolFeeRecipient = new PublicKey("62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV"); // From PUMP_SWAP_README
-        const protocolFeeRecipientTokenAccount = await getAssociatedTokenAddress(WSOL_MINT, protocolFeeRecipient, true);
+        const protocolFeeRecipient = new PublicKey("62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV"); 
+        const protocolFeeRecipientTokenAccount = await getAssociatedTokenAddress(USDC_MINT, protocolFeeRecipient, true);
 
-        const userWsol = await getAssociatedTokenAddress(WSOL_MINT, devKeypair.publicKey);
-        const userToken = await getAssociatedTokenAddress(mint, devKeypair.publicKey, false, TOKEN_PROGRAM_2022_ID); // Pump uses Token2022? Wait, legacy tokens are on standard. Pump is legacy.
-        // Let's assume Legacy for PUMP token itself unless specified.
         const userTokenLegacy = await getAssociatedTokenAddress(mint, devKeypair.publicKey);
-
-        const poolBaseTokenAccount = getATA(mint, pool, TOKEN_PROGRAM_ID); // Using Standard
-        const poolQuoteTokenAccount = getATA(WSOL_MINT, pool, TOKEN_PROGRAM_ID);
+        const poolBaseTokenAccount = getATA(mint, pool, TOKEN_PROGRAM_ID); 
+        const poolQuoteTokenAccount = getATA(USDC_MINT, pool, TOKEN_PROGRAM_ID);
 
         const tx = new Transaction();
         addPriorityFee(tx);
@@ -1311,17 +1365,11 @@ async function buyViaPumpAmm(amountIn, transfer9_5, transfer0_5, totalSpendable)
         if (!tokenAccountInfo) {
             tx.add(createAssociatedTokenAccountInstruction(devKeypair.publicKey, userTokenLegacy, devKeypair.publicKey, mint));
         }
-
-        // 2. Setup WSOL & Fund it
-        try { await getAccount(connection, userWsol); } catch (e) {
-            tx.add(createAssociatedTokenAccountInstruction(devKeypair.publicKey, userWsol, devKeypair.publicKey, WSOL_MINT));
-        }
-        tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: userWsol, lamports: amountIn }));
-        tx.add({ keys: [{ pubkey: userWsol, isSigner: false, isWritable: true }], programId: TOKEN_PROGRAM_ID, data: Buffer.from([17]) }); // SyncNative
+        // USDC account must exist because we just swapped into it.
 
         // 3. Swap Instruction
-        const swapDiscriminator = Buffer.from([198, 46, 21, 82, 180, 217, 232, 112]); // buy_exact_quote_in (We are spending SOL)
-        const amountInBuf = new BN(amountIn).toArrayLike(Buffer, 'le', 8);
+        const swapDiscriminator = Buffer.from([198, 46, 21, 82, 180, 217, 232, 112]); // buy_exact_quote_in (We are spending USDC)
+        const amountInBuf = usdcAmount.toArrayLike(Buffer, 'le', 8); // USE USDC BALANCE HERE
         const minAmountOutBuf = new BN(1).toArrayLike(Buffer, 'le', 8);
         const trackVolumeBuf = Buffer.from([0]);
         const swapData = Buffer.concat([swapDiscriminator, amountInBuf, minAmountOutBuf, trackVolumeBuf]);
@@ -1335,9 +1383,9 @@ async function buyViaPumpAmm(amountIn, transfer9_5, transfer0_5, totalSpendable)
             { pubkey: devKeypair.publicKey, isSigner: true, isWritable: true },
             { pubkey: ammGlobalConfig, isSigner: false, isWritable: false },
             { pubkey: mint, isSigner: false, isWritable: false },
-            { pubkey: WSOL_MINT, isSigner: false, isWritable: false },
+            { pubkey: USDC_MINT, isSigner: false, isWritable: false },
             { pubkey: userTokenLegacy, isSigner: false, isWritable: true }, // Base Dest
-            { pubkey: userWsol, isSigner: false, isWritable: true }, // Quote Source
+            { pubkey: userUsdc, isSigner: false, isWritable: true }, // Quote Source (USDC)
             { pubkey: poolBaseTokenAccount, isSigner: false, isWritable: true },
             { pubkey: poolQuoteTokenAccount, isSigner: false, isWritable: true },
             { pubkey: protocolFeeRecipient, isSigner: false, isWritable: false },
@@ -1362,19 +1410,11 @@ async function buyViaPumpAmm(amountIn, transfer9_5, transfer0_5, totalSpendable)
             data: swapData
         }));
 
-        // 4. Close WSOL
-        tx.add(createCloseAccountInstruction(userWsol, devKeypair.publicKey, devKeypair.publicKey));
-
-        // 5. Fee Distribution
-        tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 })); 
-        tx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
-
         tx.feePayer = devKeypair.publicKey;
 
         const sig = await sendTxWithRetry(tx, [devKeypair]);
-        await addPumpBought(0); // Tracking only, can update to actual bought amount if needed
+        await addPumpBought(0); 
         await recordClaim(totalSpendable); 
-        // Note: Buyback log details are handled by runPurchaseAndFees wrapper
         return sig;
 
     } catch (e) {
