@@ -1122,7 +1122,9 @@ async function processAirdrop() {
 
         logger.info(` distributing ${amountToDistribute} PUMP to ${userPoints.length} users (Total Points: ${globalTotalPoints})`);
 
-        const devPumpAta = await getAssociatedTokenAddress(TARGET_PUMP_TOKEN, devKeypair.publicKey);
+        // FIX: Ensure the source ATA is derived using the correct Token Program ID (Token-2022)
+        // If TARGET_PUMP_TOKEN is Token-2022, default getAssociatedTokenAddress will return wrong address
+        const devPumpAta = await getAssociatedTokenAddress(TARGET_PUMP_TOKEN, devKeypair.publicKey, false, TOKEN_PROGRAM_2022_ID);
 
         // 4. Build Transactions
         const BATCH_SIZE = 8; 
@@ -1164,15 +1166,18 @@ async function sendAirdropBatch(batch, sourceAta) {
     const tx = new Transaction();
     addPriorityFee(tx);
 
-    const atas = await Promise.all(batch.map(i => getAssociatedTokenAddress(TARGET_PUMP_TOKEN, i.user)));
+    // FIX: Derive recipient ATAs using Token-2022 Program ID
+    const atas = await Promise.all(batch.map(i => getAssociatedTokenAddress(TARGET_PUMP_TOKEN, i.user, false, TOKEN_PROGRAM_2022_ID)));
     const infos = await connection.getMultipleAccountsInfo(atas);
     
     batch.forEach((item, idx) => {
         const ata = atas[idx];
         if (!infos[idx]) {
-            tx.add(createAssociatedTokenAccountInstruction(devKeypair.publicKey, ata, item.user, TARGET_PUMP_TOKEN));
+            // FIX: Pass TOKEN_PROGRAM_2022_ID to creating instruction
+            tx.add(createAssociatedTokenAccountInstruction(devKeypair.publicKey, ata, item.user, TARGET_PUMP_TOKEN, TOKEN_PROGRAM_2022_ID));
         }
-        tx.add(createTransferInstruction(sourceAta, ata, devKeypair.publicKey, BigInt(item.amount.toString())));
+        // FIX: Pass TOKEN_PROGRAM_2022_ID to transfer instruction
+        tx.add(createTransferInstruction(sourceAta, ata, devKeypair.publicKey, BigInt(item.amount.toString()), [], TOKEN_PROGRAM_2022_ID));
     });
 
     try {
@@ -1347,7 +1352,9 @@ async function buyViaPumpAmm(solAmountIn, transfer9_5, transfer0_5, totalSpendab
         }
 
         // NEW: Get PUMP Balance BEFORE swap
-        const userTokenLegacy = await getAssociatedTokenAddress(mint, devKeypair.publicKey);
+        // FIX: Ensure legacy tracking uses correct program ID if necessary, though this variable name implies legacy
+        // If TARGET_PUMP_TOKEN is Token-2022, we should use that ID here too
+        const userTokenLegacy = await getAssociatedTokenAddress(mint, devKeypair.publicKey, false, TOKEN_PROGRAM_2022_ID);
         let prePumpBal = 0;
         try {
             const pre = await connection.getTokenAccountBalance(userTokenLegacy);
@@ -1370,7 +1377,8 @@ async function buyViaPumpAmm(solAmountIn, transfer9_5, transfer0_5, totalSpendab
         const protocolFeeRecipient = new PublicKey("62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV"); 
         const protocolFeeRecipientTokenAccount = await getAssociatedTokenAddress(USDC_MINT, protocolFeeRecipient, true);
 
-        const poolBaseTokenAccount = getATA(mint, pool, TOKEN_PROGRAM_ID); 
+        // FIX: Ensure Pool Base Token Account uses Token-2022 if mint is Token-2022
+        const poolBaseTokenAccount = getATA(mint, pool, TOKEN_PROGRAM_2022_ID); 
         const poolQuoteTokenAccount = getATA(USDC_MINT, pool, TOKEN_PROGRAM_ID);
 
         const tx = new Transaction();
@@ -1379,7 +1387,8 @@ async function buyViaPumpAmm(solAmountIn, transfer9_5, transfer0_5, totalSpendab
         // 1. Setup User Token Account (if not exists)
         const tokenAccountInfo = await connection.getAccountInfo(userTokenLegacy);
         if (!tokenAccountInfo) {
-            tx.add(createAssociatedTokenAccountInstruction(devKeypair.publicKey, userTokenLegacy, devKeypair.publicKey, mint));
+            // FIX: Pass TOKEN_PROGRAM_2022_ID
+            tx.add(createAssociatedTokenAccountInstruction(devKeypair.publicKey, userTokenLegacy, devKeypair.publicKey, mint, TOKEN_PROGRAM_2022_ID));
         }
 
         // 3. Swap Instruction
@@ -1405,7 +1414,7 @@ async function buyViaPumpAmm(solAmountIn, transfer9_5, transfer0_5, totalSpendab
             { pubkey: poolQuoteTokenAccount, isSigner: false, isWritable: true },
             { pubkey: protocolFeeRecipient, isSigner: false, isWritable: false },
             { pubkey: protocolFeeRecipientTokenAccount, isSigner: false, isWritable: true },
-            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // Base Prog
+            { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false }, // Base Prog (FIXED: Was TOKEN_PROGRAM_ID)
             { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // Quote Prog
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
             { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
