@@ -16,7 +16,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.4-SKIP-LP-POINTS";
+const VERSION = "v10.26.6-BONDING-CURVE-EXCLUSION";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -27,32 +27,6 @@ const DEPLOYMENT_FEE_SOL = 0.02;
 const HOLDER_UPDATE_INTERVAL = process.env.HOLDER_UPDATE_INTERVAL ? parseInt(process.env.HOLDER_UPDATE_INTERVAL) : 120000;
 const METADATA_UPDATE_INTERVAL = process.env.METADATA_UPDATE_INTERVAL ? parseInt(process.env.METADATA_UPDATE_INTERVAL) : 60000; 
 const ASDF_UPDATE_INTERVAL = 300000; // 5 minutes
-
-// AUTH STRATEGY
-const PINATA_JWT = process.env.PINATA_JWT ? process.env.PINATA_JWT.trim() : null; 
-const PINATA_API_KEY_LEGACY = process.env.API_KEY ? process.env.API_KEY.trim() : null;
-const PINATA_SECRET_KEY_LEGACY = process.env.SECRET_KEY ? process.env.SECRET_KEY.trim() : null;
-
-const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY; 
-const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
-
-const DISK_ROOT = '/var/data'; 
-const DEBUG_LOG_FILE = path.join(DISK_ROOT, 'server_debug.log');
-if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./data'); }
-
-const logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
-function log(level, message, meta = {}) {
-    const timestamp = new Date().toISOString();
-    logStream.write(`[${timestamp}] [${level.toUpperCase()}] ${message} ${JSON.stringify(meta)}\n`);
-    const consoleMethod = level === 'error' ? console.error : console.log;
-    consoleMethod(`[${level.toUpperCase()}] ${message}`, meta);
-}
-const logger = { info: (m, d) => log('info', m, d), warn: (m, d) => log('warn', m, d), error: (m, d) => log('error', m, d) };
-
-// --- RPC ---
-let SOLANA_CONNECTION_URL = "https://api.mainnet-beta.solana.com"; 
-if (HELIUS_API_KEY) { SOLANA_CONNECTION_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`; logger.info("✅ RPC: Helius"); }
 
 // --- CONSTANTS ---
 const safePublicKey = (val, f, n) => { try { return new PublicKey(val); } catch (e) { logger.warn(`⚠️ Invalid ${n}`); return new PublicKey(f); } };
@@ -65,7 +39,6 @@ const ASDF_TOKEN_MINT = safePublicKey("9zB5wRarXMj86MymwLumSKA1Dx35zPqqKfcZtK1Sp
 const WALLET_9_5 = safePublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z", "11111111111111111111111111111111", "WALLET_9_5"); 
 const WALLET_0_5 = safePublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g", "11111111111111111111111111111111", "WALLET_0_5"); 
 const PUMP_LIQUIDITY_WALLET = "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa"; // Wallet that holds tokens locked in the bonding curve
-const FEE_THRESHOLD_SOL = 0.20;
 
 // Program IDs
 const PUMP_PROGRAM_ID = safePublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", "11111111111111111111111111111111", "PUMP_PROGRAM_ID");
@@ -93,11 +66,24 @@ let isAirdropping = false;
 let globalTotalPoints = 0; // Tracks total score of all users for airdrop calculation
 
 // --- DB & Directories ---
+const DISK_ROOT = '/var/data'; 
+const DEBUG_LOG_FILE = path.join(DISK_ROOT, 'server_debug.log');
+if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./data'); }
 const DATA_DIR = path.join(DISK_ROOT, 'tokens');
 const DB_PATH = fs.existsSync(DISK_ROOT) ? path.join(DISK_ROOT, 'launcher.db') : './data/launcher.db';
 const ACTIVE_DATA_DIR = fs.existsSync(DISK_ROOT) ? DATA_DIR : './data/tokens';
 const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); };
 ensureDir(ACTIVE_DATA_DIR);
+
+const logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
+function log(level, message, meta = {}) {
+    const timestamp = new Date().toISOString();
+    logStream.write(`[${timestamp}] [${level.toUpperCase()}] ${message} ${JSON.stringify(meta)}\n`);
+    const consoleMethod = level === 'error' ? console.error : console.log;
+    consoleMethod(`[${level.toUpperCase()}] ${message}`, meta);
+}
+const logger = { info: (m, d) => log('info', m, d), warn: (m, d) => log('warn', m, d), error: (m, d) => log('error', m, d) };
+
 
 let deployQueue;
 let redisConnection;
@@ -571,6 +557,7 @@ app.get('/api/check-holder', async (req, res) => {
         const isAsdfTop50 = asdfTop50Holders.has(userPubkey);
 
         // 4. Calculate Points
+        // LP wallets and Dev wallet are excluded prior to this point.
         const multiplier = isAsdfTop50 ? 2 : 1;
         const points = heldPositionsCount * multiplier;
 
@@ -678,8 +665,13 @@ setInterval(async () => {
             try { 
                 if (!token.mint) continue;
                 
+                const tokenMintPublicKey = new PublicKey(token.mint);
+                // Calculate Bonding Curve PDA owner and its associated token account (ATA)
+                const [bondingCurvePDA] = PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), tokenMintPublicKey.toBuffer()], PUMP_PROGRAM_ID);
+                const associatedBondingCurveATA = await getAssociatedTokenAddress(tokenMintPublicKey, bondingCurvePDA, true);
+                
                 // 1. Fetch data from blockchain FIRST (In Memory)
-                const accounts = await connection.getTokenLargestAccounts(new PublicKey(token.mint)); 
+                const accounts = await connection.getTokenLargestAccounts(tokenMintPublicKey); 
                 const holdersToInsert = [];
 
                 if (accounts.value) { 
@@ -689,8 +681,10 @@ setInterval(async () => {
                             const info = await connection.getParsedAccountInfo(acc.address); 
                             if (info.value?.data?.parsed) { 
                                 const owner = info.value.data.parsed.info.owner; 
-                                // EXCLUDE LP WALLET HERE DURING SCRAPING
-                                if (owner !== PUMP_LIQUIDITY_WALLET) { 
+                                
+                                // EXCLUDE 1: PUMP LIQUIDITY WALLET (Constant)
+                                // EXCLUDE 2: BONDING CURVE ATA OWNER (Dynamic per token)
+                                if (owner !== PUMP_LIQUIDITY_WALLET && acc.address.toString() !== associatedBondingCurveATA.toString()) { 
                                     holdersToInsert.push({ mint: token.mint, owner: owner }); 
                                 } 
                             } 
@@ -705,7 +699,7 @@ setInterval(async () => {
                         // Clear old holders for this specific mint
                         await db.run('DELETE FROM token_holders WHERE mint = ?', token.mint);
                         
-                        // Insert new holders (Batching would be better but simple loop works for 20 items in a transaction)
+                        // Insert new holders 
                         let rank = 1;
                         for (const h of holdersToInsert) {
                             await db.run(`INSERT OR REPLACE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)`, 
@@ -734,8 +728,11 @@ setInterval(async () => {
             let tempTotalPoints = 0;
             for (const row of rows) {
                 const isTop50 = asdfTop50Holders.has(row.holderPubkey);
-                const points = row.positionCount * (isTop50 ? 2 : 1);
-                tempTotalPoints += points;
+                // EXCLUDE DEV WALLET FROM ACCRUING POINTS FOR ITS RESERVES
+                if (row.holderPubkey !== devKeypair.publicKey.toString()) {
+                    const points = row.positionCount * (isTop50 ? 2 : 1);
+                    tempTotalPoints += points;
+                }
             }
             globalTotalPoints = tempTotalPoints;
             logger.info(`Updated Global Points: ${globalTotalPoints}`);
@@ -951,7 +948,12 @@ async function processAirdrop() {
 
         for (const row of rows) {
             const isTop50 = asdfTop50Holders.has(row.holderPubkey);
-            // NOTE: LP holders are already filtered out by the inner join query
+            
+            // EXCLUDE DEV WALLET FROM AIRDROP POINTS
+            if (row.holderPubkey === devKeypair.publicKey.toString()) {
+                continue; 
+            }
+            
             const points = row.positionCount * (isTop50 ? 2 : 1);
             if (points > 0) {
                 userPoints.push({ pubkey: new PublicKey(row.holderPubkey), points });
@@ -1052,8 +1054,6 @@ async function runPurchaseAndFees() {
              
              // UPDATE CREATOR FEE STATS
              try {
-                // NOTE: This uses totalPendingFees which may be slightly inaccurate due to slippage/gas,
-                // but it's the best proxy for the gross amount of value generated by the fees.
                 await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [totalPendingFees.toNumber(), 'lifetimeCreatorFeesLamports']);
              } catch(e) {}
 
@@ -1119,7 +1119,6 @@ async function buyViaPumpAmm(amountIn, transfer9_5, transfer0_5, totalSpendable)
 
         const userWsol = await getAssociatedTokenAddress(WSOL_MINT, devKeypair.publicKey);
         const userToken = await getAssociatedTokenAddress(mint, devKeypair.publicKey, false, TOKEN_PROGRAM_2022_ID); // Pump uses Token2022? Wait, legacy tokens are on standard. Pump is legacy.
-        // Wait, PUMP token is likely Legacy SPL.
         // Let's assume Legacy for PUMP token itself unless specified.
         const userTokenLegacy = await getAssociatedTokenAddress(mint, devKeypair.publicKey);
 
