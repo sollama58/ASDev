@@ -16,7 +16,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.2-SAFE-BUFFER";
+const VERSION = "v10.26.3-LIFETIME-STATS";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -138,6 +138,7 @@ async function initDB() {
         CREATE TABLE IF NOT EXISTS airdrops (id INTEGER PRIMARY KEY AUTOINCREMENT, amount REAL, recipients INTEGER, totalPoints REAL, signatures TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('accumulatedFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeFeesLamports', 0);
+        INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeCreatorFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('totalPumpBoughtLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lastClaimTimestamp', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lastClaimAmountLamports', 0);
@@ -147,6 +148,9 @@ async function initDB() {
     try { await db.exec('ALTER TABLE tokens ADD COLUMN metadataUri TEXT'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN totalPoints REAL'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN signatures TEXT'); } catch(e) {}
+    
+    // Ensure new stat key exists for existing DBs
+    try { await db.run("INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeCreatorFeesLamports', 0)"); } catch(e) {}
 
     logger.info(`DB Initialized at ${DB_PATH}`);
 }
@@ -509,10 +513,13 @@ app.get('/api/health', async (req, res) => {
             };
         });
 
+        // CALCULATE LIFETIME FEES (Deployment Fees + Creator Trading Fees)
+        const totalFeesLamports = (cachedHealth.stats.lifetimeFeesLamports || 0) + (cachedHealth.stats.lifetimeCreatorFeesLamports || 0);
+
         res.json({ 
             status: "online", 
             wallet: devKeypair.publicKey.toString(), 
-            lifetimeFees: (cachedHealth.stats.lifetimeFeesLamports / LAMPORTS_PER_SOL).toFixed(4), 
+            lifetimeFees: (totalFeesLamports / LAMPORTS_PER_SOL).toFixed(4), // Consolidated Metric
             totalPumpBought: (cachedHealth.stats.totalPumpBoughtLamports / LAMPORTS_PER_SOL).toFixed(4), 
             pumpHoldings: cachedHealth.pumpHoldings,
             totalPoints: globalTotalPoints, 
@@ -1038,6 +1045,12 @@ async function runPurchaseAndFees() {
         if (totalPendingFees.gte(threshold)) {
              logger.info(`CLAIM TRIGGERED...`);
              await claimCreatorFees();
+             
+             // UPDATE CREATOR FEE STATS
+             try {
+                await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [totalPendingFees.toNumber(), 'lifetimeCreatorFeesLamports']);
+             } catch(e) {}
+
              await new Promise(r => setTimeout(r, 2000));
         }
 
