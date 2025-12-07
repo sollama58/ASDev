@@ -28,6 +28,33 @@ const HOLDER_UPDATE_INTERVAL = process.env.HOLDER_UPDATE_INTERVAL ? parseInt(pro
 const METADATA_UPDATE_INTERVAL = process.env.METADATA_UPDATE_INTERVAL ? parseInt(process.env.METADATA_UPDATE_INTERVAL) : 60000; 
 const ASDF_UPDATE_INTERVAL = 300000; // 5 minutes
 
+// AUTH STRATEGY
+const PINATA_JWT = process.env.PINATA_JWT ? process.env.PINATA_JWT.trim() : null; 
+const PINATA_API_KEY_LEGACY = process.env.API_KEY ? process.env.API_KEY.trim() : null;
+const PINATA_SECRET_KEY_LEGACY = process.env.SECRET_KEY ? process.env.SECRET_KEY.trim() : null;
+
+const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY; 
+const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
+
+const DISK_ROOT = '/var/data'; 
+const DEBUG_LOG_FILE = path.join(DISK_ROOT, 'server_debug.log');
+if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./data'); }
+
+const logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
+function log(level, message, meta = {}) {
+    const timestamp = new Date().toISOString();
+    logStream.write(`[${timestamp}] [${level.toUpperCase()}] ${message} ${JSON.stringify(meta)}\n`);
+    const consoleMethod = level === 'error' ? console.error : console.log;
+    consoleMethod(`[${level.toUpperCase()}] ${message}`, meta);
+}
+const logger = { info: (m, d) => log('info', m, d), warn: (m, d) => log('warn', m, d), error: (m, d) => log('error', m, d) };
+
+// --- RPC ---
+let SOLANA_CONNECTION_URL = "https://api.mainnet-beta.solana.com"; 
+if (HELIUS_API_KEY) { SOLANA_CONNECTION_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`; logger.info("✅ RPC: Helius"); }
+
+
 // --- CONSTANTS ---
 const safePublicKey = (val, f, n) => { try { return new PublicKey(val); } catch (e) { logger.warn(`⚠️ Invalid ${n}`); return new PublicKey(f); } };
 
