@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.18.0</title>
+    <title>ASDev Launcher v10.20.0</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -57,7 +57,7 @@
         .leader-table th { text-align: left; padding: 10px; border-bottom: 2px solid #ea580c; color: #ea580c; text-transform: uppercase; font-size: 11px; }
         .leader-table td { padding: 12px 10px; border-bottom: 1px solid rgba(234, 88, 12, 0.2); vertical-align: middle; }
         .leader-table tr:hover { background: rgba(234, 88, 12, 0.1); }
-        .token-img-sm { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; display: inline-block; vertical-align: middle; margin-right: 8px; border: 1px solid #7c2d12; background-color: #000; }
+        .token-img-sm { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; display: inline-block; vertical-align: middle; margin-right: 8px; border: 1px solid #7c2d12; background-color: #2a1005; min-width: 32px; min-height: 32px; }
         .metric-card { background: rgba(0,0,0,0.2); border: 1px solid #ea580c; padding: 20px; border-radius: 8px; text-align: center; }
         .metric-value { font-size: 24px; font-weight: bold; color: white; font-family: 'JetBrains Mono'; margin-top: 5px; }
         .metric-label { font-size: 12px; color: #fdba74; text-transform: uppercase; letter-spacing: 1px; }
@@ -185,7 +185,7 @@
 </div></div>
 
 <script>
-    const FRONTEND_VERSION = "v10.18.0";
+    const FRONTEND_VERSION = "v10.20.0";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02; 
@@ -234,14 +234,11 @@
                 let displayPrice = item.price;
                 let displayVol = parseFloat(item.volume);
                 
-                // [CHANGED] Always point trade link to PumpFun
                 let tradeLink = `${PUMPFUN_URL_BASE}${item.mint}`;
-                let badge = `<span class="badge-bonding" title="Bonding in Progress">PRE-BOND</span>`; // [CHANGED] Bonding -> Pre-Bond
+                let badge = `<span class="badge-bonding" title="Bonding in Progress">PRE-BOND</span>`; 
 
                 if (item.complete) {
                     badge = `<span class="badge-bonded" title="Bonding Curve Complete">BONDED</span>`;
-                    // [CHANGED] Even if bonded, we still link to pump.fun per request (or you can revert this to raydium if desired later)
-                    // The request says "keep the link to Pumpfun regardless if its bonded or pre-bond"
                     tradeLink = `${PUMPFUN_URL_BASE}${item.mint}`; 
                     try {
                         const dexRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${item.mint}`);
@@ -254,11 +251,29 @@
                     } catch (e) { console.error("DEX fetch failed", e); }
                 }
 
+                // [CHANGED] FETCH METADATA FOR IMAGE IF URI EXISTS
+                let imgSrc = item.image;
+                // If stored image is missing but we have URI, fetch it (Client-Side Resolution)
+                if ((!imgSrc || imgSrc.trim() === '') && item.metadataUri) {
+                    try {
+                        const metaRes = await fetch(item.metadataUri);
+                        const metaJson = await metaRes.json();
+                        if (metaJson.image) {
+                            imgSrc = metaJson.image;
+                        }
+                    } catch (e) { console.error("Metadata fetch failed", e); }
+                }
+                
+                // Fallback
+                if (!imgSrc || imgSrc.trim() === '') {
+                    imgSrc = 'https://placehold.co/32x32/333/fff?text=?'; 
+                }
+
                 return `
                 <tr>
                     <td class="text-orange-500 font-bold">${index + 1}</td>
                     <td>
-                        <img src="${item.image || 'https://placehold.co/32x32/333/fff?text=?'}" onerror="this.src='https://placehold.co/32x32/333/fff?text=?'" class="token-img-sm" alt="icon">
+                        <img src="${imgSrc}" onerror="this.src='https://placehold.co/32x32/333/fff?text=?'" class="token-img-sm" alt="icon">
                         <span class="text-white font-bold">${item.ticker}</span>
                         ${item.isUserTopHolder ? '<span class="holder-check" title="You are a Top 100 Holder">✅</span>' : ''}
                         ${badge}

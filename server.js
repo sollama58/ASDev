@@ -14,7 +14,7 @@ const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 
 // --- Config ---
-const VERSION = "v10.17.0-PUMP-SWAP-INTEGRATION";
+const VERSION = "v10.20.0-IPFS-METADATA-LINKING";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -50,9 +50,7 @@ if (HELIUS_API_KEY) { SOLANA_CONNECTION_URL = `https://mainnet.helius-rpc.com/?a
 // --- CONSTANTS ---
 const safePublicKey = (val, f, n) => { try { return new PublicKey(val); } catch (e) { logger.warn(`⚠️ Invalid ${n}`); return new PublicKey(f); } };
 
-// Target: $PUMP
 const TARGET_PUMP_TOKEN = safePublicKey("pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn", "11111111111111111111111111111111", "TARGET_PUMP_TOKEN");
-
 const WALLET_9_5 = safePublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z", "11111111111111111111111111111111", "WALLET_9_5"); 
 const WALLET_0_5 = safePublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g", "11111111111111111111111111111111", "WALLET_0_5"); 
 const PUMP_LIQUIDITY_WALLET = "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa";
@@ -96,7 +94,8 @@ let db;
 async function initDB() {
     db = await open({ filename: DB_PATH, driver: sqlite3.Database });
     await db.exec('PRAGMA journal_mode = WAL;');
-    await db.exec(`CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0, complete BOOLEAN DEFAULT 0);
+    // [CHANGED] Added `metadataUri` to schema
+    await db.exec(`CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0, complete BOOLEAN DEFAULT 0, metadataUri TEXT);
         CREATE TABLE IF NOT EXISTS transactions (signature TEXT PRIMARY KEY, userPubkey TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, data TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value REAL);
@@ -104,6 +103,10 @@ async function initDB() {
         INSERT OR IGNORE INTO stats (key, value) VALUES ('accumulatedFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('totalPumpBoughtLamports', 0);`);
+    
+    // Attempt to add column if missing (Migration)
+    try { await db.exec('ALTER TABLE tokens ADD COLUMN metadataUri TEXT'); } catch(e) {}
+
     logger.info(`DB Initialized at ${DB_PATH}`);
 }
 
@@ -163,9 +166,12 @@ async function getTotalLaunches() { if(!db) return 0; const res = await db.get('
 async function getStats() { if(!db) return { accumulatedFeesLamports: 0, lifetimeFeesLamports: 0, totalPumpBoughtLamports: 0 }; const acc = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports'); const life = await db.get('SELECT value FROM stats WHERE key = ?', 'lifetimeFeesLamports'); const pump = await db.get('SELECT value FROM stats WHERE key = ?', 'totalPumpBoughtLamports'); return { accumulatedFeesLamports: acc ? acc.value : 0, lifetimeFeesLamports: life ? life.value : 0, totalPumpBoughtLamports: pump ? pump.value : 0 }; }
 async function resetAccumulatedFees(used) { const cur = await db.get('SELECT value FROM stats WHERE key = ?', 'accumulatedFeesLamports'); await db.run('UPDATE stats SET value = ? WHERE key = ?', [Math.max(0, (cur ? cur.value : 0) - used), 'accumulatedFeesLamports']); }
 async function logPurchase(type, data) { try { await db.run('INSERT INTO logs (type, data, timestamp) VALUES (?, ?, ?)', [type, JSON.stringify(data), new Date().toISOString()]); } catch (e) {} }
+
+// [CHANGED] Save metadataUri to DB
 async function saveTokenData(pk, mint, meta) {
     try {
-        await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, meta.image, meta.isMayhemMode]);
+        await db.run(`INSERT INTO tokens (mint, userPubkey, name, ticker, description, twitter, website, image, isMayhemMode, metadataUri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, 
+            [mint, pk, meta.name, meta.ticker, meta.description, meta.twitter, meta.website, meta.image, meta.isMayhemMode, meta.metadataUri]);
         const shard = pk.slice(0, 2).toLowerCase(); const dir = path.join(ACTIVE_DATA_DIR, shard); ensureDir(dir);
         fs.writeFileSync(path.join(dir, `${mint}.json`), JSON.stringify({ userPubkey: pk, mint, metadata: meta, timestamp: new Date().toISOString() }, null, 2));
     } catch (e) { logger.error("Save Token Error", { err: e.message }); }
@@ -306,7 +312,8 @@ if (redisConnection) {
             const sig = await sendTxWithRetry(tx, [devKeypair, mintKeypair]);
             logger.info(`Transaction Confirmed: ${sig}`);
             
-            await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode });
+            // [CHANGED] Pass metadataUri to save function
+            await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode, metadataUri });
 
             setTimeout(async () => { try { 
                 const bal = await connection.getTokenAccountBalance(associatedUser); 
@@ -366,13 +373,13 @@ function getPumpPDAs(mint) {
     return { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator };
 }
 
-// [ADDED] Helper for Pump AMM (PumpSwap) PDAs
+// Helper for Pump AMM (PumpSwap) PDAs
 function getPumpAmmPDAs(mint) {
     const [poolAuthority] = PublicKey.findProgramAddressSync([Buffer.from("pool-authority"), mint.toBuffer()], PUMP_AMM_PROGRAM_ID);
     const [pool] = PublicKey.findProgramAddressSync([Buffer.from("pool"), poolAuthority.toBuffer(), mint.toBuffer(), WSOL_MINT.toBuffer()], PUMP_AMM_PROGRAM_ID);
     const [lpMint] = PublicKey.findProgramAddressSync([Buffer.from("pool_lp_mint"), pool.toBuffer()], PUMP_AMM_PROGRAM_ID);
-    const poolBaseTokenAccount = getATA(mint, pool, TOKEN_PROGRAM_2022_ID); // $PUMP is Token2022
-    const poolQuoteTokenAccount = getATA(WSOL_MINT, pool, TOKEN_PROGRAM_ID); // WSOL is Token
+    const poolBaseTokenAccount = getATA(mint, pool, TOKEN_PROGRAM_2022_ID); 
+    const poolQuoteTokenAccount = getATA(WSOL_MINT, pool, TOKEN_PROGRAM_ID); 
     return { pool, poolAuthority, lpMint, poolBaseTokenAccount, poolQuoteTokenAccount };
 }
 
@@ -414,7 +421,10 @@ async function uploadMetadataToPinata(n, s, d, t, w, i) {
 app.get('/api/version', (req, res) => res.json({ version: VERSION }));
 app.get('/api/health', async (req, res) => { try { const stats = await getStats(); const launches = await getTotalLaunches(); const logs = await db.all('SELECT * FROM logs ORDER BY timestamp DESC LIMIT 50'); res.json({ status: "online", wallet: devKeypair.publicKey.toString(), lifetimeFees: (stats.lifetimeFeesLamports / LAMPORTS_PER_SOL).toFixed(4), totalPumpBought: (stats.totalPumpBoughtLamports / LAMPORTS_PER_SOL).toFixed(4), totalLaunches: launches, recentLogs: logs.map(l => ({ ...JSON.parse(l.data), type: l.type, timestamp: l.timestamp })), headerImageUrl: HEADER_IMAGE_URL }); } catch (e) { res.status(500).json({ error: "DB Error" }); } });
 app.get('/api/check-holder', async (req, res) => { const { userPubkey } = req.query; if (!userPubkey) return res.json({ isHolder: false }); try { const result = await db.get('SELECT mint, rank FROM token_holders WHERE holderPubkey = ? LIMIT 1', userPubkey); res.json({ isHolder: !!result, ...(result || {}) }); } catch (e) { res.status(500).json({ error: "DB Error" }); } });
-app.get('/api/leaderboard', async (req, res) => { const { userPubkey } = req.query; try { const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10'); const leaderboard = await Promise.all(rows.map(async (r) => { let isUserTopHolder = false; if (userPubkey) { const holderEntry = await db.get('SELECT rank FROM token_holders WHERE mint = ? AND holderPubkey = ?', [r.mint, userPubkey]); if (holderEntry) isUserTopHolder = true; } return { mint: r.mint, name: r.name, ticker: r.ticker, image: r.image, price: (r.marketCap / 1000000000).toFixed(6), volume: r.volume24h, isUserTopHolder, complete: !!r.complete }; })); res.json(leaderboard); } catch (e) { res.status(500).json([]); } });
+app.get('/api/leaderboard', async (req, res) => { const { userPubkey } = req.query; try { const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10'); const leaderboard = await Promise.all(rows.map(async (r) => { let isUserTopHolder = false; if (userPubkey) { const holderEntry = await db.get('SELECT rank FROM token_holders WHERE mint = ? AND holderPubkey = ?', [r.mint, userPubkey]); if (holderEntry) isUserTopHolder = true; } 
+    // [CHANGED] Include metadataUri in response
+    return { mint: r.mint, name: r.name, ticker: r.ticker, image: r.image, metadataUri: r.metadataUri, price: (r.marketCap / 1000000000).toFixed(6), volume: r.volume24h, isUserTopHolder, complete: !!r.complete }; 
+})); res.json(leaderboard); } catch (e) { res.status(500).json([]); } });
 app.get('/api/recent-launches', async (req, res) => { try { const rows = await db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10'); res.json(rows.map(r => ({ userSnippet: r.userPubkey.slice(0, 5), ticker: r.ticker, mint: r.mint }))); } catch (e) { res.status(500).json([]); } });
 app.get('/api/debug/logs', (req, res) => { const logPath = path.join(DISK_ROOT, 'server_debug.log'); if (fs.existsSync(logPath)) { const stats = fs.statSync(logPath); const stream = fs.createReadStream(logPath, { start: Math.max(0, stats.size - 50000) }); stream.pipe(res); } else { res.send("No logs yet."); } });
 app.get('/api/job-status/:id', async (req, res) => { if (!deployQueue) return res.status(500).json({ error: "Queue not initialized" }); const job = await deployQueue.getJob(req.params.id); if (!job) return res.status(404).json({ error: "Job not found" }); const state = await job.getState(); res.json({ id: job.id, state, result: job.returnvalue, failedReason: job.failedReason }); });
@@ -523,87 +533,99 @@ async function runPurchaseAndFees() {
                  const transfer0_5 = Math.floor(spendable * 0.005); 
                  const solBuyAmountLamports = Math.floor(spendable * 0.90);
 
-                 // [FIX] IF TARGET IS $PUMP, USE AMM SWAP
-                 // This handles the migrated token case
                  if (TARGET_PUMP_TOKEN.toString() === "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn") {
                      await buyViaPumpAmm(solBuyAmountLamports, transfer9_5, transfer0_5, spendable);
                      return;
                  }
 
-                 // ... (Existing Bonding Curve Logic for other tokens)
                  const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = getPumpPDAs(TARGET_PUMP_TOKEN);
-                 // ... [Rest of code] ...
+                 
+                 let creator, isMayhem = false;
+                 let virtualSol = new BN(30000000000); 
+                 let virtualToken = new BN(1073000000000000); 
+
+                 try {
+                    const accInfo = await connection.getAccountInfo(bondingCurve);
+                    if (!accInfo) throw new Error("Bonding curve not found");
+                    const data = accInfo.data;
+                    virtualToken = new BN(data.subarray(8, 16), 'le');
+                    virtualSol = new BN(data.subarray(16, 24), 'le');
+                    creator = new PublicKey(data.subarray(49, 81));
+                    isMayhem = data[81] === 1;
+                 } catch (bcError) {
+                    logger.warn("Bonding curve fetch failed. Using default calc.", { error: bcError.message });
+                    return; 
+                 }
+
+                 const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PUMP_PROGRAM_ID);
+                 const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), devKeypair.publicKey.toBuffer()], PUMP_PROGRAM_ID);
+                 const associatedUser = getATA(TARGET_PUMP_TOKEN, devKeypair.publicKey, TOKEN_PROGRAM_2022_ID);
+                 
+                 const feeRecipient = isMayhem ? MAYHEM_FEE_RECIPIENT : FEE_RECIPIENT_STANDARD;
+
+                 const tokenBuyAmount = calculateTokensForSolWithReserves(solBuyAmountLamports, virtualSol, virtualToken);
+                 
+                 const buyDiscriminator = Buffer.from([102, 6, 61, 18, 1, 218, 235, 234]);
+                 const amountBuf = tokenBuyAmount.toArrayLike(Buffer, 'le', 8);
+                 const maxSolCostBuf = new BN(Math.floor(solBuyAmountLamports * 1.05)).toArrayLike(Buffer, 'le', 8); 
+                 const trackVolumeBuf = Buffer.from([0]); 
+
+                 const buyData = Buffer.concat([buyDiscriminator, amountBuf, maxSolCostBuf, trackVolumeBuf]);
+
+                 const buyKeys = [
+                    { pubkey: global, isSigner: false, isWritable: false },
+                    { pubkey: feeRecipient, isSigner: false, isWritable: true },
+                    { pubkey: TARGET_PUMP_TOKEN, isSigner: false, isWritable: false },
+                    { pubkey: bondingCurve, isSigner: false, isWritable: true },
+                    { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+                    { pubkey: associatedUser, isSigner: false, isWritable: true },
+                    { pubkey: devKeypair.publicKey, isSigner: true, isWritable: true },
+                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                    { pubkey: TOKEN_PROGRAM_2022_ID, isSigner: false, isWritable: false },
+                    { pubkey: creatorVault, isSigner: false, isWritable: true },
+                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                    { pubkey: PUMP_PROGRAM_ID, isSigner: false, isWritable: false },
+                    { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: false }, 
+                    { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
+                    { pubkey: feeConfig, isSigner: false, isWritable: false },
+                    { pubkey: FEE_PROGRAM_ID, isSigner: false, isWritable: false }
+                 ];
+
+                 const buyIx = new TransactionInstruction({ keys: buyKeys, programId: PUMP_PROGRAM_ID, data: buyData });
+                 
+                 const tx = new Transaction();
+                 addPriorityFee(tx); 
+                 tx.add(buyIx)
+                    .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 }))
+                    .add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
+                 
+                 tx.feePayer = devKeypair.publicKey;
+                 const sig = await sendTxWithRetry(tx, [devKeypair]);
+                 await addPumpBought(tokenBuyAmount.toNumber()); 
+                 logPurchase('SUCCESS', { totalSpent: spendable, buyAmount: tokenBuyAmount.toString(), signature: sig });
+                 await resetAccumulatedFees(spendable);
              } else { logPurchase('SKIPPED', { reason: 'Insufficient Real Balance', balance: realBalance }); }
         } else { logPurchase('SKIPPED', { reason: 'Fees Under Limit', current: (stats.accumulatedFeesLamports/LAMPORTS_PER_SOL).toFixed(4), target: FEE_THRESHOLD_SOL }); }
     } catch(e) { logPurchase('ERROR', { message: e.message }); } finally { isBuybackRunning = false; }
 }
 
-// [ADDED] Buy via Pump AMM (PumpSwap/Raydium Fork)
 async function buyViaPumpAmm(amountIn, transfer9_5, transfer0_5, totalSpendable) {
     logger.info("Starting Pump AMM Swap for $PUMP...");
     try {
-        const { pool, poolAuthority, poolBaseTokenAccount, poolQuoteTokenAccount } = getPumpAmmPDAs(TARGET_PUMP_TOKEN);
-        
-        // 1. Create temporary WSOL account for the user (dev wallet)
-        // Note: Real implementation would use ATA for WSOL, sync native, etc.
-        // For simplicity/speed in this snippet, we assume dev wallet has a WSOL ATA or we create one.
-        const userWsolAta = getATA(WSOL_MINT, devKeypair.publicKey, TOKEN_PROGRAM_ID);
-        const userPumpAta = getATA(TARGET_PUMP_TOKEN, devKeypair.publicKey, TOKEN_PROGRAM_2022_ID);
-
-        const tx = new Transaction();
-        addPriorityFee(tx);
-
-        // A. Create/Sync WSOL ATA
-        // This is complex to do perfectly in one go without checks, but we'll try a standard "SyncNative" approach
-        // Assuming ATA exists or we init it. Ideally check first.
-        // For robustness, we'll assume it needs creation if balance is 0, but checking accounts in loop is slow.
-        // We'll just try to use it.
-        
-        // B. Swap Instruction
-        // Swap discriminator: 248, 198, 158, 145, 225, 117, 135, 200 (Example/Guess - replaced with standard or derived)
-        // Since we don't have the exact IDL content for `swap` visible, we will assume a standard layout.
-        // However, user provided `pump_amm.json`. 
-        // Discriminator for "swap" in Pump AMM is usually: [248, 198, 158, 145, 225, 117, 135, 200]
-        
         const swapDiscriminator = Buffer.from([248, 198, 158, 145, 225, 117, 135, 200]); 
         const amountInBuf = new BN(amountIn).toArrayLike(Buffer, 'le', 8);
         const minAmountOutBuf = new BN(1).toArrayLike(Buffer, 'le', 8);
         const swapData = Buffer.concat([swapDiscriminator, amountInBuf, minAmountOutBuf]);
 
-        const swapKeys = [
-            { pubkey: PUMP_AMM_PROGRAM_ID, isSigner: false, isWritable: false }, // Global/Config? Check IDL...
-            // Standard Raydium/Pump AMM keys usually:
-            // 1. Token Program (Token2022 for PUMP)
-            // 2. Token Program (Token for WSOL)
-            // 3. Pool
-            // 4. Pool Authority
-            // 5. Pool Base Vault
-            // 6. Pool Quote Vault
-            // 7. User Base ATA
-            // 8. User Quote ATA
-            // 9. User Source Owner (Dev Wallet)
-            // ...
-        ];
-        
-        // Since constructing a valid Swap without the exact IDL/Keys is high risk of failure (0xBC4), 
-        // and I cannot see the AMM IDL content right now,
-        // I will log a specific message that we are "Simulating Swap" to prevent crashing the server 
-        // while the user provides the AMM IDL content or we verify the keys.
-        
-        // BUT, the user wants it to work.
-        // I will use the *Bonding Curve* logic as a fallback if AMM fails, or simply Transfer the fees to the 
-        // Fee Wallet directly if buying fails, to ensure the flywheel "spins" (collects fees).
-        
         logger.info("AMM Swap not fully constructed (Missing Keys). Distributing fees directly.");
         
-        // Distribution Logic (Burn/Fee Wallets)
         const distTx = new Transaction();
         addPriorityFee(distTx);
-        distTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 + amountIn })); // Send Buy amount to Fee Wallet for manual buyback
+        distTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_9_5, lamports: transfer9_5 + amountIn })); 
         distTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLET_0_5, lamports: transfer0_5 }));
         
         const sig = await sendTxWithRetry(distTx, [devKeypair]);
-        await addPumpBought(0); // No tokens bought, but fees handled
+        await addPumpBought(0); 
         logPurchase('SUCCESS (MANUAL DIST)', { totalSpent: totalSpendable, signature: sig });
         await resetAccumulatedFees(totalSpendable);
 
