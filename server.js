@@ -18,7 +18,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.25-HOLDER-FIX";
+const VERSION = "v10.26.28-CREATOR-BONUS";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -623,16 +623,15 @@ app.get('/api/all-launches', async (req, res) => {
 app.get('/api/all-eligible-users', async (req, res) => {
     try {
         // 1. Get List of Top 10 Leaderboard Mints (Active)
-        const top10 = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10');
+        const top10 = await db.all('SELECT mint, userPubkey FROM tokens ORDER BY volume24h DESC LIMIT 10');
         const top10Mints = top10.map(t => t.mint);
 
         if (top10Mints.length === 0) {
             return res.json({ users: [], totalPoints: 0 });
         }
 
-        // 2. Fetch all holders who hold a top 10 token
+        // 2. Calculate Base Points from Holders
         const placeholders = top10Mints.map(() => '?').join(',');
-        // No longer fetching expectedAirdrop per token
         const rows = await db.all(`
             SELECT holderPubkey, COUNT(*) as positionCount 
             FROM token_holders 
@@ -640,27 +639,52 @@ app.get('/api/all-eligible-users', async (req, res) => {
             GROUP BY holderPubkey
         `, top10Mints);
 
+        let userPointsMap = new Map();
+
+        // Add Holder Points
+        rows.forEach(row => {
+            userPointsMap.set(row.holderPubkey, {
+                pubkey: row.holderPubkey,
+                holderPositions: row.positionCount,
+                createdPositions: 0
+            });
+        });
+
+        // 3. Add Creator Points
+        top10.forEach(token => {
+            if (token.userPubkey) {
+                const user = userPointsMap.get(token.userPubkey) || { 
+                    pubkey: token.userPubkey, 
+                    holderPositions: 0, 
+                    createdPositions: 0 
+                };
+                user.createdPositions += 1;
+                userPointsMap.set(token.userPubkey, user);
+            }
+        });
+
         const eligibleUsers = [];
         let calculatedTotalPoints = 0;
 
-        for (const row of rows) {
-            // EXCLUDE DEV WALLET
-            if (row.holderPubkey === devKeypair.publicKey.toString()) {
-                continue; 
-            }
-            
-            const isAsdfTop50 = asdfTop50Holders.has(row.holderPubkey);
-            const multiplier = isAsdfTop50 ? 2 : 1;
-            const points = row.positionCount * multiplier;
+        for (const user of userPointsMap.values()) {
+            if (user.pubkey === devKeypair.publicKey.toString()) continue;
 
-            // Calculate expected airdrop using the global cache (globalUserExpectedAirdrops)
-            const expectedAirdrop = globalUserExpectedAirdrops.get(row.holderPubkey) || 0;
+            const isAsdfTop50 = asdfTop50Holders.has(user.pubkey);
+            const multiplier = isAsdfTop50 ? 2 : 1;
+            
+            // Formula: (Holder Points + (Creator Points * 2)) * Multiplier
+            const totalBasePoints = user.holderPositions + (user.createdPositions * 2);
+            const points = totalBasePoints * multiplier;
+
+            // Retrieve expected airdrop value from the global cache map
+            const expectedAirdrop = globalUserExpectedAirdrops.get(user.pubkey) || 0;
 
             if (points > 0) {
                 eligibleUsers.push({
-                    pubkey: row.holderPubkey,
+                    pubkey: user.pubkey,
                     points: points,
-                    positions: row.positionCount,
+                    positions: user.holderPositions, // Kept for UI compat, or could show total
+                    created: user.createdPositions,
                     isAsdfTop50: isAsdfTop50,
                     expectedAirdrop: expectedAirdrop
                 });
@@ -690,37 +714,45 @@ app.get('/api/airdrop-logs', async (req, res) => {
 app.get('/api/check-holder', async (req, res) => { 
     const { userPubkey } = req.query; 
     // New default: Include expectedAirdrop = 0
-    if (!userPubkey) return res.json({ isHolder: false, isAsdfTop50: false, points: 0, multiplier: 1, heldPositionsCount: 0, expectedAirdrop: 0 }); 
+    if (!userPubkey) return res.json({ isHolder: false, isAsdfTop50: false, points: 0, multiplier: 1, heldPositionsCount: 0, createdPositionsCount: 0, expectedAirdrop: 0 }); 
     
     try { 
         const top10 = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10');
         const top10Mints = top10.map(t => t.mint);
 
         let heldPositionsCount = 0;
+        let createdPositionsCount = 0;
         
         if (top10Mints.length > 0) {
             const placeholders = top10Mints.map(() => '?').join(',');
             
-            // Query only for position count
+            // 1. Holder Count
             const query = `SELECT COUNT(*) as count FROM token_holders WHERE holderPubkey = ? AND mint IN (${placeholders})`;
             const params = [userPubkey, ...top10Mints];
-            
             const result = await db.get(query, params);
             heldPositionsCount = result ? result.count : 0;
+
+            // 2. Creator Count (NEW)
+            // Note: DB queries need string interpolation for IN clause params if not using array expansion correctly
+            const creatorQuery = `SELECT COUNT(*) as count FROM tokens WHERE userPubkey = ? AND mint IN (${placeholders})`;
+            const creatorParams = [userPubkey, ...top10Mints];
+            const creatorRes = await db.get(creatorQuery, creatorParams);
+            createdPositionsCount = creatorRes ? creatorRes.count : 0;
         }
         
         // 3. Check ASDF Top 50 Status (from Memory Set)
         const isAsdfTop50 = asdfTop50Holders.has(userPubkey);
 
-        // 4. Calculate Points
+        // 4. Calculate Points (Holder + (Creator * 2))
+        const totalBase = heldPositionsCount + (createdPositionsCount * 2);
         const multiplier = isAsdfTop50 ? 2 : 1;
-        const points = heldPositionsCount * multiplier;
+        const points = totalBase * multiplier;
         
         // FIX: Retrieve expected airdrop value from the global cache map
         const totalExpectedAirdrop = globalUserExpectedAirdrops.get(userPubkey) || 0;
         
         // DEBUG: Explicitly Log what is being returned for this user
-        logger.info("Check Holder:", { user: userPubkey, expected: totalExpectedAirdrop, inMap: globalUserExpectedAirdrops.has(userPubkey) });
+        logger.info("Check Holder:", { user: userPubkey, points, held: heldPositionsCount, created: createdPositionsCount });
 
         res.json({ 
             isHolder: heldPositionsCount > 0, 
@@ -728,7 +760,8 @@ app.get('/api/check-holder', async (req, res) => {
             points: points,
             multiplier: multiplier,
             heldPositionsCount: heldPositionsCount,
-            expectedAirdrop: totalExpectedAirdrop // Return the aggregated, pre-calculated expected drop
+            createdPositionsCount: createdPositionsCount, // New field for frontend
+            expectedAirdrop: totalExpectedAirdrop 
         }); 
     } catch (e) { 
         logger.error("Check Holder Error", {msg: e.message});
@@ -753,6 +786,7 @@ app.get('/api/token-holders/:mint', async (req, res) => {
 app.get('/api/leaderboard', async (req, res) => { const { userPubkey } = req.query; try { const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10'); const leaderboard = await Promise.all(rows.map(async (r) => { let isUserTopHolder = false; if (userPubkey) { const holderEntry = await db.get('SELECT rank FROM token_holders WHERE mint = ? AND holderPubkey = ?', [r.mint, userPubkey]); if (holderEntry) isUserTopHolder = true; } 
     return { 
         mint: r.mint, 
+        creator: r.userPubkey, // ADDED: Return creator address
         name: r.name, 
         ticker: r.ticker, 
         image: r.image, 
@@ -833,7 +867,8 @@ app.post('/api/deploy', async (req, res) => {
 async function updateGlobalState() {
     if (!db) return; 
     try {
-        const topTokens = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10'); 
+        // UPDATED: Now selecting userPubkey to track creators
+        const topTokens = await db.all('SELECT mint, userPubkey FROM tokens ORDER BY volume24h DESC LIMIT 10'); 
         const top10Mints = topTokens.map(t => t.mint);
 
         // 1A. Cache Dev Wallet Pump Holdings
@@ -930,25 +965,48 @@ async function updateGlobalState() {
         }
 
         // --- CALCULATE GLOBAL TOTAL POINTS AND EXPECTED AIRDROP (Global Cache) ---
-        let userPointMap = new Map();
+        // NEW MAP STRUCTURE: { pubkey: { holderPoints: 0, creatorPoints: 0 } }
+        let rawPointsMap = new Map();
         let tempTotalPoints = 0;
         
         if (top10Mints.length > 0) {
             const placeholders = top10Mints.map(() => '?').join(',');
-            // Fetch all point-eligible entries (already filtered for LPs/BCs)
+            
+            // 1. Fetch Holder Points
             const rows = await db.all(`SELECT holderPubkey, COUNT(*) as positionCount FROM token_holders WHERE mint IN (${placeholders}) GROUP BY holderPubkey`, top10Mints);
             
             for (const row of rows) {
-                const isTop50 = asdfTop50Holders.has(row.holderPubkey);
-                if (row.holderPubkey !== devKeypair.publicKey.toString()) {
-                    const points = row.positionCount * (isTop50 ? 2 : 1);
-                    if (points > 0) {
-                        userPointMap.set(row.holderPubkey, points);
-                        tempTotalPoints += points;
-                    }
+                rawPointsMap.set(row.holderPubkey, { holderPoints: row.positionCount, creatorPoints: 0 });
+            }
+
+            // 2. Fetch Creator Points (NEW)
+            for (const token of topTokens) {
+                if (token.userPubkey) {
+                    const entry = rawPointsMap.get(token.userPubkey) || { holderPoints: 0, creatorPoints: 0 };
+                    entry.creatorPoints += 1; // 1 point per created token in top 10
+                    rawPointsMap.set(token.userPubkey, entry);
+                }
+            }
+
+            // 3. Calculate Final Weighted Points
+            for (const [pubkey, data] of rawPointsMap.entries()) {
+                if (pubkey === devKeypair.publicKey.toString()) continue;
+
+                const isTop50 = asdfTop50Holders.has(pubkey);
+                // Formula: (Holder + (Creator * 2)) * Multiplier
+                const basePoints = data.holderPoints + (data.creatorPoints * 2);
+                const totalPoints = basePoints * (isTop50 ? 2 : 1);
+
+                if (totalPoints > 0) {
+                    // Update global map with single integer score
+                    // We rebuild this every cycle
+                    tempTotalPoints += totalPoints;
+                    // We store the calculated score directly in the global map for airdrop distribution
+                    // But we might want to store breakdown? No, processAirdrop just needs score.
                 }
             }
         }
+        
         globalTotalPoints = tempTotalPoints;
         
         // DEBUG: LOG POINTS AND MAP SIZE
@@ -958,15 +1016,22 @@ async function updateGlobalState() {
         globalUserExpectedAirdrops.clear();
         globalUserPointsMap.clear(); // Clear points map
         
-        // We always populate points map, even if distributable amount is 0
-        for (const [pubkey, points] of userPointMap.entries()) {
-             globalUserPointsMap.set(pubkey, points);
+        // Re-iterate raw map to populate the final globals
+        for (const [pubkey, data] of rawPointsMap.entries()) {
+             if (pubkey === devKeypair.publicKey.toString()) continue;
              
-             // Only populate expected airdrop map if there is something to distribute
-             if (distributableAmount > 0 && globalTotalPoints > 0) {
-                 const share = points / globalTotalPoints;
-                 const expectedAirdrop = share * distributableAmount;
-                 globalUserExpectedAirdrops.set(pubkey, expectedAirdrop);
+             const isTop50 = asdfTop50Holders.has(pubkey);
+             const points = (data.holderPoints + (data.creatorPoints * 2)) * (isTop50 ? 2 : 1);
+             
+             if (points > 0) {
+                 globalUserPointsMap.set(pubkey, points);
+                 
+                 // Only populate expected airdrop map if there is something to distribute
+                 if (distributableAmount > 0 && globalTotalPoints > 0) {
+                     const share = points / globalTotalPoints;
+                     const expectedAirdrop = share * distributableAmount;
+                     globalUserExpectedAirdrops.set(pubkey, expectedAirdrop);
+                 }
              }
         }
         
