@@ -14,7 +14,8 @@ const FormData = require('form-data');
 const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
 // IMPORTS FIXED: Imported constants directly, removed duplicate declarations below
-const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+// UPDATED: Added createTransferCheckedInstruction to imports
+const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
 const VERSION = "v10.26.17-AIRDROP-MATH-FIX";
@@ -1197,7 +1198,17 @@ async function sendAirdropBatch(batch, sourceAta) {
             tx.add(createAssociatedTokenAccountInstruction(devKeypair.publicKey, ata, item.user, TARGET_PUMP_TOKEN, TOKEN_PROGRAM_2022_ID));
         }
         // FIX: Pass TOKEN_PROGRAM_2022_ID to transfer instruction
-        tx.add(createTransferInstruction(sourceAta, ata, devKeypair.publicKey, BigInt(item.amount.toString()), [], TOKEN_PROGRAM_2022_ID));
+        // UPDATED: Changed from createTransferInstruction to createTransferCheckedInstruction for safety
+        tx.add(createTransferCheckedInstruction(
+            sourceAta, 
+            TARGET_PUMP_TOKEN, 
+            ata, 
+            devKeypair.publicKey, 
+            BigInt(item.amount.toString()), 
+            6, // Decimals for PUMP token
+            [], 
+            TOKEN_PROGRAM_2022_ID
+        ));
     });
 
     try {
