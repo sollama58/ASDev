@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.26.24</title>
+    <title>ASDev Launcher v10.26.26</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -30,7 +30,7 @@
         .status-box { background: rgba(0,0,0,0.3); border: 1px solid #ea580c; color: #fdba74; padding: 16px; font-size: 16px; font-family: 'JetBrains Mono'; text-align: center; margin-top: 20px; display: none; border-radius: 6px; }
         .status-success { border-color: #22c55e; color: #4ade80; background: rgba(20, 83, 45, 0.3); }
         .status-error { border-color: #ef4444; color: #fca5a5; background: rgba(127, 29, 29, 0.3); }
-        .sys-status { color: #ef4444; font-weight: bold; transition: color 0.5s; }
+        .sys-status { color: #ef4444; font-weight: bold; transition: color 0.5s; cursor: pointer; }
         .sys-status.online { color: #22c55e; text-shadow: 0 0 8px rgba(34, 197, 94, 0.6); }
         #image-preview { width: 180px; height: 180px; border: 2px dashed #7c2d12; display: flex; align-items: center; justify-content: center; background: #2a1005; color: #7c2d12; font-family: 'JetBrains Mono'; font-size: 12px; overflow: hidden; border-radius: 12px; margin-top: 10px; cursor: pointer; position: relative; }
         #image-preview img { width: 100%; height: 100%; object-fit: cover; }
@@ -50,8 +50,25 @@
         .toggle-switch input:checked + .slider:before { transform: translateX(26px); }
         .mayhem-label { transition: color 0.4s; }
         .mayhem-label.active { color: #ef4444; }
-        #header-image { width: 60px; height: 60px; border-radius: 8px; object-fit: cover; animation: bounce 1s infinite alternate; }
-        @keyframes bounce { from { transform: translateY(0); } to { transform: translateY(-5px); } }
+        /* FIX: Applied animation to a wrapper instead of the image */
+        #logo-wrapper { 
+            width: 60px; 
+            height: 60px; 
+            border-radius: 8px; 
+            overflow: hidden; 
+            min-width: 60px; /* Ensure fixed size for layout */
+            animation: bounce 1s infinite alternate; 
+        }
+        #header-image { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+            /* Removed animation: bounce 1s infinite alternate; */
+        }
+        @keyframes bounce { 
+            from { transform: translateY(0); } 
+            to { transform: translateY(-5px); } 
+        }
         .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); }
         .modal-content { background-color: #2a1005; margin: 5% auto; padding: 30px; border: 4px solid #ea580c; width: 85%; max-width: 800px; border-radius: 12px; box-shadow: 0 0 20px rgba(234, 88, 12, 0.5); }
         .close-btn { color: #aaa; float: right; font-size: 28px; font-weight: bold; }
@@ -77,6 +94,11 @@
         .badge-skipped { background: rgba(234, 88, 12, 0.2); color: #fb923c; border: 1px solid #ea580c; }
         .badge-success { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid #22c55e; }
         .badge-error { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; }
+        .status-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px dashed rgba(255, 255, 255, 0.1); }
+        .status-item:last-child { border-bottom: none; }
+        .status-icon { margin-right: 10px; }
+        .text-green { color: #4ade80; }
+        .text-red { color: #ef4444; }
     </style>
 </head>
 <body>
@@ -87,7 +109,10 @@
     <div class="p-10">
         <div class="flex justify-between items-start mb-10 border-b-4 border-orange-900 pb-8">
             <div class="flex items-center gap-6">
-                <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
+                <!-- WRAPPED THE IMAGE FOR STABLE BOUNCING -->
+                <div id="logo-wrapper">
+                    <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
+                </div>
                 <div><h1 class="text-4xl md:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1><p class="text-orange-400 text-sm font-mono uppercase tracking-widest mt-2">ASDev Airdrop and Flywheel Pumpfun Launcher</p></div>
             </div>
             <div class="flex flex-col items-end gap-3">
@@ -258,7 +283,8 @@
         
         <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
             <div><span class="text-orange-600">RPC UPLINK: MAINNET PUBLIC</span></div>
-            <div class="flex gap-4"><span>SYSTEM STATUS: <span id="sys-status" class="sys-status">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
+            <!-- MADE STATUS INDICATOR CLICKABLE -->
+            <div class="flex gap-4"><span>SYSTEM STATUS: <span id="sys-status" class="sys-status" onclick="toggleStatusModal()">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
         </div>
     </div>
 </div>
@@ -279,6 +305,18 @@
         <div id="holders-list" class="max-h-[60vh] overflow-y-auto pr-2 font-mono text-xs">
             <!-- List injected here -->
         </div>
+    </div>
+</div>
+
+<!-- NEW: SYSTEM STATUS MODAL -->
+<div id="status-modal" class="modal">
+    <div class="modal-content border-yellow-600" style="max-width: 450px;">
+        <span class="close-btn" onclick="closeStatusModal()">&times;</span>
+        <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2">SYSTEM STATUS DIAGNOSTICS</h3>
+        <div id="status-details-list" class="font-mono text-sm space-y-2">
+            <!-- Status items injected here -->
+        </div>
+        <p class="text-xs text-yellow-500 mt-4">If services are offline, automatic processes (like airdrops and buybacks) may be delayed or halted.</p>
     </div>
 </div>
 
@@ -389,7 +427,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v10.26.24";
+    const FRONTEND_VERSION = "v10.26.26";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02; 
@@ -402,6 +440,14 @@
     let isDeploying = false;
     let nextCheckTime = 0;
     
+    // NEW: System Status Tracker
+    let systemStatus = {
+        backend: 'CHECKING',
+        solana_rpc: 'CHECKING',
+        db_access: 'CHECKING', // Inferred from successful data fetches
+        error_message: null
+    };
+
     // Cached global values for calculation
     let currentPumpHoldings = 0;
     let currentGlobalPoints = 0;
@@ -430,7 +476,9 @@
         allEligibleUsersModal: document.getElementById('all-eligible-users-modal'),
         modalAllEligibleUsersContent: document.getElementById('modal-all-eligible-users-content'),
         // NEW INFO MODAL REFERENCE
-        airdropInfoModal: document.getElementById('airdrop-info-modal')
+        airdropInfoModal: document.getElementById('airdrop-info-modal'),
+        statusModal: document.getElementById('status-modal'),
+        statusDetailsList: document.getElementById('status-details-list')
     };
 
     lucide.createIcons();
@@ -474,6 +522,9 @@
             const endpoint = `${BACKEND_URL}/api/leaderboard${userPubkey ? '?userPubkey='+userPubkey : ''}`;
             const res = await fetch(endpoint);
             const data = await res.json();
+            
+            // Update DB status based on successful data retrieval
+            systemStatus.db_access = 'ONLINE';
             
             // Handle the structured response from updated backend
             const tokens = data.tokens || [];
@@ -541,16 +592,20 @@
                     <td class="text-orange-200 truncate max-w-[100px]">${item.name}</td>
                     <td class="text-right text-green-400 font-bold font-mono">${formatMcap(displayMcap)}</td>
                     <td class="text-right text-white font-bold">$${displayVol.toLocaleString()}</td>
-                    <td class="text-right flex gap-2 justify-end items-center">
-                        <button onclick="viewTokenHolders('${item.mint}', '${item.ticker}')" class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition" title="View Top 50 Holders">
-                            👥
-                        </button>
-                        <a href="${tradeLink}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a>
+                    <td class="text-right">
+                        <div class="flex gap-2 justify-end items-center">
+                            <button onclick="viewTokenHolders('${item.mint}', '${item.ticker}')" class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition" title="View Top 50 Holders">
+                                👥
+                            </button>
+                            <a href="${tradeLink}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a>
+                        </div>
                     </td>
                 </tr>`;
             })).then(rows => rows.join(''));
 
-        } catch (e) {}
+        } catch (e) {
+            systemStatus.db_access = 'OFFLINE';
+        }
     };
     window.updateLeaderboard = updateLeaderboard;
 
@@ -667,6 +722,7 @@
         try { 
             const res = await fetch(`${BACKEND_URL}/api/recent-launches`); 
             if (res.ok) { 
+                // Nothing to update in system status, success is implied by content load.
                 const launches = await res.json(); 
                 if (launches.length === 0) { 
                     ui.tickerContent.innerHTML = '<span class="ticker-item text-orange-600">NO RECENT LAUNCHES YET... START ONE!</span>'; 
@@ -686,24 +742,27 @@
     };
 
     const checkHealth = async () => { 
+        let status = 'ONLINE';
+        let error = null;
+
         try { 
             const res = await fetch(`${BACKEND_URL}/api/health`); 
             if (res.ok) { 
                 const data = await res.json(); 
-                ui.sysStatus.innerText = "ONLINE"; ui.sysStatus.classList.add("online"); 
+                
+                // Set overall status based on backend self-assessment
+                systemStatus.backend = data.status === 'online' ? 'ONLINE' : 'DEGRADED';
+                
                 ui.headerImage.src = data.headerImageUrl || "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; 
                 
-                // NEW: Use Total Daily Volume metric from backend
                 if (data.totalVolume !== undefined) {
                     ui.metricFees.innerText = "$" + (parseFloat(data.totalVolume) || 0).toLocaleString();
                 } else if (data.lifetimeFees) {
-                    // Fallback if field missing
                     ui.metricFees.innerText = data.lifetimeFees + " SOL"; 
                 }
                 
                 if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches; 
                 
-                // NEW: Use direct token amount from backend tracker
                 if (data.totalPumpTokensBought) {
                     ui.metricPump.innerText = data.totalPumpTokensBought;
                 } else {
@@ -728,7 +787,6 @@
                     nextCheckTime = data.nextCheckTime;
                 }
 
-                // NEW: Update Airdrop Panel
                 if (data.pumpHoldings !== undefined) {
                     currentPumpHoldings = parseFloat(data.pumpHoldings);
                     ui.airdropBalance.innerHTML = `${currentPumpHoldings.toLocaleString('en-US', {maximumFractionDigits: 0})} <span class="text-lg align-top text-purple-400">$PUMP</span>`;
@@ -739,11 +797,26 @@
                 if (data.totalPoints !== undefined) {
                     currentGlobalPoints = data.totalPoints;
                 }
-                
-                // Client side calculation removed, rely on backend data from checkAsdfStatus
 
-            } else { throw new Error("Backend Error"); } 
-        } catch (e) { ui.sysStatus.innerText = "OFFLINE"; ui.sysStatus.classList.remove("online"); ui.headerImage.src = "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; } 
+            } else { 
+                status = 'OFFLINE';
+                error = `Backend responded with status code: ${res.status}`;
+            } 
+        } catch (e) { 
+            status = 'OFFLINE';
+            error = `Failed to reach backend API. Check network connection or backend URL.`;
+        } 
+        
+        // Finalize system status
+        systemStatus.error_message = error;
+
+        // Update main indicator based on most critical failure
+        if (status === 'ONLINE' && systemStatus.solana_rpc === 'ONLINE') {
+            ui.sysStatus.innerText = "ONLINE"; ui.sysStatus.classList.add("online");
+        } else {
+            ui.sysStatus.innerText = status === 'OFFLINE' ? "OFFLINE" : "DEGRADED";
+            ui.sysStatus.classList.remove("online");
+        }
     };
 
     setInterval(() => {
@@ -762,13 +835,19 @@
     }, 1000);
 
     const refreshWalletBalance = async () => { 
-        if (!userPubkey) return; 
+        if (!userPubkey) { 
+            systemStatus.solana_rpc = 'N/A';
+            return; 
+        }
         try { 
             const res = await fetch(`${BACKEND_URL}/api/balance?pubkey=${userPubkey}`);
             if (!res.ok) throw new Error("Balance fetch failed");
             const data = await res.json();
             const solBalance = data.balance / solanaWeb3.LAMPORTS_PER_SOL;
             ui.walletBal.innerText = solBalance.toFixed(3) + " SOL"; 
+            
+            systemStatus.solana_rpc = 'ONLINE'; // If the balance check passed, RPC is up
+            
             if (!isDeploying) {
                 if (solBalance < DEPLOYMENT_FEE) {
                     ui.deployBtn.disabled = true; ui.deployBtn.innerText = `INSUFFICIENT BALANCE (< ${DEPLOYMENT_FEE} SOL)`; ui.deployBtn.classList.add("opacity-50", "cursor-not-allowed");
@@ -776,11 +855,20 @@
                     ui.deployBtn.disabled = false; ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE"; ui.deployBtn.classList.remove("opacity-50", "cursor-not-allowed");
                 }
             }
-        } catch (e) { console.error("Balance check error:", e); } 
+        } catch (e) { 
+            console.error("Balance check error:", e); 
+            systemStatus.solana_rpc = 'OFFLINE';
+        } 
     };
 
     const refreshAllData = async () => {
         if (ui.refreshBtn) ui.refreshBtn.classList.add('opacity-50', 'cursor-wait');
+        
+        // Reset status checks at the start of the refresh cycle
+        systemStatus.backend = 'CHECKING';
+        systemStatus.db_access = 'CHECKING';
+        systemStatus.solana_rpc = 'CHECKING';
+
         try {
             await Promise.allSettled([
                 updatePumpPrice(),
@@ -791,6 +879,10 @@
                 checkAsdfStatus() // Refresh user-specific data including expected airdrop
             ]);
         } catch (e) { console.error("Auto-Refresh Error", e); }
+        
+        // Re-run checkHealth to ensure the main indicator updates based on the final status of all checks
+        checkHealth(); 
+        
         if (ui.refreshBtn) ui.refreshBtn.classList.remove('opacity-50', 'cursor-wait');
     };
     window.refreshAllData = refreshAllData;
@@ -799,6 +891,49 @@
     refreshAllData();
 
     ui.refreshBtn.onclick = () => refreshAllData();
+
+    // --- System Status Modal Logic ---
+    const toggleStatusModal = () => {
+        const list = ui.statusDetailsList;
+        list.innerHTML = '';
+        
+        // Helper to generate status item HTML
+        const generateStatusItem = (name, status, error) => {
+            const isOnline = status === 'ONLINE';
+            const colorClass = isOnline ? 'text-green' : 'text-red';
+            const icon = isOnline ? 'check-circle' : 'x-circle';
+            const statusText = isOnline ? 'ONLINE' : (status === 'OFFLINE' ? 'OFFLINE' : status);
+
+            let itemHtml = `
+                <div class="status-item">
+                    <span class="font-bold text-white">${name}</span>
+                    <div class="flex items-center">
+                        <i data-lucide="${icon}" class="status-icon ${colorClass}" width="16"></i>
+                        <span class="${colorClass} font-bold">${statusText}</span>
+                    </div>
+                </div>
+            `;
+            if (error) {
+                itemHtml += `<div class="text-xs text-red-400 font-normal mt-1 pl-4">Error: ${error}</div>`;
+            }
+            return itemHtml;
+        };
+
+        let html = '';
+        html += generateStatusItem("Backend API Server", systemStatus.backend, systemStatus.error_message);
+        html += generateStatusItem("Database Read/Write", systemStatus.db_access, systemStatus.db_access === 'OFFLINE' ? "Failed to query SQLite DB (internal server issue)." : null);
+        html += generateStatusItem("Solana RPC (Helius)", systemStatus.solana_rpc, systemStatus.solana_rpc === 'OFFLINE' ? "Failed Solana balance check via RPC." : null);
+        
+        list.innerHTML = html;
+        lucide.createIcons();
+        ui.statusModal.style.display = 'block';
+    };
+    window.toggleStatusModal = toggleStatusModal;
+
+    const closeStatusModal = () => { ui.statusModal.style.display = 'none'; };
+    window.closeStatusModal = closeStatusModal;
+    // --- End System Status Modal Logic ---
+
 
     const updateMayhemLabel = () => { if (ui.mayhemToggle.checked) { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: ON (HIGH RISK)"; ui.mayhemStatusLabel.classList.add('active'); } else { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: OFF"; ui.mayhemStatusLabel.classList.remove('active'); } };
     ui.mayhemToggle.addEventListener('change', updateMayhemLabel); updateMayhemLabel(); 
