@@ -18,7 +18,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.23-HOLDER-LIMITS";
+const VERSION = "v10.26.24-HOLDERS-API";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -734,6 +734,19 @@ app.get('/api/check-holder', async (req, res) => {
         logger.error("Check Holder Error", {msg: e.message});
         res.status(500).json({ error: "DB Error", expectedAirdrop: 0 }); 
     } 
+});
+
+// NEW: Endpoint to fetch Top 50 holders for a specific token
+app.get('/api/token-holders/:mint', async (req, res) => {
+    try {
+        const { mint } = req.params;
+        // Fetch rank and pubkey, ordered by rank
+        const holders = await db.all('SELECT rank, holderPubkey FROM token_holders WHERE mint = ? ORDER BY rank ASC LIMIT 50', [mint]);
+        res.json(holders);
+    } catch (e) {
+        logger.error("Token Holders API Error", { error: e.message });
+        res.status(500).json({ error: "DB Error" });
+    }
 });
 
 // [UPDATED] Return object with lastUpdate timestamp for "Synced" display

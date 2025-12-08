@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.26.21</title>
+    <title>ASDev Launcher v10.26.24</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -271,6 +271,17 @@
     </div>
 </div>
 
+<!-- NEW: HOLDERS MODAL -->
+<div id="holders-modal" class="modal">
+    <div class="modal-content border-orange-600" style="max-width: 400px;">
+        <span class="close-btn" onclick="closeHoldersModal()">&times;</span>
+        <h3 id="holders-modal-title" class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">Top Holders</h3>
+        <div id="holders-list" class="max-h-[60vh] overflow-y-auto pr-2 font-mono text-xs">
+            <!-- List injected here -->
+        </div>
+    </div>
+</div>
+
 <!-- NEW ALL LAUNCHES MODAL -->
 <div id="all-launches-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAllLaunchesModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">ALL PLATFORM LAUNCHES</h3><div id="modal-all-launches-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
@@ -378,7 +389,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v10.26.21";
+    const FRONTEND_VERSION = "v10.26.24";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02; 
@@ -530,13 +541,63 @@
                     <td class="text-orange-200 truncate max-w-[100px]">${item.name}</td>
                     <td class="text-right text-green-400 font-bold font-mono">${formatMcap(displayMcap)}</td>
                     <td class="text-right text-white font-bold">$${displayVol.toLocaleString()}</td>
-                    <td class="text-right"><a href="${tradeLink}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a></td>
+                    <td class="text-right flex gap-2 justify-end items-center">
+                        <button onclick="viewTokenHolders('${item.mint}', '${item.ticker}')" class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition" title="View Top 50 Holders">
+                            👥
+                        </button>
+                        <a href="${tradeLink}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a>
+                    </td>
                 </tr>`;
             })).then(rows => rows.join(''));
 
         } catch (e) {}
     };
     window.updateLeaderboard = updateLeaderboard;
+
+    // NEW: Function to View Token Holders
+    const viewTokenHolders = async (mint, ticker) => {
+        const modal = document.getElementById('holders-modal');
+        const list = document.getElementById('holders-list');
+        const title = document.getElementById('holders-modal-title');
+        
+        modal.style.display = 'block';
+        title.innerText = `TOP 50: $${ticker}`;
+        list.innerHTML = '<div class="text-center text-orange-400 p-4">Loading holder data...</div>';
+
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/token-holders/${mint}`);
+            if (!res.ok) throw new Error("Failed to fetch");
+            const holders = await res.json();
+            
+            if (holders.length === 0) {
+                list.innerHTML = '<div class="text-center text-gray-500 p-4">No holder data available yet.</div>';
+                return;
+            }
+
+            let html = '<table class="w-full text-left text-orange-200">';
+            html += '<thead><tr class="text-orange-500 border-b border-orange-800/50"><th class="py-2">#</th><th class="py-2">Wallet</th></tr></thead><tbody>';
+            
+            holders.forEach(h => {
+                // Display only first 5 chars as requested
+                const shortWallet = h.holderPubkey.slice(0, 5); 
+                html += `<tr class="border-b border-orange-900/20 hover:bg-orange-900/10">
+                            <td class="py-1 text-orange-400 font-bold w-12">${h.rank}</td>
+                            <td class="py-1 font-mono">${shortWallet}...</td>
+                         </tr>`;
+            });
+            
+            html += '</tbody></table>';
+            list.innerHTML = html;
+        } catch (e) {
+            list.innerHTML = '<div class="text-center text-red-400 p-4">Failed to load holders.</div>';
+        }
+    };
+    
+    const closeHoldersModal = () => { document.getElementById('holders-modal').style.display = 'none'; };
+    window.closeHoldersModal = closeHoldersModal;
+    // Make sure viewTokenHolders is global so the onclick works
+    window.viewTokenHolders = viewTokenHolders;
+
 
     // Fix: Updated to handle small, non-zero values by using higher precision display.
     const updateExpectedAirdropDisplay = (expectedAmount) => {
