@@ -18,7 +18,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.19-AIRDROP-HISTORY-UI";
+const VERSION = "v10.26.20-JUP-API-FIX";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -1376,9 +1376,12 @@ async function runPurchaseAndFees() {
 // NEW HELPER: Swap SOL to USDC via Jupiter Aggregator v6
 async function swapSolToUsdc(amountLamports) {
     try {
-        const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${USDC_MINT.toString()}&amount=${amountLamports}&slippageBps=100`;
+        // CHANGED: Using new api.jup.ag/swap/v1 endpoint to avoid DNS ENOTFOUND on quote-api.jup.ag
+        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${USDC_MINT.toString()}&amount=${amountLamports}&slippageBps=100`;
         const quoteRes = await axios.get(quoteUrl);
-        const swapRes = await axios.post('https://quote-api.jup.ag/v6/swap', {
+        
+        // CHANGED: Using new api.jup.ag/swap/v1 endpoint for swap transaction build
+        const swapRes = await axios.post('https://api.jup.ag/swap/v1/swap', {
             quoteResponse: quoteRes.data,
             userPublicKey: devKeypair.publicKey.toString(),
             wrapAndUnwrapSol: true

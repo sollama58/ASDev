@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.26.17</title>
+    <title>ASDev Launcher v10.26.21</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -37,7 +37,7 @@
         /* DRAG AND DROP STATE */
         .drag-over { border-color: #22c55e !important; background-color: rgba(34, 197, 94, 0.2) !important; border-style: solid !important; transform: scale(1.02); }
         
-        .log-entry { border-bottom: 1px solid rgba(234, 88, 12, 0.3); padding: 8px 0; font-family: 'JetBrains Mono'; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .log-entry { border-bottom: 1px solid rgba(234, 88, 12, 0.3); padding: 12px 0; font-family: 'JetBrains Mono'; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
         .log-entry:last-child { border-bottom: none; }
         .log-skipped { color: #fdba74; opacity: 0.8; }
         .log-success { color: #4ade80; font-weight: bold; }
@@ -53,7 +53,7 @@
         #header-image { width: 60px; height: 60px; border-radius: 8px; object-fit: cover; animation: bounce 1s infinite alternate; }
         @keyframes bounce { from { transform: translateY(0); } to { transform: translateY(-5px); } }
         .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); }
-        .modal-content { background-color: #2a1005; margin: 10% auto; padding: 30px; border: 4px solid #ea580c; width: 80%; max-width: 800px; border-radius: 12px; box-shadow: 0 0 20px rgba(234, 88, 12, 0.5); }
+        .modal-content { background-color: #2a1005; margin: 5% auto; padding: 30px; border: 4px solid #ea580c; width: 85%; max-width: 800px; border-radius: 12px; box-shadow: 0 0 20px rgba(234, 88, 12, 0.5); }
         .close-btn { color: #aaa; float: right; font-size: 28px; font-weight: bold; }
         .close-btn:hover, .close-btn:focus { color: #fff; text-decoration: none; cursor: pointer; }
         .leader-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
@@ -69,6 +69,14 @@
         .badge-bonding { display: inline-block; background-color: #eab308; color: #000; font-weight: bold; padding: 1px 4px; border-radius: 3px; font-size: 9px; margin-left: 6px; border: 1px solid #713f12; vertical-align: middle; }
         .tx-link { color: #a78bfa; text-decoration: underline; font-size: 10px; }
         .ca-display { word-break: break-all; user-select: all; cursor: copy; }
+        /* Log Grid Styles */
+        .log-grid { display: grid; grid-template-columns: 100px 1fr; gap: 8px; font-size: 11px; }
+        .log-label { color: #fdba74; font-weight: bold; text-transform: uppercase; }
+        .log-value { color: #ffedd5; word-break: break-all; }
+        .status-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 10px; text-transform: uppercase; }
+        .badge-skipped { background: rgba(234, 88, 12, 0.2); color: #fb923c; border: 1px solid #ea580c; }
+        .badge-success { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid #22c55e; }
+        .badge-error { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; }
     </style>
 </head>
 <body>
@@ -213,7 +221,7 @@
         <div class="panel bg-orange-950/30 border border-orange-900 mt-8 lg:col-span-3">
             <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
                 <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">BUYBACK & FEE TRACKER</h3>
-                <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-xs underline p-1">VIEW ALL LOGS</button>
+                <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-xs underline p-1">VIEW EXPANDED LOGS</button>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
                 <div class="bg-black/30 p-4 rounded border border-orange-900/50">
@@ -255,7 +263,13 @@
     </div>
 </div>
 
-<div id="log-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeLogModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FULL BUYBACK LOGS</h3><div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2"></div></div></div>
+<div id="log-modal" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="closeLogModal()">&times;</span>
+        <h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FLYWHEEL & BUYBACK LOGS</h3>
+        <div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2 flex flex-col gap-2"></div>
+    </div>
+</div>
 
 <!-- NEW ALL LAUNCHES MODAL -->
 <div id="all-launches-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAllLaunchesModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">ALL PLATFORM LAUNCHES</h3><div id="modal-all-launches-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
@@ -364,7 +378,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v10.26.17";
+    const FRONTEND_VERSION = "v10.26.21";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02; 
@@ -942,11 +956,58 @@
     const closeAirdropInfoModal = () => { ui.airdropInfoModal.style.display = 'none'; };
     window.closeAirdropInfoModal = closeAirdropInfoModal;
 
-    const toggleLogModal = () => { ui.modalLogContent.innerHTML = ''; 
+    // IMPROVED: Buyback Logs Toggle Function
+    const toggleLogModal = () => { 
+        ui.modalLogContent.innerHTML = ''; 
         if(allLogs && allLogs.length > 0) {
             ui.modalLogContent.innerHTML = allLogs.map(log => {
                 const time = new Date(log.timestamp).toLocaleTimeString();
-                return `<div class="log-entry text-orange-300"><span>[${time}] ${log.type}:</span> <span>${JSON.stringify(log.data || log)}</span></div>`;
+                let logDetailsHtml = '';
+                
+                // Fields to exclude from the detailed view (already shown in header or not needed)
+                const excludedKeys = ['type', 'timestamp'];
+                
+                // Helper to format keys like "feesCollected" -> "Fees Collected"
+                const formatKey = (str) => str.replace(/([A-Z])/g, ' $1').trim();
+
+                // Generate badge based on Status
+                let statusBadge = '';
+                if (log.status) {
+                    let badgeClass = 'badge-skipped'; // Default orange
+                    if (log.status === 'SUCCESS') badgeClass = 'badge-success';
+                    else if (log.status.includes('FAIL') || log.status.includes('ERROR')) badgeClass = 'badge-error';
+                    statusBadge = `<span class="status-badge ${badgeClass}">${log.status}</span>`;
+                }
+
+                // Iterate over object keys to create grid rows
+                for (const [key, value] of Object.entries(log)) {
+                    if (excludedKeys.includes(key)) continue;
+                    
+                    let displayValue = value;
+                    if (key.toLowerCase().includes('sol') || key.toLowerCase().includes('fees')) {
+                        // Attempt to format numbers if they look like SOL amounts
+                        const numVal = parseFloat(value);
+                        if (!isNaN(numVal)) displayValue = numVal.toFixed(4) + ' SOL';
+                    }
+
+                    logDetailsHtml += `
+                        <div class="log-grid">
+                            <span class="log-label">${formatKey(key)}:</span>
+                            <span class="log-value">${displayValue}</span>
+                        </div>
+                    `;
+                }
+
+                return `
+                <div class="log-entry">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-orange-500 font-bold">[${time}] ${log.type}</span>
+                        ${statusBadge}
+                    </div>
+                    <div class="bg-black/20 p-2 rounded border border-orange-900/30">
+                        ${logDetailsHtml}
+                    </div>
+                </div>`;
             }).join('');
         } else {
             ui.modalLogContent.innerHTML = '<p class="text-center text-orange-400">No logs yet.</p>';
@@ -957,6 +1018,7 @@
     const closeLogModal = () => { ui.logModal.style.display = 'none'; };
     window.closeLogModal = closeLogModal;
 
+    // UPDATED: Airdrop Log Toggle with DATE in timestamp
     const toggleAirdropLogModal = async () => {
         ui.airdropLogModal.style.display = 'block';
         ui.modalAirdropLogContent.innerHTML = '<div class="text-center text-purple-400 p-4">Loading History...</div>';
@@ -972,39 +1034,22 @@
                 ui.modalAirdropLogContent.innerHTML = `
                     <table class="w-full text-left font-mono text-xs">
                         <thead class="text-purple-400 border-b border-purple-800">
-                            <tr>
-                                <th class="p-2">Time</th>
-                                <th class="p-2">Amount</th>
-                                <th class="p-2">Users</th>
-                                <th class="p-2">Total Pts</th>
-                                <th class="p-2">Status</th>
-                                <th class="p-2 text-right">TXs</th>
-                            </tr>
+                            <tr><th class="p-2">Date/Time</th><th class="p-2">Amount</th><th class="p-2">Users</th><th class="p-2">Total Pts</th><th class="p-2 text-right">TXs</th></tr>
                         </thead>
                         <tbody class="text-purple-200">
-                            ${logs.map(log => {
-                                let details = { success: 0, failed: 0 };
-                                try {
-                                    if (log.details) details = JSON.parse(log.details);
-                                } catch (e) {}
-
-                                return `
+                            ${logs.map(log => `
                                 <tr class="border-b border-purple-800/30 hover:bg-purple-900/20">
-                                    <td class="p-2">${new Date(log.timestamp).toLocaleTimeString()}</td>
+                                    <td class="p-2">${new Date(log.timestamp).toLocaleString()}</td> 
                                     <td class="p-2 font-bold text-green-400">${parseFloat(log.amount).toFixed(2)}</td>
                                     <td class="p-2">${log.recipients}</td>
                                     <td class="p-2">${log.totalPoints || '-'}</td>
-                                    <td class="p-2">
-                                        <span class="text-green-400">OK: ${details.success || 0}</span> | 
-                                        <span class="text-red-400">FAIL: ${details.failed || 0}</span>
-                                    </td>
                                     <td class="p-2 text-right">
                                         ${log.signatures ? log.signatures.split(',').map((sig, i) => 
-                                            `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link hover:text-white">[TX ${i+1}]</a>`
+                                            `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link">[TX ${i+1}]</a>`
                                         ).join(' ') : 'Pending'}
                                     </td>
                                 </tr>
-                            `}).join('')}
+                            `).join('')}
                         </tbody>
                     </table>
                 `;
