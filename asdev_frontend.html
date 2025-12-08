@@ -972,22 +972,39 @@
                 ui.modalAirdropLogContent.innerHTML = `
                     <table class="w-full text-left font-mono text-xs">
                         <thead class="text-purple-400 border-b border-purple-800">
-                            <tr><th class="p-2">Time</th><th class="p-2">Amount</th><th class="p-2">Users</th><th class="p-2">Total Pts</th><th class="p-2 text-right">TXs</th></tr>
+                            <tr>
+                                <th class="p-2">Time</th>
+                                <th class="p-2">Amount</th>
+                                <th class="p-2">Users</th>
+                                <th class="p-2">Total Pts</th>
+                                <th class="p-2">Status</th>
+                                <th class="p-2 text-right">TXs</th>
+                            </tr>
                         </thead>
                         <tbody class="text-purple-200">
-                            ${logs.map(log => `
+                            ${logs.map(log => {
+                                let details = { success: 0, failed: 0 };
+                                try {
+                                    if (log.details) details = JSON.parse(log.details);
+                                } catch (e) {}
+
+                                return `
                                 <tr class="border-b border-purple-800/30 hover:bg-purple-900/20">
                                     <td class="p-2">${new Date(log.timestamp).toLocaleTimeString()}</td>
                                     <td class="p-2 font-bold text-green-400">${parseFloat(log.amount).toFixed(2)}</td>
                                     <td class="p-2">${log.recipients}</td>
                                     <td class="p-2">${log.totalPoints || '-'}</td>
+                                    <td class="p-2">
+                                        <span class="text-green-400">OK: ${details.success || 0}</span> | 
+                                        <span class="text-red-400">FAIL: ${details.failed || 0}</span>
+                                    </td>
                                     <td class="p-2 text-right">
                                         ${log.signatures ? log.signatures.split(',').map((sig, i) => 
-                                            `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link">[TX ${i+1}]</a>`
+                                            `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link hover:text-white">[TX ${i+1}]</a>`
                                         ).join(' ') : 'Pending'}
                                     </td>
                                 </tr>
-                            `).join('')}
+                            `}).join('')}
                         </tbody>
                     </table>
                 `;
