@@ -18,7 +18,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.17-AIRDROP-IDEMPOTENT-FIX";
+const VERSION = "v10.26.17-REDIS-VANITY";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -26,6 +26,10 @@ const PRIORITY_FEE_MICRO_LAMPORTS = 100000;
 const DEPLOYMENT_FEE_SOL = 0.02;
 // CHANGE 1: Define Fee Threshold used by Flywheel logic 
 const FEE_THRESHOLD_SOL = 0.20; 
+
+// VANITY CONFIG
+const TARGET_SUFFIX = "ASDF"; // The suffix we want
+const VANITY_POOL_SIZE = 25; // How many keys to keep in reserve
 
 // Update Intervals (Env Vars or Default)
 const HOLDER_UPDATE_INTERVAL = process.env.HOLDER_UPDATE_INTERVAL ? parseInt(process.env.HOLDER_UPDATE_INTERVAL) : 120000;
@@ -111,12 +115,21 @@ const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recurs
 ensureDir(ACTIVE_DATA_DIR);
 
 let deployQueue;
+let vanityQueue; // NEW: Queue for Vanity Gen
 let redisConnection;
+
 try {
     redisConnection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
+    
+    // Deployment Queue
     deployQueue = new Queue('deployQueue', { connection: redisConnection });
-    deployQueue.resume(); // Ensure queue is running
-    logger.info("✅ Redis Queue Initialized");
+    deployQueue.resume();
+    
+    // Vanity Queue
+    vanityQueue = new Queue('vanityQueue', { connection: redisConnection });
+    vanityQueue.resume();
+
+    logger.info("✅ Redis Queues Initialized");
 } catch (e) { logger.error("❌ Redis Init Fail", { error: e.message }); }
 
 // --- CACHE HELPER ---
@@ -149,6 +162,7 @@ async function initDB() {
         CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value REAL);
         CREATE TABLE IF NOT EXISTS token_holders (mint TEXT, holderPubkey TEXT, rank INTEGER, lastUpdated INTEGER, PRIMARY KEY (mint, holderPubkey));
         CREATE TABLE IF NOT EXISTS airdrops (id INTEGER PRIMARY KEY AUTOINCREMENT, amount REAL, recipients INTEGER, totalPoints REAL, signatures TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS vanity_pool (publicKey TEXT PRIMARY KEY, secretKey TEXT);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('accumulatedFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeCreatorFeesLamports', 0);
@@ -158,11 +172,12 @@ async function initDB() {
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lastClaimAmountLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('nextCheckTimestamp', 0);`); 
     
-    // Manual Migration: Dropping old expectedAirdrop column if it exists
+    // Manual Migration
     try { await db.exec('ALTER TABLE token_holders DROP COLUMN expectedAirdrop'); } catch(e) {}
     try { await db.exec('ALTER TABLE tokens ADD COLUMN metadataUri TEXT'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN totalPoints REAL'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN signatures TEXT'); } catch(e) {}
+    try { await db.exec('CREATE TABLE IF NOT EXISTS vanity_pool (publicKey TEXT PRIMARY KEY, secretKey TEXT);'); } catch(e) {}
     
     // Ensure new stat key exists for existing DBs
     try { await db.run("INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeCreatorFeesLamports', 0)"); } catch(e) {}
@@ -288,7 +303,86 @@ function calculateTokensForSol(solAmountLamports) {
     return virtualTokenReserves.sub(newVirtualTokens);
 }
 
-// --- WORKER ---
+// --- WORKER 2: VANITY ADDRESS GENERATOR (CONSUMER) ---
+if (redisConnection) {
+    const vanityWorker = new Worker('vanityQueue', async (job) => {
+        // This worker's sole job is to generate a Vanity Address and save it to the DB.
+        // It allows the main server to remain responsive.
+        if (!db) return; // DB might be initializing
+        
+        try {
+            const desiredSuffix = job.data.suffix || TARGET_SUFFIX;
+            let found = null;
+            const MAX_ITERATIONS = 5000; // Batch per loop
+            
+            // Loop until found or until we yield to let other jobs process
+            // Note: Since this is a worker, we can block slightly longer, but we check DB often
+            // to avoid over-filling.
+            
+            while (!found) {
+                // Check if pool is already full (race condition check)
+                const res = await db.get('SELECT COUNT(*) as count FROM vanity_pool');
+                if (res.count >= VANITY_POOL_SIZE) {
+                    return; // Stop if pool is full
+                }
+
+                // Grind Batch
+                for (let i = 0; i < MAX_ITERATIONS; i++) {
+                    const kp = Keypair.generate();
+                    if (kp.publicKey.toString().endsWith(desiredSuffix)) {
+                        found = kp;
+                        break;
+                    }
+                }
+                
+                // Allow event loop to breathe
+                await new Promise(resolve => setImmediate(resolve));
+            }
+
+            if (found) {
+                const secretStr = JSON.stringify(Array.from(found.secretKey));
+                await db.run('INSERT OR IGNORE INTO vanity_pool (publicKey, secretKey) VALUES (?, ?)', [found.publicKey.toString(), secretStr]);
+                logger.info(`✨ Vanity Key Mined: ${found.publicKey.toString().slice(-6)}`);
+            }
+
+        } catch (e) {
+            logger.error("Vanity Worker Error", { e: e.message });
+        }
+    }, { 
+        connection: redisConnection, 
+        concurrency: 2 // Allow 2 concurrent grinding threads (processes)
+    });
+    
+    // --- MAIN SERVER PRODUCER LOOP ---
+    // Every 5 seconds, check if we need more vanity keys
+    setInterval(async () => {
+        if (!db || !vanityQueue) return;
+        
+        try {
+            const res = await db.get('SELECT COUNT(*) as count FROM vanity_pool');
+            const poolCount = res ? res.count : 0;
+            
+            // Also check how many jobs are already waiting
+            const waitingCount = await vanityQueue.getWaitingCount();
+            const activeCount = await vanityQueue.getActiveCount();
+            const totalPending = waitingCount + activeCount;
+
+            // If (Pool + Pending Jobs) < Target, add more jobs
+            if ((poolCount + totalPending) < VANITY_POOL_SIZE) {
+                const needed = VANITY_POOL_SIZE - (poolCount + totalPending);
+                // Add jobs in batches
+                for (let i = 0; i < needed; i++) {
+                    await vanityQueue.add('grind', { suffix: TARGET_SUFFIX });
+                }
+                if (needed > 0) logger.info(`📥 Queued ${needed} vanity generation jobs.`);
+            }
+        } catch (e) {
+            // logger.warn("Vanity Producer Check Failed", e.message);
+        }
+    }, 5000);
+}
+
+// --- WORKER 1: DEPLOYMENT (CONSUMER) ---
 if (redisConnection) {
     worker = new Worker('deployQueue', async (job) => {
         logger.info(`STARTING JOB ${job.id}: ${job.data.ticker}`);
@@ -296,7 +390,41 @@ if (redisConnection) {
 
         try {
             if (!metadataUri) throw new Error("Metadata URI missing");
-            const mintKeypair = Keypair.generate();
+            
+            // 1. GET KEYPAIR (Try Pool First)
+            let mintKeypair;
+            let fromPool = false;
+
+            try {
+                // Fetch one from pool
+                const row = await db.get('SELECT * FROM vanity_pool LIMIT 1');
+                if (row) {
+                    const secretKey = new Uint8Array(JSON.parse(row.secretKey));
+                    mintKeypair = Keypair.fromSecretKey(secretKey);
+                    
+                    // Validity Check: Ensure account is empty/valid on chain before use
+                    // This answers "ensure they're still valid before use"
+                    const info = await connection.getAccountInfo(mintKeypair.publicKey);
+                    
+                    // Remove from pool immediately to prevent double-use
+                    await db.run('DELETE FROM vanity_pool WHERE publicKey = ?', [row.publicKey]);
+
+                    if (info !== null) {
+                        logger.warn(`⚠️ Pooled key ${row.publicKey} already initialized/dirty on-chain. Discarding.`);
+                        mintKeypair = Keypair.generate(); // Fallback to random
+                    } else {
+                        fromPool = true;
+                        logger.info(`💎 Using Valid Vanity Mint: ${mintKeypair.publicKey.toString()}`);
+                    }
+                } else {
+                    logger.info("⚠️ Vanity Pool Empty. Using Random Mint.");
+                    mintKeypair = Keypair.generate();
+                }
+            } catch (e) {
+                logger.error("Pool Error", {e: e.message});
+                mintKeypair = Keypair.generate();
+            }
+
             const mint = mintKeypair.publicKey;
             const creator = devKeypair.publicKey;
 
