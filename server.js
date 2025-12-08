@@ -18,7 +18,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.17-SPLIT-REDIS";
+const VERSION = "v10.26.17-AIRDROP-IDEMPOTENT-FIX";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -26,10 +26,6 @@ const PRIORITY_FEE_MICRO_LAMPORTS = 100000;
 const DEPLOYMENT_FEE_SOL = 0.02;
 // CHANGE 1: Define Fee Threshold used by Flywheel logic 
 const FEE_THRESHOLD_SOL = 0.20; 
-
-// VANITY CONFIG
-const TARGET_SUFFIX = "ASDF"; // The suffix we want
-const VANITY_POOL_SIZE = 20; // How many keys to keep in reserve
 
 // Update Intervals (Env Vars or Default)
 const HOLDER_UPDATE_INTERVAL = process.env.HOLDER_UPDATE_INTERVAL ? parseInt(process.env.HOLDER_UPDATE_INTERVAL) : 120000;
@@ -41,11 +37,7 @@ const PINATA_JWT = process.env.PINATA_JWT ? process.env.PINATA_JWT.trim() : null
 const PINATA_API_KEY_LEGACY = process.env.API_KEY ? process.env.API_KEY.trim() : null;
 const PINATA_SECRET_KEY_LEGACY = process.env.SECRET_KEY ? process.env.SECRET_KEY.trim() : null;
 
-// REDIS CONFIGURATION
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-// NEW: Specific Redis instance for heavy lifting (Vanity Grinding)
-const GRIND_REDIS_URL = process.env.GRIND_REDIS_URL || 'redis://red-d4rg4o6r433s73a83mmg:6379';
-
 const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY; 
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
@@ -119,23 +111,12 @@ const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recurs
 ensureDir(ACTIVE_DATA_DIR);
 
 let deployQueue;
-let vanityQueue; 
-let redisConnection; // Primary (Deployments)
-let grindRedisConnection; // Secondary (Vanity)
-
+let redisConnection;
 try {
-    // 1. Primary Connection (Deployments)
     redisConnection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
     deployQueue = new Queue('deployQueue', { connection: redisConnection });
-    deployQueue.resume();
-    logger.info("✅ Primary Redis Connected (Deployments)");
-
-    // 2. Secondary Connection (Grinding)
-    grindRedisConnection = new IORedis(GRIND_REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
-    vanityQueue = new Queue('vanityQueue', { connection: grindRedisConnection });
-    vanityQueue.resume();
-    logger.info("✅ Grind Redis Connected (Vanity Pool)");
-
+    deployQueue.resume(); // Ensure queue is running
+    logger.info("✅ Redis Queue Initialized");
 } catch (e) { logger.error("❌ Redis Init Fail", { error: e.message }); }
 
 // --- CACHE HELPER ---
@@ -168,7 +149,6 @@ async function initDB() {
         CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value REAL);
         CREATE TABLE IF NOT EXISTS token_holders (mint TEXT, holderPubkey TEXT, rank INTEGER, lastUpdated INTEGER, PRIMARY KEY (mint, holderPubkey));
         CREATE TABLE IF NOT EXISTS airdrops (id INTEGER PRIMARY KEY AUTOINCREMENT, amount REAL, recipients INTEGER, totalPoints REAL, signatures TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS vanity_pool (publicKey TEXT PRIMARY KEY, secretKey TEXT);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('accumulatedFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeFeesLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeCreatorFeesLamports', 0);
@@ -178,12 +158,11 @@ async function initDB() {
         INSERT OR IGNORE INTO stats (key, value) VALUES ('lastClaimAmountLamports', 0);
         INSERT OR IGNORE INTO stats (key, value) VALUES ('nextCheckTimestamp', 0);`); 
     
-    // Manual Migration
+    // Manual Migration: Dropping old expectedAirdrop column if it exists
     try { await db.exec('ALTER TABLE token_holders DROP COLUMN expectedAirdrop'); } catch(e) {}
     try { await db.exec('ALTER TABLE tokens ADD COLUMN metadataUri TEXT'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN totalPoints REAL'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN signatures TEXT'); } catch(e) {}
-    try { await db.exec('CREATE TABLE IF NOT EXISTS vanity_pool (publicKey TEXT PRIMARY KEY, secretKey TEXT);'); } catch(e) {}
     
     // Ensure new stat key exists for existing DBs
     try { await db.run("INSERT OR IGNORE INTO stats (key, value) VALUES ('lifetimeCreatorFeesLamports', 0)"); } catch(e) {}
@@ -309,79 +288,7 @@ function calculateTokensForSol(solAmountLamports) {
     return virtualTokenReserves.sub(newVirtualTokens);
 }
 
-// --- WORKER 2: VANITY ADDRESS GENERATOR (CONSUMER) ---
-// Uses grindRedisConnection (Isolated Redis Instance)
-if (grindRedisConnection) {
-    const vanityWorker = new Worker('vanityQueue', async (job) => {
-        if (!db) return; 
-        
-        try {
-            const desiredSuffix = job.data.suffix || TARGET_SUFFIX;
-            let found = null;
-            const MAX_ITERATIONS = 5000; // Batch per loop
-            
-            while (!found) {
-                // Check if pool is already full
-                const res = await db.get('SELECT COUNT(*) as count FROM vanity_pool');
-                if (res.count >= VANITY_POOL_SIZE) {
-                    return; // Stop if pool is full
-                }
-
-                // Grind Batch
-                for (let i = 0; i < MAX_ITERATIONS; i++) {
-                    const kp = Keypair.generate();
-                    if (kp.publicKey.toString().endsWith(desiredSuffix)) {
-                        found = kp;
-                        break;
-                    }
-                }
-                
-                // Allow event loop to breathe
-                await new Promise(resolve => setImmediate(resolve));
-            }
-
-            if (found) {
-                const secretStr = JSON.stringify(Array.from(found.secretKey));
-                await db.run('INSERT OR IGNORE INTO vanity_pool (publicKey, secretKey) VALUES (?, ?)', [found.publicKey.toString(), secretStr]);
-                logger.info(`✨ Vanity Key Mined: ${found.publicKey.toString().slice(-6)}`);
-            }
-
-        } catch (e) {
-            logger.error("Vanity Worker Error", { e: e.message });
-        }
-    }, { 
-        connection: grindRedisConnection, // Connects to the specific grind Redis
-        concurrency: 2 
-    });
-    
-    // --- MAIN SERVER PRODUCER LOOP ---
-    // Pushes jobs to the grindRedisConnection
-    setInterval(async () => {
-        if (!db || !vanityQueue) return;
-        
-        try {
-            const res = await db.get('SELECT COUNT(*) as count FROM vanity_pool');
-            const poolCount = res ? res.count : 0;
-            
-            const waitingCount = await vanityQueue.getWaitingCount();
-            const activeCount = await vanityQueue.getActiveCount();
-            const totalPending = waitingCount + activeCount;
-
-            if ((poolCount + totalPending) < VANITY_POOL_SIZE) {
-                const needed = VANITY_POOL_SIZE - (poolCount + totalPending);
-                for (let i = 0; i < needed; i++) {
-                    await vanityQueue.add('grind', { suffix: TARGET_SUFFIX });
-                }
-                if (needed > 0) logger.info(`📥 Queued ${needed} vanity generation jobs.`);
-            }
-        } catch (e) {
-            // logger.warn("Vanity Producer Check Failed", e.message);
-        }
-    }, 5000);
-}
-
-// --- WORKER 1: DEPLOYMENT (CONSUMER) ---
-// Uses redisConnection (Primary Redis Instance)
+// --- WORKER ---
 if (redisConnection) {
     worker = new Worker('deployQueue', async (job) => {
         logger.info(`STARTING JOB ${job.id}: ${job.data.ticker}`);
@@ -389,40 +296,7 @@ if (redisConnection) {
 
         try {
             if (!metadataUri) throw new Error("Metadata URI missing");
-            
-            // 1. GET KEYPAIR (Try Pool First)
-            let mintKeypair;
-            let fromPool = false;
-
-            try {
-                // Fetch one from pool
-                const row = await db.get('SELECT * FROM vanity_pool LIMIT 1');
-                if (row) {
-                    const secretKey = new Uint8Array(JSON.parse(row.secretKey));
-                    mintKeypair = Keypair.fromSecretKey(secretKey);
-                    
-                    // Validity Check
-                    const info = await connection.getAccountInfo(mintKeypair.publicKey);
-                    
-                    // Remove from pool immediately to prevent double-use
-                    await db.run('DELETE FROM vanity_pool WHERE publicKey = ?', [row.publicKey]);
-
-                    if (info !== null) {
-                        logger.warn(`⚠️ Pooled key ${row.publicKey} already initialized/dirty on-chain. Discarding.`);
-                        mintKeypair = Keypair.generate(); // Fallback to random
-                    } else {
-                        fromPool = true;
-                        logger.info(`💎 Using Valid Vanity Mint: ${mintKeypair.publicKey.toString()}`);
-                    }
-                } else {
-                    logger.info("⚠️ Vanity Pool Empty. Using Random Mint.");
-                    mintKeypair = Keypair.generate();
-                }
-            } catch (e) {
-                logger.error("Pool Error", {e: e.message});
-                mintKeypair = Keypair.generate();
-            }
-
+            const mintKeypair = Keypair.generate();
             const mint = mintKeypair.publicKey;
             const creator = devKeypair.publicKey;
 
