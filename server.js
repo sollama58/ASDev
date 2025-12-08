@@ -18,7 +18,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.17-REDIS-VANITY";
+const VERSION = "v10.26.17-SPLIT-REDIS";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -29,7 +29,7 @@ const FEE_THRESHOLD_SOL = 0.20;
 
 // VANITY CONFIG
 const TARGET_SUFFIX = "ASDF"; // The suffix we want
-const VANITY_POOL_SIZE = 25; // How many keys to keep in reserve
+const VANITY_POOL_SIZE = 20; // How many keys to keep in reserve
 
 // Update Intervals (Env Vars or Default)
 const HOLDER_UPDATE_INTERVAL = process.env.HOLDER_UPDATE_INTERVAL ? parseInt(process.env.HOLDER_UPDATE_INTERVAL) : 120000;
@@ -41,7 +41,11 @@ const PINATA_JWT = process.env.PINATA_JWT ? process.env.PINATA_JWT.trim() : null
 const PINATA_API_KEY_LEGACY = process.env.API_KEY ? process.env.API_KEY.trim() : null;
 const PINATA_SECRET_KEY_LEGACY = process.env.SECRET_KEY ? process.env.SECRET_KEY.trim() : null;
 
+// REDIS CONFIGURATION
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+// NEW: Specific Redis instance for heavy lifting (Vanity Grinding)
+const GRIND_REDIS_URL = process.env.GRIND_REDIS_URL || 'redis://red-d4rg4o6r433s73a83mmg:6379';
+
 const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY; 
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
@@ -115,21 +119,23 @@ const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recurs
 ensureDir(ACTIVE_DATA_DIR);
 
 let deployQueue;
-let vanityQueue; // NEW: Queue for Vanity Gen
-let redisConnection;
+let vanityQueue; 
+let redisConnection; // Primary (Deployments)
+let grindRedisConnection; // Secondary (Vanity)
 
 try {
+    // 1. Primary Connection (Deployments)
     redisConnection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
-    
-    // Deployment Queue
     deployQueue = new Queue('deployQueue', { connection: redisConnection });
     deployQueue.resume();
-    
-    // Vanity Queue
-    vanityQueue = new Queue('vanityQueue', { connection: redisConnection });
-    vanityQueue.resume();
+    logger.info("✅ Primary Redis Connected (Deployments)");
 
-    logger.info("✅ Redis Queues Initialized");
+    // 2. Secondary Connection (Grinding)
+    grindRedisConnection = new IORedis(GRIND_REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
+    vanityQueue = new Queue('vanityQueue', { connection: grindRedisConnection });
+    vanityQueue.resume();
+    logger.info("✅ Grind Redis Connected (Vanity Pool)");
+
 } catch (e) { logger.error("❌ Redis Init Fail", { error: e.message }); }
 
 // --- CACHE HELPER ---
@@ -304,23 +310,18 @@ function calculateTokensForSol(solAmountLamports) {
 }
 
 // --- WORKER 2: VANITY ADDRESS GENERATOR (CONSUMER) ---
-if (redisConnection) {
+// Uses grindRedisConnection (Isolated Redis Instance)
+if (grindRedisConnection) {
     const vanityWorker = new Worker('vanityQueue', async (job) => {
-        // This worker's sole job is to generate a Vanity Address and save it to the DB.
-        // It allows the main server to remain responsive.
-        if (!db) return; // DB might be initializing
+        if (!db) return; 
         
         try {
             const desiredSuffix = job.data.suffix || TARGET_SUFFIX;
             let found = null;
             const MAX_ITERATIONS = 5000; // Batch per loop
             
-            // Loop until found or until we yield to let other jobs process
-            // Note: Since this is a worker, we can block slightly longer, but we check DB often
-            // to avoid over-filling.
-            
             while (!found) {
-                // Check if pool is already full (race condition check)
+                // Check if pool is already full
                 const res = await db.get('SELECT COUNT(*) as count FROM vanity_pool');
                 if (res.count >= VANITY_POOL_SIZE) {
                     return; // Stop if pool is full
@@ -349,12 +350,12 @@ if (redisConnection) {
             logger.error("Vanity Worker Error", { e: e.message });
         }
     }, { 
-        connection: redisConnection, 
-        concurrency: 2 // Allow 2 concurrent grinding threads (processes)
+        connection: grindRedisConnection, // Connects to the specific grind Redis
+        concurrency: 2 
     });
     
     // --- MAIN SERVER PRODUCER LOOP ---
-    // Every 5 seconds, check if we need more vanity keys
+    // Pushes jobs to the grindRedisConnection
     setInterval(async () => {
         if (!db || !vanityQueue) return;
         
@@ -362,15 +363,12 @@ if (redisConnection) {
             const res = await db.get('SELECT COUNT(*) as count FROM vanity_pool');
             const poolCount = res ? res.count : 0;
             
-            // Also check how many jobs are already waiting
             const waitingCount = await vanityQueue.getWaitingCount();
             const activeCount = await vanityQueue.getActiveCount();
             const totalPending = waitingCount + activeCount;
 
-            // If (Pool + Pending Jobs) < Target, add more jobs
             if ((poolCount + totalPending) < VANITY_POOL_SIZE) {
                 const needed = VANITY_POOL_SIZE - (poolCount + totalPending);
-                // Add jobs in batches
                 for (let i = 0; i < needed; i++) {
                     await vanityQueue.add('grind', { suffix: TARGET_SUFFIX });
                 }
@@ -383,6 +381,7 @@ if (redisConnection) {
 }
 
 // --- WORKER 1: DEPLOYMENT (CONSUMER) ---
+// Uses redisConnection (Primary Redis Instance)
 if (redisConnection) {
     worker = new Worker('deployQueue', async (job) => {
         logger.info(`STARTING JOB ${job.id}: ${job.data.ticker}`);
@@ -402,8 +401,7 @@ if (redisConnection) {
                     const secretKey = new Uint8Array(JSON.parse(row.secretKey));
                     mintKeypair = Keypair.fromSecretKey(secretKey);
                     
-                    // Validity Check: Ensure account is empty/valid on chain before use
-                    // This answers "ensure they're still valid before use"
+                    // Validity Check
                     const info = await connection.getAccountInfo(mintKeypair.publicKey);
                     
                     // Remove from pool immediately to prevent double-use
