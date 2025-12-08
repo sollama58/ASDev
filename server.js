@@ -18,7 +18,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.22-AIRDROP-LIMITS";
+const VERSION = "v10.26.23-HOLDER-LIMITS";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -869,6 +869,15 @@ async function updateGlobalState() {
                             if (info.value?.data?.parsed) { 
                                 const owner = info.value.data.parsed.info.owner; 
                                 
+                                // NEW: Extract UI Amount (Readable Balance)
+                                const tokenAmountObj = info.value.data.parsed.info.tokenAmount;
+                                
+                                // FILTER: Must hold > 1 token to count as a Top Holder
+                                // This ensures small dust accounts don't qualify for points/airdrops
+                                if (tokenAmountObj.uiAmount <= 1) {
+                                    continue;
+                                }
+
                                 // REFINED EXCLUSION LOGIC: 
                                 if (owner !== PUMP_LIQUIDITY_WALLET && owner !== bondingCurvePDAStr) { 
                                     holdersToInsert.push({ mint: token.mint, owner: owner }); 
@@ -1021,9 +1030,14 @@ async function syncAsdfHolders() {
                 const data = Buffer.from(acc.account.data);
                 const amount = new BN(data.slice(64, 72), 'le'); 
                 const owner = new PublicKey(data.slice(32, 64)).toString(); 
-                return { owner, amount: amount.toString() }; // BN to string for JSON
-            }).sort((a, b) => new BN(b.amount).cmp(new BN(a.amount)));
+                return { owner, amount: amount }; // Keep as BN for comparison
+            })
+            // FILTER: Must hold > 1.0 token to count as ASDF Top Holder
+            // Assuming 6 decimals for standard Pump token, threshold is 1,000,000 raw units
+            .filter(h => h.amount.gt(new BN(1000000))) 
+            .sort((a, b) => b.amount.cmp(a.amount));
             
+            // Map back to strings for storage after sorting/filtering
             return holders.slice(0, 50).map(h => h.owner);
         };
 
