@@ -19,7 +19,8 @@
     "sqlite3": "^5.1.6",
     "bullmq": "^5.7.0",
     "ioredis": "^5.4.0",
-    "node-addon-api": "^7.1.0" 
+    "node-addon-api": "^7.1.0",
+    "typescript": "^5.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
