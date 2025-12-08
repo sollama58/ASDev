@@ -18,7 +18,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.20-JUP-API-FIX";
+const VERSION = "v10.26.22-AIRDROP-LIMITS";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -1120,11 +1120,21 @@ async function processAirdrop() {
     if (isAirdropping) return;
     isAirdropping = true;
     try {
+        // 0. Safety Check: SOL Balance (New Requirement)
+        const solBalance = await connection.getBalance(devKeypair.publicKey);
+        const minSolRequired = 0.25 * LAMPORTS_PER_SOL;
+
+        if (solBalance < minSolRequired) {
+            logger.warn(`⚠️ Airdrop Skipped: Low SOL Balance (${(solBalance/LAMPORTS_PER_SOL).toFixed(4)} < 0.25)`);
+            return;
+        }
+
         // 1. Check Balance (Use cached devPumpHoldings from the interval loop)
         const balance = devPumpHoldings;
-        if (balance <= 10000) return;
+        // UPDATED: Now requires 50,000 PUMP to trigger
+        if (balance <= 50000) return;
 
-        logger.info(`🔥 AIRDROP TRIGGERED: Balance ${balance} PUMP > 10,000`);
+        logger.info(`🔥 AIRDROP TRIGGERED: Balance ${balance} PUMP > 50,000`);
 
         // 2. Calculate Distributable
         const amountToDistribute = balance * 0.99;
