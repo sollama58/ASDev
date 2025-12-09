@@ -1,6 +1,6 @@
 {
   "name": "pump-launcher",
-  "version": "10.26.30",
+  "version": "10.26.33",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -21,7 +21,8 @@
     "ioredis": "^5.4.0",
     "node-addon-api": "^7.1.0",
     "typescript": "^5.0.0",
-    "twitter-api-v2": "^1.15.0"
+    "twitter-api-v2": "^1.15.0",
+    "fastestsmallesttextencoderdecoder": "^1.0.22"
   },
   "engines": {
     "node": ">=18.0.0"
