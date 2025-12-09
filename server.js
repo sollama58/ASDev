@@ -21,7 +21,7 @@ const { TwitterApi } = require('twitter-api-v2');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.33-TWITTER-FIX";
+const VERSION = "v10.26.34-TWITTER-V1.1";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -489,13 +489,14 @@ if (redisConnection) {
                 accessSecret: process.env.TWITTER_ACCESS_SECRET,
             });
 
-            // Ensure we use the read-write client
-            const rwClient = client.readWrite;
-
+            // UPDATED: Use V1.1 API for posting as requested
             const tweetText = `🚀 NEW LAUNCH ALERT 🚀\n\nNAME: ${name} ($${ticker})\nCA: ${mint}\n\nTrade now on PumpFun:\nhttps://pump.fun/coin/${mint}\n\n#Solana #Memecoin #Ignition`;
             
-            const { data } = await rwClient.v2.tweet(tweetText);
-            const tweetUrl = `https://x.com/user/status/${data.id}`;
+            // Note: client.v1.tweet is the wrapper for POST statuses/update
+            const tweet = await client.v1.tweet(tweetText);
+            
+            // V1.1 returns id_str
+            const tweetUrl = `https://x.com/user/status/${tweet.id_str}`;
             
             // Save tweet URL to DB
             if (db) {
@@ -504,9 +505,11 @@ if (redisConnection) {
             logger.info(`🐦 Tweet Posted: ${tweetUrl}`);
             return tweetUrl;
         } catch (e) {
-            // Detailed error logging
-            if (e.code === 403) {
-                logger.error("Tweet Permission Error (403)", { error: "Check App Permissions (Read/Write) in Developer Portal." });
+            // Detailed error logging for V1
+            if (e.code === 401) {
+                logger.error("Tweet Auth Error (401)", { error: "Check if TWITTER_APP_KEY is the API Key (Consumer Key), NOT Client ID." });
+            } else if (e.code === 403) {
+                 logger.error("Tweet Permission Error (403)", { error: "App might be restricted or using V1.1 without Essential/Elevated access." });
             } else {
                 logger.error("Tweet Failed", { error: e.message, code: e.code });
             }
