@@ -310,7 +310,8 @@
             <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-6">PLATFORM METRICS</h3>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div class="metric-card"><div class="metric-label">Lifetime Launches</div><div id="metric-launches" class="metric-value">0</div></div>
-                <div class="metric-card"><div class="metric-label">$PUMP Tokens Bought</div><div id="metric-pump" class="metric-value">0</div></div>
+                <!-- CHANGED LABEL: Total Airdropped -->
+                <div class="metric-card"><div class="metric-label">Total $PUMP Airdropped</div><div id="metric-pump" class="metric-value">0</div></div>
                 <!-- CHANGED LABEL -->
                 <div class="metric-card"><div class="metric-label">Total Daily Volume</div><div id="metric-fees" class="metric-value">$0.00</div></div>
             </div>
@@ -866,14 +867,13 @@
                 
                 if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches; 
                 
-                if (data.totalPumpTokensBought) {
+                // UPDATED: Show Total Airdropped Pump
+                if (data.totalAirdropped !== undefined) {
+                    // Assuming data.totalAirdropped is raw number, format nicely
+                    ui.metricPump.innerText = parseFloat(data.totalAirdropped).toLocaleString('en-US', {maximumFractionDigits: 0});
+                } else if (data.totalPumpTokensBought) {
+                    // Fallback to old metric if API doesn't return new one (backwards compat)
                     ui.metricPump.innerText = data.totalPumpTokensBought;
-                } else {
-                    const solSpent = parseFloat(data.totalPumpBought || 0);
-                    let tokensBought = "0";
-                    if (pumpPriceCache > 0) { tokensBought = (solSpent / pumpPriceCache).toLocaleString('en-US', {maximumFractionDigits: 0}); } 
-                    else { tokensBought = (solSpent * 30000000).toLocaleString('en-US', {maximumFractionDigits: 0}); }
-                    ui.metricPump.innerText = tokensBought;
                 }
 
                 allLogs = data.recentLogs; 

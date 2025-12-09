@@ -21,7 +21,7 @@ const { TwitterApi } = require('twitter-api-v2');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.36-JUPITER-FIX";
+const VERSION = "v10.26.37-AIRDROP-METRIC";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -597,6 +597,10 @@ app.get('/api/health', async (req, res) => {
             const volRes = await db.get('SELECT SUM(volume24h) as total FROM tokens');
             const totalVolume = volRes && volRes.total ? volRes.total : 0;
 
+            // NEW: Get Total Airdropped PUMP
+            const airdropRes = await db.get('SELECT SUM(amount) as total FROM airdrops');
+            const totalAirdropped = airdropRes && airdropRes.total ? airdropRes.total : 0;
+
             // RPC Calls to Cache
             const currentBalance = await connection.getBalance(devKeypair.publicKey);
             
@@ -631,7 +635,7 @@ app.get('/api/health', async (req, res) => {
             }
 
             return {
-                stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume
+                stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped
             };
         });
 
@@ -655,7 +659,9 @@ app.get('/api/health', async (req, res) => {
             lastClaimAmount: (cachedHealth.stats.lastClaimAmountLamports / LAMPORTS_PER_SOL).toFixed(4),
             nextCheckTime: cachedHealth.stats.nextCheckTimestamp || (Date.now() + 5*60*1000),
             // NEW: Return Total Platform Volume
-            totalVolume: cachedHealth.totalVolume
+            totalVolume: cachedHealth.totalVolume,
+            // NEW: Return Total Airdropped
+            totalAirdropped: cachedHealth.totalAirdropped
         }); 
     } catch (e) { res.status(500).json({ error: "DB Error" }); } 
 });
