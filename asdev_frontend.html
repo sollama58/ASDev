@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.26.31</title>
+    <title>ASDev Launcher v10.26.32</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -100,6 +100,36 @@
         .status-icon { margin-right: 10px; }
         .text-green { color: #4ade80; }
         .text-red { color: #ef4444; }
+        /* Wallet Modal Buttons */
+        .btn-wallet {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #2a1005;
+            border: 1px solid #7c2d12;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            color: #fb923c;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: bold;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .btn-wallet:hover {
+            background: #451a03;
+            border-color: #ea580c;
+            transform: translateX(5px);
+        }
+        .btn-wallet .detected-tag {
+            font-size: 10px;
+            background: #22c55e;
+            color: #000;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 10px;
+        }
     </style>
 </head>
 <body>
@@ -118,7 +148,8 @@
             </div>
             <div class="flex flex-col items-end gap-3">
                 <div id="wallet-ui" class="hidden flex items-center gap-3 bg-orange-950 border border-orange-800 p-3 rounded-lg shadow-xl"><span class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span><span id="wallet-addr" class="font-mono text-sm text-orange-200"></span><span id="wallet-bal" class="font-mono text-sm text-white font-bold ml-2 bg-orange-900/50 px-3 py-1 rounded">0.00 SOL</span><button id="refresh-btn" class="ml-2 text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded"><i data-lucide="refresh-cw" width="16"></i></button><button id="disconnect-btn" class="ml-1 text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded"><i data-lucide="log-out" width="16"></i></button></div>
-                <button id="connect-btn" class="bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-8 py-3 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg hover:shadow-orange-900/40">Connect Wallet</button>
+                <!-- Updated Connect Button: Triggers Modal -->
+                <button id="connect-btn" onclick="openWalletModal()" class="bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-8 py-3 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg hover:shadow-orange-900/40">Connect Wallet</button>
             </div>
         </div>
 
@@ -214,12 +245,12 @@
                 <!-- Status -->
                 <div class="text-center w-full md:w-1/4 flex flex-col justify-center gap-3 border-r border-purple-800/30 pr-4">
                     <div class="flex justify-between items-center px-4">
-                        <span class="text-[10px] text-purple-300 uppercase tracking-widest">Top Holder Pos</span>
+                        <span class="text-[10px] text-purple-300 uppercase tracking-widest">Top Holder Pts</span>
                         <span class="text-lg text-yellow-400 font-bold font-mono" id="user-top-positions">0</span>
                     </div>
                     <!-- NEW: Creator Positions -->
                     <div class="flex justify-between items-center px-4">
-                        <span class="text-[10px] text-blue-300 uppercase tracking-widest">Top Creator Pos</span>
+                        <span class="text-[10px] text-blue-300 uppercase tracking-widest">Top Creator Pts</span>
                         <span class="text-lg text-blue-400 font-bold font-mono" id="user-created-positions">0</span>
                     </div>
                     <div class="flex justify-between items-center px-4">
@@ -293,6 +324,36 @@
             <!-- MADE STATUS INDICATOR CLICKABLE -->
             <div class="flex gap-4"><span>SYSTEM STATUS: <span id="sys-status" class="sys-status" onclick="toggleStatusModal()">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
         </div>
+    </div>
+</div>
+
+<!-- NEW: WALLET SELECTION MODAL -->
+<div id="wallet-modal" class="modal">
+    <div class="modal-content border-orange-600" style="max-width: 450px;">
+        <span class="close-btn" onclick="closeWalletModal()">&times;</span>
+        <h3 class="text-orange-500 font-mono text-lg mb-6 uppercase tracking-widest border-b border-orange-900/50 pb-2">SELECT WALLET PROVIDER</h3>
+        
+        <div id="wallet-list" class="flex flex-col gap-2">
+            <!-- Buttons injected by JS or hardcoded below -->
+            <button onclick="selectWallet('phantom')" class="btn-wallet" id="btn-phantom">
+                <span class="flex items-center gap-3"><i data-lucide="ghost" width="20"></i> Phantom</span>
+                <span id="tag-phantom" class="hidden detected-tag">DETECTED</span>
+            </button>
+            
+            <button onclick="selectWallet('solflare')" class="btn-wallet" id="btn-solflare">
+                <span class="flex items-center gap-3"><i data-lucide="flame" width="20"></i> Solflare</span>
+                <span id="tag-solflare" class="hidden detected-tag">DETECTED</span>
+            </button>
+            
+            <button onclick="selectWallet('backpack')" class="btn-wallet" id="btn-backpack">
+                <span class="flex items-center gap-3"><i data-lucide="backpack" width="20"></i> Backpack</span>
+                <span id="tag-backpack" class="hidden detected-tag">DETECTED</span>
+            </button>
+        </div>
+        
+        <p class="text-center text-xs text-orange-400/60 mt-4 font-mono">
+            Selecting a wallet will prompt a connection request.
+        </p>
     </div>
 </div>
 
@@ -445,13 +506,16 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v10.26.31";
+    const FRONTEND_VERSION = "v10.26.32";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02; 
     const PUMPFUN_URL_BASE = "https://pump.fun/coin/";
     const PUMP_CONTRACT = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
 
+    // NEW: WALLET STATE
+    let activeWalletProvider = null;
+    let connectedWalletType = null;
     let userPubkey = null;
     let allLogs = []; 
     let pumpPriceCache = 0.0;
@@ -501,7 +565,9 @@
         statusDetailsList: document.getElementById('status-details-list'),
         // SOCIAL REFERENCES
         socialLoading: document.getElementById('social-loading'),
-        modalTweetLink: document.getElementById('modal-tweet-link')
+        modalTweetLink: document.getElementById('modal-tweet-link'),
+        // WALLET MODAL
+        walletModal: document.getElementById('wallet-modal')
     };
 
     lucide.createIcons();
@@ -724,7 +790,8 @@
             ui.userTopPositions.innerText = data.heldPositionsCount || 0;
             
             // NEW: Update Created Position Count
-            ui.userCreatedPositions.innerText = data.createdPositionsCount || 0;
+            // UPDATED: Now displaying calculated points (count * 2) instead of raw count
+            ui.userCreatedPositions.innerText = (data.createdPositionsCount || 0) * 2;
 
             // Update ASDF Status
             if (data.isAsdfTop50) {
@@ -1143,7 +1210,7 @@
                     <p class="text-purple-300 font-mono text-sm mb-4">Total Global Points: <span class="text-white font-bold">${data.totalPoints.toLocaleString()}</span> | Total Eligible Users: <span class="text-white font-bold">${users.length}</span></p>
                     <table class="w-full text-left font-mono text-xs">
                         <thead class="text-purple-400 border-b border-purple-800">
-                            <tr><th class="p-2">#</th><th class="p-2">Wallet (Snippet)</th><th class="p-2 text-right">Positions</th><th class="p-2 text-right">Multiplier</th><th class="p-2 text-right">Points</th><th class="p-2 text-right">Est. Airdrop</th></tr>
+                            <tr><th class="p-2">#</th><th class="p-2">Wallet (Snippet)</th><th class="p-2 text-right">Holder Pts</th><th class="p-2 text-right">Creator Pts</th><th class="p-2 text-right">Multiplier</th><th class="p-2 text-right">Points</th><th class="p-2 text-right">Est. Airdrop</th></tr>
                         </thead>
                         <tbody class="text-purple-200">
                             ${users.sort((a, b) => b.points - a.points).map((user, index) => {
@@ -1156,6 +1223,7 @@
                                     <td class="p-2">${index + 1}</td>
                                     <td class="p-2 text-white font-bold">${user.pubkey.slice(0, 5)}...</td>
                                     <td class="p-2 text-right">${user.positions}</td>
+                                    <td class="p-2 text-right text-blue-400">${(user.created || 0) * 2}</td>
                                     <td class="p-2 text-right">${multiplierBadge}</td>
                                     <td class="p-2 text-right text-yellow-400 font-bold">${user.points}</td>
                                     <td class="p-2 text-right text-green-400 font-bold">${parseFloat(user.expectedAirdrop).toLocaleString('en-US', {maximumFractionDigits: 2})} $PUMP</td>
@@ -1319,9 +1387,80 @@
         checkAsdfStatus();
     };
 
-    const connectWallet = async () => { if (window.solana && window.solana.isPhantom) { try { const resp = await window.solana.connect(); await updateWalletUI(resp.publicKey); } catch (err) { console.error(err); } } else { window.open("https://phantom.app/", "_blank"); } };
-    const disconnectWallet = async () => { if (window.solana) { try { await window.solana.disconnect(); } catch (e) {} userPubkey = null; updateWalletUI(null); } };
-    ui.connectBtn.onclick = connectWallet; ui.disconnectBtn.onclick = disconnectWallet;
+    // --- NEW WALLET CONNECTION LOGIC ---
+
+    const openWalletModal = () => {
+        // Detect wallets and update UI
+        if (window.solana && window.solana.isPhantom) document.getElementById('tag-phantom').classList.remove('hidden');
+        if (window.solflare && window.solflare.isSolflare) document.getElementById('tag-solflare').classList.remove('hidden');
+        if (window.backpack || window.xnft) document.getElementById('tag-backpack').classList.remove('hidden');
+
+        ui.walletModal.style.display = 'block';
+        lucide.createIcons();
+    };
+    window.openWalletModal = openWalletModal;
+    
+    const closeWalletModal = () => { ui.walletModal.style.display = 'none'; };
+    window.closeWalletModal = closeWalletModal;
+
+    const selectWallet = async (type) => {
+        let provider = null;
+        let installUrl = "https://phantom.app";
+
+        if (type === 'phantom') {
+            provider = window.solana?.isPhantom ? window.solana : null;
+            installUrl = "https://phantom.app/";
+        } else if (type === 'solflare') {
+            provider = window.solflare;
+            installUrl = "https://solflare.com/";
+        } else if (type === 'backpack') {
+            provider = window.backpack || window.xnft?.solana;
+            installUrl = "https://backpack.app/";
+        }
+
+        if (!provider) {
+            window.open(installUrl, '_blank');
+            showStatus(`${type.toUpperCase()} not detected. Opening download page...`, 'error');
+            return;
+        }
+
+        try {
+            const resp = await provider.connect();
+            activeWalletProvider = provider;
+            connectedWalletType = type;
+            
+            // Save to localStorage for auto-connect
+            localStorage.setItem('connectedWalletType', type);
+            
+            // Handle different response structures
+            let pubkey = resp.publicKey;
+            if (!pubkey && provider.publicKey) pubkey = provider.publicKey;
+            
+            await updateWalletUI(pubkey);
+            closeWalletModal();
+            showStatus(`Connected to ${type.toUpperCase()}`, 'success');
+
+        } catch (err) {
+            console.error("Connection Error:", err);
+            showStatus("Connection Rejected", 'error');
+        }
+    };
+    window.selectWallet = selectWallet;
+
+    const disconnectWallet = async () => { 
+        if (activeWalletProvider) { 
+            try { await activeWalletProvider.disconnect(); } catch (e) {} 
+        } else if (window.solana) {
+             try { await window.solana.disconnect(); } catch (e) {} 
+        }
+        
+        userPubkey = null; 
+        activeWalletProvider = null;
+        localStorage.removeItem('connectedWalletType');
+        updateWalletUI(null); 
+    };
+    ui.disconnectBtn.onclick = disconnectWallet;
+
 
     const validateInputs = (name, ticker, description, twitter, website, fileInput) => {
         if (fileInput.files.length === 0) return "Image is required.";
@@ -1339,7 +1478,7 @@
     };
 
     ui.deployBtn.onclick = async () => {
-        if (!userPubkey) return showStatus("CONNECT WALLET FIRST", 'error');
+        if (!userPubkey || !activeWalletProvider) return showStatus("CONNECT WALLET FIRST", 'error');
         const name = document.getElementById('name').value;
         const ticker = document.getElementById('ticker').value;
         const description = document.getElementById('desc').value;
@@ -1396,8 +1535,12 @@
             tx.recentBlockhash = blockhash;
             tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
             
-            const signedTx = await window.solana.signAndSendTransaction(tx);
+            // UPDATED: USE ACTIVE PROVIDER
+            const signedTx = await activeWalletProvider.signAndSendTransaction(tx);
             
+            // Handle different return types (some return object with signature, some return raw string)
+            const txSignature = signedTx.signature || signedTx;
+
             ui.deployBtn.innerText = "QUEUING DEPLOYMENT...";
             showStatus("PAYMENT CONFIRMED. QUEUING...", 'normal');
 
@@ -1407,7 +1550,7 @@
                 body: JSON.stringify({
                     name, ticker, description, twitter, website,
                     metadataUri,
-                    userTx: signedTx.signature,
+                    userTx: txSignature,
                     userPubkey: userPubkey,
                     isMayhemMode: isMayhemMode 
                 })
@@ -1499,10 +1642,17 @@
         }, 2000);
     };
     
+    // Updated Auto-Connect Logic
     window.addEventListener('load', () => {
-        if (window.solana && window.solana.isPhantom) {
-            window.solana.connect({ onlyIfTrusted: true }).then((resp) => updateWalletUI(resp.publicKey)).catch(() => {});
-            window.solana.on('disconnect', () => { disconnectWallet(); showStatus("Wallet Disconnected.", 'info'); });
+        const savedType = localStorage.getItem('connectedWalletType');
+        if (savedType) {
+            // Give extensions a moment to inject
+            setTimeout(() => {
+                selectWallet(savedType).catch(e => {
+                    console.warn("Auto-connect failed:", e);
+                    localStorage.removeItem('connectedWalletType');
+                });
+            }, 500);
         }
     });
 </script>
