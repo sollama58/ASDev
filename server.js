@@ -493,7 +493,7 @@ if (redisConnection) {
             const rwClient = client.readWrite;
 
             // UPDATED: Use V2 API (Standard) for posting
-            const tweetText = `🚀 NEW LAUNCH ALERT 🚀\n\nNAME: ${name} ($${ticker})\nCA: ${mint}\n\nTrade now on PumpFun:\nhttps://pump.fun/coin/${mint}\n\n#Solana #Memecoin #Ignition`;
+            const tweetText = `🚀 NEW LAUNCH ALERT 🚀\n\nNAME: ${name} ( $${ticker} )\nCA: ${mint}\n\nTrade now on PumpFun:\nhttps://pump.fun/coin/${mint}\n\n#Solana #Memecoin #Ignition`;
             
             // Note: client.v2.tweet is the standard modern endpoint
             const { data } = await rwClient.v2.tweet(tweetText);
