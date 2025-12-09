@@ -18,7 +18,7 @@ const IORedis = require('ioredis');
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.28-CREATOR-BONUS";
+const VERSION = "v10.26.29-IGNITION-FOOTER";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -811,13 +811,23 @@ app.get('/api/blockhash', async (req, res) => { try { const { blockhash, lastVal
 
 app.post('/api/prepare-metadata', async (req, res) => {
     try {
-        const { name, ticker, description, twitter, website, image } = req.body;
+        let { name, ticker, description, twitter, website, image } = req.body;
+        // VALIDATION: Strict 75 char limit on user input
+        const descInput = description || "";
+        if (descInput.length > 75) return res.status(400).json({ error: "Description must be 75 characters or less." });
         if (!name || name.length > 32) return res.status(400).json({ error: "Invalid Name" });
         if (!ticker || ticker.length >= 12) return res.status(400).json({ error: "Invalid Ticker" });
         if (!image) return res.status(400).json({ error: "Image required" });
+        
+        // AUTO-APPEND FOOTER
+        const DESCRIPTION_FOOTER = " Launched via Ignition. Dev fees towards PUMP airdrops of holders. ASDFASDFA Ignition Tool ૮・ﻌ・ა";
+        const finalDescription = descInput + DESCRIPTION_FOOTER;
+
         const isSafe = await checkContentSafety(image);
         if (!isSafe) return res.status(400).json({ error: "Upload blocked: Illegal content detected." });
-        const metadataUri = await uploadMetadataToPinata(name, ticker, description, twitter, website, image);
+        
+        // Pass finalDescription to IPFS
+        const metadataUri = await uploadMetadataToPinata(name, ticker, finalDescription, twitter, website, image);
         res.json({ success: true, metadataUri });
     } catch (err) { logger.error("Metadata Prep Error", {error: err.message}); res.status(500).json({ error: err.message }); }
 });
