@@ -13,12 +13,15 @@ const axios = require('axios');
 const FormData = require('form-data');
 const { Queue, Worker } = require('bullmq');
 const IORedis = require('ioredis');
+// NEW: Twitter API Import
+const { TwitterApi } = require('twitter-api-v2');
+
 // IMPORTS FIXED: Imported constants directly, removed duplicate declarations below
 // UPDATED: Added createAssociatedTokenAccountIdempotentInstruction to imports
 const { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createAssociatedTokenAccountIdempotentInstruction, getAccount, createCloseAccountInstruction, createTransferInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 
 // --- Config ---
-const VERSION = "v10.26.29-IGNITION-FOOTER";
+const VERSION = "v10.26.31-ASYNC-SOCIAL";
 const PORT = process.env.PORT || 3000;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const DEV_WALLET_PRIVATE_KEY = process.env.DEV_WALLET_PRIVATE_KEY;
@@ -111,12 +114,16 @@ const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recurs
 ensureDir(ACTIVE_DATA_DIR);
 
 let deployQueue;
+let socialQueue; // NEW: Queue for Twitter posts
 let redisConnection;
+
 try {
     redisConnection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
     deployQueue = new Queue('deployQueue', { connection: redisConnection });
-    deployQueue.resume(); // Ensure queue is running
-    logger.info("✅ Redis Queue Initialized");
+    socialQueue = new Queue('socialQueue', { connection: redisConnection }); // Init Social Queue
+    deployQueue.resume(); 
+    socialQueue.resume();
+    logger.info("✅ Redis Queues Initialized");
 } catch (e) { logger.error("❌ Redis Init Fail", { error: e.message }); }
 
 // --- CACHE HELPER ---
@@ -143,7 +150,7 @@ async function initDB() {
     db = await open({ filename: DB_PATH, driver: sqlite3.Database });
     await db.exec('PRAGMA journal_mode = WAL;');
     // REMOVED expectedAirdrop from token_holders for simpler logic, storing globally/in memory
-    await db.exec(`CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0, complete BOOLEAN DEFAULT 0, metadataUri TEXT);
+    await db.exec(`CREATE TABLE IF NOT EXISTS tokens (mint TEXT PRIMARY KEY, userPubkey TEXT, name TEXT, ticker TEXT, description TEXT, twitter TEXT, website TEXT, image TEXT, isMayhemMode BOOLEAN, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, volume24h REAL DEFAULT 0, marketCap REAL DEFAULT 0, lastUpdated INTEGER DEFAULT 0, complete BOOLEAN DEFAULT 0, metadataUri TEXT, tweetUrl TEXT);
         CREATE TABLE IF NOT EXISTS transactions (signature TEXT PRIMARY KEY, userPubkey TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, data TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value REAL);
@@ -161,6 +168,8 @@ async function initDB() {
     // Manual Migration: Dropping old expectedAirdrop column if it exists
     try { await db.exec('ALTER TABLE token_holders DROP COLUMN expectedAirdrop'); } catch(e) {}
     try { await db.exec('ALTER TABLE tokens ADD COLUMN metadataUri TEXT'); } catch(e) {}
+    // NEW: Add tweetUrl column
+    try { await db.exec('ALTER TABLE tokens ADD COLUMN tweetUrl TEXT'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN totalPoints REAL'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN signatures TEXT'); } catch(e) {}
     try { await db.exec('ALTER TABLE airdrops ADD COLUMN details TEXT'); } catch(e) {}
@@ -289,8 +298,9 @@ function calculateTokensForSol(solAmountLamports) {
     return virtualTokenReserves.sub(newVirtualTokens);
 }
 
-// --- WORKER ---
+// --- WORKERS ---
 if (redisConnection) {
+    // 1. DEPLOY WORKER
     worker = new Worker('deployQueue', async (job) => {
         logger.info(`STARTING JOB ${job.id}: ${job.data.ticker}`);
         const { name, ticker, description, twitter, website, image, userPubkey, isMayhemMode, metadataUri } = job.data;
@@ -407,6 +417,14 @@ if (redisConnection) {
             
             await saveTokenData(userPubkey, mint.toString(), { name, ticker, description, twitter, website, image, isMayhemMode, metadataUri });
 
+            // Trigger Social Post Asynchronously
+            if (socialQueue) {
+                await socialQueue.add('postTweet', { name, ticker, mint: mint.toString() }, {
+                    attempts: 5,
+                    backoff: { type: 'exponential', delay: 10000 } 
+                });
+            }
+
             setTimeout(async () => { try { 
                 const bal = await connection.getTokenAccountBalance(associatedUser); 
                 if (bal.value && bal.value.uiAmount > 0) { 
@@ -453,6 +471,39 @@ if (redisConnection) {
             throw jobError;
         }
     }, { connection: redisConnection, concurrency: 1 });
+
+    // 2. SOCIAL WORKER
+    const socialWorker = new Worker('socialQueue', async (job) => {
+        const { name, ticker, mint } = job.data;
+        if (!process.env.TWITTER_APP_KEY) {
+            logger.warn("Skipping Tweet: Missing Credentials");
+            return;
+        }
+
+        try {
+            const client = new TwitterApi({
+                appKey: process.env.TWITTER_APP_KEY,
+                appSecret: process.env.TWITTER_APP_SECRET,
+                accessToken: process.env.TWITTER_ACCESS_TOKEN,
+                accessSecret: process.env.TWITTER_ACCESS_SECRET,
+            });
+
+            const tweetText = `🚀 NEW LAUNCH ALERT 🚀\n\nNAME: ${name} ($${ticker})\nCA: ${mint}\n\nTrade now on PumpFun:\nhttps://pump.fun/coin/${mint}\n\n#Solana #Memecoin #Ignition`;
+            
+            const { data } = await client.v2.tweet(tweetText);
+            const tweetUrl = `https://x.com/user/status/${data.id}`;
+            
+            // Save tweet URL to DB
+            if (db) {
+                await db.run('UPDATE tokens SET tweetUrl = ? WHERE mint = ?', [tweetUrl, mint]);
+            }
+            logger.info(`🐦 Tweet Posted: ${tweetUrl}`);
+            return tweetUrl;
+        } catch (e) {
+            logger.error("Tweet Failed", { error: e.message });
+            throw e; // Triggers retry
+        }
+    }, { connection: redisConnection });
 }
 
 // --- PDAs/Uploads ---
@@ -778,6 +829,17 @@ app.get('/api/token-holders/:mint', async (req, res) => {
         res.json(holders);
     } catch (e) {
         logger.error("Token Holders API Error", { error: e.message });
+        res.status(500).json({ error: "DB Error" });
+    }
+});
+
+// NEW: Endpoint to poll for Tweet URL
+app.get('/api/token/:mint', async (req, res) => {
+    try {
+        const { mint } = req.params;
+        const token = await db.get('SELECT tweetUrl FROM tokens WHERE mint = ?', [mint]);
+        res.json(token || {});
+    } catch (e) {
         res.status(500).json({ error: "DB Error" });
     }
 });
@@ -1489,12 +1551,12 @@ async function runPurchaseAndFees() {
 // NEW HELPER: Swap SOL to USDC via Jupiter Aggregator v6
 async function swapSolToUsdc(amountLamports) {
     try {
-        // CHANGED: Using new api.jup.ag/swap/v1 endpoint to avoid DNS ENOTFOUND on quote-api.jup.ag
-        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${USDC_MINT.toString()}&amount=${amountLamports}&slippageBps=100`;
+        // CHANGED: Using PUBLIC Jupiter V6 Quote API (No API Key Required)
+        const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${USDC_MINT.toString()}&amount=${amountLamports}&slippageBps=100`;
         const quoteRes = await axios.get(quoteUrl);
         
-        // CHANGED: Using new api.jup.ag/swap/v1 endpoint for swap transaction build
-        const swapRes = await axios.post('https://api.jup.ag/swap/v1/swap', {
+        // CHANGED: Using PUBLIC Jupiter V6 Swap API
+        const swapRes = await axios.post('https://quote-api.jup.ag/v6/swap', {
             quoteResponse: quoteRes.data,
             userPublicKey: devKeypair.publicKey.toString(),
             wrapAndUnwrapSol: true

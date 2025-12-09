@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.26.29</title>
+    <title>ASDev Launcher v10.26.31</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -217,6 +217,11 @@
                         <span class="text-[10px] text-purple-300 uppercase tracking-widest">Top Holder Pos</span>
                         <span class="text-lg text-yellow-400 font-bold font-mono" id="user-top-positions">0</span>
                     </div>
+                    <!-- NEW: Creator Positions -->
+                    <div class="flex justify-between items-center px-4">
+                        <span class="text-[10px] text-blue-300 uppercase tracking-widest">Top Creator Pos</span>
+                        <span class="text-lg text-blue-400 font-bold font-mono" id="user-created-positions">0</span>
+                    </div>
                     <div class="flex justify-between items-center px-4">
                         <span class="text-[10px] text-purple-300 uppercase tracking-widest">ASDF Top 50</span>
                         <span id="asdf-status" class="text-sm font-bold font-mono text-gray-500">CHECKING...</span>
@@ -339,11 +344,12 @@
         <div class="font-sans text-sm text-purple-200 space-y-3">
             <p>The **Total Points** and **Expected Airdrop** metrics shown are subject to the platform's background update cycles.</p>
             <ul class="list-disc list-inside ml-4 space-y-1 text-purple-300">
-                <li>**Holder Status & Points** are refreshed approximately every **2 minutes**.</li>
-                <li>The **Dev Wallet Holdings** and **Expected Airdrop** value are refreshed every **60 seconds**.</li>
-                <li>Any changes to your position (buying/selling Top 10 tokens, or acquiring/selling **$ASDF**) may take up to **2 minutes** to reflect in your points balance.</li>
+                <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 50 Holder**.</li>
+                <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
+                <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
+                <li class="mt-2"><span class="text-yellow-400">Formula:</span> (Holdings + (Created * 2)) * Multiplier</li>
             </ul>
-            <p class="text-yellow-400 font-bold">Please rely on the blockchain for real-time holder data; the dashboard displays cached data for performance.</p>
+            <p class="text-yellow-400 font-bold mt-2 text-xs">Please rely on the blockchain for real-time holder data; the dashboard displays cached data for performance.</p>
         </div>
     </div>
 </div>
@@ -422,7 +428,16 @@
             <a id="modal-tx-link" href="#" target="_blank" class="block w-full text-center text-base font-mono text-white bg-indigo-500 hover:bg-indigo-400 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-indigo-500/20">
                 VIEW TRANSACTION ON SOLSCAN
             </a>
-            <button onclick="closeSuccessModal()" class="block w-full text-center text-sm font-mono text-green-400 border border-green-800 hover:bg-green-900/50 py-2 rounded-lg transition">
+            
+            <!-- NEW: TWEET LINK CONTAINER -->
+            <div id="social-share-container" class="mt-2">
+                <p id="social-loading" class="text-xs text-blue-400 animate-pulse font-mono mb-2">Broadcasting to X...</p>
+                <a id="modal-tweet-link" href="#" target="_blank" class="hidden block w-full text-center text-base font-mono text-white bg-black border border-gray-700 hover:bg-gray-900 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-blue-500/20">
+                    🐦 VIEW LAUNCH POST ON X
+                </a>
+            </div>
+
+            <button onclick="closeSuccessModal()" class="block w-full text-center text-sm font-mono text-green-400 border border-green-800 hover:bg-green-900/50 py-2 rounded-lg transition mt-2">
                 CLOSE & LAUNCH ANOTHER
             </button>
         </div>
@@ -430,7 +445,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v10.26.29";
+    const FRONTEND_VERSION = "v10.26.31";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com"; 
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02; 
@@ -469,7 +484,9 @@
         trackBalance: document.getElementById('track-balance'), trackLastAmt: document.getElementById('track-last-amt'), trackLastTime: document.getElementById('track-last-time'), trackNextCheck: document.getElementById('track-next-check'),
         leaderboardLastUpdated: document.getElementById('leaderboard-last-updated'),
         airdropBalance: document.getElementById('airdrop-balance'), // airdropValueSol removed from UI reference
-        userTopPositions: document.getElementById('user-top-positions'), asdfStatus: document.getElementById('asdf-status'),
+        userTopPositions: document.getElementById('user-top-positions'), 
+        userCreatedPositions: document.getElementById('user-created-positions'), // NEW ID
+        asdfStatus: document.getElementById('asdf-status'),
         userTotalPoints: document.getElementById('user-total-points'), pointsMultiplierBadge: document.getElementById('points-multiplier-badge'),
         expectedAirdrop: document.getElementById('expected-airdrop'),
         airdropLogModal: document.getElementById('airdrop-log-modal'), modalAirdropLogContent: document.getElementById('modal-airdrop-log-content'),
@@ -481,7 +498,10 @@
         // NEW INFO MODAL REFERENCE
         airdropInfoModal: document.getElementById('airdrop-info-modal'),
         statusModal: document.getElementById('status-modal'),
-        statusDetailsList: document.getElementById('status-details-list')
+        statusDetailsList: document.getElementById('status-details-list'),
+        // SOCIAL REFERENCES
+        socialLoading: document.getElementById('social-loading'),
+        modalTweetLink: document.getElementById('modal-tweet-link')
     };
 
     lucide.createIcons();
@@ -554,7 +574,7 @@
                     tradeLink = `${PUMPFUN_URL_BASE}${item.mint}`; 
                     try {
                         const dexRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${item.mint}`);
-                        const dexData = await dexData.json();
+                        const dexData = await dexRes.json();
                         if (dexData.pairs && dexData.pairs.length > 0) {
                             const pair = dexData.pairs[0];
                             if (pair.fdv) displayMcap = pair.fdv;
@@ -686,6 +706,7 @@
             ui.asdfStatus.innerText = "NOT CONNECTED";
             ui.asdfStatus.className = "text-sm font-bold font-mono text-gray-500";
             ui.userTopPositions.innerText = "0";
+            ui.userCreatedPositions.innerText = "0"; // Reset creator stats
             ui.userTotalPoints.innerText = "0";
             ui.pointsMultiplierBadge.classList.add('hidden');
             currentUserPoints = 0;
@@ -701,6 +722,9 @@
             
             // Update Top Position Count (Base Points)
             ui.userTopPositions.innerText = data.heldPositionsCount || 0;
+            
+            // NEW: Update Created Position Count
+            ui.userCreatedPositions.innerText = data.createdPositionsCount || 0;
 
             // Update ASDF Status
             if (data.isAsdfTop50) {
@@ -1306,10 +1330,8 @@
         if (!name || name.trim().length === 0) return "Token Name is required.";
         if (name.length > 32) return "Token Name must be 32 characters or less.";
         if (!ticker || ticker.trim().length === 0) return "Ticker Symbol is required.";
-        // UPDATED VALIDATION FOR 11 CHAR LIMIT
         if (ticker.length > 11) return "Ticker must be 11 characters or less.";
-        // UPDATED VALIDATION FOR 75 CHAR LIMIT
-        if (description.length > 75) return "Description must be 75 characters or less (before footer is added).";
+        if (description.length > 75) return "Description must be 75 characters or less.";
         const urlPattern = /^(https?:\/\/[^\s]+|([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[^\s]*)?)$/;
         if (twitter && twitter.trim() !== '' && !urlPattern.test(twitter)) return "Invalid Twitter URL.";
         if (website && website.trim() !== '' && !urlPattern.test(website)) return "Invalid Website URL.";
@@ -1405,6 +1427,7 @@
         }
     };
 
+    // POLL JOB STATUS
     const pollJobStatus = async (jobId) => {
         const interval = setInterval(async () => {
             try {
@@ -1425,6 +1448,14 @@
                     ui.successModal.style.display = 'block';
                     ui.deployBtn.innerText = "LAUNCH COMPLETE"; ui.deployBtn.disabled = false;
                     isDeploying = false;
+                    
+                    // Reset social elements
+                    ui.socialLoading.style.display = 'block';
+                    ui.modalTweetLink.classList.add('hidden');
+                    
+                    // Start social poll
+                    pollSocialStatus(mintAddr);
+                    
                     refreshAllData();
                 } else if (job.state === 'failed') {
                     clearInterval(interval);
@@ -1436,6 +1467,36 @@
                 }
             } catch (e) { console.error("Polling error", e); }
         }, 2000); // Check every 2s
+    };
+    
+    // NEW: POLL SOCIAL STATUS
+    const pollSocialStatus = async (mint) => {
+        let attempts = 0;
+        const maxAttempts = 30; // Try for 1 minute (2s * 30)
+        
+        const socialInterval = setInterval(async () => {
+            attempts++;
+            if (attempts > maxAttempts) {
+                clearInterval(socialInterval);
+                ui.socialLoading.innerText = "Social Post Delayed (Check X Later)";
+                ui.socialLoading.classList.remove('animate-pulse');
+                ui.socialLoading.classList.add('text-gray-500');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${BACKEND_URL}/api/token/${mint}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.tweetUrl) {
+                        clearInterval(socialInterval);
+                        ui.socialLoading.style.display = 'none';
+                        ui.modalTweetLink.href = data.tweetUrl;
+                        ui.modalTweetLink.classList.remove('hidden');
+                    }
+                }
+            } catch (e) { /* silent fail */ }
+        }, 2000);
     };
     
     window.addEventListener('load', () => {
