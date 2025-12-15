@@ -34,11 +34,18 @@ function init(deps) {
         }
     });
 
-    // King of the Hill (KOTH) Endpoint
+    // King of the Pill (KOTH) Endpoint
     router.get('/koth', async (req, res) => {
         try {
             // Select token with highest market cap
-            const koth = await db.get('SELECT mint, userPubkey, name, ticker, image, marketCap, volume24h FROM tokens ORDER BY marketCap DESC LIMIT 1');
+            // Ensure we only select valid tokens (non-null marketCap)
+            const koth = await db.get(`
+                SELECT mint, userPubkey, name, ticker, image, marketCap, volume24h 
+                FROM tokens 
+                WHERE marketCap > 0 
+                ORDER BY marketCap DESC 
+                LIMIT 1
+            `);
             
             if (koth) {
                 res.json({ 
@@ -57,6 +64,7 @@ function init(deps) {
                 res.json({ found: false });
             }
         } catch (e) {
+            console.error("KOTH Endpoint Error:", e);
             res.status(500).json({ error: "DB Error" });
         }
     });

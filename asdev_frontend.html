@@ -136,6 +136,8 @@
         .koth-title { text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
         .koth-glow { animation: glow 2s infinite alternate; }
         @keyframes glow { from { box-shadow: 0 0 10px rgba(217, 70, 239, 0.2); } to { box-shadow: 0 0 25px rgba(217, 70, 239, 0.7); } }
+        /* Force display for debugging */
+        /* #koth-panel { display: block !important; } */
     </style>
 </head>
 <body>
@@ -205,6 +207,7 @@
         </div>
         
         <!-- KING OF THE PILL PANEL -->
+        <!-- Added explicit 'style' attribute for testing, but relying on class removal -->
         <div id="koth-panel" class="panel koth-panel koth-glow mt-8 lg:col-span-3 hidden">
             <div class="flex flex-col md:flex-row items-center justify-between gap-6">
                 <div class="flex items-center gap-4">
@@ -926,22 +929,34 @@
     // NEW: UPDATE KOTH DISPLAY
     const updateKOTH = async () => {
         try {
+            console.log("Fetching KOTH..."); // Debug log
             const res = await fetch(`${BACKEND_URL}/api/koth`);
+            
             if (res.ok) {
                 const data = await res.json();
+                console.log("KOTH Data:", data); // Debug log
+
                 if (data.found && data.token) {
-                    ui.kothPanel.classList.remove('hidden');
+                    console.log("KOTH found, displaying panel.");
+                    // Ensure hidden class is removed
+                    const panel = document.getElementById('koth-panel');
+                    if (panel) panel.classList.remove('hidden');
+                    
                     ui.kothTicker.innerText = `$${escapeHtml(data.token.ticker)}`;
                     ui.kothName.innerText = escapeHtml(data.token.name);
                     ui.kothMcap.innerText = formatMcap(data.token.marketCap);
                     
                     if (data.token.image) {
-                        ui.kothImg.src = data.token.image;
+                        ui.kothImg.src = escapeHtml(data.token.image);
                         ui.kothImg.classList.remove('hidden');
                     }
                 } else {
-                    ui.kothPanel.classList.add('hidden');
+                    console.log("No KOTH found.");
+                    const panel = document.getElementById('koth-panel');
+                    if (panel) panel.classList.add('hidden');
                 }
+            } else {
+                console.error("KOTH fetch failed with status:", res.status);
             }
         } catch (e) {
             console.error("Failed to fetch KOTH", e);
