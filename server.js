@@ -84,7 +84,7 @@ const PUMP_PROGRAM_ID = safePublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF
 const PUMP_AMM_PROGRAM_ID = safePublicKey("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA", "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA", "PUMP_AMM_PROGRAM_ID");
 const TOKEN_PROGRAM_2022_ID = safePublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "TOKEN_PROGRAM_2022_ID");
 // Note: TOKEN_PROGRAM_ID and ASSOCIATED_TOKEN_PROGRAM_ID are now imported from @solana/spl-token
-const WSOL_MINT = safePublicKey("So11111111111111111111111111111111111111112", "So11111111111111111111111111111111111111112", "WSOL_MINT");
+const WSOL_MINT = safePublicKey("So11111111111111111111111111111111111111112", "So11111111111111111111111111111111", "WSOL_MINT");
 const USDC_MINT = safePublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "USDC_MINT");
 
 // Fee & Metaplex
@@ -849,6 +849,43 @@ app.get('/api/all-launches', async (req, res) => {
         logger.error("All Launches Error", { error: e.message });
         res.status(500).json({ tokens: [], lastUpdate: Date.now() }); 
     } 
+});
+
+// =======================================================
+// NEW: King of the Pill (KOTH) Endpoint [ADDED]
+// =======================================================
+app.get('/api/koth', async (req, res) => {
+    try {
+        // Select token with highest market cap
+        // Ensure we only select valid tokens (non-null marketCap)
+        const koth = await db.get(`
+            SELECT mint, userPubkey, name, ticker, image, marketCap, volume24h 
+            FROM tokens 
+            WHERE marketCap > 0 
+            ORDER BY marketCap DESC 
+            LIMIT 1
+        `);
+        
+        if (koth) {
+            res.json({ 
+                found: true,
+                token: {
+                    mint: koth.mint,
+                    creator: koth.userPubkey,
+                    name: koth.name,
+                    ticker: koth.ticker,
+                    image: koth.image,
+                    marketCap: koth.marketCap,
+                    volume: koth.volume24h
+                }
+            });
+        } else {
+            res.json({ found: false });
+        }
+    } catch (e) {
+        console.error("KOTH Endpoint Error:", e);
+        res.status(500).json({ error: "DB Error" });
+    }
 });
 
 // NEW: Endpoint to fetch all eligible users and their points
