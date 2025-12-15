@@ -131,11 +131,11 @@
             border-radius: 4px;
             margin-left: 10px;
         }
-        /* KOTH Styles */
-        .koth-panel { background: linear-gradient(135deg, #422006 0%, #000000 100%); border: 3px solid #fbbf24; box-shadow: 0 0 20px rgba(251, 191, 36, 0.3); }
+        /* KOTH Styles - Updated to Pill Theme */
+        .koth-panel { background: linear-gradient(135deg, #1a0b2e 0%, #000000 100%); border: 3px solid #d946ef; box-shadow: 0 0 20px rgba(217, 70, 239, 0.3); }
         .koth-title { text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
         .koth-glow { animation: glow 2s infinite alternate; }
-        @keyframes glow { from { box-shadow: 0 0 10px rgba(251, 191, 36, 0.2); } to { box-shadow: 0 0 20px rgba(251, 191, 36, 0.6); } }
+        @keyframes glow { from { box-shadow: 0 0 10px rgba(217, 70, 239, 0.2); } to { box-shadow: 0 0 25px rgba(217, 70, 239, 0.7); } }
     </style>
 </head>
 <body>
@@ -204,34 +204,34 @@
             <div id="status-msg" class="status-box"></div>
         </div>
         
-        <!-- KING OF THE HILL PANEL -->
+        <!-- KING OF THE PILL PANEL -->
         <div id="koth-panel" class="panel koth-panel koth-glow mt-8 lg:col-span-3 hidden">
             <div class="flex flex-col md:flex-row items-center justify-between gap-6">
                 <div class="flex items-center gap-4">
-                    <div class="text-4xl">👑</div>
+                    <div class="text-4xl">💊</div> <!-- Updated Icon to Pill -->
                     <div>
-                        <h3 class="text-yellow-400 font-mono font-bold text-lg uppercase tracking-widest koth-title">KING OF THE HILL</h3>
-                        <p class="text-yellow-200/80 text-xs font-mono">HIGHEST MARKET CAP LAUNCH</p>
+                        <h3 class="text-fuchsia-400 font-mono font-bold text-lg uppercase tracking-widest koth-title">KING OF THE PILL</h3>
+                        <p class="text-fuchsia-200/80 text-xs font-mono">HIGHEST MARKET CAP LAUNCH</p>
                     </div>
                 </div>
                 
-                <div class="flex items-center gap-6 bg-black/40 p-3 rounded-lg border border-yellow-600/30 flex-1 justify-center">
-                    <img id="koth-img" src="" class="w-12 h-12 rounded border border-yellow-500 object-cover hidden">
+                <div class="flex items-center gap-6 bg-black/40 p-3 rounded-lg border border-fuchsia-600/30 flex-1 justify-center">
+                    <img id="koth-img" src="" class="w-12 h-12 rounded border border-fuchsia-500 object-cover hidden">
                     <div class="text-center">
                         <div id="koth-ticker" class="text-2xl font-bold text-white font-mono">$????</div>
-                        <div id="koth-name" class="text-xs text-yellow-500 font-mono uppercase">LOADING...</div>
+                        <div id="koth-name" class="text-xs text-fuchsia-500 font-mono uppercase">LOADING...</div>
                     </div>
                 </div>
 
                 <div class="text-center">
-                    <div class="text-xs text-yellow-500 uppercase font-mono mb-1">MARKET CAP</div>
+                    <div class="text-xs text-fuchsia-500 uppercase font-mono mb-1">MARKET CAP</div>
                     <div id="koth-mcap" class="text-2xl font-bold text-white font-mono">$0</div>
                 </div>
                 
                 <div class="text-right">
-                    <div class="text-[10px] text-yellow-200/60 uppercase font-mono mb-1">REWARD SHARE</div>
-                    <div class="text-xl font-bold text-yellow-400 font-mono">10%</div>
-                    <div class="text-[10px] text-yellow-500 font-mono">OF AIRDROPS</div>
+                    <div class="text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">REWARD SHARE</div>
+                    <div class="text-xl font-bold text-fuchsia-400 font-mono">10%</div>
+                    <div class="text-[10px] text-fuchsia-500 font-mono">OF AIRDROPS</div>
                 </div>
             </div>
         </div>
@@ -444,7 +444,7 @@
                 <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
                 <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
                 <li class="mt-2"><span class="text-yellow-400">Formula:</span> (Holdings + (Created * 2)) * Multiplier</li>
-                <li class="mt-2 text-yellow-300 font-bold">👑 King of the Hill (KOTH): 10% of every airdrop goes directly to the Creator of the highest MCAP token, bypassing points logic.</li>
+                <li class="mt-2 text-fuchsia-300 font-bold">💊 King of the Pill (KOTH): 10% of every airdrop goes directly to the Creator of the highest MCAP token, bypassing points logic.</li>
             </ul>
             <p class="text-yellow-400 font-bold mt-2 text-xs">Please rely on the blockchain for real-time holder data; the dashboard displays cached data for performance.</p>
         </div>
@@ -482,8 +482,8 @@
                     <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
                 </ul>
                 <!-- KOTH SECTION ADDED -->
-                <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mt-4">
-                    <p class="text-[10px] text-yellow-400 uppercase tracking-widest mb-1">👑 KING OF THE HILL (NEW)</p>
+                <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
+                    <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">💊 KING OF THE PILL (NEW)</p>
                     <p class="text-xs text-gray-300">The Creator of the highest Market Cap token receives <span class="text-white font-bold">10% of the entire Airdrop pot</span> immediately, before other points are calculated.</p>
                 </div>
             </div>
