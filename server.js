@@ -41,12 +41,17 @@ const PINATA_API_KEY_LEGACY = process.env.API_KEY ? process.env.API_KEY.trim() :
 const PINATA_SECRET_KEY_LEGACY = process.env.SECRET_KEY ? process.env.SECRET_KEY.trim() : null;
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY; 
+const CLARIFAI_API_KEY = process.env.CLARIFAI_API_KEY;
+
+// ASDF Vanity Grinder Config
+const VANITY_GRINDER_URL = process.env.VANITY_GRINDER_URL; // e.g., "http://localhost:8080"
+const VANITY_GRINDER_API_KEY = process.env.VANITY_GRINDER_API_KEY;
+const VANITY_GRINDER_ENABLED = process.env.VANITY_GRINDER_ENABLED === 'true'; 
 const HEADER_IMAGE_URL = process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO";
 
-const DISK_ROOT = '/var/data'; 
+const DISK_ROOT = process.env.DISK_ROOT || (fs.existsSync('/var/data') ? '/var/data' : './data');
 const DEBUG_LOG_FILE = path.join(DISK_ROOT, 'server_debug.log');
-if (!fs.existsSync(DISK_ROOT)) { if (!fs.existsSync('./data')) fs.mkdirSync('./data'); }
+if (!fs.existsSync(DISK_ROOT)) { fs.mkdirSync(DISK_ROOT, { recursive: true }); }
 
 const logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
 function log(level, message, meta = {}) {
@@ -193,6 +198,139 @@ async function checkContentSafety(base64Data) {
     } catch (e) { return true; }
 }
 
+// --- ASDF Vanity Grinder Integration ---
+// Fetches a pre-generated keypair with mint address ending in "ASDF" from the vanity grinder pool
+// Supports both Rust grinder format (mint.mint_keypair as base58) and Node format (secret as byte array)
+async function fetchVanityKeypair() {
+    if (!VANITY_GRINDER_ENABLED || !VANITY_GRINDER_URL) {
+        logger.info("Vanity grinder disabled or not configured, using random keypair");
+        return null;
+    }
+
+    try {
+        const headers = {};
+        if (VANITY_GRINDER_API_KEY) {
+            headers['X-API-Key'] = VANITY_GRINDER_API_KEY;
+        }
+
+        const response = await axios.get(`${VANITY_GRINDER_URL}/mint`, {
+            headers,
+            timeout: 10000
+        });
+
+        let keypair = null;
+        let address = null;
+
+        // Format 1: Rust grinder format { success: true, mint: { mint_address, mint_keypair (base58) } }
+        if (response.data && response.data.success && response.data.mint) {
+            const { mint_address, mint_keypair } = response.data.mint;
+            if (mint_address && mint_keypair) {
+                // mint_keypair is base58-encoded 64-byte secret
+                const secretBytes = bs58.decode(mint_keypair);
+                keypair = Keypair.fromSecretKey(secretBytes);
+                address = keypair.publicKey.toBase58();
+                logger.info(`✅ Fetched vanity keypair (Rust): ${address} (${response.data.remaining} remaining)`);
+            }
+        }
+        // Format 2: Node grinder format { public_key, secret: [byte array] }
+        else if (response.data && response.data.public_key && response.data.secret) {
+            const secretBytes = Uint8Array.from(response.data.secret);
+            keypair = Keypair.fromSecretKey(secretBytes);
+            address = keypair.publicKey.toBase58();
+            logger.info(`✅ Fetched vanity keypair (Node): ${address}`);
+        }
+
+        if (keypair && address) {
+            // Verify the address ends with ASDF (case-insensitive)
+            if (!address.toUpperCase().endsWith('ASDF')) {
+                logger.warn(`Vanity keypair doesn't end with ASDF: ${address}, falling back to random`);
+                return null;
+            }
+            return keypair;
+        }
+
+        logger.warn("Invalid response from vanity grinder", { data: response.data });
+        return null;
+    } catch (e) {
+        logger.error("Failed to fetch vanity keypair", { error: e.message });
+        return null;
+    }
+}
+
+// Get mint keypair - tries vanity grinder first, falls back to random
+async function getMintKeypair() {
+    const vanityKeypair = await fetchVanityKeypair();
+    if (vanityKeypair) {
+        return vanityKeypair;
+    }
+    logger.info("Using random keypair (fallback)");
+    return Keypair.generate();
+}
+
+// --- Vanity Pool Auto-Refill ---
+// Periodically checks pool status and triggers refill when running low
+const VANITY_POOL_MIN_SIZE = 10;  // Trigger refill when pool falls below this
+const VANITY_POOL_REFILL_COUNT = 20;  // How many to generate when refilling
+const VANITY_POOL_CHECK_INTERVAL = 30000;  // Check every 30 seconds
+let isRefilling = false;
+
+async function checkAndRefillVanityPool() {
+    if (!VANITY_GRINDER_ENABLED || !VANITY_GRINDER_URL || isRefilling) {
+        return;
+    }
+
+    try {
+        const headers = {};
+        if (VANITY_GRINDER_API_KEY) {
+            headers['X-API-Key'] = VANITY_GRINDER_API_KEY;
+        }
+
+        // Check pool status
+        const statsResponse = await axios.get(`${VANITY_GRINDER_URL}/stats`, {
+            headers,
+            timeout: 5000
+        });
+
+        const available = statsResponse.data.available || 0;
+
+        if (available < VANITY_POOL_MIN_SIZE) {
+            logger.info(`🔄 Vanity pool low (${available}/${VANITY_POOL_MIN_SIZE}), triggering refill...`);
+            isRefilling = true;
+
+            try {
+                const refillResponse = await axios.post(
+                    `${VANITY_GRINDER_URL}/refill?count=${VANITY_POOL_REFILL_COUNT}`,
+                    null,
+                    { headers, timeout: 300000 }  // 5 min timeout for generation
+                );
+
+                if (refillResponse.data.success) {
+                    logger.info(`✅ Vanity pool refilled: +${refillResponse.data.generated} keys (total: ${refillResponse.data.total_available})`);
+                } else {
+                    logger.warn("Vanity pool refill failed", { response: refillResponse.data });
+                }
+            } catch (refillErr) {
+                logger.error("Vanity pool refill error", { error: refillErr.message });
+            } finally {
+                isRefilling = false;
+            }
+        }
+    } catch (e) {
+        // Don't log errors for connection refused (grinder might not be running)
+        if (!e.message.includes('ECONNREFUSED')) {
+            logger.error("Vanity pool check failed", { error: e.message });
+        }
+    }
+}
+
+// Start pool monitor if vanity grinder is enabled
+if (VANITY_GRINDER_ENABLED && VANITY_GRINDER_URL) {
+    setInterval(checkAndRefillVanityPool, VANITY_POOL_CHECK_INTERVAL);
+    // Initial check after 5 seconds
+    setTimeout(checkAndRefillVanityPool, 5000);
+    logger.info(`🔄 Vanity pool auto-refill enabled (min: ${VANITY_POOL_MIN_SIZE}, refill: ${VANITY_POOL_REFILL_COUNT})`);
+}
+
 initDB();
 const app = express();
 app.use(cors());
@@ -307,7 +445,7 @@ if (redisConnection) {
 
         try {
             if (!metadataUri) throw new Error("Metadata URI missing");
-            const mintKeypair = Keypair.generate();
+            const mintKeypair = await getMintKeypair();
             const mint = mintKeypair.publicKey;
             const creator = devKeypair.publicKey;
 
@@ -585,6 +723,28 @@ async function uploadMetadataToPinata(n, s, d, t, w, i) {
 
 // --- Routes ---
 app.get('/api/version', (req, res) => res.json({ version: VERSION }));
+
+// TEST ENDPOINT: Verify Vanity Grinder Integration
+app.get('/api/test-vanity', async (req, res) => {
+    try {
+        const startTime = Date.now();
+        const keypair = await getMintKeypair();
+        const elapsed = Date.now() - startTime;
+        const address = keypair.publicKey.toBase58();
+        const isVanity = address.toUpperCase().endsWith('ASDF');
+
+        res.json({
+            success: true,
+            address,
+            isVanityAddress: isVanity,
+            vanityGrinderEnabled: VANITY_GRINDER_ENABLED,
+            vanityGrinderUrl: VANITY_GRINDER_URL || 'not configured',
+            fetchTimeMs: elapsed
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 app.get('/api/health', async (req, res) => { 
     try { 
         // CACHE IMPLEMENTATION FOR HEALTH ENDPOINT
@@ -823,7 +983,6 @@ app.get('/api/check-holder', async (req, res) => {
         // FIX: Retrieve expected airdrop value from the global cache map
         const totalExpectedAirdrop = globalUserExpectedAirdrops.get(userPubkey) || 0;
         
-        // DEBUG: Explicitly Log what is being returned for this user
         logger.info("Check Holder:", { user: userPubkey, points, held: heldPositionsCount, created: createdPositionsCount });
 
         res.json({ 
@@ -981,10 +1140,7 @@ async function updateGlobalState() {
             devPumpHoldings = 0; 
         }
         const distributableAmount = devPumpHoldings * 0.99;
-        
-        // DEBUG: LOG CRITICAL VALUES
-        // logger.info("DEBUG: Dev Pump Holdings:", devPumpHoldings);
-        
+
         // 1B. Update Individual Token Holders
         for (const token of topTokens) { 
             try { 
@@ -1101,10 +1257,8 @@ async function updateGlobalState() {
         }
         
         globalTotalPoints = tempTotalPoints;
-        
-        // DEBUG: LOG POINTS AND MAP SIZE
-        logger.info(`DEBUG: Global Points: ${globalTotalPoints}`);
-        
+        logger.info(`Global Points updated: ${globalTotalPoints}`);
+
         // --- UPDATE GLOBAL CACHE FOR EXPECTED AIRDROP ---
         globalUserExpectedAirdrops.clear();
         globalUserPointsMap.clear(); // Clear points map
@@ -1127,9 +1281,6 @@ async function updateGlobalState() {
                  }
              }
         }
-        
-        // logger.info(`DEBUG: User Map Size: ${globalUserExpectedAirdrops.size}`);
-        // No DB transaction needed for expectedAirdrop calculation, as it's cached in memory map.
 
     } catch(e) { console.error("Loop Error", e); }
 }

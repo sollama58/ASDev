@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data
+data/
+dump.rdb
+*.log
+
+# Vanity Grinder (cloned separately)
+asdf-vanity-grinder/
+start_grinder.sh
+vanity_pool.json
+vanity_mints.json
+
+# Test files
+vanity_mock.js
+vanity_grinder_real.js
+
+# OS files
+.DS_Store
+Thumbs.db
