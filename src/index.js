@@ -64,17 +64,22 @@ async function main() {
     }));
 
     // CORS configuration
+    // DIAGNOSIS FIX: Use '*' explicitly if wildcard is detected, rather than reflection (true)
+    // This is more robust for public frontends (like Squarespace) interacting with Render
     const corsOptions = {
-        origin: config.CORS_ORIGINS.includes('*') ? true : config.CORS_ORIGINS,
-        optionsSuccessStatus: 200
+        origin: config.CORS_ORIGINS.includes('*') ? '*' : config.CORS_ORIGINS,
+        optionsSuccessStatus: 200,
+        credentials: true
     };
     app.use(cors(corsOptions));
     app.use(express.json({ limit: '50mb' }));
 
     // Rate limiting
+    // DIAGNOSIS FIX: Increased max requests from 100 to 2000 per 15 minutes.
+    // The frontend polls ~6 endpoints every minute. 100 was too low and caused false "Offline" states.
     const apiLimiter = rateLimit({
         windowMs: 15 * 60 * 1000, // 15 minutes
-        max: 100, // 100 requests per window
+        max: 2000, // Increased to accommodate frontend polling
         message: { error: 'Too many requests, please try again later' },
         standardHeaders: true,
         legacyHeaders: false
@@ -82,7 +87,7 @@ async function main() {
 
     const deployLimiter = rateLimit({
         windowMs: 60 * 1000, // 1 minute
-        max: 3, // 3 deployments per minute
+        max: 10, // Increased slightly to prevent accidental blocks during launch parties
         message: { error: 'Too many deployment requests, please wait' },
         standardHeaders: true,
         legacyHeaders: false
