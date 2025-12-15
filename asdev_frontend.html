@@ -711,51 +711,25 @@
             }
 
             if (!tokens || tokens.length === 0) { ui.leaderboardBody.innerHTML = '<tr><td colspan="5" class="text-center text-orange-400 py-4">No active tokens found.</td></tr>'; return; }
-            ui.leaderboardBody.innerHTML = await Promise.all(tokens.map(async (item, index) => {
-                let displayMcap = item.marketCap; // Default from backend (Pump API)
+            
+            // Generate rows
+            const rows = tokens.map((item, index) => {
+                let displayMcap = item.marketCap; 
                 let displayVol = parseFloat(item.volume);
-                
                 let tradeLink = `${PUMPFUN_URL_BASE}${item.mint}`;
                 let badge = `<span class="badge-bonding" title="Bonding in Progress">PRE-BOND</span>`; 
 
-                // If complete (Post-Bond), attempt to fetch real data from DexScreener
                 if (item.complete) {
                     badge = `<span class="badge-bonded" title="Bonding Curve Complete">BONDED</span>`;
-                    tradeLink = `${PUMPFUN_URL_BASE}${item.mint}`; 
-                    try {
-                        const dexRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${item.mint}`);
-                        const dexData = await dexRes.json();
-                        if (dexData.pairs && dexData.pairs.length > 0) {
-                            const pair = dexData.pairs[0];
-                            if (pair.fdv) displayMcap = pair.fdv;
-                            else if (pair.marketCap) displayMcap = pair.marketCap;
-                            displayVol = pair.volume.h24;
-                        }
-                    } catch (e) { console.error("DEX fetch failed", e); }
                 }
 
-                let imgSrc = item.image;
-                if ((!imgSrc || imgSrc.trim() === '') && item.metadataUri) {
-                    try {
-                        const metaRes = await fetch(item.metadataUri);
-                        const metaJson = await metaRes.json();
-                        if (metaJson.image) {
-                            imgSrc = metaJson.image;
-                        }
-                    } catch (e) { console.error("Metadata fetch failed", e); }
-                }
-                
-                if (!imgSrc || imgSrc.trim() === '') {
-                    imgSrc = 'https://placehold.co/32x32/333/fff?text=?'; 
-                }
+                // Image Logic: Prefer stored image, fallback to metadata URI if needed (handled by browser or backend pre-fetch ideally), final fallback to placeholder
+                let imgSrc = item.image || 'https://placehold.co/32x32/333/fff?text=?';
 
-                // Check for HOLDER status (from backend API logic)
                 const holderMark = item.isUserTopHolder 
                     ? `<span class="holder-check" title="You are a Top Holder">👑 TOP HOLDER</span>` 
                     : '';
                 
-                // NEW: Check for CREATOR status (from user pubkey match)
-                // item.creator is returned by backend now
                 const creatorMark = (userPubkey && item.creator && userPubkey === item.creator)
                     ? `<span class="badge-creator" title="You created this token">🛠️ CREATOR</span>`
                     : '';
@@ -771,7 +745,6 @@
                         ${badge}
                         <div class="text-[10px] text-orange-300 mt-1 truncate max-w-[150px]">${escapeHtml(item.name)}</div>
                     </td>
-                    <!-- REMOVED NAME COLUMN -->
                     <td class="text-right text-green-400 font-bold font-mono">${formatMcap(displayMcap)}</td>
                     <td class="text-right text-white font-bold">$${displayVol.toLocaleString()}</td>
                     <td class="text-right">
@@ -783,10 +756,13 @@
                         </div>
                     </td>
                 </tr>`;
-            })).then(rows => rows.join(''));
+            });
+            
+            ui.leaderboardBody.innerHTML = rows.join('');
 
         } catch (e) {
             systemStatus.db_access = 'OFFLINE';
+            console.error("Leaderboard update failed", e);
         }
     };
     window.updateLeaderboard = updateLeaderboard;
