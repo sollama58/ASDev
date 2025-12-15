@@ -504,7 +504,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v20";
+    const FRONTEND_VERSION = "v21";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02;
@@ -1348,55 +1348,6 @@
     window.toggleLogModal = toggleLogModal;
     const closeLogModal = () => { ui.logModal.style.display = 'none'; };
     window.closeLogModal = closeLogModal;
-
-    // Wallet Modal Functions
-    const openWalletModal = () => {
-        // Detect available wallets
-        if (window.phantom?.solana) document.getElementById('tag-phantom')?.classList.remove('hidden');
-        if (window.solflare) document.getElementById('tag-solflare')?.classList.remove('hidden');
-        if (window.backpack) document.getElementById('tag-backpack')?.classList.remove('hidden');
-        ui.walletModal.style.display = 'block';
-        lucide.createIcons();
-    };
-    window.openWalletModal = openWalletModal;
-
-    const closeWalletModal = () => { ui.walletModal.style.display = 'none'; };
-    window.closeWalletModal = closeWalletModal;
-
-    const selectWallet = async (walletType) => {
-        closeWalletModal();
-        try {
-            let provider = null;
-            if (walletType === 'phantom' && window.phantom?.solana) {
-                provider = window.phantom.solana;
-            } else if (walletType === 'solflare' && window.solflare) {
-                provider = window.solflare;
-            } else if (walletType === 'backpack' && window.backpack) {
-                provider = window.backpack;
-            }
-
-            if (!provider) {
-                showStatus(`${walletType} wallet not detected. Please install it.`, 'error');
-                return;
-            }
-
-            const resp = await provider.connect();
-            activeWalletProvider = provider;
-            connectedWalletType = walletType;
-            userPubkey = resp.publicKey.toString();
-
-            ui.connectBtn.classList.add('hidden');
-            ui.walletUI.classList.remove('hidden');
-            ui.walletAddr.innerText = userPubkey.slice(0, 4) + "..." + userPubkey.slice(-4);
-
-            refreshWalletBalance();
-            updateHolderStatus();
-            showStatus(`Connected to ${walletType}!`, 'success');
-        } catch (e) {
-            showStatus("Wallet connection failed: " + e.message, 'error');
-        }
-    };
-    window.selectWallet = selectWallet;
 
     // UPDATED: Airdrop Log Toggle with DATE in timestamp
     const toggleAirdropLogModal = async () => {
