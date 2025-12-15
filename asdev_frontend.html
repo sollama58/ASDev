@@ -131,6 +131,11 @@
             border-radius: 4px;
             margin-left: 10px;
         }
+        /* KOTH Styles */
+        .koth-panel { background: linear-gradient(135deg, #422006 0%, #000000 100%); border: 3px solid #fbbf24; box-shadow: 0 0 20px rgba(251, 191, 36, 0.3); }
+        .koth-title { text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+        .koth-glow { animation: glow 2s infinite alternate; }
+        @keyframes glow { from { box-shadow: 0 0 10px rgba(251, 191, 36, 0.2); } to { box-shadow: 0 0 20px rgba(251, 191, 36, 0.6); } }
     </style>
 </head>
 <body>
@@ -199,6 +204,38 @@
             <div id="status-msg" class="status-box"></div>
         </div>
         
+        <!-- KING OF THE HILL PANEL -->
+        <div id="koth-panel" class="panel koth-panel koth-glow mt-8 lg:col-span-3 hidden">
+            <div class="flex flex-col md:flex-row items-center justify-between gap-6">
+                <div class="flex items-center gap-4">
+                    <div class="text-4xl">👑</div>
+                    <div>
+                        <h3 class="text-yellow-400 font-mono font-bold text-lg uppercase tracking-widest koth-title">KING OF THE HILL</h3>
+                        <p class="text-yellow-200/80 text-xs font-mono">HIGHEST MARKET CAP LAUNCH</p>
+                    </div>
+                </div>
+                
+                <div class="flex items-center gap-6 bg-black/40 p-3 rounded-lg border border-yellow-600/30 flex-1 justify-center">
+                    <img id="koth-img" src="" class="w-12 h-12 rounded border border-yellow-500 object-cover hidden">
+                    <div class="text-center">
+                        <div id="koth-ticker" class="text-2xl font-bold text-white font-mono">$????</div>
+                        <div id="koth-name" class="text-xs text-yellow-500 font-mono uppercase">LOADING...</div>
+                    </div>
+                </div>
+
+                <div class="text-center">
+                    <div class="text-xs text-yellow-500 uppercase font-mono mb-1">MARKET CAP</div>
+                    <div id="koth-mcap" class="text-2xl font-bold text-white font-mono">$0</div>
+                </div>
+                
+                <div class="text-right">
+                    <div class="text-[10px] text-yellow-200/60 uppercase font-mono mb-1">REWARD SHARE</div>
+                    <div class="text-xl font-bold text-yellow-400 font-mono">10%</div>
+                    <div class="text-[10px] text-yellow-500 font-mono">OF AIRDROPS</div>
+                </div>
+            </div>
+        </div>
+
         <div class="panel bg-black/30 border border-orange-900 mt-8 lg:col-span-3">
             <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
                 <div class="flex items-center gap-4">
@@ -407,6 +444,7 @@
                 <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
                 <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
                 <li class="mt-2"><span class="text-yellow-400">Formula:</span> (Holdings + (Created * 2)) * Multiplier</li>
+                <li class="mt-2 text-yellow-300 font-bold">👑 King of the Hill (KOTH): 10% of every airdrop goes directly to the Creator of the highest MCAP token, bypassing points logic.</li>
             </ul>
             <p class="text-yellow-400 font-bold mt-2 text-xs">Please rely on the blockchain for real-time holder data; the dashboard displays cached data for performance.</p>
         </div>
@@ -443,9 +481,10 @@
                     <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
                     <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
                 </ul>
-                <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50">
-                    <p class="text-[10px] text-purple-300 uppercase tracking-widest mb-1">MATH EXAMPLE</p>
-                    <p class="text-xs text-gray-300">User is Top 50 in 3 coins (3pts).<br>User Created 1 Top 10 coin (2pts).<br>Base = 5.<br>User holds $ASDF (Top 50).<br><span class="text-white font-bold">Total Points = 5 x 2 = 10 Points.</span></p>
+                <!-- KOTH SECTION ADDED -->
+                <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mt-4">
+                    <p class="text-[10px] text-yellow-400 uppercase tracking-widest mb-1">👑 KING OF THE HILL (NEW)</p>
+                    <p class="text-xs text-gray-300">The Creator of the highest Market Cap token receives <span class="text-white font-bold">10% of the entire Airdrop pot</span> immediately, before other points are calculated.</p>
                 </div>
             </div>
         </div>
@@ -456,7 +495,7 @@
             <ul class="list-disc list-inside text-gray-400 space-y-1">
                 <li><span class="text-white font-bold">Trigger:</span> When Dev Wallet holds > 50,000 $PUMP and >0.25SOL.</li>
                 <li><span class="text-white font-bold">Action:</span> Distributes **99%** of the $PUMP balance to all qualified users.</li>
-                <li><span class="text-white font-bold">Distribution:</span> Proportional based on your share of the Total Global Points.</li>
+                <li><span class="text-white font-bold">Distribution:</span> Proportional based on your share of the Total Global Points (minus 10% KOTH allocation).</li>
             </ul>
         </div>
 
@@ -603,7 +642,13 @@
         socialLoading: document.getElementById('social-loading'),
         modalTweetLink: document.getElementById('modal-tweet-link'),
         // WALLET MODAL
-        walletModal: document.getElementById('wallet-modal')
+        walletModal: document.getElementById('wallet-modal'),
+        // KOTH REFERENCES
+        kothPanel: document.getElementById('koth-panel'),
+        kothTicker: document.getElementById('koth-ticker'),
+        kothName: document.getElementById('koth-name'),
+        kothMcap: document.getElementById('koth-mcap'),
+        kothImg: document.getElementById('koth-img')
     };
 
     lucide.createIcons();
@@ -878,6 +923,31 @@
         } 
     };
 
+    // NEW: UPDATE KOTH DISPLAY
+    const updateKOTH = async () => {
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/koth`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.found && data.token) {
+                    ui.kothPanel.classList.remove('hidden');
+                    ui.kothTicker.innerText = `$${escapeHtml(data.token.ticker)}`;
+                    ui.kothName.innerText = escapeHtml(data.token.name);
+                    ui.kothMcap.innerText = formatMcap(data.token.marketCap);
+                    
+                    if (data.token.image) {
+                        ui.kothImg.src = data.token.image;
+                        ui.kothImg.classList.remove('hidden');
+                    }
+                } else {
+                    ui.kothPanel.classList.add('hidden');
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch KOTH", e);
+        }
+    };
+
     const checkHealth = async () => { 
         let status = 'ONLINE';
         let error = null;
@@ -1007,6 +1077,7 @@
             await Promise.allSettled([
                 updatePumpPrice(),
                 updateLeaderboard(),
+                updateKOTH(), // FETCH KING OF THE HILL
                 fetchRecentLaunches(),
                 checkHealth(),
                 refreshWalletBalance(),
@@ -1376,7 +1447,9 @@
                                     <td class="p-2">${log.totalPoints || '-'}</td>
                                     <td class="p-2 text-right">
                                         ${log.signatures ? log.signatures.split(',').map((sig, i) => 
-                                            `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link">[TX ${i+1}]</a>`
+                                            sig.startsWith('KOTH') 
+                                            ? `<a href="https://solscan.io/tx/${sig.split(':')[1]}" target="_blank" class="tx-link text-yellow-400">[👑]</a>`
+                                            : `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link">[TX ${i+1}]</a>`
                                         ).join(' ') : 'Pending'}
                                     </td>
                                 </tr>

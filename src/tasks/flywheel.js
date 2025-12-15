@@ -104,6 +104,7 @@ async function claimCreatorFees(deps) {
 
 /**
  * Process airdrop distribution
+ * Updated with "King of the Hill" (KOTH) Logic
  */
 async function processAirdrop(deps) {
     const { connection, devKeypair, db, globalState } = deps;
@@ -123,29 +124,71 @@ async function processAirdrop(deps) {
 
         logger.info(`AIRDROP TRIGGERED: Balance ${balance} PUMP > 50,000`);
 
-        const amountToDistribute = balance * 0.99;
-        const amountToDistributeInt = new BN(amountToDistribute * 1000000);
+        // Total Amount to be distributed (99% of holdings)
+        const totalDistributable = balance * 0.99;
+        let kothAmount = 0;
+        let communityAmount = totalDistributable;
+        let kothTxSignature = null;
 
-        const userPoints = Array.from(globalState.userPointsMap.entries())
-            .map(([pubkey, points]) => ({ pubkey: new PublicKey(pubkey), points }))
-            .filter(user => user.points > 0);
-
-        if (globalState.totalPoints === 0 || userPoints.length === 0) return;
-
-        logger.info(`Distributing ${amountToDistribute} PUMP to ${userPoints.length} users`);
-
+        // 1. Identify King of the Hill (Highest MCAP)
+        const kothToken = await db.get('SELECT userPubkey, ticker, mint FROM tokens ORDER BY marketCap DESC LIMIT 1');
+        
         const devPumpAta = await getAssociatedTokenAddress(
             TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
         );
 
+        // 2. Process KOTH Payout (10%)
+        if (kothToken && kothToken.userPubkey) {
+            kothAmount = totalDistributable * 0.10;
+            communityAmount = totalDistributable * 0.90;
+
+            logger.info(`👑 King of the Hill found: ${kothToken.ticker} ($${kothAmount.toFixed(2)} PUMP prize)`);
+
+            try {
+                // Send specific transaction for KOTH
+                const kothBatch = [{ user: new PublicKey(kothToken.userPubkey), amount: new BN(kothAmount * 1000000) }];
+                kothTxSignature = await sendAirdropBatch(kothBatch, devPumpAta, deps);
+                
+                if (kothTxSignature) {
+                    logger.info(`✅ KOTH Payout Sent: ${kothTxSignature}`);
+                } else {
+                    logger.error("❌ KOTH Payout Failed - returning funds to community pool");
+                    // If fails, put money back in community pot
+                    communityAmount += kothAmount;
+                    kothAmount = 0;
+                }
+            } catch (e) {
+                logger.error(`KOTH Logic Error: ${e.message}`);
+                communityAmount += kothAmount;
+                kothAmount = 0;
+            }
+        }
+
+        // 3. Process Community Distribution (Remaining 90%)
+        const communityAmountInt = new BN(communityAmount * 1000000); // 6 decimals
+        const userPoints = Array.from(globalState.userPointsMap.entries())
+            .map(([pubkey, points]) => ({ pubkey: new PublicKey(pubkey), points }))
+            .filter(user => user.points > 0);
+
+        if (globalState.totalPoints === 0 || userPoints.length === 0) {
+             isAirdropping = false;
+             return;
+        }
+
+        logger.info(`Distributing ${communityAmount} PUMP to ${userPoints.length} users (Community Pool)`);
+
         const BATCH_SIZE = 8;
         let currentBatch = [];
         let allSignatures = [];
+        
+        // Add KOTH sig if it exists
+        if (kothTxSignature) allSignatures.push(`KOTH:${kothTxSignature}`);
+
         let successfulBatches = 0;
         let failedBatches = 0;
 
         for (const user of userPoints) {
-            const share = amountToDistributeInt.mul(new BN(user.points)).div(new BN(globalState.totalPoints));
+            const share = communityAmountInt.mul(new BN(user.points)).div(new BN(globalState.totalPoints));
             if (share.eqn(0)) continue;
 
             currentBatch.push({ user: user.pubkey, amount: share });
@@ -175,10 +218,10 @@ async function processAirdrop(deps) {
 
         logger.info(`Airdrop Complete. Success: ${successfulBatches}, Failed: ${failedBatches}`);
 
-        const details = JSON.stringify({ success: successfulBatches, failed: failedBatches });
+        const details = JSON.stringify({ success: successfulBatches, failed: failedBatches, kothWinner: kothToken?.ticker || 'None', kothAmount: kothAmount });
         await db.run(
             'INSERT INTO airdrop_logs (amount, recipients, totalPoints, signatures, details, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-            [amountToDistribute, userPoints.length, globalState.totalPoints, allSignatures.join(','), details, new Date().toISOString()]
+            [totalDistributable, userPoints.length + (kothAmount > 0 ? 1 : 0), globalState.totalPoints, allSignatures.join(','), details, new Date().toISOString()]
         );
     } catch (e) {
         logger.error("Airdrop Failed", { error: e.message });
@@ -302,10 +345,10 @@ async function runPurchaseAndFees(deps) {
             const MIN_SPEND = 0.05 * LAMPORTS_PER_SOL;
 
             if (spendable > MIN_SPEND) {
-                // New Distribution: 95% Buyback, 4.5% ASDF Fee, 0.5% Upkeep
-                const transfer9_5 = Math.floor(spendable * 0.045); // 4.5% to ASDF Fee Wallet (formerly 9.5%)
-                const transfer0_5 = Math.floor(spendable * 0.005); // 0.5% to Upkeep (unchanged)
-                const solBuyAmount = Math.floor(spendable * 0.95); // 95% to Buyback (formerly 90%)
+                // Distribution: 95% Buyback, 4.5% ASDF Fee, 0.5% Upkeep
+                const transfer9_5 = Math.floor(spendable * 0.045);
+                const transfer0_5 = Math.floor(spendable * 0.005);
+                const solBuyAmount = Math.floor(spendable * 0.95);
 
                 logData.solSpent = (solBuyAmount + transfer9_5 + transfer0_5) / LAMPORTS_PER_SOL;
                 logData.transfer9_5 = transfer9_5 / LAMPORTS_PER_SOL;

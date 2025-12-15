@@ -34,6 +34,33 @@ function init(deps) {
         }
     });
 
+    // King of the Hill (KOTH) Endpoint
+    router.get('/koth', async (req, res) => {
+        try {
+            // Select token with highest market cap
+            const koth = await db.get('SELECT mint, userPubkey, name, ticker, image, marketCap, volume24h FROM tokens ORDER BY marketCap DESC LIMIT 1');
+            
+            if (koth) {
+                res.json({ 
+                    found: true,
+                    token: {
+                        mint: koth.mint,
+                        creator: koth.userPubkey,
+                        name: koth.name,
+                        ticker: koth.ticker,
+                        image: koth.image,
+                        marketCap: koth.marketCap,
+                        volume: koth.volume24h
+                    }
+                });
+            } else {
+                res.json({ found: false });
+            }
+        } catch (e) {
+            res.status(500).json({ error: "DB Error" });
+        }
+    });
+
     // Leaderboard
     router.get('/leaderboard', async (req, res) => {
         const { userPubkey } = req.query;
