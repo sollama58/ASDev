@@ -302,9 +302,10 @@ async function runPurchaseAndFees(deps) {
             const MIN_SPEND = 0.05 * LAMPORTS_PER_SOL;
 
             if (spendable > MIN_SPEND) {
-                const transfer9_5 = Math.floor(spendable * 0.095);
-                const transfer0_5 = Math.floor(spendable * 0.005);
-                const solBuyAmount = Math.floor(spendable * 0.90);
+                // New Distribution: 95% Buyback, 4.5% ASDF Fee, 0.5% Upkeep
+                const transfer9_5 = Math.floor(spendable * 0.045); // 4.5% to ASDF Fee Wallet (formerly 9.5%)
+                const transfer0_5 = Math.floor(spendable * 0.005); // 0.5% to Upkeep (unchanged)
+                const solBuyAmount = Math.floor(spendable * 0.95); // 95% to Buyback (formerly 90%)
 
                 logData.solSpent = (solBuyAmount + transfer9_5 + transfer0_5) / LAMPORTS_PER_SOL;
                 logData.transfer9_5 = transfer9_5 / LAMPORTS_PER_SOL;
