@@ -64,22 +64,21 @@ async function main() {
     }));
 
     // CORS configuration
-    // DIAGNOSIS FIX: Use '*' explicitly if wildcard is detected, rather than reflection (true)
-    // This is more robust for public frontends (like Squarespace) interacting with Render
+    // DIAGNOSIS FIX 2: Removed 'credentials: true'.
+    // Credentials cannot be true if origin is '*', which causes the browser to block the request.
     const corsOptions = {
         origin: config.CORS_ORIGINS.includes('*') ? '*' : config.CORS_ORIGINS,
-        optionsSuccessStatus: 200,
-        credentials: true
+        optionsSuccessStatus: 200
+        // credentials: true  <-- REMOVED TO FIX WILDCARD SUPPORT
     };
     app.use(cors(corsOptions));
     app.use(express.json({ limit: '50mb' }));
 
     // Rate limiting
-    // DIAGNOSIS FIX: Increased max requests from 100 to 2000 per 15 minutes.
-    // The frontend polls ~6 endpoints every minute. 100 was too low and caused false "Offline" states.
+    // Kept the generous limits from the previous fix
     const apiLimiter = rateLimit({
         windowMs: 15 * 60 * 1000, // 15 minutes
-        max: 2000, // Increased to accommodate frontend polling
+        max: 2000, 
         message: { error: 'Too many requests, please try again later' },
         standardHeaders: true,
         legacyHeaders: false
@@ -87,7 +86,7 @@ async function main() {
 
     const deployLimiter = rateLimit({
         windowMs: 60 * 1000, // 1 minute
-        max: 10, // Increased slightly to prevent accidental blocks during launch parties
+        max: 10,
         message: { error: 'Too many deployment requests, please wait' },
         standardHeaders: true,
         legacyHeaders: false
