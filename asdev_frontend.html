@@ -15,7 +15,7 @@
         .font-mono { font-family: 'JetBrains Mono', monospace; }
         #app-container { width: 100%; max-width: 1100px; background-color: #451a03; border: 6px solid #7c2d12; border-radius: 20px; overflow: hidden; box-shadow: 0 40px 80px rgba(0,0,0,0.95); position: relative; }
         .ticker-wrap { width: 100%; background-color: #2a1005; border-bottom: 2px solid #7c2d12; overflow: hidden; height: 40px; display: flex; align-items: center; position: relative; }
-        .ticker { display: flex; gap: 2rem; white-space: nowrap; animation: marquee 80s linear infinite; /* Adjusted to 80s (50% slower than 40s) for smoother, visible scrolling */ font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #fb923c; }
+        .ticker { display: flex; gap: 2rem; white-space: nowrap; animation: marquee 80s linear infinite; font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #fb923c; }
         .ticker-item { display: inline-flex; align-items: center; gap: 6px; }
         .ticker-item a { color: #4ade80; text-decoration: underline; transition: color 0.2s; }
         .ticker-item a:hover { color: #ffffff; }
@@ -51,20 +51,18 @@
         .toggle-switch input:checked + .slider:before { transform: translateX(26px); }
         .mayhem-label { transition: color 0.4s; }
         .mayhem-label.active { color: #ef4444; }
-        /* FIX: Applied animation to a wrapper instead of the image */
         #logo-wrapper { 
             width: 60px; 
             height: 60px; 
             border-radius: 8px; 
             overflow: hidden; 
-            min-width: 60px; /* Ensure fixed size for layout */
+            min-width: 60px;
             animation: bounce 1s infinite alternate; 
         }
         #header-image { 
             width: 100%; 
             height: 100%; 
             object-fit: cover; 
-            /* Removed animation: bounce 1s infinite alternate; */
         }
         @keyframes bounce { 
             from { transform: translateY(0); } 
@@ -131,13 +129,11 @@
             border-radius: 4px;
             margin-left: 10px;
         }
-        /* KOTH Styles - Updated to Pill Theme */
+        /* KOTH Styles */
         .koth-panel { background: linear-gradient(135deg, #1a0b2e 0%, #000000 100%); border: 3px solid #d946ef; box-shadow: 0 0 20px rgba(217, 70, 239, 0.3); }
         .koth-title { text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
         .koth-glow { animation: glow 2s infinite alternate; }
         @keyframes glow { from { box-shadow: 0 0 10px rgba(217, 70, 239, 0.2); } to { box-shadow: 0 0 25px rgba(217, 70, 239, 0.7); } }
-        /* Force display for debugging */
-        /* #koth-panel { display: block !important; } */
     </style>
 </head>
 <body>
@@ -148,7 +144,6 @@
     <div class="p-10">
         <div class="flex justify-between items-start mb-10 border-b-4 border-orange-900 pb-8">
             <div class="flex items-center gap-6">
-                <!-- WRAPPED THE IMAGE FOR STABLE BOUNCING -->
                 <div id="logo-wrapper">
                     <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
                 </div>
@@ -207,11 +202,10 @@
         </div>
         
         <!-- KING OF THE PILL PANEL -->
-        <!-- Added explicit 'style' attribute for testing, but relying on class removal -->
         <div id="koth-panel" class="panel koth-panel koth-glow mt-8 lg:col-span-3 hidden">
             <div class="flex flex-col md:flex-row items-center justify-between gap-6">
                 <div class="flex items-center gap-4">
-                    <div class="text-4xl">💊</div> <!-- Updated Icon to Pill -->
+                    <div class="text-4xl">💊</div> 
                     <div>
                         <h3 class="text-fuchsia-400 font-mono font-bold text-lg uppercase tracking-widest koth-title">KING OF THE PILL</h3>
                         <p class="text-fuchsia-200/80 text-xs font-mono">HIGHEST MARKET CAP LAUNCH</p>
@@ -245,7 +239,6 @@
                     <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">🔥 TOP 10 LAUNCHES (BY 24H VOL)</h3>
                     <span id="leaderboard-last-updated" class="text-orange-600 text-xs font-mono">Syncing...</span>
                 </div>
-                <!-- UPDATED: Added Expand button -->
                 <div class="flex items-center gap-2">
                     <button onclick="toggleAllLaunchesModal()" class="text-orange-400 hover:text-white transition p-1 rounded hover:bg-orange-800" title="Expand to All Launches">
                         <i data-lucide="maximize-2" width="16"></i>
@@ -257,38 +250,32 @@
             </div>
             <div class="overflow-x-auto">
                 <table class="leader-table">
-                    <!-- REMOVED NAME COLUMN -->
                     <thead><tr><th style="width: 50px;">#</th><th>Token</th><th class="text-right">MCAP</th><th class="text-right">Vol (24H)</th><th class="text-right">Action</th></tr></thead>
                     <tbody id="leaderboard-body"><tr><td colspan="5" class="text-center text-orange-400 py-4">Scanning Chain Data...</td></tr></tbody>
                 </table>
             </div>
         </div>
 
-        <!-- New Airdrop Panel -->
+        <!-- Airdrop Panel -->
         <div class="panel bg-purple-950/30 border border-purple-800 mt-8 lg:col-span-3">
             <div class="flex justify-between items-center border-b border-purple-800/50 pb-2 mb-4">
                 <h3 class="text-purple-400 font-mono text-sm uppercase tracking-widest">🪂 AIRDROP RESERVES & POINTS</h3>
-                <!-- UPDATED: Added Expand Users button next to View History -->
                 <div class="flex items-center gap-4">
                     <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">EXPAND USERS</button>
                     <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">VIEW HISTORY</button>
                 </div>
             </div>
             <div class="flex flex-col md:flex-row items-stretch justify-between gap-6 px-4">
-                <!-- Holdings -->
                 <div class="text-center w-full md:w-1/4 border-r border-purple-800/30 pr-4">
                     <div class="text-xs text-purple-300 uppercase mb-2 tracking-widest">Dev Wallet Holdings</div>
-                    <!-- REMOVED: airdrop-value-sol div -->
                     <div class="text-3xl md:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" id="airdrop-balance">0.00 <span class="text-lg align-top text-purple-400">$PUMP</span></div>
                 </div>
                 
-                <!-- Status -->
                 <div class="text-center w-full md:w-1/4 flex flex-col justify-center gap-3 border-r border-purple-800/30 pr-4">
                     <div class="flex justify-between items-center px-4">
                         <span class="text-[10px] text-purple-300 uppercase tracking-widest">Top Holder Pts</span>
                         <span class="text-lg text-yellow-400 font-bold font-mono" id="user-top-positions">0</span>
                     </div>
-                    <!-- NEW: Creator Positions -->
                     <div class="flex justify-between items-center px-4">
                         <span class="text-[10px] text-blue-300 uppercase tracking-widest">Top Creator Pts</span>
                         <span class="text-lg text-blue-400 font-bold font-mono" id="user-created-positions">0</span>
@@ -299,11 +286,9 @@
                     </div>
                 </div>
 
-                <!-- Points -->
                 <div class="text-center w-full md:w-1/4 flex flex-col justify-center items-center border-r border-purple-800/30 pr-4">
                     <div class="flex justify-center items-center gap-2 mb-1">
                         <div class="text-xs text-purple-300 uppercase tracking-widest">Total Points</div>
-                        <!-- NEW: Info button for disclaimer -->
                         <button onclick="toggleAirdropInfoModal()" class="p-0 text-purple-400 hover:text-white transition" title="View Update Information">
                             <i data-lucide="info" width="14" height="14"></i>
                         </button>
@@ -312,7 +297,6 @@
                     <div id="points-multiplier-badge" class="hidden mt-1 px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[10px] text-green-400 font-bold tracking-wider">2X MULTIPLIER ACTIVE</div>
                 </div>
 
-                <!-- Expected -->
                 <div class="text-center w-full md:w-1/4 flex flex-col justify-center items-center bg-purple-900/20 rounded-lg py-2">
                     <div class="text-[10px] text-purple-300 uppercase mb-1 tracking-widest">Expected Airdrop</div>
                     <div class="text-2xl text-green-400 font-bold font-mono" id="expected-airdrop">0.00</div>
@@ -351,7 +335,6 @@
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div class="metric-card"><div class="metric-label">Lifetime Launches</div><div id="metric-launches" class="metric-value">0</div></div>
                 <div class="metric-card"><div class="metric-label">Total $PUMP Airdropped</div><div id="metric-pump" class="metric-value">0</div></div>
-                <!-- CHANGED LABEL -->
                 <div class="metric-card"><div class="metric-label">Total Daily Volume</div><div id="metric-fees" class="metric-value">$0.00</div></div>
             </div>
             <div class="text-center mt-6">
@@ -361,13 +344,12 @@
         
         <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
             <div><span class="text-orange-600">RPC UPLINK: MAINNET PUBLIC</span></div>
-            <!-- MADE STATUS INDICATOR CLICKABLE -->
             <div class="flex gap-4"><span>SYSTEM STATUS: <span id="sys-status" class="sys-status" onclick="toggleStatusModal()">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
         </div>
     </div>
 </div>
 
-<!-- WALLET SELECTION MODAL -->
+<!-- MODALS -->
 <div id="wallet-modal" class="modal">
     <div class="modal-content border-orange-600" style="max-width: 450px;">
         <span class="close-btn" onclick="closeWalletModal()">&times;</span>
@@ -377,21 +359,16 @@
                 <span class="flex items-center gap-3"><i data-lucide="ghost" width="20"></i> Phantom</span>
                 <span id="tag-phantom" class="hidden detected-tag">DETECTED</span>
             </button>
-
             <button onclick="selectWallet('solflare')" class="btn-wallet" id="btn-solflare">
                 <span class="flex items-center gap-3"><i data-lucide="flame" width="20"></i> Solflare</span>
                 <span id="tag-solflare" class="hidden detected-tag">DETECTED</span>
             </button>
-
             <button onclick="selectWallet('backpack')" class="btn-wallet" id="btn-backpack">
                 <span class="flex items-center gap-3"><i data-lucide="backpack" width="20"></i> Backpack</span>
                 <span id="tag-backpack" class="hidden detected-tag">DETECTED</span>
             </button>
         </div>
-
-        <p class="text-center text-xs text-orange-400/60 mt-4 font-mono">
-            Selecting a wallet will prompt a connection request.
-        </p>
+        <p class="text-center text-xs text-orange-400/60 mt-4 font-mono">Selecting a wallet will prompt a connection request.</p>
     </div>
 </div>
 
@@ -403,39 +380,29 @@
     </div>
 </div>
 
-<!-- HOLDERS MODAL -->
 <div id="holders-modal" class="modal">
     <div class="modal-content border-orange-600" style="max-width: 400px;">
         <span class="close-btn" onclick="closeHoldersModal()">&times;</span>
         <h3 id="holders-modal-title" class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">Top Holders</h3>
-        <div id="holders-list" class="max-h-[60vh] overflow-y-auto pr-2 font-mono text-xs">
-            <!-- List injected here -->
-        </div>
+        <div id="holders-list" class="max-h-[60vh] overflow-y-auto pr-2 font-mono text-xs"></div>
     </div>
 </div>
 
-<!-- NEW: SYSTEM STATUS MODAL -->
 <div id="status-modal" class="modal">
     <div class="modal-content border-yellow-600" style="max-width: 450px;">
         <span class="close-btn" onclick="closeStatusModal()">&times;</span>
         <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2">SYSTEM STATUS DIAGNOSTICS</h3>
-        <div id="status-details-list" class="font-mono text-sm space-y-2">
-            <!-- Status items injected here -->
-        </div>
+        <div id="status-details-list" class="font-mono text-sm space-y-2"></div>
         <p class="text-xs text-yellow-500 mt-4">If services are offline, automatic processes (like airdrops and buybacks) may be delayed or halted.</p>
     </div>
 </div>
 
-<!-- NEW ALL LAUNCHES MODAL -->
 <div id="all-launches-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAllLaunchesModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">ALL PLATFORM LAUNCHES</h3><div id="modal-all-launches-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
-<!-- NEW ALL ELIGIBLE USERS MODAL -->
 <div id="all-eligible-users-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAllEligibleUsersModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">ELIGIBLE AIRDROP USERS & POINTS</h3><div id="modal-all-eligible-users-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
-<!-- NEW AIRDROP LOG MODAL -->
 <div id="airdrop-log-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAirdropLogModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">AIRDROP DISTRIBUTION HISTORY</h3><div id="modal-airdrop-log-content" class="max-h-[60vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
-<!-- NEW AIRDROP INFO MODAL (DISCLAIMER) -->
 <div id="airdrop-info-modal" class="modal">
     <div class="modal-content border-purple-600">
         <span class="close-btn" onclick="closeAirdropInfoModal()">&times;</span>
@@ -449,7 +416,6 @@
                 <li class="mt-2"><span class="text-yellow-400">Formula:</span> (Holdings + (Created * 2)) * Multiplier</li>
                 <li class="mt-2 text-fuchsia-300 font-bold">💊 King of the Pill (KOTH): 10% of every airdrop goes directly to the Creator of the highest MCAP token, bypassing points logic.</li>
             </ul>
-            <p class="text-yellow-400 font-bold mt-2 text-xs">Please rely on the blockchain for real-time holder data; the dashboard displays cached data for performance.</p>
         </div>
     </div>
 </div>
@@ -466,7 +432,6 @@
                 </ul>
 
                 <h4 class="text-orange-400 font-bold mb-3 border-b border-orange-800 pb-1">2. THE FLYWHEEL (BUYBACKS)</h4>
-                <!-- UPDATED: Fee threshold changed from 0.20 SOL to 0.01 SOL -->
                 <p class="text-orange-200 mb-2">Every 5 minutes, if the Fee Pool > 0.20 SOL:</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
                     <li><span class="text-green-400 font-bold">95.0%</span>: Buys **$PUMP** (Sent to Dev Wallet).</li>
@@ -479,12 +444,10 @@
                 <h4 class="text-purple-400 font-bold mb-3 border-b border-purple-800 pb-1">3. POINTS SYSTEM (QUALIFICATION)</h4>
                 <p class="text-purple-200 mb-2">Users earn points by holding top tokens. No signup required.</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <!-- Updated text to reflect Top 50 rule and CREATOR BONUS -->
                     <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 50 Holder**.</li>
                     <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
                     <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
                 </ul>
-                <!-- KOTH SECTION ADDED -->
                 <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
                     <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">💊 KING OF THE PILL (NEW)</p>
                     <p class="text-xs text-gray-300">The Creator of the highest Market Cap token receives <span class="text-white font-bold">10% of the entire Airdrop pot</span> immediately, before other points are calculated.</p>
@@ -501,11 +464,6 @@
                 <li><span class="text-white font-bold">Distribution:</span> Proportional based on your share of the Total Global Points (minus 10% KOTH allocation).</li>
             </ul>
         </div>
-
-        <div class="mt-6 p-4 border border-orange-800 bg-orange-950/50 rounded-lg">
-            <h5 class="text-red-400 font-bold mb-2 text-xs">LEGAL DISCLAIMER</h5>
-            <p class="text-[10px] text-orange-300">This platform is a decentralized utility tool provided "as-is". The operators are not responsible for the nature of tokens created, their value, or any financial losses incurred. By using this service, you agree to comply with all applicable laws and regulations in your jurisdiction. Uploading illegal or prohibited content is strictly forbidden. Transactions on the blockchain are irreversible.</p>
-        </div>
     </div>
 </div></div>
 
@@ -516,44 +474,30 @@
         <div class="mb-6"><i data-lucide="rocket" class="w-16 h-16 text-green-400 mx-auto animate-bounce"></i></div>
         <h3 class="text-green-400 font-bold font-mono mb-2 text-3xl tracking-widest">DEPLOYMENT SUCCESSFUL</h3>
         <p class="text-green-200 text-sm mb-6">Your token is live on the Solana blockchain!</p>
-        
         <div class="bg-black/40 p-4 rounded-lg border border-green-800 mb-4 text-left">
             <p class="text-xs text-green-500 font-mono uppercase tracking-wider mb-1">CONTRACT ADDRESS (CA)</p>
             <p id="modal-mint-addr" class="text-white font-mono text-lg break-all font-bold ca-display" onclick="copyCA()"></p>
         </div>
-        
         <div class="flex flex-col gap-3">
-            <a id="modal-pump-link" href="#" target="_blank" class="block w-full text-center text-base font-mono text-black bg-yellow-400 hover:bg-yellow-300 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-yellow-500/20">
-                TRADE ON PUMP.FUN
-            </a>
-            <a id="modal-tx-link" href="#" target="_blank" class="block w-full text-center text-base font-mono text-white bg-indigo-500 hover:bg-indigo-400 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-indigo-500/20">
-                VIEW TRANSACTION ON SOLSCAN
-            </a>
-            
-            <!-- NEW: TWEET LINK CONTAINER -->
+            <a id="modal-pump-link" href="#" target="_blank" class="block w-full text-center text-base font-mono text-black bg-yellow-400 hover:bg-yellow-300 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-yellow-500/20">TRADE ON PUMP.FUN</a>
+            <a id="modal-tx-link" href="#" target="_blank" class="block w-full text-center text-base font-mono text-white bg-indigo-500 hover:bg-indigo-400 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-indigo-500/20">VIEW TRANSACTION ON SOLSCAN</a>
             <div id="social-share-container" class="mt-2">
                 <p id="social-loading" class="text-xs text-blue-400 animate-pulse font-mono mb-2">Broadcasting to X...</p>
-                <a id="modal-tweet-link" href="#" target="_blank" class="hidden block w-full text-center text-base font-mono text-white bg-black border border-gray-700 hover:bg-gray-900 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-blue-500/20">
-                    🐦 VIEW LAUNCH POST ON X
-                </a>
+                <a id="modal-tweet-link" href="#" target="_blank" class="hidden block w-full text-center text-base font-mono text-white bg-black border border-gray-700 hover:bg-gray-900 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-blue-500/20">🐦 VIEW LAUNCH POST ON X</a>
             </div>
-
-            <button onclick="closeSuccessModal()" class="block w-full text-center text-sm font-mono text-green-400 border border-green-800 hover:bg-green-900/50 py-2 rounded-lg transition mt-2">
-                CLOSE & LAUNCH ANOTHER
-            </button>
+            <button onclick="closeSuccessModal()" class="block w-full text-center text-sm font-mono text-green-400 border border-green-800 hover:bg-green-900/50 py-2 rounded-lg transition mt-2">CLOSE & LAUNCH ANOTHER</button>
         </div>
     </div>
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v21";
+    const FRONTEND_VERSION = "v21.1-IMG-FIX";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02;
     const PUMPFUN_URL_BASE = "https://pump.fun/coin/";
     const PUMP_CONTRACT = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
 
-    // Wallet state
     let activeWalletProvider = null;
     let connectedWalletType = null;
     let userPubkey = null;
@@ -562,39 +506,61 @@
     let isDeploying = false;
     let nextCheckTime = 0;
     
-    // NEW: System Status Tracker
     let systemStatus = {
         backend: 'CHECKING',
         solana_rpc: 'CHECKING',
-        db_access: 'CHECKING', // Inferred from successful data fetches
+        db_access: 'CHECKING',
         error_message: null
     };
 
-    // Cached global values for calculation
     let currentPumpHoldings = 0;
     let currentGlobalPoints = 0;
     let currentUserPoints = 0;
 
-    // XSS Sanitization helper
     const sanitize = (html) => DOMPurify.sanitize(html, {
         ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'span', 'div', 'a', 'br', 'img', 'table', 'tr', 'td', 'th', 'thead', 'tbody'],
-        ALLOWED_ATTR: ['href', 'target', 'class', 'style', 'src', 'alt', 'width', 'height']
+        ALLOWED_ATTR: ['href', 'target', 'class', 'style', 'src', 'alt', 'width', 'height', 'loading']
     });
 
-    // Safe text escaping for user content
     const escapeHtml = (text) => {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     };
 
-    // Interval manager for cleanup
+    /**
+     * ADVANCED IMAGE RESOLVER
+     * Fixes IPFS links, uses caching proxy, and ensures HTTPS.
+     */
+    const resolveTokenImage = (url) => {
+        const fallback = 'https://placehold.co/32x32/333/fff?text=?';
+        if (!url) return fallback;
+
+        let cleanUrl = url.trim();
+
+        // 1. Handle IPFS Protocol
+        if (cleanUrl.startsWith('ipfs://')) {
+            cleanUrl = cleanUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
+        }
+
+        // 2. Handle known slow gateways - Replace with faster public gateway
+        if (cleanUrl.includes('gateway.pinata.cloud')) {
+            cleanUrl = cleanUrl.replace('gateway.pinata.cloud', 'ipfs.io');
+        }
+
+        // 3. Use wsrv.nl Image Proxy for caching, resizing, and enforcing HTTPS
+        // w=64: Resize to 64px width (high DPI for 32px display)
+        // output=webp: Use modern format
+        // q=80: Quality optimization
+        // url: The encoded original URL
+        return `https://wsrv.nl/?url=${encodeURIComponent(cleanUrl)}&w=64&output=webp&q=80&default=${encodeURIComponent(fallback)}`;
+    };
+
     const activeIntervals = [];
     const registerInterval = (id) => { activeIntervals.push(id); return id; };
     const clearAllIntervals = () => { activeIntervals.forEach(id => clearInterval(id)); activeIntervals.length = 0; };
     window.addEventListener('beforeunload', clearAllIntervals);
 
-    // API retry helper with exponential backoff
     const fetchWithRetry = async (url, options = {}, maxRetries = 3, baseDelay = 1000) => {
         let lastError;
         for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -617,7 +583,7 @@
         connectBtn: document.getElementById('connect-btn'), walletUI: document.getElementById('wallet-ui'), walletAddr: document.getElementById('wallet-addr'), walletBal: document.getElementById('wallet-bal'),
         refreshBtn: document.getElementById('refresh-btn'), disconnectBtn: document.getElementById('disconnect-btn'), deployBtn: document.getElementById('deploy-btn'),
         statusBox: document.getElementById('status-msg'), sysStatus: document.getElementById('sys-status'), imgPreview: document.getElementById('image-preview'),
-        previewName: document.getElementById('preview-name'), previewTicker: document.getElementById('preview-ticker'), lifetimeFees: document.getElementById('lifetime-fees'),
+        previewName: document.getElementById('preview-name'), previewTicker: document.getElementById('preview-ticker'),
         logFeed: document.getElementById('log-feed'), headerImage: document.getElementById('header-image'), mayhemToggle: document.getElementById('mayhem-toggle'),
         mayhemStatusLabel: document.getElementById('mayhem-status-label'), logModal: document.getElementById('log-modal'), modalLogContent: document.getElementById('modal-log-content'),
         aboutModal: document.getElementById('about-modal'), successModal: document.getElementById('success-modal'),
@@ -625,28 +591,23 @@
         metricLaunches: document.getElementById('metric-launches'), metricPump: document.getElementById('metric-pump'), metricFees: document.getElementById('metric-fees'),
         trackBalance: document.getElementById('track-balance'), trackLastAmt: document.getElementById('track-last-amt'), trackLastTime: document.getElementById('track-last-time'), trackNextCheck: document.getElementById('track-next-check'),
         leaderboardLastUpdated: document.getElementById('leaderboard-last-updated'),
-        airdropBalance: document.getElementById('airdrop-balance'), // airdropValueSol removed from UI reference
+        airdropBalance: document.getElementById('airdrop-balance'),
         userTopPositions: document.getElementById('user-top-positions'), 
-        userCreatedPositions: document.getElementById('user-created-positions'), // NEW ID
+        userCreatedPositions: document.getElementById('user-created-positions'),
         asdfStatus: document.getElementById('asdf-status'),
         userTotalPoints: document.getElementById('user-total-points'), pointsMultiplierBadge: document.getElementById('points-multiplier-badge'),
         expectedAirdrop: document.getElementById('expected-airdrop'),
         airdropLogModal: document.getElementById('airdrop-log-modal'), modalAirdropLogContent: document.getElementById('modal-airdrop-log-content'),
-        // NEW MODAL REFERENCES
         allLaunchesModal: document.getElementById('all-launches-modal'),
         modalAllLaunchesContent: document.getElementById('modal-all-launches-content'),
         allEligibleUsersModal: document.getElementById('all-eligible-users-modal'),
         modalAllEligibleUsersContent: document.getElementById('modal-all-eligible-users-content'),
-        // NEW INFO MODAL REFERENCE
         airdropInfoModal: document.getElementById('airdrop-info-modal'),
         statusModal: document.getElementById('status-modal'),
         statusDetailsList: document.getElementById('status-details-list'),
-        // SOCIAL REFERENCES
         socialLoading: document.getElementById('social-loading'),
         modalTweetLink: document.getElementById('modal-tweet-link'),
-        // WALLET MODAL
         walletModal: document.getElementById('wallet-modal'),
-        // KOTH REFERENCES
         kothPanel: document.getElementById('koth-panel'),
         kothTicker: document.getElementById('koth-ticker'),
         kothName: document.getElementById('koth-name'),
@@ -656,10 +617,8 @@
 
     lucide.createIcons();
     
-    // Function to copy CA to clipboard
     const copyCA = () => {
         const ca = ui.successModal.querySelector('#modal-mint-addr').textContent;
-        // Use the old execCommand method for broader compatibility in sandboxed environments
         const tempInput = document.createElement('textarea');
         tempInput.value = ca;
         document.body.appendChild(tempInput);
@@ -668,11 +627,10 @@
         document.body.removeChild(tempInput);
         showStatus("Contract Address copied to clipboard!", 'success');
     };
-    window.copyCA = copyCA; // Expose globally for the onclick event in HTML
+    window.copyCA = copyCA;
 
     fetch(`${BACKEND_URL}/api/version`).then(r=>r.json()).then(d=>ui.versionDisplay.innerText = `${FRONTEND_VERSION} | BE: ${d.version}`).catch(()=>{});
 
-    // Simple number formatter for MCAP (e.g., 12.5K, 1.2M)
     const formatMcap = (num) => {
         if (!num || num === 0) return "$0";
         if (num >= 1000000) return "$" + (num / 1000000).toFixed(2) + "M";
@@ -696,10 +654,8 @@
             const res = await fetchWithRetry(endpoint);
             const data = await res.json();
             
-            // Update DB status based on successful data retrieval
             systemStatus.db_access = 'ONLINE';
             
-            // Handle the structured response from updated backend
             const tokens = data.tokens || [];
             const lastUpdate = data.lastUpdate;
 
@@ -712,7 +668,6 @@
 
             if (!tokens || tokens.length === 0) { ui.leaderboardBody.innerHTML = '<tr><td colspan="5" class="text-center text-orange-400 py-4">No active tokens found.</td></tr>'; return; }
             
-            // Generate rows
             const rows = tokens.map((item, index) => {
                 let displayMcap = item.marketCap; 
                 let displayVol = parseFloat(item.volume);
@@ -723,15 +678,9 @@
                     badge = `<span class="badge-bonded" title="Bonding Curve Complete">BONDED</span>`;
                 }
 
-                // Image Logic: Prefer stored image, fallback to placeholder URL
-                // Using a generic placeholder for the secondary fallback case.
-                const fallbackImgSrc = 'https://placehold.co/32x32/333/fff?text=?';
-                let imgSrc = escapeHtml(item.image) || fallbackImgSrc;
+                // USE NEW IMAGE RESOLVER
+                let imgSrc = resolveTokenImage(item.image);
                 
-                // Add console log to see what URL is being used
-                console.log(`Token ${item.ticker} image URL: ${imgSrc}`);
-
-
                 const holderMark = item.isUserTopHolder 
                     ? `<span class="holder-check" title="You are a Top Holder">👑 TOP HOLDER</span>` 
                     : '';
@@ -744,8 +693,7 @@
                 <tr>
                     <td class="text-orange-500 font-bold">${index + 1}</td>
                     <td>
-                        <!-- IMPROVED ONERROR HANDLER: Ensures a valid image/placeholder is used -->
-                        <img src="${imgSrc}" onerror="this.src='${fallbackImgSrc}'" class="token-img-sm" alt="icon">
+                        <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
                         <span class="text-white font-bold">${escapeHtml(item.ticker)}</span>
                         ${creatorMark}
                         ${holderMark}
@@ -774,7 +722,6 @@
     };
     window.updateLeaderboard = updateLeaderboard;
 
-    // NEW: Function to View Token Holders
     const viewTokenHolders = async (mint, ticker) => {
         const modal = document.getElementById('holders-modal');
         const list = document.getElementById('holders-list');
@@ -814,51 +761,38 @@
     
     const closeHoldersModal = () => { document.getElementById('holders-modal').style.display = 'none'; };
     window.closeHoldersModal = closeHoldersModal;
-    // Make sure viewTokenHolders is global so the onclick works
     window.viewTokenHolders = viewTokenHolders;
 
-
-    // Fix: Updated to handle small, non-zero values by using higher precision display.
     const updateExpectedAirdropDisplay = (expectedAmount) => {
         const amount = parseFloat(expectedAmount);
-        if (amount > 0 && amount < 0.1) { // If amount is small (e.g., < 0.1 PUMP)
-            // Use high precision (e.g., 6 significant digits) to prevent rounding to 0.00
+        if (amount > 0 && amount < 0.1) {
             ui.expectedAirdrop.innerText = amount.toPrecision(6);
         } else {
-            // Otherwise, use standard formatting (max 2 decimal places, for larger amounts)
             ui.expectedAirdrop.innerText = amount.toLocaleString('en-US', {maximumFractionDigits: 2});
         }
     };
     
-    // Removed unused call
-    // window.calculateExpectedAirdrop = calculateExpectedAirdrop;
-
     const checkAsdfStatus = async () => {
         if (!userPubkey) {
             ui.asdfStatus.innerText = "NOT CONNECTED";
             ui.asdfStatus.className = "text-sm font-bold font-mono text-gray-500";
             ui.userTopPositions.innerText = "0";
-            ui.userCreatedPositions.innerText = "0"; // Reset creator stats
+            ui.userCreatedPositions.innerText = "0";
             ui.userTotalPoints.innerText = "0";
             ui.pointsMultiplierBadge.classList.add('hidden');
             currentUserPoints = 0;
-            updateExpectedAirdropDisplay(0); // Set to 0 if disconnected
+            updateExpectedAirdropDisplay(0);
             return;
         }
         
         ui.asdfStatus.innerText = "CHECKING...";
         try {
-            // Updated endpoint query to include expectedAirdrop
             const res = await fetch(`${BACKEND_URL}/api/check-holder?userPubkey=${userPubkey}`);
             const data = await res.json();
             
-            // Update Top Position Count (Base Points)
             ui.userTopPositions.innerText = data.heldPositionsCount || 0;
-            
-            // Update Created Position Points (count * 2)
             ui.userCreatedPositions.innerText = (data.createdPositionsCount || 0) * 2;
 
-            // Update ASDF Status
             if (data.isAsdfTop50) {
                 ui.asdfStatus.innerText = "YES (QUALIFIED)";
                 ui.asdfStatus.className = "text-sm font-bold font-mono text-green-400 animate-pulse";
@@ -869,11 +803,8 @@
                 ui.pointsMultiplierBadge.classList.add('hidden');
             }
 
-            // Update Total Points
             currentUserPoints = data.points || 0;
             ui.userTotalPoints.innerText = currentUserPoints;
-            
-            // NEW: Use pre-calculated expected airdrop amount
             updateExpectedAirdropDisplay(data.expectedAirdrop);
 
         } catch (e) {
@@ -884,13 +815,10 @@
     };
 
     const fetchRecentLaunches = async () => { 
-        // Explicitly set fetching status right before network call
         ui.tickerContent.innerHTML = '<span class="ticker-item text-orange-600">FETCHING LAUNCH FEED... PLEASE WAIT...</span>';
-
         try { 
             const res = await fetch(`${BACKEND_URL}/api/recent-launches`); 
             if (res.ok) { 
-                // Nothing to update in system status, success is implied by content load.
                 const launches = await res.json(); 
                 if (launches.length === 0) { 
                     ui.tickerContent.innerHTML = '<span class="ticker-item text-orange-600">NO RECENT LAUNCHES YET... START ONE!</span>'; 
@@ -900,28 +828,19 @@
                 const tickerItems = repeatedLaunches.map(launch => `<span class="ticker-item"><span class="text-white font-bold">LAUNCHED:</span><span class="text-white">${escapeHtml(launch.userSnippet)}...</span><span class="text-orange-400">-></span><a href="${PUMPFUN_URL_BASE}${escapeHtml(launch.mint)}" target="_blank" class="font-bold underline">${escapeHtml(launch.ticker)}</a></span>`).join('');
                 ui.tickerContent.innerHTML = tickerItems; 
             } else {
-                // Server returned non-200 status
                  ui.tickerContent.innerHTML = '<span class="ticker-item text-red-500">ERROR: FAILED TO LOAD LAUNCH FEED (Server Issue)</span>'; 
             }
         } catch (e) {
-            // Network error/timeout
             ui.tickerContent.innerHTML = '<span class="ticker-item text-red-500">ERROR: FAILED TO LOAD LAUNCH FEED (Network Error)</span>';
         } 
     };
 
-    // NEW: UPDATE KOTH DISPLAY
     const updateKOTH = async () => {
         try {
-            console.log("Fetching KOTH..."); // Debug log
             const res = await fetch(`${BACKEND_URL}/api/koth`);
-            
             if (res.ok) {
                 const data = await res.json();
-                console.log("KOTH Data:", data); // Debug log
-
                 if (data.found && data.token) {
-                    console.log("KOTH found, displaying panel.");
-                    // Ensure hidden class is removed
                     const panel = document.getElementById('koth-panel');
                     if (panel) panel.classList.remove('hidden');
                     
@@ -930,16 +849,14 @@
                     ui.kothMcap.innerText = formatMcap(data.token.marketCap);
                     
                     if (data.token.image) {
-                        ui.kothImg.src = escapeHtml(data.token.image);
+                        // Use Image Resolver for KOTH
+                        ui.kothImg.src = resolveTokenImage(data.token.image);
                         ui.kothImg.classList.remove('hidden');
                     }
                 } else {
-                    console.log("No KOTH found.");
                     const panel = document.getElementById('koth-panel');
                     if (panel) panel.classList.add('hidden');
                 }
-            } else {
-                console.error("KOTH fetch failed with status:", res.status);
             }
         } catch (e) {
             console.error("Failed to fetch KOTH", e);
@@ -954,30 +871,20 @@
             const res = await fetchWithRetry(`${BACKEND_URL}/api/health`);
             if (res.ok) { 
                 const data = await res.json(); 
-                
-                // Set overall status based on backend self-assessment
                 systemStatus.backend = data.status === 'online' ? 'ONLINE' : 'DEGRADED';
-                
                 ui.headerImage.src = data.headerImageUrl || "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; 
-                
                 if (data.totalVolume !== undefined) {
                     ui.metricFees.innerText = "$" + (parseFloat(data.totalVolume) || 0).toLocaleString();
                 } else if (data.lifetimeFees) {
                     ui.metricFees.innerText = data.lifetimeFees + " SOL"; 
                 }
-                
                 if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches; 
-                
-                // Display Total Airdropped PUMP
                 if (data.totalAirdropped !== undefined) {
                     ui.metricPump.innerText = parseFloat(data.totalAirdropped).toLocaleString('en-US', {maximumFractionDigits: 0});
                 } else if (data.totalPumpTokensBought) {
-                    // Fallback for backwards compatibility
                     ui.metricPump.innerText = data.totalPumpTokensBought;
                 }
-
                 allLogs = data.recentLogs; 
-                
                 if (data.currentFeeBalance) ui.trackBalance.innerText = data.currentFeeBalance;
                 if (data.lastClaimAmount) ui.trackLastAmt.innerText = data.lastClaimAmount;
                 if (data.lastClaimTime && data.lastClaimTime > 0) {
@@ -985,21 +892,16 @@
                 } else {
                     ui.trackLastTime.innerText = "Never";
                 }
-                
                 if (data.nextCheckTime) {
                     nextCheckTime = data.nextCheckTime;
                 }
-
                 if (data.pumpHoldings !== undefined) {
                     currentPumpHoldings = parseFloat(data.pumpHoldings);
                     ui.airdropBalance.innerHTML = `${currentPumpHoldings.toLocaleString('en-US', {maximumFractionDigits: 0})} <span class="text-lg align-top text-purple-400">$PUMP</span>`;
-                    // REMOVED: ui.airdropValueSol.innerText = `≈ ${estVal.toFixed(2)} SOL`;
                 }
-                
                 if (data.totalPoints !== undefined) {
                     currentGlobalPoints = data.totalPoints;
                 }
-
             } else { 
                 status = 'OFFLINE';
                 error = `Backend responded with status code: ${res.status}`;
@@ -1009,10 +911,7 @@
             error = `Failed to reach backend API. Check network connection or backend URL.`;
         } 
         
-        // Finalize system status
         systemStatus.error_message = error;
-
-        // Update main indicator based on most critical failure
         if (status === 'ONLINE' && systemStatus.solana_rpc !== 'OFFLINE') {
             ui.sysStatus.innerText = "ONLINE"; ui.sysStatus.classList.add("online");
         } else {
@@ -1047,9 +946,7 @@
             const data = await res.json();
             const solBalance = data.balance / solanaWeb3.LAMPORTS_PER_SOL;
             ui.walletBal.innerText = solBalance.toFixed(3) + " SOL"; 
-            
-            systemStatus.solana_rpc = 'ONLINE'; // If the balance check passed, RPC is up
-            
+            systemStatus.solana_rpc = 'ONLINE'; 
             if (!isDeploying) {
                 if (solBalance < DEPLOYMENT_FEE) {
                     ui.deployBtn.disabled = true; ui.deployBtn.innerText = `INSUFFICIENT BALANCE (< ${DEPLOYMENT_FEE} SOL)`; ui.deployBtn.classList.add("opacity-50", "cursor-not-allowed");
@@ -1065,27 +962,21 @@
 
     const refreshAllData = async () => {
         if (ui.refreshBtn) ui.refreshBtn.classList.add('opacity-50', 'cursor-wait');
-        
-        // Reset status checks at the start of the refresh cycle
         systemStatus.backend = 'CHECKING';
         systemStatus.db_access = 'CHECKING';
         systemStatus.solana_rpc = 'CHECKING';
-
         try {
             await Promise.allSettled([
                 updatePumpPrice(),
                 updateLeaderboard(),
-                updateKOTH(), // FETCH KING OF THE HILL
+                updateKOTH(),
                 fetchRecentLaunches(),
                 checkHealth(),
                 refreshWalletBalance(),
-                checkAsdfStatus() // Refresh user-specific data including expected airdrop
+                checkAsdfStatus()
             ]);
         } catch (e) { console.error("Auto-Refresh Error", e); }
-        
-        // Re-run checkHealth to ensure the main indicator updates based on the final status of all checks
         checkHealth(); 
-        
         if (ui.refreshBtn) ui.refreshBtn.classList.remove('opacity-50', 'cursor-wait');
     };
     window.refreshAllData = refreshAllData;
@@ -1095,18 +986,14 @@
 
     ui.refreshBtn.onclick = () => refreshAllData();
 
-    // --- System Status Modal Logic ---
     const toggleStatusModal = () => {
         const list = ui.statusDetailsList;
         list.innerHTML = '';
-        
-        // Helper to generate status item HTML
         const generateStatusItem = (name, status, error) => {
             const isOnline = status === 'ONLINE';
             const colorClass = isOnline ? 'text-green' : 'text-red';
             const icon = isOnline ? 'check-circle' : 'x-circle';
             const statusText = isOnline ? 'ONLINE' : (status === 'OFFLINE' ? 'OFFLINE' : status);
-
             let itemHtml = `
                 <div class="status-item">
                     <span class="font-bold text-white">${name}</span>
@@ -1121,33 +1008,26 @@
             }
             return itemHtml;
         };
-
         let html = '';
         html += generateStatusItem("Backend API Server", systemStatus.backend, systemStatus.error_message);
         html += generateStatusItem("Database Read/Write", systemStatus.db_access, systemStatus.db_access === 'OFFLINE' ? "Failed to query SQLite DB (internal server issue)." : null);
         html += generateStatusItem("Solana RPC (Helius)", systemStatus.solana_rpc, systemStatus.solana_rpc === 'OFFLINE' ? "Failed Solana balance check via RPC." : null);
-        
         list.innerHTML = html;
         lucide.createIcons();
         ui.statusModal.style.display = 'block';
     };
     window.toggleStatusModal = toggleStatusModal;
-
     const closeStatusModal = () => { ui.statusModal.style.display = 'none'; };
     window.closeStatusModal = closeStatusModal;
-    // --- End System Status Modal Logic ---
-
 
     const updateMayhemLabel = () => { if (ui.mayhemToggle.checked) { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: ON (HIGH RISK)"; ui.mayhemStatusLabel.classList.add('active'); } else { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: OFF"; ui.mayhemStatusLabel.classList.remove('active'); } };
     ui.mayhemToggle.addEventListener('change', updateMayhemLabel); updateMayhemLabel(); 
 
     const updatePreview = () => { ui.previewName.innerText = document.getElementById('name').value || "Token Name"; ui.previewTicker.innerText = document.getElementById('ticker').value ? `$${document.getElementById('ticker').value.toUpperCase()}` : "$TICKER"; };
     
-    // Updated previewImage to handle drag/drop and click upload
     const previewImage = (event) => { 
         const files = event.target.files || event.dataTransfer?.files;
         const file = files?.[0]; 
-
         if (file) { 
             const reader = new FileReader(); 
             reader.onload = (e) => { 
@@ -1166,75 +1046,43 @@
     };
     window.previewImage = previewImage; window.updatePreview = updatePreview;
     
-    // DRAG AND DROP HANDLERS
     const dropZone = document.getElementById('image-preview');
     const fileInput = document.getElementById('image-file');
-
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, preventDefaults, false);
-    });
-
-    function preventDefaults(e) {
-        e.preventDefault();
-        e.stopPropagation();
-    }
-
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropZone.addEventListener(eventName, highlight, false);
-    });
-
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, unhighlight, false);
-    });
-
-    function highlight(e) {
-        dropZone.classList.add('drag-over');
-    }
-
-    function unhighlight(e) {
-        dropZone.classList.remove('drag-over');
-    }
-
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => { dropZone.addEventListener(eventName, preventDefaults, false); });
+    function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
+    ['dragenter', 'dragover'].forEach(eventName => { dropZone.addEventListener(eventName, highlight, false); });
+    ['dragleave', 'drop'].forEach(eventName => { dropZone.addEventListener(eventName, unhighlight, false); });
+    function highlight(e) { dropZone.classList.add('drag-over'); }
+    function unhighlight(e) { dropZone.classList.remove('drag-over'); }
     dropZone.addEventListener('drop', handleDrop, false);
-
     function handleDrop(e) {
         const dt = e.dataTransfer;
         const files = dt.files;
-
         if (files.length > 0 && files[0].type.startsWith('image/')) {
-            // Create a new FileList object to assign to the file input
             const dataTransfer = new DataTransfer();
             dataTransfer.items.add(files[0]);
             fileInput.files = dataTransfer.files; 
-            
-            previewImage({ target: fileInput }); // Trigger existing preview logic using the file input
+            previewImage({ target: fileInput }); 
         } else {
              showStatus("Invalid file type dropped. Please use an image.", 'error');
         }
     }
 
-
     const closeSuccessModal = () => { ui.successModal.style.display = 'none'; };
     window.closeSuccessModal = closeSuccessModal;
     
-    // --- MODAL FUNCTIONS ---
-
-    // Function for All Launches Modal
     const toggleAllLaunchesModal = async () => {
         ui.allLaunchesModal.style.display = 'block';
         ui.modalAllLaunchesContent.innerHTML = '<div class="text-center text-orange-400 p-4">Fetching all token data...</div>';
-        
         try {
             const res = await fetch(`${BACKEND_URL}/api/all-launches`);
             if (res.ok) {
                 const data = await res.json();
                 const tokens = data.tokens || [];
-                
                 if (tokens.length === 0) {
                     ui.modalAllLaunchesContent.innerHTML = '<div class="text-center text-gray-500 p-4">No tokens have been launched yet.</div>';
                     return;
                 }
-                
                 const tableHTML = `
                     <table class="w-full text-left font-mono text-xs leader-table">
                         <thead class="text-orange-400 border-b border-orange-800">
@@ -1242,20 +1090,18 @@
                         </thead>
                         <tbody class="text-orange-200">
                             ${await Promise.all(tokens.map(async (item, index) => {
-                                // Re-use existing badge logic for status display
                                 const badge = item.complete ? 
                                     '<span class="badge-bonded text-xs" style="background-color:#22c55e;">BONDED</span>' : 
                                     '<span class="badge-bonding text-xs" style="background-color:#eab308;">PRE-BOND</span>';
                                     
-                                // Image Logic:
-                                const fallbackImgSrc = 'https://placehold.co/32x32/333/fff?text=?';
-                                let imgSrc = escapeHtml(item.image) || fallbackImgSrc;
+                                // USE NEW IMAGE RESOLVER HERE TOO
+                                let imgSrc = resolveTokenImage(item.image);
 
                                 return `
                                 <tr class="border-b border-orange-800/30 hover:bg-orange-900/20">
                                     <td class="p-2">${index + 1}</td>
                                     <td class="p-2">
-                                        <img src="${imgSrc}" onerror="this.src='${fallbackImgSrc}'" class="token-img-sm" alt="icon">
+                                        <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
                                         <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="font-bold underline text-white">${escapeHtml(item.ticker)}</a> (${escapeHtml(item.name)})
                                     </td>
                                     <td class="p-2 text-orange-400">${escapeHtml(item.userPubkey?.slice(0, 5) || '?????')}...</td>
@@ -1280,22 +1126,18 @@
     const closeAllLaunchesModal = () => { ui.allLaunchesModal.style.display = 'none'; };
     window.closeAllLaunchesModal = closeAllLaunchesModal;
 
-    // Function for All Eligible Users Modal
     const toggleAllEligibleUsersModal = async () => {
         ui.allEligibleUsersModal.style.display = 'block';
         ui.modalAllEligibleUsersContent.innerHTML = '<div class="text-center text-purple-400 p-4">Calculating all eligible users...</div>';
-
         try {
             const res = await fetch(`${BACKEND_URL}/api/all-eligible-users`);
             if (res.ok) {
                 const data = await res.json();
                 const users = data.users || [];
-                
                 if (users.length === 0) {
                     ui.modalAllEligibleUsersContent.innerHTML = '<div class="text-center text-gray-500 p-4">No users currently qualify for the airdrop (0 global points).</div>';
                     return;
                 }
-                
                 const tableHTML = `
                     <p class="text-purple-300 font-mono text-sm mb-4">Total Global Points: <span class="text-white font-bold">${data.totalPoints.toLocaleString()}</span> | Total Eligible Users: <span class="text-white font-bold">${users.length}</span></p>
                     <table class="w-full text-left font-mono text-xs">
@@ -1307,7 +1149,6 @@
                                 const multiplierBadge = user.isAsdfTop50 
                                     ? '<span class="px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold">2X (ASDF)</span>' 
                                     : '<span class="px-2 py-0.5 bg-gray-500/20 border border-gray-500 rounded text-[9px] text-gray-400 font-bold">1X</span>';
-                                    
                                 return `
                                 <tr class="border-b border-purple-800/30 hover:bg-purple-900/20">
                                     <td class="p-2">${index + 1}</td>
@@ -1335,56 +1176,36 @@
     const closeAllEligibleUsersModal = () => { ui.allEligibleUsersModal.style.display = 'none'; };
     window.closeAllEligibleUsersModal = closeAllEligibleUsersModal;
 
-    // Function for Airdrop Info Modal (New Disclaimer)
-    const toggleAirdropInfoModal = () => { 
-        ui.airdropInfoModal.style.display = 'block'; 
-        // Force lucide icons to render inside the new modal content if they weren't before
-        lucide.createIcons();
-    };
+    const toggleAirdropInfoModal = () => { ui.airdropInfoModal.style.display = 'block'; lucide.createIcons(); };
     window.toggleAirdropInfoModal = toggleAirdropInfoModal;
     const closeAirdropInfoModal = () => { ui.airdropInfoModal.style.display = 'none'; };
     window.closeAirdropInfoModal = closeAirdropInfoModal;
 
-    // IMPROVED: Buyback Logs Toggle Function
     const toggleLogModal = () => { 
         ui.modalLogContent.innerHTML = ''; 
         if(allLogs && allLogs.length > 0) {
             ui.modalLogContent.innerHTML = allLogs.map(log => {
                 const time = new Date(log.timestamp).toLocaleTimeString();
                 let logDetailsHtml = '';
-                
-                // Fields to exclude from the detailed view (already shown in header or not needed)
                 const excludedKeys = ['type', 'timestamp'];
-                
-                // Helper to format keys like "feesCollected" -> "Fees Collected"
                 const formatKey = (str) => str.replace(/([A-Z])/g, ' $1').trim();
-
-                // Generate badge based on Status
                 let statusBadge = '';
                 if (log.status) {
-                    let badgeClass = 'badge-skipped'; // Default orange
+                    let badgeClass = 'badge-skipped'; 
                     if (log.status === 'SUCCESS') badgeClass = 'badge-success';
                     else if (log.status.includes('FAIL') || log.status.includes('ERROR')) badgeClass = 'badge-error';
                     statusBadge = `<span class="status-badge ${badgeClass}">${log.status}</span>`;
                 }
-
-                // Iterate over object keys to create grid rows
                 for (const [key, value] of Object.entries(log)) {
                     if (excludedKeys.includes(key)) continue;
-                    
                     let displayValue = value;
                     if (key.toLowerCase().includes('sol') || key.toLowerCase().includes('fees')) {
-                        // Attempt to format numbers if they look like SOL amounts
                         const numVal = parseFloat(value);
                         if (!isNaN(numVal)) displayValue = numVal.toFixed(4) + ' SOL';
                     }
-                    
-                    // Specific fix for kothWinner in logs details
                     if (key === 'kothWinner') {
                         displayValue = value || 'N/A';
                     }
-
-
                     logDetailsHtml += `
                         <div class="log-grid">
                             <span class="log-label">${formatKey(key)}:</span>
@@ -1392,7 +1213,6 @@
                         </div>
                     `;
                 }
-
                 return `
                 <div class="log-entry">
                     <div class="flex justify-between items-center mb-1">
@@ -1413,7 +1233,6 @@
     const closeLogModal = () => { ui.logModal.style.display = 'none'; };
     window.closeLogModal = closeLogModal;
 
-    // UPDATED: Airdrop Log Toggle with DATE in timestamp
     const toggleAirdropLogModal = async () => {
         ui.airdropLogModal.style.display = 'block';
         ui.modalAirdropLogContent.innerHTML = '<div class="text-center text-purple-400 p-4">Loading History...</div>';
@@ -1425,7 +1244,6 @@
                     ui.modalAirdropLogContent.innerHTML = '<div class="text-center text-gray-500 p-4">No airdrops distributed yet.</div>';
                     return;
                 }
-                
                 ui.modalAirdropLogContent.innerHTML = `
                     <table class="w-full text-left font-mono text-xs">
                         <thead class="text-purple-400 border-b border-purple-800">
@@ -1471,8 +1289,8 @@
         if (!pubkey) {
             ui.walletUI.classList.add('hidden');
             ui.connectBtn.classList.remove('hidden');
-            updateLeaderboard(); // Update to remove user-specific data on disconnect
-            checkAsdfStatus(); // Reset status display
+            updateLeaderboard(); 
+            checkAsdfStatus();
             return;
         }
         userPubkey = pubkey.toString();
@@ -1481,18 +1299,14 @@
         ui.walletUI.classList.add('flex');
         ui.walletAddr.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4);
         await refreshWalletBalance();
-        updateLeaderboard(); // Update to show user-specific data on connect
+        updateLeaderboard(); 
         checkAsdfStatus();
     };
 
-    // --- NEW WALLET CONNECTION LOGIC ---
-
     const openWalletModal = () => {
-        // Detect wallets and update UI
         if (window.solana && window.solana.isPhantom) document.getElementById('tag-phantom').classList.remove('hidden');
         if (window.solflare && window.solflare.isSolflare) document.getElementById('tag-solflare').classList.remove('hidden');
         if (window.backpack || window.xnft) document.getElementById('tag-backpack').classList.remove('hidden');
-
         ui.walletModal.style.display = 'block';
         lucide.createIcons();
     };
@@ -1504,7 +1318,6 @@
     const selectWallet = async (type) => {
         let provider = null;
         let installUrl = "https://phantom.app";
-
         if (type === 'phantom') {
             provider = window.solana?.isPhantom ? window.solana : null;
             installUrl = "https://phantom.app/";
@@ -1515,29 +1328,21 @@
             provider = window.backpack || window.xnft?.solana;
             installUrl = "https://backpack.app/";
         }
-
         if (!provider) {
             window.open(installUrl, '_blank');
             showStatus(`${type.toUpperCase()} not detected. Opening download page...`, 'error');
             return;
         }
-
         try {
             const resp = await provider.connect();
             activeWalletProvider = provider;
             connectedWalletType = type;
-            
-            // Save to localStorage for auto-connect
             localStorage.setItem('connectedWalletType', type);
-            
-            // Handle different response structures
             let pubkey = resp.publicKey;
             if (!pubkey && provider.publicKey) pubkey = provider.publicKey;
-            
             await updateWalletUI(pubkey);
             closeWalletModal();
             showStatus(`Connected to ${type.toUpperCase()}`, 'success');
-
         } catch (err) {
             console.error("Connection Error:", err);
             showStatus("Connection Rejected", 'error');
@@ -1551,14 +1356,12 @@
         } else if (window.solana) {
              try { await window.solana.disconnect(); } catch (e) {} 
         }
-        
         userPubkey = null; 
         activeWalletProvider = null;
         localStorage.removeItem('connectedWalletType');
         updateWalletUI(null); 
     };
     ui.disconnectBtn.onclick = disconnectWallet;
-
 
     const validateInputs = (name, ticker, description, twitter, website, fileInput) => {
         if (fileInput.files.length === 0) return "Image is required.";
@@ -1584,44 +1387,35 @@
         const website = document.getElementById('website').value;
         const fileInput = document.getElementById('image-file');
         const isMayhemMode = ui.mayhemToggle.checked;
-        
         const validationError = validateInputs(name, ticker, description, twitter, website, fileInput);
         if (validationError) return showStatus(validationError.toUpperCase(), 'error');
-
         let imageBase64;
         try { imageBase64 = await toBase64(fileInput.files[0]); } catch(e) { return showStatus("IMAGE PROCESSING FAILED", 'error'); }
-
-        isDeploying = true; // Lock button
+        isDeploying = true;
         ui.deployBtn.disabled = true; 
         ui.deployBtn.innerText = "UPLOADING & VERIFYING METADATA..."; 
         showStatus("PREPARING METADATA...", 'normal');
-
         try {
             const prepRes = await fetchWithRetry(`${BACKEND_URL}/api/prepare-metadata`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, ticker, description, twitter, website, image: imageBase64 })
-            }, 2); // 2 retries for metadata upload
-
+            }, 2);
             if (!prepRes.ok) {
                 const errData = await prepRes.json();
                 throw new Error(errData.error || "Metadata upload failed");
             }
             const { metadataUri } = await prepRes.json();
-
             ui.deployBtn.innerText = "SIGNING FEE TRANSACTION...";
             showStatus("METADATA READY. PLEASE SIGN WALLET...", 'normal');
-
             const bhRes = await fetchWithRetry(`${BACKEND_URL}/api/blockhash`);
             if (!bhRes.ok) throw new Error("Failed to fetch blockhash from backend");
             const { blockhash } = await bhRes.json();
-
             const tx = new solanaWeb3.Transaction();
             const modifyComputeUnits = solanaWeb3.ComputeBudgetProgram.setComputeUnitLimit({ units: 200000 });
             const addPriorityFee = solanaWeb3.ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 });
             tx.add(modifyComputeUnits);
             tx.add(addPriorityFee);
-
             tx.add(
                 solanaWeb3.SystemProgram.transfer({
                     fromPubkey: new solanaWeb3.PublicKey(userPubkey),
@@ -1629,19 +1423,12 @@
                     lamports: DEPLOYMENT_FEE * 1000000000 
                 })
             );
-            
             tx.recentBlockhash = blockhash;
             tx.feePayer = new solanaWeb3.PublicKey(userPubkey);
-            
-            // UPDATED: USE ACTIVE PROVIDER
             const signedTx = await activeWalletProvider.signAndSendTransaction(tx);
-            
-            // Handle different return types (some return object with signature, some return raw string)
             const txSignature = signedTx.signature || signedTx;
-
             ui.deployBtn.innerText = "QUEUING DEPLOYMENT...";
             showStatus("PAYMENT CONFIRMED. QUEUING...", 'normal');
-
             const deployRes = await fetchWithRetry(`${BACKEND_URL}/api/deploy`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1653,26 +1440,22 @@
                     isMayhemMode: isMayhemMode
                 })
             }, 2);
-
             const data = await deployRes.json();
             if (data.success && data.jobId) {
                 ui.deployBtn.innerText = "DEPLOYING...";
                 pollJobStatus(data.jobId);
             } else { throw new Error(data.error); }
-
         } catch (e) {
             console.error(e);
             showStatus("ERROR: " + (e.message || "Process failed."), 'error');
-            isDeploying = false; // Unlock button logic
-            refreshWalletBalance(); // Reset button state
+            isDeploying = false;
+            refreshWalletBalance();
         }
     };
 
-    // POLL JOB STATUS
     const pollJobStatus = async (jobId) => {
         let attempts = 0;
-        const maxAttempts = 150; // 5 minutes max (2s * 150)
-
+        const maxAttempts = 150;
         const interval = setInterval(async () => {
             attempts++;
             if (attempts > maxAttempts) {
@@ -1682,33 +1465,23 @@
                 ui.deployBtn.disabled = false; ui.deployBtn.innerText = "CHECK STATUS";
                 return;
             }
-
             try {
                 const res = await fetch(`${BACKEND_URL}/api/job-status/${jobId}`);
                 const job = await res.json();
-
                 if (job.state === 'completed') {
                     clearInterval(interval);
                     showStatus("LAUNCH CONFIRMED", 'success');
                     const mintAddr = job.result.mint;
                     const txSig = job.result.signature;
-                    
-                    // UPDATE SUCCESS MODAL LINKS
                     ui.successModal.querySelector('#modal-mint-addr').textContent = mintAddr;
                     ui.successModal.querySelector('#modal-tx-link').href = `https://solscan.io/tx/${txSig}`;
                     ui.successModal.querySelector('#modal-pump-link').href = `${PUMPFUN_URL_BASE}${mintAddr}`;
-                    
                     ui.successModal.style.display = 'block';
                     ui.deployBtn.innerText = "LAUNCH COMPLETE"; ui.deployBtn.disabled = false;
                     isDeploying = false;
-                    
-                    // Reset social elements
                     ui.socialLoading.style.display = 'block';
                     ui.modalTweetLink.classList.add('hidden');
-                    
-                    // Start social poll
                     pollSocialStatus(mintAddr);
-                    
                     refreshAllData();
                 } else if (job.state === 'failed') {
                     clearInterval(interval);
@@ -1719,14 +1492,12 @@
                     showStatus(`STATUS: ${job.state.toUpperCase()} (Please Wait...)`, 'normal');
                 }
             } catch (e) { console.error("Polling error", e); }
-        }, 2000); // Check every 2s
+        }, 2000);
     };
     
-    // NEW: POLL SOCIAL STATUS
     const pollSocialStatus = async (mint) => {
         let attempts = 0;
-        const maxAttempts = 30; // Try for 1 minute (2s * 30)
-        
+        const maxAttempts = 30; 
         const socialInterval = setInterval(async () => {
             attempts++;
             if (attempts > maxAttempts) {
@@ -1736,7 +1507,6 @@
                 ui.socialLoading.classList.add('text-gray-500');
                 return;
             }
-
             try {
                 const res = await fetch(`${BACKEND_URL}/api/token/${mint}`);
                 if (res.ok) {
@@ -1752,11 +1522,9 @@
         }, 2000);
     };
     
-    // Updated Auto-Connect Logic
     window.addEventListener('load', () => {
         const savedType = localStorage.getItem('connectedWalletType');
         if (savedType) {
-            // Give extensions a moment to inject
             setTimeout(() => {
                 selectWallet(savedType).catch(e => {
                     console.warn("Auto-connect failed:", e);

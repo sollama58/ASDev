@@ -11,110 +11,140 @@ const { logger } = require('../services');
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
+ * Batch tokens for DexScreener (max 30 per request)
+ */
+function chunkArray(array, size) {
+    const result = [];
+    for (let i = 0; i < array.length; i += size) {
+        result.push(array.slice(i, i + size));
+    }
+    return result;
+}
+
+/**
  * Update metadata for all tokens
  */
 async function updateMetadata(deps) {
     const { db, globalState } = deps;
 
-    // Fetch tokens, including metadataUri and current image state
+    // Fetch tokens
     const tokens = await db.all('SELECT mint, metadataUri, image FROM tokens');
     
-    // Shuffle tokens to avoid hitting the same ones first every time if process restarts
-    // This helps distribution of API calls
-    const shuffledTokens = tokens.sort(() => Math.random() - 0.5);
-
-    let requestCount = 0;
-
-    for (const t of shuffledTokens) {
-        let mcap = 0;
-        let vol = 0;
-        let finalImageUrl = t.image; // Keep existing image if it's already set
-        let updatesMade = false;
-
-        // --- 1. RESOLVE IMAGE URL FROM METADATA URI (Gentle Fetch) ---
-        if (t.metadataUri && !finalImageUrl) {
+    // 1. RESOLVE MISSING IMAGES (Gentle, one by one)
+    // Only process tokens that don't have an image yet to save requests
+    const tokensMissingImage = tokens.filter(t => t.metadataUri && !t.image);
+    
+    if (tokensMissingImage.length > 0) {
+        logger.info(`Resolving images for ${tokensMissingImage.length} tokens...`);
+        for (const t of tokensMissingImage) {
             try {
-                // If we've made 50 requests in this batch, pause for 2 seconds to be safe
-                if (requestCount > 0 && requestCount % 50 === 0) {
-                    await delay(2000);
-                }
-                
-                // Use a longer timeout for IPFS
-                const metadataRes = await axios.get(t.metadataUri, { timeout: 8000 });
-                requestCount++;
-
+                // Fetch metadata from IPFS/URI
+                const metadataRes = await axios.get(t.metadataUri, { timeout: 5000 });
                 if (metadataRes.data && metadataRes.data.image) {
-                    finalImageUrl = metadataRes.data.image;
-                    logger.debug(`Resolved image for ${t.mint}: ${finalImageUrl}`);
-                    updatesMade = true;
+                    const finalImageUrl = metadataRes.data.image;
+                    await db.run('UPDATE tokens SET image = ? WHERE mint = ?', [finalImageUrl, t.mint]);
+                    logger.debug(`Resolved image for ${t.mint}`);
                 }
             } catch (e) {
-                // 429 Handling: If we hit a rate limit, pause significantly
                 if (e.response && e.response.status === 429) {
-                    logger.warn(`Metadata Rate Limit (429) on ${t.mint}. Pausing for 5 seconds...`);
-                    await delay(5000); 
-                } else {
-                    // logger.warn(`Failed to resolve metadata for ${t.mint}: ${e.message}`);
+                    logger.warn(`IPFS/Metadata Rate Limit (429). Pausing 10s...`);
+                    await delay(10000);
                 }
             }
+            await delay(2000); // 2s delay between image resolutions to be safe
         }
-        
-        // --- 2. FETCH MARKET DATA (DexScreener/Pump) ---
-        try {
-            // Try DexScreener first
-            const dexRes = await axios.get(
-                `https://api.dexscreener.com/latest/dex/tokens/${t.mint}`,
-                { timeout: 5000 }
-            );
-            requestCount++;
+    }
 
-            if (dexRes.data?.pairs?.length > 0) {
-                const pair = dexRes.data.pairs[0];
-                mcap = pair.fdv || pair.marketCap || 0;
-                vol = pair.volume?.h24 || 0;
-            } else {
-                // Fallback to Pump API
-                const pumpRes = await axios.get(
-                    `https://frontend-api.pump.fun/coins/${t.mint}`,
-                    { timeout: 5000 }
-                );
-                requestCount++;
-                if (pumpRes.data) {
-                    mcap = pumpRes.data.usd_market_cap || 0;
+    // 2. BATCH FETCH MARKET DATA (DexScreener)
+    // DexScreener allows up to 30 addresses per call
+    const chunks = chunkArray(tokens, 30);
+    
+    for (const chunk of chunks) {
+        const mints = chunk.map(t => t.mint).join(',');
+        
+        try {
+            const dexRes = await axios.get(
+                `https://api.dexscreener.com/latest/dex/tokens/${mints}`,
+                { timeout: 8000 }
+            );
+
+            const pairs = dexRes.data?.pairs || [];
+            
+            // Map results by mint for easy lookup
+            const updates = new Map();
+            
+            // DexScreener might return multiple pairs per token, take the best one (usually highest liquidity/volume)
+            for (const pair of pairs) {
+                const mint = pair.baseToken.address;
+                const existing = updates.get(mint);
+                
+                // If we haven't seen this mint or this pair has higher liquidity, use it
+                if (!existing || (pair.liquidity?.usd > existing.liquidity)) {
+                    updates.set(mint, {
+                        marketCap: pair.fdv || pair.marketCap || 0,
+                        volume24h: pair.volume?.h24 || 0,
+                        priceUsd: pair.priceUsd || 0,
+                        liquidity: pair.liquidity?.usd || 0
+                    });
                 }
             }
 
-            // --- 3. SAVE ALL UPDATES ---
-            // Only update DB if we have new meaningful data or resolved an image
-            if (mcap > 0 || updatesMade) {
-                await db.run(
-                    `UPDATE tokens 
-                     SET volume24h = ?, marketCap = ?, lastUpdated = ?, image = ? 
-                     WHERE mint = ?`,
-                    [vol, mcap, Date.now(), finalImageUrl, t.mint]
-                );
+            // Process updates
+            for (const t of chunk) {
+                const data = updates.get(t.mint);
+                
+                if (data) {
+                    // We got data from DexScreener
+                    await db.run(
+                        `UPDATE tokens 
+                         SET volume24h = ?, marketCap = ?, priceUsd = ?, lastUpdated = ? 
+                         WHERE mint = ?`,
+                        [data.volume24h, data.marketCap, data.priceUsd, Date.now(), t.mint]
+                    );
+                } else {
+                    // Token not found on DexScreener yet (might be very new), try Pump.fun fallback
+                    // ONLY do this if we didn't get data from DexScreener to save limits
+                    try {
+                        await delay(250); // Small delay to prevent hammering Pump API
+                        const pumpRes = await axios.get(
+                            `https://frontend-api.pump.fun/coins/${t.mint}`,
+                            { timeout: 3000 }
+                        );
+                        if (pumpRes.data) {
+                            const mcap = pumpRes.data.usd_market_cap || 0;
+                            await db.run(
+                                `UPDATE tokens SET marketCap = ?, lastUpdated = ? WHERE mint = ?`,
+                                [mcap, Date.now(), t.mint]
+                            );
+                        }
+                    } catch (pumpErr) {
+                         // Ignore pump 404s/errors silently
+                    }
+                }
             }
+            
+            // Delay between chunks to be nice to DexScreener
+            await delay(1500);
 
         } catch (e) {
-             if (e.response && e.response.status === 429) {
-                logger.warn(`Market Data Rate Limit (429). Pausing...`);
-                await delay(5000);
-             }
+            if (e.response && e.response.status === 429) {
+                logger.warn(`DexScreener Rate Limit (429). Pausing 30 seconds...`);
+                await delay(30000);
+            } else {
+                logger.warn(`DexScreener Batch Error: ${e.message}`);
+            }
         }
-
-        // Base delay between every token to be gentle
-        await delay(1000); 
     }
 
     globalState.lastBackendUpdate = Date.now();
-    logger.info(`Metadata update cycle complete. Last update: ${new Date(globalState.lastBackendUpdate).toLocaleTimeString()}`);
+    logger.info(`Metadata update complete. Tokens scanned: ${tokens.length}`);
 }
 
 /**
  * Start the metadata updater interval
  */
 function start(deps) {
-    // Run immediately on start (with slight delay to let DB init)
+    // Run immediately on start (with slight delay)
     setTimeout(() => updateMetadata(deps), 5000);
     
     // Then run on interval
