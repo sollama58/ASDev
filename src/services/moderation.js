@@ -11,18 +11,23 @@ const logger = require('./logger');
  * Returns true if safe, false if unsafe
  */
 async function checkContentSafety(base64Data) {
+    // 1. Check if key exists
     if (!config.CLARIFAI_API_KEY) {
-        // If no key is configured, bypass moderation (Fail Open)
-        return true;
+        return true; // Fail open if no key
     }
 
+    // 2. Clean the key
+    const cleanKey = config.CLARIFAI_API_KEY.trim();
+
     // Helper to attempt request with specific auth header
-    const attemptRequest = async (authHeader) => {
+    const attemptRequest = async (authPrefix) => {
         // Remove data:image/...;base64, prefix if present
         const base64Content = base64Data.replace(/^data:image\/(.*);base64,/, '');
 
+        // Use the standard 'moderation-recognition' model
+        // Model ID: d16f390eb32cad478c7ae150069bd2c6
         return axios.post(
-            'https://api.clarifai.com/v2/models/d16f390eb32cad478c7ae150069bd2c6/versions/aa8be956dbaa4b7a858826a84253cab9/outputs',
+            'https://api.clarifai.com/v2/models/d16f390eb32cad478c7ae150069bd2c6/outputs',
             {
                 inputs: [{
                     data: {
@@ -32,7 +37,7 @@ async function checkContentSafety(base64Data) {
             },
             {
                 headers: {
-                    "Authorization": authHeader,
+                    "Authorization": `${authPrefix} ${cleanKey}`,
                     "Content-Type": "application/json"
                 }
             }
@@ -44,19 +49,23 @@ async function checkContentSafety(base64Data) {
         
         // Strategy 1: Try as "Key {api_key}" (Standard API Key)
         try {
-            response = await attemptRequest(`Key ${config.CLARIFAI_API_KEY}`);
+            response = await attemptRequest('Key');
         } catch (err1) {
             // Strategy 2: If 401, try as "Bearer {pat}" (Personal Access Token)
             if (err1.response && err1.response.status === 401) {
-                logger.debug("Clarifai: Key auth failed, retrying with Bearer auth...");
-                response = await attemptRequest(`Bearer ${config.CLARIFAI_API_KEY}`);
+                logger.debug("Clarifai: Key auth failed (401), retrying with Bearer auth...");
+                response = await attemptRequest('Bearer');
             } else {
-                throw err1; // Re-throw if it's not a 401
+                throw err1; // Re-throw if it's not a 401 (e.g. 500 or network error)
             }
         }
 
+        if (!response.data || !response.data.outputs || !response.data.outputs[0]) {
+            logger.warn("Clarifai response malformed", { data: response.data });
+            return true; // Fail open on bad response format
+        }
+
         const concepts = response.data.outputs[0].data.concepts;
-        // Only check for explicit (pornographic) content
         // unsafe is true if 'explicit' score is > 0.85
         const unsafe = concepts.find(c => c.name === 'explicit' && c.value > 0.85);
         
@@ -70,7 +79,8 @@ async function checkContentSafety(base64Data) {
     } catch (e) {
         // FAIL OPEN: If the moderation service fails (e.g. Auth Error, Rate Limit, Network Error),
         // we log the warning but ALLOW the content to proceed so the app doesn't break.
-        logger.warn("Content safety check failed (Bypassing)", { error: e.message });
+        const status = e.response ? e.response.status : 'Unknown';
+        logger.warn(`Content safety check failed (${status}) - Bypassing`, { error: e.message });
         return true;
     }
 }
