@@ -30,7 +30,18 @@ async function updateGlobalState(deps) {
             globalState.devPumpHoldings = 0;
         }
 
-        const distributableAmount = globalState.devPumpHoldings * 0.99;
+        // --- UPDATED LOGIC FOR KOTH ---
+        // Total available in wallet
+        const rawHoldings = globalState.devPumpHoldings;
+        
+        // 1. Calculate the 'Distributable' amount (99% of holdings, as per flywheel logic)
+        const totalDistributable = rawHoldings * 0.99;
+        
+        // 2. KOTH gets 10% of that distributable amount
+        // const kothShare = totalDistributable * 0.10; // (Unused variable, but kept for clarity of logic)
+        
+        // 3. Community gets the remaining 90%
+        const communityPool = totalDistributable * 0.90;
 
         // Update holders for each top token
         for (const token of topTokens) {
@@ -130,7 +141,7 @@ async function updateGlobalState(deps) {
         }
 
         globalState.totalPoints = tempTotalPoints;
-        logger.info(`Global Points: ${globalState.totalPoints}`);
+        logger.info(`Global Points: ${globalState.totalPoints} | Est. Pool: ${communityPool.toFixed(2)} PUMP`);
 
         // Update expected airdrops
         globalState.userExpectedAirdrops.clear();
@@ -145,9 +156,10 @@ async function updateGlobalState(deps) {
             if (points > 0) {
                 globalState.userPointsMap.set(pubkey, points);
 
-                if (distributableAmount > 0 && globalState.totalPoints > 0) {
+                if (communityPool > 0 && globalState.totalPoints > 0) {
                     const share = points / globalState.totalPoints;
-                    const expectedAirdrop = share * distributableAmount;
+                    // FIX: Use communityPool (90%) instead of totalDistributable
+                    const expectedAirdrop = share * communityPool;
                     globalState.userExpectedAirdrops.set(pubkey, expectedAirdrop);
                 }
             }
