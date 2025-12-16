@@ -14,8 +14,13 @@ const logger = require('./logger');
 async function getQuote(inputMint, outputMint, amountIn, slippageBps = 100) {
     const url = `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountIn}&slippageBps=${slippageBps}`;
 
-    const response = await axios.get(url);
-    return response.data;
+    try {
+        const response = await axios.get(url);
+        return response.data;
+    } catch (e) {
+        logger.error("Jupiter Quote API Error", { error: e.message });
+        return null;
+    }
 }
 
 /**
@@ -33,21 +38,27 @@ async function getSwapTransaction(quoteResponse, userPublicKey, wrapAndUnwrapSol
 }
 
 /**
- * Swap SOL to USDC
+ * Swap SOL to a specific Token
  */
-async function swapSolToUsdc(amountLamports, wallet, connection) {
+async function swapSolToToken(amountLamports, outputMint, wallet, connection) {
     try {
+        // 1. Get Quote (SOL -> Token)
+        // Input is always WSOL for SOL swaps
         const quoteResponse = await getQuote(
-            'So11111111111111111111111111111111111111112',
-            TOKENS.USDC.toString(),
+            'So11111111111111111111111111111111111111112', // WSOL Mint
+            outputMint.toString(),
             amountLamports
         );
 
+        if (!quoteResponse) throw new Error("Failed to get Jupiter quote");
+
+        // 2. Get Transaction
         const swapTransactionBase64 = await getSwapTransaction(
             quoteResponse,
             wallet.publicKey
         );
 
+        // 3. Sign and Send
         const swapTransactionBuf = Buffer.from(swapTransactionBase64, 'base64');
         const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
         transaction.sign([wallet]);
@@ -58,16 +69,26 @@ async function swapSolToUsdc(amountLamports, wallet, connection) {
         });
 
         await connection.confirmTransaction(sig, 'confirmed');
-        logger.info("Jupiter swap completed", { signature: sig });
-        return sig;
+        
+        logger.info(`Jupiter swap completed: SOL -> ${outputMint.toString().slice(0, 5)}...`, { signature: sig, outAmount: quoteResponse.outAmount });
+        
+        return { signature: sig, outAmount: quoteResponse.outAmount };
     } catch (e) {
         logger.error("Jupiter Swap Error", { error: e.message });
         return null;
     }
 }
 
+/**
+ * Legacy wrapper for backward compatibility if needed
+ */
+async function swapSolToUsdc(amountLamports, wallet, connection) {
+    return swapSolToToken(amountLamports, TOKENS.USDC, wallet, connection);
+}
+
 module.exports = {
     getQuote,
     getSwapTransaction,
-    swapSolToUsdc,
+    swapSolToToken,
+    swapSolToUsdc
 };

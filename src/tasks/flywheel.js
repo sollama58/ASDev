@@ -292,6 +292,7 @@ async function runPurchaseAndFees(deps) {
         reason: 'Unknown',
         feesCollected: 0,
         solSpent: 0,
+        tokensBought: 0,
         transfer9_5: 0,
         transfer0_5: 0,
         pumpBuySig: null
@@ -362,12 +363,21 @@ async function runPurchaseAndFees(deps) {
                 await solana.sendTxWithRetry(feeTx, [devKeypair]);
                 logger.info("Fees Distributed");
 
-                // Swap to USDC then buy PUMP
-                const jupSig = await jupiter.swapSolToUsdc(solBuyAmount, devKeypair, connection);
-                if (jupSig) {
-                    logData.pumpBuySig = jupSig;
+                // DIRECT BUY: Swap SOL -> PUMP using Jupiter
+                const swapResult = await jupiter.swapSolToToken(solBuyAmount, TOKENS.PUMP, devKeypair, connection);
+                
+                if (swapResult && swapResult.signature) {
+                    logData.pumpBuySig = swapResult.signature;
+                    logData.tokensBought = swapResult.outAmount;
                     logData.status = 'SUCCESS';
                     logData.reason = 'Flywheel Complete';
+                    
+                    // Update Stats
+                    await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [solBuyAmount, 'totalPumpBoughtLamports']);
+                    
+                    // Convert raw units to float (Assuming 6 decimals for PUMP/Token-2022)
+                    const tokensBoughtVal = parseFloat(swapResult.outAmount) / 1000000;
+                    await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [tokensBoughtVal, 'totalPumpTokensBought']);
                 } else {
                     logData.status = 'BUY_FAIL';
                 }
