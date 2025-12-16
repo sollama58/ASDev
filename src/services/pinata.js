@@ -35,6 +35,7 @@ function getPinataJSONHeaders() {
 
 /**
  * Upload image to Pinata IPFS
+ * Returns the IPFS Hash (CID)
  */
 async function uploadImage(base64Data) {
     try {
@@ -48,30 +49,33 @@ async function uploadImage(base64Data) {
             { headers: getPinataHeaders(formData), maxBodyLength: Infinity }
         );
 
-        return `https://gateway.pinata.cloud/ipfs/${response.data.IpfsHash}`;
+        return response.data.IpfsHash;
     } catch (e) {
         logger.error("Pinata image upload failed", { error: e.message });
-        // Return fallback to prevent crash, but log error
-        return "https://placehold.co/400x400/333/fff?text=Upload+Failed";
+        throw new Error("Image upload failed");
     }
 }
 
 /**
  * Upload token metadata to Pinata IPFS
- * Returns object with both metadata URI and the direct Image URI
+ * Returns object with metadata URI and the direct Image URI (Gateway)
  */
 async function uploadMetadata(name, symbol, description, twitter, website, imageBase64) {
-    let imageUrl = "https://placehold.co/400x400/333/fff?text=No+Image";
-
+    let imageCid = "";
+    
+    // 1. Upload Image
     if (imageBase64) {
-        imageUrl = await uploadImage(imageBase64);
+        imageCid = await uploadImage(imageBase64);
     }
 
+    // 2. Construct Metadata
+    // CRITICAL FIX: Use ipfs:// scheme for the on-chain metadata.
+    // This allows Pump.fun/Solscan/Wallets to use their own fast gateways.
     const metadata = {
         name,
         symbol,
         description,
-        image: imageUrl,
+        image: imageCid ? `ipfs://${imageCid}` : "", 
         showName: true,
         createdOn: "https://pump.fun",
         twitter: twitter || "",
@@ -80,15 +84,20 @@ async function uploadMetadata(name, symbol, description, twitter, website, image
     };
 
     try {
+        // 3. Upload Metadata JSON
         const response = await axios.post(
             'https://api.pinata.cloud/pinning/pinJSONToIPFS',
             metadata,
             { headers: getPinataJSONHeaders() }
         );
         
+        const metadataHash = response.data.IpfsHash;
+
         return {
-            metadataUri: `https://gateway.pinata.cloud/ipfs/${response.data.IpfsHash}`,
-            imageUrl: imageUrl
+            // Return the gateway URL for the frontend to display immediately
+            imageUrl: imageCid ? `https://gateway.pinata.cloud/ipfs/${imageCid}` : "",
+            // Return the HTTP URL for the metadata so the Token Program can read it
+            metadataUri: `https://gateway.pinata.cloud/ipfs/${metadataHash}`
         };
     } catch (e) {
         throw new Error(`Pinata Error: ${e.response?.data?.error || e.message}`);
