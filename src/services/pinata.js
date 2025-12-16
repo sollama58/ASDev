@@ -14,9 +14,6 @@ function getPinataHeaders(formData) {
     const headers = { ...formData.getHeaders() };
     if (config.PINATA_JWT) {
         headers['Authorization'] = `Bearer ${config.PINATA_JWT}`;
-    } else if (config.PINATA_API_KEY_LEGACY) {
-        headers['pinata_api_key'] = config.PINATA_API_KEY_LEGACY;
-        headers['pinata_secret_api_key'] = config.PINATA_SECRET_KEY_LEGACY;
     } else {
         throw new Error("Missing Pinata Credentials");
     }
@@ -30,9 +27,6 @@ function getPinataJSONHeaders() {
     const headers = { 'Content-Type': 'application/json' };
     if (config.PINATA_JWT) {
         headers['Authorization'] = `Bearer ${config.PINATA_JWT}`;
-    } else if (config.PINATA_API_KEY_LEGACY) {
-        headers['pinata_api_key'] = config.PINATA_API_KEY_LEGACY;
-        headers['pinata_secret_api_key'] = config.PINATA_SECRET_KEY_LEGACY;
     } else {
         throw new Error("Missing Pinata Credentials");
     }
@@ -57,15 +51,17 @@ async function uploadImage(base64Data) {
         return `https://gateway.pinata.cloud/ipfs/${response.data.IpfsHash}`;
     } catch (e) {
         logger.error("Pinata image upload failed", { error: e.message });
-        return "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8";
+        // Return fallback to prevent crash, but log error
+        return "https://placehold.co/400x400/333/fff?text=Upload+Failed";
     }
 }
 
 /**
  * Upload token metadata to Pinata IPFS
+ * Returns object with both metadata URI and the direct Image URI
  */
 async function uploadMetadata(name, symbol, description, twitter, website, imageBase64) {
-    let imageUrl = "https://gateway.pinata.cloud/ipfs/QmPc5gX8W8h9j5h8x8h8h8h8h8h8h8h8h8h8h8h8h8";
+    let imageUrl = "https://placehold.co/400x400/333/fff?text=No+Image";
 
     if (imageBase64) {
         imageUrl = await uploadImage(imageBase64);
@@ -89,7 +85,11 @@ async function uploadMetadata(name, symbol, description, twitter, website, image
             metadata,
             { headers: getPinataJSONHeaders() }
         );
-        return `https://gateway.pinata.cloud/ipfs/${response.data.IpfsHash}`;
+        
+        return {
+            metadataUri: `https://gateway.pinata.cloud/ipfs/${response.data.IpfsHash}`,
+            imageUrl: imageUrl
+        };
     } catch (e) {
         throw new Error(`Pinata Error: ${e.response?.data?.error || e.message}`);
     }

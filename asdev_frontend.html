@@ -217,7 +217,6 @@
                     <div class="text-center">
                         <div id="koth-ticker" class="text-2xl font-bold text-white font-mono">$????</div>
                         <div id="koth-name" class="text-xs text-fuchsia-500 font-mono uppercase">LOADING...</div>
-                        <!-- NEW CREATOR ELEMENT -->
                         <div id="koth-creator" class="text-[10px] text-fuchsia-400/70 font-mono mt-1">CREATOR: ?????...</div>
                     </div>
                 </div>
@@ -493,7 +492,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v21.2-KOTH-FIX";
+    const FRONTEND_VERSION = "v21.3-IMG-FIX";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02;
@@ -600,7 +599,7 @@
         kothName: document.getElementById('koth-name'),
         kothMcap: document.getElementById('koth-mcap'),
         kothImg: document.getElementById('koth-img'),
-        kothCreator: document.getElementById('koth-creator') // NEW UI REF
+        kothCreator: document.getElementById('koth-creator') 
     };
 
     lucide.createIcons();
@@ -816,7 +815,6 @@
         } 
     };
 
-    // UPDATED KOTH UI LOGIC
     const updateKOTH = async () => {
         try {
             const res = await fetch(`${BACKEND_URL}/api/koth`);
@@ -1389,7 +1387,9 @@
                 const errData = await prepRes.json();
                 throw new Error(errData.error || "Metadata upload failed");
             }
-            const { metadataUri } = await prepRes.json();
+            // MODIFIED: Capture Image URL
+            const { metadataUri, imageUrl } = await prepRes.json();
+            
             ui.deployBtn.innerText = "SIGNING FEE TRANSACTION...";
             showStatus("METADATA READY. PLEASE SIGN WALLET...", 'normal');
             const bhRes = await fetchWithRetry(`${BACKEND_URL}/api/blockhash`);
@@ -1419,6 +1419,7 @@
                 body: JSON.stringify({
                     name, ticker, description, twitter, website,
                     metadataUri,
+                    imageUrl, // <-- Sending the URL explicitly
                     userTx: txSignature,
                     userPubkey: userPubkey,
                     isMayhemMode: isMayhemMode
