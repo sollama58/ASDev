@@ -723,8 +723,14 @@
                     badge = `<span class="badge-bonded" title="Bonding Curve Complete">BONDED</span>`;
                 }
 
-                // Image Logic: Prefer stored image, fallback to metadata URI if needed (handled by browser or backend pre-fetch ideally), final fallback to placeholder
-                let imgSrc = item.image || 'https://placehold.co/32x32/333/fff?text=?';
+                // Image Logic: Prefer stored image, fallback to placeholder URL
+                // Using a generic placeholder for the secondary fallback case.
+                const fallbackImgSrc = 'https://placehold.co/32x32/333/fff?text=?';
+                let imgSrc = escapeHtml(item.image) || fallbackImgSrc;
+                
+                // Add console log to see what URL is being used
+                console.log(`Token ${item.ticker} image URL: ${imgSrc}`);
+
 
                 const holderMark = item.isUserTopHolder 
                     ? `<span class="holder-check" title="You are a Top Holder">👑 TOP HOLDER</span>` 
@@ -738,7 +744,8 @@
                 <tr>
                     <td class="text-orange-500 font-bold">${index + 1}</td>
                     <td>
-                        <img src="${escapeHtml(imgSrc)}" onerror="this.src='https://placehold.co/32x32/333/fff?text=?'" class="token-img-sm" alt="icon">
+                        <!-- IMPROVED ONERROR HANDLER: Ensures a valid image/placeholder is used -->
+                        <img src="${imgSrc}" onerror="this.src='${fallbackImgSrc}'" class="token-img-sm" alt="icon">
                         <span class="text-white font-bold">${escapeHtml(item.ticker)}</span>
                         ${creatorMark}
                         ${holderMark}
@@ -1240,26 +1247,15 @@
                                     '<span class="badge-bonded text-xs" style="background-color:#22c55e;">BONDED</span>' : 
                                     '<span class="badge-bonding text-xs" style="background-color:#eab308;">PRE-BOND</span>';
                                     
-                                // Try to get image from token data or metadata URI
-                                let imgSrc = item.image;
-                                if ((!imgSrc || imgSrc.trim() === '') && item.metadataUri) {
-                                    try {
-                                        const metaRes = await fetch(item.metadataUri);
-                                        const metaJson = await metaRes.json();
-                                        if (metaJson.image) {
-                                            imgSrc = metaJson.image;
-                                        }
-                                    } catch (e) { /* silent fail */ }
-                                }
-                                if (!imgSrc || imgSrc.trim() === '') {
-                                    imgSrc = 'https://placehold.co/32x32/333/fff?text=?'; 
-                                }
+                                // Image Logic:
+                                const fallbackImgSrc = 'https://placehold.co/32x32/333/fff?text=?';
+                                let imgSrc = escapeHtml(item.image) || fallbackImgSrc;
 
                                 return `
                                 <tr class="border-b border-orange-800/30 hover:bg-orange-900/20">
                                     <td class="p-2">${index + 1}</td>
                                     <td class="p-2">
-                                        <img src="${escapeHtml(imgSrc)}" onerror="this.src='https://placehold.co/32x32/333/fff?text=?'" class="token-img-sm" alt="icon">
+                                        <img src="${imgSrc}" onerror="this.src='${fallbackImgSrc}'" class="token-img-sm" alt="icon">
                                         <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="font-bold underline text-white">${escapeHtml(item.ticker)}</a> (${escapeHtml(item.name)})
                                     </td>
                                     <td class="p-2 text-orange-400">${escapeHtml(item.userPubkey?.slice(0, 5) || '?????')}...</td>
@@ -1382,6 +1378,12 @@
                         const numVal = parseFloat(value);
                         if (!isNaN(numVal)) displayValue = numVal.toFixed(4) + ' SOL';
                     }
+                    
+                    // Specific fix for kothWinner in logs details
+                    if (key === 'kothWinner') {
+                        displayValue = value || 'N/A';
+                    }
+
 
                     logDetailsHtml += `
                         <div class="log-grid">
@@ -1439,7 +1441,7 @@
                                     <td class="p-2 text-right">
                                         ${log.signatures ? log.signatures.split(',').map((sig, i) => 
                                             sig.startsWith('KOTH') 
-                                            ? `<a href="https://solscan.io/tx/${sig.split(':')[1]}" target="_blank" class="tx-link text-yellow-400">[👑]</a>`
+                                            ? `<a href="https://solscan.io/tx/${sig.split(':')[1]}" target="_blank" class="tx-link text-fuchsia-400">[💊]</a>`
                                             : `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link">[TX ${i+1}]</a>`
                                         ).join(' ') : 'Pending'}
                                     </td>
