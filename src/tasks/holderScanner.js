@@ -30,18 +30,25 @@ async function updateGlobalState(deps) {
             globalState.devPumpHoldings = 0;
         }
 
-        // --- UPDATED LOGIC FOR KOTH ---
-        // Total available in wallet
-        const rawHoldings = globalState.devPumpHoldings;
+        // --- CALCULATION LOGIC ---
         
-        // 1. Calculate the 'Distributable' amount (99% of holdings, as per flywheel logic)
+        // 1. Determine Pots
+        const rawHoldings = globalState.devPumpHoldings;
+        // 99% of holdings are distributable (matches flywheel logic)
         const totalDistributable = rawHoldings * 0.99;
         
-        // 2. KOTH gets 10% of that distributable amount
-        // const kothShare = totalDistributable * 0.10; // (Unused variable, but kept for clarity of logic)
+        // KOTH gets 10% of the distributable amount
+        const kothPot = totalDistributable * 0.10;
         
-        // 3. Community gets the remaining 90%
-        const communityPool = totalDistributable * 0.90;
+        // Community gets the remaining 90%
+        const communityPot = totalDistributable * 0.90;
+
+        // 2. Identify KOTH Creator (Highest Market Cap)
+        // We fetch this separately to ensure we get the absolute top even if not in volume top 10
+        const kothToken = await db.get('SELECT userPubkey FROM tokens ORDER BY marketCap DESC LIMIT 1');
+        const kothCreator = kothToken ? kothToken.userPubkey : null;
+
+        // --- END CALCULATION PREP ---
 
         // Update holders for each top token
         for (const token of topTokens) {
@@ -141,9 +148,9 @@ async function updateGlobalState(deps) {
         }
 
         globalState.totalPoints = tempTotalPoints;
-        logger.info(`Global Points: ${globalState.totalPoints} | Est. Pool: ${communityPool.toFixed(2)} PUMP`);
+        logger.info(`Global Points: ${globalState.totalPoints} | Community Pot: ${communityPot.toFixed(2)} | KOTH Pot: ${kothPot.toFixed(2)}`);
 
-        // Update expected airdrops
+        // Update expected airdrops and points map
         globalState.userExpectedAirdrops.clear();
         globalState.userPointsMap.clear();
 
@@ -156,14 +163,31 @@ async function updateGlobalState(deps) {
             if (points > 0) {
                 globalState.userPointsMap.set(pubkey, points);
 
-                if (communityPool > 0 && globalState.totalPoints > 0) {
+                let expected = 0;
+                
+                // 1. Calculate Community Share
+                if (communityPot > 0 && globalState.totalPoints > 0) {
                     const share = points / globalState.totalPoints;
-                    // FIX: Use communityPool (90%) instead of totalDistributable
-                    const expectedAirdrop = share * communityPool;
-                    globalState.userExpectedAirdrops.set(pubkey, expectedAirdrop);
+                    expected = share * communityPot;
                 }
+
+                // 2. Add KOTH Pot if this user is the KOTH creator
+                if (pubkey === kothCreator) {
+                    expected += kothPot;
+                    logger.debug(`User ${pubkey} is KOTH creator. Adding ${kothPot.toFixed(2)} to expectation.`);
+                }
+
+                globalState.userExpectedAirdrops.set(pubkey, expected);
             }
         }
+
+        // Edge Case: KOTH Creator exists but has 0 points (no top 50 holdings)
+        // They must still be added to the expected airdrops map
+        if (kothCreator && !globalState.userExpectedAirdrops.has(kothCreator) && kothCreator !== devKeypair.publicKey.toString()) {
+            globalState.userExpectedAirdrops.set(kothCreator, kothPot);
+            logger.debug(`KOTH Creator ${kothCreator} added with 0 points but ${kothPot.toFixed(2)} expectation.`);
+        }
+
     } catch (e) {
         logger.error("Holder scanner error", { error: e.message });
     }
