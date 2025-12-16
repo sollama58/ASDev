@@ -84,12 +84,13 @@ async function initDB() {
         const runMigration = async (columnName, columnType) => {
             try {
                 // Attempt to add the column
-                await db.exec(\`ALTER TABLE tokens ADD COLUMN \${columnName} \${columnType}\`);
-                logger.info(\`[DB MIGRATION] Added column '\${columnName}' to tokens table.\`);
+                // FIX: Removed invalid backslashes before backticks and template vars
+                await db.exec(`ALTER TABLE tokens ADD COLUMN ${columnName} ${columnType}`);
+                logger.info(`[DB MIGRATION] Added column '${columnName}' to tokens table.`);
             } catch (e) {
                 // Safely ignore the error if the column already exists
                 if (!e.message.includes("duplicate column name") && !e.message.includes("column already exists")) {
-                    logger.error(\`[DB MIGRATION] Failed to add column \${columnName}\`, { error: e.message });
+                    logger.error(`[DB MIGRATION] Failed to add column ${columnName}`, { error: e.message });
                 }
             }
         };
