@@ -217,6 +217,8 @@
                     <div class="text-center">
                         <div id="koth-ticker" class="text-2xl font-bold text-white font-mono">$????</div>
                         <div id="koth-name" class="text-xs text-fuchsia-500 font-mono uppercase">LOADING...</div>
+                        <!-- NEW CREATOR ELEMENT -->
+                        <div id="koth-creator" class="text-[10px] text-fuchsia-400/70 font-mono mt-1">CREATOR: ?????...</div>
                     </div>
                 </div>
 
@@ -491,7 +493,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v21.1-IMG-FIX";
+    const FRONTEND_VERSION = "v21.2-KOTH-FIX";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02;
@@ -528,31 +530,16 @@
         return div.innerHTML;
     };
 
-    /**
-     * ADVANCED IMAGE RESOLVER
-     * Fixes IPFS links, uses caching proxy, and ensures HTTPS.
-     */
     const resolveTokenImage = (url) => {
         const fallback = 'https://placehold.co/32x32/333/fff?text=?';
         if (!url) return fallback;
-
         let cleanUrl = url.trim();
-
-        // 1. Handle IPFS Protocol
         if (cleanUrl.startsWith('ipfs://')) {
             cleanUrl = cleanUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
         }
-
-        // 2. Handle known slow gateways - Replace with faster public gateway
         if (cleanUrl.includes('gateway.pinata.cloud')) {
             cleanUrl = cleanUrl.replace('gateway.pinata.cloud', 'ipfs.io');
         }
-
-        // 3. Use wsrv.nl Image Proxy for caching, resizing, and enforcing HTTPS
-        // w=64: Resize to 64px width (high DPI for 32px display)
-        // output=webp: Use modern format
-        // q=80: Quality optimization
-        // url: The encoded original URL
         return `https://wsrv.nl/?url=${encodeURIComponent(cleanUrl)}&w=64&output=webp&q=80&default=${encodeURIComponent(fallback)}`;
     };
 
@@ -612,7 +599,8 @@
         kothTicker: document.getElementById('koth-ticker'),
         kothName: document.getElementById('koth-name'),
         kothMcap: document.getElementById('koth-mcap'),
-        kothImg: document.getElementById('koth-img')
+        kothImg: document.getElementById('koth-img'),
+        kothCreator: document.getElementById('koth-creator') // NEW UI REF
     };
 
     lucide.createIcons();
@@ -678,7 +666,6 @@
                     badge = `<span class="badge-bonded" title="Bonding Curve Complete">BONDED</span>`;
                 }
 
-                // USE NEW IMAGE RESOLVER
                 let imgSrc = resolveTokenImage(item.image);
                 
                 const holderMark = item.isUserTopHolder 
@@ -726,24 +713,19 @@
         const modal = document.getElementById('holders-modal');
         const list = document.getElementById('holders-list');
         const title = document.getElementById('holders-modal-title');
-        
         modal.style.display = 'block';
         title.innerText = `TOP 50: $${ticker}`;
         list.innerHTML = '<div class="text-center text-orange-400 p-4">Loading holder data...</div>';
-
         try {
             const res = await fetch(`${BACKEND_URL}/api/token-holders/${escapeHtml(mint)}`);
             if (!res.ok) throw new Error("Failed to fetch");
             const holders = await res.json();
-
             if (holders.length === 0) {
                 list.innerHTML = '<div class="text-center text-gray-500 p-4">No holder data available yet.</div>';
                 return;
             }
-
             let html = '<table class="w-full text-left text-orange-200">';
             html += '<thead><tr class="text-orange-500 border-b border-orange-800/50"><th class="py-2">#</th><th class="py-2">Wallet</th></tr></thead><tbody>';
-
             holders.forEach(h => {
                 const shortWallet = escapeHtml(h.holderPubkey?.slice(0, 5) || '?????');
                 html += `<tr class="border-b border-orange-900/20 hover:bg-orange-900/10">
@@ -751,7 +733,6 @@
                             <td class="py-1 font-mono">${shortWallet}...</td>
                          </tr>`;
             });
-
             html += '</tbody></table>';
             list.innerHTML = html;
         } catch (e) {
@@ -835,6 +816,7 @@
         } 
     };
 
+    // UPDATED KOTH UI LOGIC
     const updateKOTH = async () => {
         try {
             const res = await fetch(`${BACKEND_URL}/api/koth`);
@@ -848,8 +830,11 @@
                     ui.kothName.innerText = escapeHtml(data.token.name);
                     ui.kothMcap.innerText = formatMcap(data.token.marketCap);
                     
+                    // NEW: Display Creator
+                    const creator = data.token.creator || '?????';
+                    ui.kothCreator.innerText = `CREATOR: ${creator.slice(0, 5)}...`;
+
                     if (data.token.image) {
-                        // Use Image Resolver for KOTH
                         ui.kothImg.src = resolveTokenImage(data.token.image);
                         ui.kothImg.classList.remove('hidden');
                     }
@@ -1094,7 +1079,6 @@
                                     '<span class="badge-bonded text-xs" style="background-color:#22c55e;">BONDED</span>' : 
                                     '<span class="badge-bonding text-xs" style="background-color:#eab308;">PRE-BOND</span>';
                                     
-                                // USE NEW IMAGE RESOLVER HERE TOO
                                 let imgSrc = resolveTokenImage(item.image);
 
                                 return `
