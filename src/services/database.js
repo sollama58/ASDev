@@ -39,7 +39,9 @@ async function smartCache(key, ttlSeconds, fetchFunction) {
 
     try {
         const value = await fetchFunction();
-        cache.set(key, { value, timestamp: now });
+        if (value !== undefined && value !== null) {
+            cache.set(key, { value, timestamp: now });
+        }
         return value;
     } catch (e) {
         if (cached) return cached.value;
@@ -54,7 +56,7 @@ async function initDB() {
             driver: sqlite3.Database
         });
 
-        // Create tables
+        // 1. Create essential tables (with all modern columns included)
         await db.exec(`
             CREATE TABLE IF NOT EXISTS tokens (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +79,25 @@ async function initDB() {
             )
         `);
 
+        // 2. Perform Migration Checks to ensure all columns exist in old DB files
+        // This handles older schema versions that are missing the fields used by metadataUpdater.js
+        const runMigration = async (columnName, columnType) => {
+            try {
+                // Attempt to add the column
+                await db.exec(\`ALTER TABLE tokens ADD COLUMN \${columnName} \${columnType}\`);
+                logger.info(\`[DB MIGRATION] Added column '\${columnName}' to tokens table.\`);
+            } catch (e) {
+                // Safely ignore the error if the column already exists
+                if (!e.message.includes("duplicate column name") && !e.message.includes("column already exists")) {
+                    logger.error(\`[DB MIGRATION] Failed to add column \${columnName}\`, { error: e.message });
+                }
+            }
+        };
+
+        await runMigration('priceUsd', 'REAL DEFAULT 0');
+        await runMigration('lastUpdated', 'INTEGER');
+
+        // Continue creating other tables...
         await db.exec(`
             CREATE TABLE IF NOT EXISTS token_holders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +134,8 @@ async function initDB() {
             'totalPumpTokensBought',
             'lastClaimTimestamp',
             'lastClaimAmountLamports',
-            'nextCheckTimestamp'
+            'nextCheckTimestamp',
+            'lifetimeCreatorFeesLamports' // Ensure this is also initialized
         ];
 
         for (const key of statsKeys) {
