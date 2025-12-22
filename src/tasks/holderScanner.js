@@ -60,31 +60,46 @@ async function updateGlobalState(deps) {
                     [Buffer.from("bonding-curve"), tokenMintPublicKey.toBuffer()],
                     PROGRAMS.PUMP
                 );
-                const bondingCurvePDAStr = bondingCurvePDA.toString();
-
-                const accounts = await connection.getTokenLargestAccounts(tokenMintPublicKey);
+                
+                // UPDATED: Use getProgramAccounts to fetch all holders (bypass RPC limit of 20)
+                // We target Token 2022 as that is what the launcher deploys
                 const holdersToInsert = [];
-
-                if (accounts.value) {
-                    const topHolders = accounts.value.slice(0, 50);
-
-                    for (const acc of topHolders) {
-                        try {
-                            const info = await connection.getParsedAccountInfo(acc.address);
-                            if (info.value?.data?.parsed) {
-                                const owner = info.value.data.parsed.info.owner;
-                                const tokenAmountObj = info.value.data.parsed.info.tokenAmount;
-
-                                // Filter: must hold > 1 token
-                                if (tokenAmountObj.uiAmount <= 1) continue;
-
-                                // Exclude liquidity wallets
-                                if (owner !== WALLETS.PUMP_LIQUIDITY && owner !== bondingCurvePDAStr) {
-                                    holdersToInsert.push({ mint: token.mint, owner });
-                                }
-                            }
-                        } catch (e) {}
+                
+                try {
+                    const accounts = await connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
+                        filters: [
+                            { memcmp: { offset: 0, bytes: token.mint } }
+                        ],
+                        encoding: 'base64'
+                    });
+    
+                    const parsedAccounts = accounts.map(acc => {
+                        const data = Buffer.from(acc.account.data);
+                        // Layout: Mint(0-32), Owner(32-64), Amount(64-72)
+                        if (data.length < 72) return null;
+                        
+                        const owner = new PublicKey(data.slice(32, 64)).toString();
+                        const amount = new BN(data.slice(64, 72), 'le');
+                        return { owner, amount };
+                    })
+                    .filter(a => a !== null)
+                    .sort((a, b) => b.amount.cmp(a.amount)); // Descending sort
+    
+                    const bondingCurvePDAStr = bondingCurvePDA.toString();
+                    // Threshold: > 1 token (assuming 6 decimals = 1,000,000)
+                    const threshold = new BN(1000000);
+    
+                    for (const acc of parsedAccounts) {
+                        if (holdersToInsert.length >= 50) break;
+    
+                        if (acc.amount.lte(threshold)) continue;
+    
+                        if (acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr) {
+                            holdersToInsert.push({ mint: token.mint, owner: acc.owner });
+                        }
                     }
+                } catch (scanErr) {
+                    logger.error(`Failed to scan holders for ${token.mint}`, { error: scanErr.message });
                 }
 
                 // Atomic DB update
@@ -105,10 +120,14 @@ async function updateGlobalState(deps) {
                     await db.run('COMMIT');
                 } catch (err) {
                     await db.run('ROLLBACK');
+                    throw err;
                 }
-            } catch (e) {}
+            } catch (e) {
+                logger.error(`Holder update loop error for ${token.mint}: ${e.message}`);
+            }
 
-            await new Promise(r => setTimeout(r, 1000));
+            // Respect rate limits (fetching full accounts is heavier than largest accounts)
+            await new Promise(r => setTimeout(r, 2000));
         }
 
         // Calculate global points
