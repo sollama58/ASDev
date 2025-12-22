@@ -134,6 +134,9 @@
         .koth-title { text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
         .koth-glow { animation: glow 2s infinite alternate; }
         @keyframes glow { from { box-shadow: 0 0 10px rgba(217, 70, 239, 0.2); } to { box-shadow: 0 0 25px rgba(217, 70, 239, 0.7); } }
+        /* Conservation Notice */
+        .conservation-notice { grid-column: 1 / -1; margin-top: 10px; background: rgba(59, 130, 246, 0.2); border: 1px solid #3b82f6; padding: 10px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px; display: none; }
+        .conservation-active { display: block; }
     </style>
 </head>
 <body>
@@ -327,6 +330,19 @@
                 <div class="bg-black/30 p-4 rounded border border-orange-900/50">
                     <div class="text-xs text-orange-400 uppercase">Next Check In</div>
                     <div class="text-xl text-yellow-400 font-bold font-mono mt-1" id="track-next-check">--:--</div>
+                </div>
+                
+                <!-- Dynamic Conservation Notice -->
+                <div id="conservation-notice" class="conservation-notice col-span-1 md:col-span-4">
+                    <div class="flex items-center justify-center gap-2 mb-1">
+                        <i data-lucide="shield-alert" class="text-blue-400" width="16"></i>
+                        <span class="text-blue-300 font-bold uppercase">Conserving SOL for Airdrop</span>
+                    </div>
+                    <div class="text-blue-200 text-xs">
+                        Targeting <span id="cons-users" class="font-bold text-white">0</span> users. 
+                        Need <span id="cons-need" class="font-bold text-white">0.0000</span> SOL (Have <span id="cons-have" class="text-gray-400">0.0000</span>).
+                        <span id="cons-missing" class="text-yellow-400 ml-1"></span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -599,7 +615,12 @@
         kothName: document.getElementById('koth-name'),
         kothMcap: document.getElementById('koth-mcap'),
         kothImg: document.getElementById('koth-img'),
-        kothCreator: document.getElementById('koth-creator') 
+        kothCreator: document.getElementById('koth-creator'),
+        consNotice: document.getElementById('conservation-notice'),
+        consUsers: document.getElementById('cons-users'),
+        consNeed: document.getElementById('cons-need'),
+        consHave: document.getElementById('cons-have'),
+        consMissing: document.getElementById('cons-missing')
     };
 
     lucide.createIcons();
@@ -884,6 +905,17 @@
                 }
                 if (data.totalPoints !== undefined) {
                     currentGlobalPoints = data.totalPoints;
+                }
+                
+                // --- Conservation Status Logic ---
+                if (data.conservationStatus && data.conservationStatus.isConserving) {
+                    ui.consNotice.classList.add('conservation-active');
+                    ui.consUsers.innerText = data.conservationStatus.eligibleCount;
+                    ui.consNeed.innerText = parseFloat(data.conservationStatus.estimatedCost).toFixed(4);
+                    ui.consHave.innerText = parseFloat(data.conservationStatus.currentSol).toFixed(4);
+                    ui.consMissing.innerText = `(${data.conservationStatus.missingAtas} new wallets)`;
+                } else {
+                    ui.consNotice.classList.remove('conservation-active');
                 }
             } else { 
                 status = 'OFFLINE';
