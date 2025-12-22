@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.26.37</title>
+    <title>ASDev Launcher v10.26.38</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -427,9 +427,9 @@
         <div class="font-sans text-sm text-purple-200 space-y-3">
             <p>The **Total Points** and **Expected Airdrop** metrics shown are subject to the platform's background update cycles.</p>
             <ul class="list-disc list-inside ml-4 space-y-1 text-purple-300">
-                <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 50 Holder**.</li>
+                <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 100 Holder**.</li>
                 <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
-                <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
+                <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 100 Holder of **$ASDF**.</li>
                 <li class="mt-2"><span class="text-yellow-400">Formula:</span> (Holdings + (Created * 2)) * Multiplier</li>
                 <li class="mt-2 text-fuchsia-300 font-bold">💊 King of the Pill (KOTH): 10% of every airdrop goes directly to the Creator of the highest MCAP token, bypassing points logic.</li>
             </ul>
@@ -461,9 +461,9 @@
                 <h4 class="text-purple-400 font-bold mb-3 border-b border-purple-800 pb-1">3. POINTS SYSTEM (QUALIFICATION)</h4>
                 <p class="text-purple-200 mb-2">Users earn points by holding top tokens. No signup required.</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 50 Holder**.</li>
+                    <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 100 Holder**.</li>
                     <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
-                    <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
+                    <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 100 Holder of **$ASDF**.</li>
                 </ul>
                 <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
                     <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">💊 KING OF THE PILL (NEW)</p>
@@ -711,7 +711,7 @@
                     <td class="text-right text-white font-bold">$${displayVol.toLocaleString()}</td>
                     <td class="text-right">
                         <div class="flex gap-2 justify-end items-center">
-                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}')" class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition" title="View Top 50 Holders">
+                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}')" class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition" title="View Top 100 Holders">
                                 👥
                             </button>
                             <a href="${escapeHtml(tradeLink)}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a>
@@ -734,7 +734,7 @@
         const list = document.getElementById('holders-list');
         const title = document.getElementById('holders-modal-title');
         modal.style.display = 'block';
-        title.innerText = `TOP 50: $${ticker}`;
+        title.innerText = `TOP 100: $${ticker}`;
         list.innerHTML = '<div class="text-center text-orange-400 p-4">Loading holder data...</div>';
         try {
             const res = await fetch(`${BACKEND_URL}/api/token-holders/${escapeHtml(mint)}`);

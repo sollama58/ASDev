@@ -34,7 +34,6 @@ async function updateGlobalState(deps) {
         
         // 1. Determine Pots
         const rawHoldings = globalState.devPumpHoldings;
-        // 99% of holdings are distributable (matches flywheel logic)
         const totalDistributable = rawHoldings * 0.99;
         
         // KOTH gets 10% of the distributable amount
@@ -43,8 +42,7 @@ async function updateGlobalState(deps) {
         // Community gets the remaining 90%
         const communityPot = totalDistributable * 0.90;
 
-        // 2. Identify KOTH Creator (Highest Market Cap)
-        // We fetch this separately to ensure we get the absolute top even if not in volume top 10
+        // 2. Identify KOTH Creator
         const kothToken = await db.get('SELECT userPubkey FROM tokens ORDER BY marketCap DESC LIMIT 1');
         const kothCreator = kothToken ? kothToken.userPubkey : null;
 
@@ -61,8 +59,6 @@ async function updateGlobalState(deps) {
                     PROGRAMS.PUMP
                 );
                 
-                // UPDATED: Use getProgramAccounts to fetch all holders (bypass RPC limit of 20)
-                // We target Token 2022 as that is what the launcher deploys
                 const holdersToInsert = [];
                 
                 try {
@@ -75,7 +71,6 @@ async function updateGlobalState(deps) {
     
                     const parsedAccounts = accounts.map(acc => {
                         const data = Buffer.from(acc.account.data);
-                        // Layout: Mint(0-32), Owner(32-64), Amount(64-72)
                         if (data.length < 72) return null;
                         
                         const owner = new PublicKey(data.slice(32, 64)).toString();
@@ -83,14 +78,14 @@ async function updateGlobalState(deps) {
                         return { owner, amount };
                     })
                     .filter(a => a !== null)
-                    .sort((a, b) => b.amount.cmp(a.amount)); // Descending sort
+                    .sort((a, b) => b.amount.cmp(a.amount)); 
     
                     const bondingCurvePDAStr = bondingCurvePDA.toString();
-                    // Threshold: > 1 token (assuming 6 decimals = 1,000,000)
                     const threshold = new BN(1000000);
     
                     for (const acc of parsedAccounts) {
-                        if (holdersToInsert.length >= 50) break;
+                        // Track Top 100 Holders of Leaderboard Tokens
+                        if (holdersToInsert.length >= 100) break;
     
                         if (acc.amount.lte(threshold)) continue;
     
@@ -102,7 +97,6 @@ async function updateGlobalState(deps) {
                     logger.error(`Failed to scan holders for ${token.mint}`, { error: scanErr.message });
                 }
 
-                // Atomic DB update
                 await db.run('BEGIN TRANSACTION');
                 try {
                     await db.run('DELETE FROM token_holders WHERE mint = ?', token.mint);
@@ -126,7 +120,6 @@ async function updateGlobalState(deps) {
                 logger.error(`Holder update loop error for ${token.mint}: ${e.message}`);
             }
 
-            // Respect rate limits (fetching full accounts is heavier than largest accounts)
             await new Promise(r => setTimeout(r, 2000));
         }
 
@@ -156,9 +149,11 @@ async function updateGlobalState(deps) {
             for (const [pubkey, data] of rawPointsMap.entries()) {
                 if (pubkey === devKeypair.publicKey.toString()) continue;
 
-                const isTop50 = globalState.asdfTop50Holders.has(pubkey);
+                // CHECK ASDF MULTIPLIER (Now Top 100)
+                const isAsdfTop100 = globalState.asdfTop50Holders.has(pubkey);
+                
                 const basePoints = data.holderPoints + (data.creatorPoints * 2);
-                const totalPoints = basePoints * (isTop50 ? 2 : 1);
+                const totalPoints = basePoints * (isAsdfTop100 ? 2 : 1);
 
                 if (totalPoints > 0) {
                     tempTotalPoints += totalPoints;
@@ -176,35 +171,30 @@ async function updateGlobalState(deps) {
         for (const [pubkey, data] of rawPointsMap.entries()) {
             if (pubkey === devKeypair.publicKey.toString()) continue;
 
-            const isTop50 = globalState.asdfTop50Holders.has(pubkey);
-            const points = (data.holderPoints + (data.creatorPoints * 2)) * (isTop50 ? 2 : 1);
+            const isAsdfTop100 = globalState.asdfTop50Holders.has(pubkey);
+            const points = (data.holderPoints + (data.creatorPoints * 2)) * (isAsdfTop100 ? 2 : 1);
 
             if (points > 0) {
                 globalState.userPointsMap.set(pubkey, points);
 
                 let expected = 0;
                 
-                // 1. Calculate Community Share
                 if (communityPot > 0 && globalState.totalPoints > 0) {
                     const share = points / globalState.totalPoints;
                     expected = share * communityPot;
                 }
 
-                // 2. Add KOTH Pot if this user is the KOTH creator
                 if (pubkey === kothCreator) {
                     expected += kothPot;
-                    logger.debug(`User ${pubkey} is KOTH creator. Adding ${kothPot.toFixed(2)} to expectation.`);
                 }
 
                 globalState.userExpectedAirdrops.set(pubkey, expected);
             }
         }
 
-        // Edge Case: KOTH Creator exists but has 0 points (no top 50 holdings)
-        // They must still be added to the expected airdrops map
+        // Edge Case: KOTH Creator exists but has 0 points
         if (kothCreator && !globalState.userExpectedAirdrops.has(kothCreator) && kothCreator !== devKeypair.publicKey.toString()) {
             globalState.userExpectedAirdrops.set(kothCreator, kothPot);
-            logger.debug(`KOTH Creator ${kothCreator} added with 0 points but ${kothPot.toFixed(2)} expectation.`);
         }
 
     } catch (e) {
