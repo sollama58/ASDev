@@ -114,8 +114,7 @@ async function processAirdrop(deps) {
 
     try {
         const balance = globalState.devPumpHoldings;
-        // If we are conserving, the flywheel logic handles the check. 
-        // We double check simply here to avoid accidental triggers if state is stale.
+        // Basic Threshold Check
         if (balance <= 50000) {
             isAirdropping = false;
             return;
@@ -247,6 +246,7 @@ async function processAirdrop(deps) {
 
 /**
  * Send a batch of airdrop transfers
+ * Enhanced: Skips invalid ATAs instead of failing the whole batch
  */
 async function sendAirdropBatch(batch, sourceAta, deps) {
     const { connection, devKeypair } = deps;
@@ -255,10 +255,24 @@ async function sendAirdropBatch(batch, sourceAta, deps) {
         const tx = new Transaction();
         solana.addPriorityFee(tx);
 
-        const atas = await Promise.all(batch.map(i =>
-            getAssociatedTokenAddress(TOKENS.PUMP, i.user, false, PROGRAMS.TOKEN_2022)
-        ));
+        // 1. Resolve ATAs safely
+        const validItems = [];
+        const atas = [];
 
+        for (const item of batch) {
+            try {
+                // Safely derive ATA. If pubkey is somehow invalid, this might throw.
+                const ata = await getAssociatedTokenAddress(TOKENS.PUMP, item.user, false, PROGRAMS.TOKEN_2022);
+                validItems.push(item);
+                atas.push(ata);
+            } catch (err) {
+                logger.warn(`Skipping invalid user in airdrop batch: ${item.user.toString()}`);
+            }
+        }
+
+        if (validItems.length === 0) return null;
+
+        // 2. Fetch Infos for valid items only
         let infos = null;
         let retries = 3;
         while (retries > 0) {
@@ -272,8 +286,10 @@ async function sendAirdropBatch(batch, sourceAta, deps) {
             }
         }
 
-        batch.forEach((item, idx) => {
+        // 3. Build TX with valid items only
+        validItems.forEach((item, idx) => {
             const ata = atas[idx];
+            // If info is null, it means account doesn't exist -> Create it (Idempotent)
             if (!infos[idx]) {
                 tx.add(createAssociatedTokenAccountIdempotentInstruction(
                     devKeypair.publicKey, ata, item.user, TOKENS.PUMP, PROGRAMS.TOKEN_2022
@@ -351,9 +367,10 @@ async function runPurchaseAndFees(deps) {
         }
 
         const realBalance = await connection.getBalance(devKeypair.publicKey);
-        const SAFETY_BUFFER = 0.05 * LAMPORTS_PER_SOL; // Extra buffer for TX fees
+        // Default buffer for normal operations
+        let dynamicSafetyBuffer = 0.05 * LAMPORTS_PER_SOL; 
 
-        // --- CONSERVATION LOGIC ---
+        // --- CONSERVATION & EXCESS LOGIC ---
         const pumpBalance = globalState.devPumpHoldings || 0;
         const AIRDROP_THRESHOLD = 50000;
         const ATA_RENT_COST = 0.00203928 * LAMPORTS_PER_SOL; // Precise rent cost
@@ -372,22 +389,42 @@ async function runPurchaseAndFees(deps) {
                 const BATCH_SIZE = 100;
                 for (let i = 0; i < eligibleUsers.length; i += BATCH_SIZE) {
                     const batch = eligibleUsers.slice(i, i + BATCH_SIZE);
+                    const validAtas = [];
+
+                    // Step 1: Derive ATAs safely (don't fail batch on one bad key)
+                    for (const u of batch) {
+                        try {
+                            const pk = new PublicKey(u);
+                            const ata = await getAssociatedTokenAddress(TOKENS.PUMP, pk, false, PROGRAMS.TOKEN_2022);
+                            validAtas.push(ata);
+                        } catch (e) {
+                            // Invalid Pubkey? Just ignore it for calculation purposes.
+                            // If it's invalid, we can't airdrop to it anyway.
+                            logger.warn(`Conservation Check: Invalid pubkey found: ${u}`);
+                        }
+                    }
+
+                    if (validAtas.length === 0) continue;
+
+                    // Step 2: Check on-chain
                     try {
-                        const atas = await Promise.all(batch.map(u => 
-                            getAssociatedTokenAddress(TOKENS.PUMP, new PublicKey(u), false, PROGRAMS.TOKEN_2022)
-                        ));
-                        const infos = await connection.getMultipleAccountsInfo(atas);
+                        const infos = await connection.getMultipleAccountsInfo(validAtas);
                         // Count null accounts (they need creation)
                         missingAtaCount += infos.filter(info => !info).length;
                     } catch (err) {
-                        logger.error("Error checking ATAs", {error: err.message});
-                        // Fallback: assume all in batch are missing to be safe
-                        missingAtaCount += batch.length;
+                        logger.error("Error checking ATAs batch", {error: err.message});
+                        // Fallback: assume all valid in this batch are missing (safety)
+                        missingAtaCount += validAtas.length;
                     }
                 }
             }
             
-            const estimatedAirdropCost = (missingAtaCount * ATA_RENT_COST) + SAFETY_BUFFER;
+            // Base Cost = Rent for new accounts + standard transaction fee buffer
+            const estimatedAirdropCost = (missingAtaCount * ATA_RENT_COST) + (0.05 * LAMPORTS_PER_SOL);
+            
+            // Excess logic: Maintain 1 SOL buffer ON TOP of estimated costs
+            const ONE_SOL = 1 * LAMPORTS_PER_SOL;
+            const requiredReserve = estimatedAirdropCost + ONE_SOL;
 
             conservationStatus = {
                 eligibleCount: eligibleUsers.length,
@@ -395,20 +432,26 @@ async function runPurchaseAndFees(deps) {
                 estimatedCost: estimatedAirdropCost / LAMPORTS_PER_SOL,
                 currentSol: realBalance / LAMPORTS_PER_SOL,
                 pumpBalance: pumpBalance,
-                isConserving: realBalance < estimatedAirdropCost
+                isConserving: realBalance < estimatedAirdropCost // Only "conserving" if we can't afford the airdrop
             };
             
-            // Store for API access
             globalState.conservationStatus = conservationStatus;
 
             if (realBalance < estimatedAirdropCost) {
-                // Not enough SOL for rent -> Skip buyback to accumulate SOL
+                // CASE 1: NOT ENOUGH FOR AIRDROP -> Stop Buyback, Conserve SOL
                 logger.info(`Flywheel: Conserving SOL. Need ${conservationStatus.estimatedCost.toFixed(4)}, Have ${conservationStatus.currentSol.toFixed(4)}.`);
                 logData.status = 'CONSERVING_SOL';
                 logData.reason = `Saving for Airdrop (${missingAtaCount} new wallets)`;
                 proceedWithBuyback = false;
+            } else if (realBalance > requiredReserve) {
+                // CASE 2: EXCESS FUNDS -> Enable Buyback with EXCESS only
+                // We set the safety buffer to the required reserve so we don't dip below it
+                logger.info(`Flywheel: Excess SOL detected (${conservationStatus.currentSol.toFixed(4)}). Buying PUMP with excess (Reserve: ${(requiredReserve/LAMPORTS_PER_SOL).toFixed(4)}).`);
+                dynamicSafetyBuffer = requiredReserve;
+                logData.reason = 'Excess SOL Buyback';
+                proceedWithBuyback = true;
             } else {
-                // Have enough SOL -> Skip buyback to prioritize airdrop
+                // CASE 3: ENOUGH FOR AIRDROP, BUT NO EXCESS -> Skip Buyback, Trigger Airdrop
                 logger.info(`Flywheel: Ready for Airdrop. Triggering distribution.`);
                 logData.reason = 'Ready for Airdrop';
                 proceedWithBuyback = false; 
@@ -420,11 +463,22 @@ async function runPurchaseAndFees(deps) {
         // --------------------------
 
         if (proceedWithBuyback) {
-            if (realBalance < SAFETY_BUFFER) {
-                logData.reason = 'LOW BALANCE';
+            // Check against dynamic buffer
+            if (realBalance < dynamicSafetyBuffer) {
+                logData.reason = 'LOW BALANCE (Below Buffer)';
                 logData.status = 'LOW_BALANCE_SKIP';
-            } else if (claimedAmount > 0) {
-                let spendable = Math.min(claimedAmount, realBalance - SAFETY_BUFFER);
+            } else if (claimedAmount > 0 || (pumpBalance > AIRDROP_THRESHOLD)) {
+                
+                // Determine spendable amount
+                let spendable = Math.min(claimedAmount, realBalance - dynamicSafetyBuffer);
+                
+                // If in "Excess Mode", allow spending more of the excess
+                if (pumpBalance > AIRDROP_THRESHOLD) {
+                    spendable = realBalance - dynamicSafetyBuffer;
+                    // Cap single buy size to 5 SOL for safety/slippage
+                    if (spendable > 5 * LAMPORTS_PER_SOL) spendable = 5 * LAMPORTS_PER_SOL;
+                }
+
                 const MIN_SPEND = 0.05 * LAMPORTS_PER_SOL;
 
                 if (spendable > MIN_SPEND) {
@@ -452,7 +506,7 @@ async function runPurchaseAndFees(deps) {
                         logData.pumpBuySig = swapResult.signature;
                         logData.tokensBought = swapResult.outAmount;
                         logData.status = 'SUCCESS';
-                        logData.reason = 'Flywheel Complete';
+                        logData.reason = pumpBalance > AIRDROP_THRESHOLD ? 'Excess SOL Buyback' : 'Flywheel Complete';
                         
                         // Update Stats
                         await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [solBuyAmount, 'totalPumpBoughtLamports']);
