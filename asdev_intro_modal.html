@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ignition Intro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* Standalone styles for the modal overlay */
+        .ignition-modal-overlay {
+            display: none; /* Hidden by default */
+            position: fixed;
+            z-index: 9999;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.8);
+            backdrop-filter: blur(5px);
+            font-family: 'Comic Neue', cursive;
+        }
+
+        .ignition-modal-content {
+            background-color: #2a1005;
+            margin: 10% auto;
+            padding: 25px;
+            border: 4px solid #ea580c;
+            width: 90%;
+            max-width: 500px;
+            border-radius: 12px;
+            box-shadow: 0 0 25px rgba(234, 88, 12, 0.6);
+            position: relative;
+            color: #ffedd5;
+        }
+
+        .ignition-close-btn {
+            color: #fff;
+            float: right;
+            font-size: 24px;
+            font-weight: bold;
+            background: rgba(255, 255, 255, 0.1);
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            margin-top: -10px;
+            margin-right: -10px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .ignition-close-btn:hover { background: rgba(255, 255, 255, 0.2); }
+
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        
+        /* Button Glow Animation */
+        @keyframes pulse-orange {
+            0%, 100% { box-shadow: 0 0 10px rgba(234, 88, 12, 0.5); }
+            50% { box-shadow: 0 0 20px rgba(234, 88, 12, 0.8); }
+        }
+        .btn-pump {
+            animation: pulse-orange 2s infinite;
+        }
+    </style>
+</head>
+<body>
+
+<!-- 
+    Copy this entire block into your other pages.
+    Ensure Tailwind CSS is loaded on the parent page or include the script tag above.
+-->
+<div id="ignition-intro-modal" class="ignition-modal-overlay">
+    <div class="ignition-modal-content">
+        <span class="ignition-close-btn" onclick="closeIgnitionModal()">&times;</span>
+        
+        <div class="text-center mb-6">
+            <h3 class="text-orange-500 font-mono text-2xl font-bold uppercase tracking-widest border-b-2 border-orange-800/50 pb-2 inline-block">🔥 IGNITION IS LIVE</h3>
+        </div>
+
+        <div class="font-sans text-sm text-orange-100 space-y-5">
+            <p class="text-orange-200 text-center text-base italic">
+                The premier automated airdrop launcher for Pumpfun on Solana.
+            </p>
+            
+            <div class="space-y-3 bg-black/20 p-4 rounded-lg border border-orange-900/30">
+                <div class="flex items-start gap-3">
+                    <span class="text-xl">🚀</span>
+                    <div>
+                        <strong class="text-orange-400 block text-xs uppercase tracking-wider font-mono">Launch Instantly</strong>
+                        <span class="text-xs text-gray-300">Deploy tokens to Pump.fun for just 0.02 SOL.</span>
+                    </div>
+                </div>
+                
+                <div class="flex items-start gap-3">
+                    <span class="text-xl">♻️</span>
+                    <div>
+                        <strong class="text-green-400 block text-xs uppercase tracking-wider font-mono">The Flywheel</strong>
+                        <span class="text-xs text-gray-300">Fees automatically buy back <strong class="text-white">$PUMP</strong> every 5 mins.</span>
+                    </div>
+                </div>
+
+                <div class="flex items-start gap-3">
+                    <span class="text-xl">🪂</span>
+                    <div>
+                        <strong class="text-purple-400 block text-xs uppercase tracking-wider font-mono">Earn Airdrops</strong>
+                        <span class="text-xs text-gray-300">Hold Top tokens to earn points. Dev wallet holdings are airdropped automatically.</span>
+                    </div>
+                </div>
+            </div>
+
+            <a href="https://www.alonisthe.dev/ignition" class="block w-full text-center bg-orange-600 hover:bg-orange-500 text-white font-bold py-3 rounded-lg mt-6 uppercase tracking-widest font-mono text-lg transition transform hover:-translate-y-1 btn-pump" onclick="closeIgnitionModal()">
+                LET'S PUMP! 🚀
+            </a>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Logic to show modal only once per session/user
+    document.addEventListener('DOMContentLoaded', () => {
+        const modal = document.getElementById('ignition-intro-modal');
+        const hasSeenIntro = localStorage.getItem('hasSeenQuickStart');
+
+        if (!hasSeenIntro) {
+            // Slight delay for effect
+            setTimeout(() => {
+                modal.style.display = 'block';
+            }, 500);
+        }
+    });
+
+    function closeIgnitionModal() {
+        const modal = document.getElementById('ignition-intro-modal');
+        modal.style.display = 'none';
+        // Set flag so it doesn't show again
+        localStorage.setItem('hasSeenQuickStart', 'true');
+    }
+</script>
+
+</body>
+</html>
