@@ -104,7 +104,7 @@ async function claimCreatorFees(deps) {
 
 /**
  * Process airdrop distribution
- * Updated with "King of the Hill" (KOTH) Logic
+ * Updated with "King of the Hill" (KOTH) Logic and Dynamic Cost Check
  */
 async function processAirdrop(deps) {
     const { connection, devKeypair, db, globalState } = deps;
@@ -113,14 +113,25 @@ async function processAirdrop(deps) {
     isAirdropping = true;
 
     try {
-        const solBalance = await connection.getBalance(devKeypair.publicKey);
-        if (solBalance < 0.25 * LAMPORTS_PER_SOL) {
-            logger.warn(`Airdrop Skipped: Low SOL Balance`);
+        const balance = globalState.devPumpHoldings;
+        // If we are conserving, the flywheel logic handles the check. 
+        // We double check simply here to avoid accidental triggers if state is stale.
+        if (balance <= 50000) {
+            isAirdropping = false;
             return;
         }
 
-        const balance = globalState.devPumpHoldings;
-        if (balance <= 50000) return;
+        // --- FINAL SAFETY CHECK ---
+        const solBalance = await connection.getBalance(devKeypair.publicKey);
+        // Use the cached calculation from flywheel if available, otherwise safe fallback
+        const cachedCost = globalState.conservationStatus?.estimatedCost || (0.05 * LAMPORTS_PER_SOL);
+        
+        if (solBalance < cachedCost) {
+            logger.warn(`Airdrop Skipped: Insufficient SOL (Final Check). Need ${(cachedCost/LAMPORTS_PER_SOL).toFixed(4)}, Have ${(solBalance/LAMPORTS_PER_SOL).toFixed(4)}`);
+            isAirdropping = false;
+            return;
+        }
+        // --------------------------------
 
         logger.info(`AIRDROP TRIGGERED: Balance ${balance} PUMP > 50,000`);
 
@@ -223,6 +234,10 @@ async function processAirdrop(deps) {
             'INSERT INTO airdrop_logs (amount, recipients, totalPoints, signatures, details, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
             [totalDistributable, userPoints.length + (kothAmount > 0 ? 1 : 0), globalState.totalPoints, allSignatures.join(','), details, new Date().toISOString()]
         );
+        
+        // Clear status after run
+        globalState.conservationStatus = null;
+        
     } catch (e) {
         logger.error("Airdrop Failed", { error: e.message });
     } finally {
@@ -336,56 +351,125 @@ async function runPurchaseAndFees(deps) {
         }
 
         const realBalance = await connection.getBalance(devKeypair.publicKey);
-        const SAFETY_BUFFER = 50000000;
+        const SAFETY_BUFFER = 0.05 * LAMPORTS_PER_SOL; // Extra buffer for TX fees
 
-        if (realBalance < SAFETY_BUFFER) {
-            logData.reason = 'LOW BALANCE';
-            logData.status = 'LOW_BALANCE_SKIP';
-        } else if (claimedAmount > 0) {
-            let spendable = Math.min(claimedAmount, realBalance - SAFETY_BUFFER);
-            const MIN_SPEND = 0.05 * LAMPORTS_PER_SOL;
+        // --- CONSERVATION LOGIC ---
+        const pumpBalance = globalState.devPumpHoldings || 0;
+        const AIRDROP_THRESHOLD = 50000;
+        const ATA_RENT_COST = 0.00203928 * LAMPORTS_PER_SOL; // Precise rent cost
+        
+        let proceedWithBuyback = true;
+        let conservationStatus = null;
 
-            if (spendable > MIN_SPEND) {
-                // Distribution: 95% Buyback, 4.5% ASDF Fee, 0.5% Upkeep
-                const transfer9_5 = Math.floor(spendable * 0.045);
-                const transfer0_5 = Math.floor(spendable * 0.005);
-                const solBuyAmount = Math.floor(spendable * 0.95);
-
-                logData.solSpent = (solBuyAmount + transfer9_5 + transfer0_5) / LAMPORTS_PER_SOL;
-                logData.transfer9_5 = transfer9_5 / LAMPORTS_PER_SOL;
-                logData.transfer0_5 = transfer0_5 / LAMPORTS_PER_SOL;
-
-                // Fee distribution
-                const feeTx = new Transaction();
-                solana.addPriorityFee(feeTx);
-                feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_95, lamports: transfer9_5 }));
-                feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_05, lamports: transfer0_5 }));
-                await solana.sendTxWithRetry(feeTx, [devKeypair]);
-                logger.info("Fees Distributed");
-
-                // DIRECT BUY: Swap SOL -> PUMP using Jupiter
-                const swapResult = await jupiter.swapSolToToken(solBuyAmount, TOKENS.PUMP, devKeypair, connection);
-                
-                if (swapResult && swapResult.signature) {
-                    logData.pumpBuySig = swapResult.signature;
-                    logData.tokensBought = swapResult.outAmount;
-                    logData.status = 'SUCCESS';
-                    logData.reason = 'Flywheel Complete';
-                    
-                    // Update Stats
-                    await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [solBuyAmount, 'totalPumpBoughtLamports']);
-                    
-                    // Convert raw units to float (Assuming 6 decimals for PUMP/Token-2022)
-                    const tokensBoughtVal = parseFloat(swapResult.outAmount) / 1000000;
-                    await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [tokensBoughtVal, 'totalPumpTokensBought']);
-                } else {
-                    logData.status = 'BUY_FAIL';
+        if (pumpBalance > AIRDROP_THRESHOLD) {
+            logger.info("Flywheel: PUMP Threshold met. Calculating precise airdrop costs...");
+            
+            const eligibleUsers = Array.from(globalState.userPointsMap.keys());
+            let missingAtaCount = 0;
+            
+            if (eligibleUsers.length > 0) {
+                // Batch check ATAs to be precise
+                const BATCH_SIZE = 100;
+                for (let i = 0; i < eligibleUsers.length; i += BATCH_SIZE) {
+                    const batch = eligibleUsers.slice(i, i + BATCH_SIZE);
+                    try {
+                        const atas = await Promise.all(batch.map(u => 
+                            getAssociatedTokenAddress(TOKENS.PUMP, new PublicKey(u), false, PROGRAMS.TOKEN_2022)
+                        ));
+                        const infos = await connection.getMultipleAccountsInfo(atas);
+                        // Count null accounts (they need creation)
+                        missingAtaCount += infos.filter(info => !info).length;
+                    } catch (err) {
+                        logger.error("Error checking ATAs", {error: err.message});
+                        // Fallback: assume all in batch are missing to be safe
+                        missingAtaCount += batch.length;
+                    }
                 }
+            }
+            
+            const estimatedAirdropCost = (missingAtaCount * ATA_RENT_COST) + SAFETY_BUFFER;
+
+            conservationStatus = {
+                eligibleCount: eligibleUsers.length,
+                missingAtas: missingAtaCount,
+                estimatedCost: estimatedAirdropCost / LAMPORTS_PER_SOL,
+                currentSol: realBalance / LAMPORTS_PER_SOL,
+                pumpBalance: pumpBalance,
+                isConserving: realBalance < estimatedAirdropCost
+            };
+            
+            // Store for API access
+            globalState.conservationStatus = conservationStatus;
+
+            if (realBalance < estimatedAirdropCost) {
+                // Not enough SOL for rent -> Skip buyback to accumulate SOL
+                logger.info(`Flywheel: Conserving SOL. Need ${conservationStatus.estimatedCost.toFixed(4)}, Have ${conservationStatus.currentSol.toFixed(4)}.`);
+                logData.status = 'CONSERVING_SOL';
+                logData.reason = `Saving for Airdrop (${missingAtaCount} new wallets)`;
+                proceedWithBuyback = false;
             } else {
-                logData.status = 'LOW_SPEND_SKIP';
+                // Have enough SOL -> Skip buyback to prioritize airdrop
+                logger.info(`Flywheel: Ready for Airdrop. Triggering distribution.`);
+                logData.reason = 'Ready for Airdrop';
+                proceedWithBuyback = false; 
+            }
+        } else {
+            // Clear status if under threshold
+            globalState.conservationStatus = null;
+        }
+        // --------------------------
+
+        if (proceedWithBuyback) {
+            if (realBalance < SAFETY_BUFFER) {
+                logData.reason = 'LOW BALANCE';
+                logData.status = 'LOW_BALANCE_SKIP';
+            } else if (claimedAmount > 0) {
+                let spendable = Math.min(claimedAmount, realBalance - SAFETY_BUFFER);
+                const MIN_SPEND = 0.05 * LAMPORTS_PER_SOL;
+
+                if (spendable > MIN_SPEND) {
+                    // Distribution: 95% Buyback, 4.5% ASDF Fee, 0.5% Upkeep
+                    const transfer9_5 = Math.floor(spendable * 0.045);
+                    const transfer0_5 = Math.floor(spendable * 0.005);
+                    const solBuyAmount = Math.floor(spendable * 0.95);
+
+                    logData.solSpent = (solBuyAmount + transfer9_5 + transfer0_5) / LAMPORTS_PER_SOL;
+                    logData.transfer9_5 = transfer9_5 / LAMPORTS_PER_SOL;
+                    logData.transfer0_5 = transfer0_5 / LAMPORTS_PER_SOL;
+
+                    // Fee distribution
+                    const feeTx = new Transaction();
+                    solana.addPriorityFee(feeTx);
+                    feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_95, lamports: transfer9_5 }));
+                    feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_05, lamports: transfer0_5 }));
+                    await solana.sendTxWithRetry(feeTx, [devKeypair]);
+                    logger.info("Fees Distributed");
+
+                    // DIRECT BUY: Swap SOL -> PUMP using Jupiter
+                    const swapResult = await jupiter.swapSolToToken(solBuyAmount, TOKENS.PUMP, devKeypair, connection);
+                    
+                    if (swapResult && swapResult.signature) {
+                        logData.pumpBuySig = swapResult.signature;
+                        logData.tokensBought = swapResult.outAmount;
+                        logData.status = 'SUCCESS';
+                        logData.reason = 'Flywheel Complete';
+                        
+                        // Update Stats
+                        await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [solBuyAmount, 'totalPumpBoughtLamports']);
+                        
+                        // Convert raw units to float (Assuming 6 decimals for PUMP/Token-2022)
+                        const tokensBoughtVal = parseFloat(swapResult.outAmount) / 1000000;
+                        await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [tokensBoughtVal, 'totalPumpTokensBought']);
+                    } else {
+                        logData.status = 'BUY_FAIL';
+                    }
+                } else {
+                    logData.status = 'LOW_SPEND_SKIP';
+                }
             }
         }
 
+        // Try to airdrop (internally checks balance & threshold)
         await processAirdrop(deps);
         await logPurchase('FLYWHEEL_CYCLE', logData);
 

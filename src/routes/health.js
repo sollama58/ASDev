@@ -108,7 +108,9 @@ function init(deps) {
                 lastClaimAmount: (cachedHealth.stats.lastClaimAmountLamports / LAMPORTS_PER_SOL).toFixed(4),
                 nextCheckTime: cachedHealth.stats.nextCheckTimestamp || (Date.now() + 5*60*1000),
                 totalVolume: cachedHealth.totalVolume,
-                totalAirdropped: cachedHealth.totalAirdropped
+                totalAirdropped: cachedHealth.totalAirdropped,
+                // Pass dynamic conservation status to frontend
+                conservationStatus: globalState.conservationStatus || null
             });
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
