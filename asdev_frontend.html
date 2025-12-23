@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ASDev Launcher v10.26.40</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASDev Launcher v10.26.37</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -11,7 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     <style>
         /* TERMINAL FIRE THEME */
-        body { background-color: #2a1005; color: #ffedd5; font-family: 'Comic Neue', cursive; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 20px 10px; }
+        body { background-color: #2a1005; color: #ffedd5; font-family: 'Comic Neue', cursive; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 40px 20px; }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
         #app-container { width: 100%; max-width: 1100px; background-color: #451a03; border: 6px solid #7c2d12; border-radius: 20px; overflow: hidden; box-shadow: 0 40px 80px rgba(0,0,0,0.95); position: relative; }
         .ticker-wrap { width: 100%; background-color: #2a1005; border-bottom: 2px solid #7c2d12; overflow: hidden; height: 40px; display: flex; align-items: center; position: relative; }
@@ -20,47 +20,20 @@
         .ticker-item a { color: #4ade80; text-decoration: underline; transition: color 0.2s; }
         .ticker-item a:hover { color: #ffffff; }
         @keyframes marquee { 0% { transform: translateX(100%); } 100% { transform: translateX(-100%); } }
-        .panel { background: rgba(20, 10, 5, 0.6); border: 2px solid #ea580c; border-radius: 12px; box-shadow: 6px 6px 0 #9a3412; padding: 20px; margin-bottom: 24px; }
-        
-        /* FIX iOS ZOOM - Font size 16px */
+        .panel { background: rgba(20, 10, 5, 0.6); border: 2px solid #ea580c; border-radius: 12px; box-shadow: 6px 6px 0 #9a3412; padding: 32px; margin-bottom: 32px; }
         .input-field { background: #2a1005; border: 2px solid #7c2d12; color: #fb923c; font-family: 'JetBrains Mono', monospace; width: 100%; padding: 16px; margin-bottom: 20px; outline: none; transition: border-color 0.2s; border-radius: 6px; font-size: 16px; }
         .input-field:focus { border-color: #ea580c; }
-        
         input[type="file"]::file-selector-button { background: #ea580c; border: none; color: #2a1005; padding: 10px 16px; font-family: 'JetBrains Mono'; font-weight: bold; cursor: pointer; margin-right: 15px; border-radius: 4px; }
         .btn-action { background: #ea580c; border: 2px solid #9a3412; color: #2a1005; font-weight: bold; font-family: 'JetBrains Mono'; text-transform: uppercase; width: 100%; padding: 20px; font-size: 20px; cursor: pointer; transition: all 0.1s; box-shadow: 5px 5px 0 #7c2d12; border-radius: 8px; }
         .btn-action:hover { background: #f97316; transform: translate(-1px, -1px); box-shadow: 6px 6px 0 #7c2d12; }
         .btn-action:active { transform: translate(2px, 2px); box-shadow: 0 0 0; }
         .btn-action:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(100%); transform: none; box-shadow: none; }
-        
-        /* TOAST NOTIFICATION STYLE */
-        .status-box { 
-            position: fixed; 
-            bottom: 20px; 
-            left: 50%; 
-            transform: translateX(-50%); 
-            width: 90%; 
-            max-width: 400px; 
-            z-index: 1000; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.9);
-            background: rgba(42, 16, 5, 0.95); 
-            border: 2px solid #ea580c; 
-            color: #fdba74; 
-            padding: 16px; 
-            font-size: 16px; 
-            font-family: 'JetBrains Mono'; 
-            text-align: center; 
-            border-radius: 12px;
-            display: none; 
-            animation: slideUp 0.3s ease-out;
-        }
-        @keyframes slideUp { from { bottom: -100px; opacity: 0; } to { bottom: 20px; opacity: 1; } }
-
-        .status-success { border-color: #22c55e; color: #4ade80; background: rgba(20, 83, 45, 0.95); }
-        .status-error { border-color: #ef4444; color: #fca5a5; background: rgba(69, 26, 3, 0.95); }
-        
+        .status-box { background: rgba(0,0,0,0.3); border: 1px solid #ea580c; color: #fdba74; padding: 16px; font-size: 16px; font-family: 'JetBrains Mono'; text-align: center; margin-top: 20px; display: none; border-radius: 6px; }
+        .status-success { border-color: #22c55e; color: #4ade80; background: rgba(20, 83, 45, 0.3); }
+        .status-error { border-color: #ef4444; color: #fca5a5; background: rgba(127, 29, 29, 0.3); }
         .sys-status { color: #ef4444; font-weight: bold; transition: color 0.5s; cursor: pointer; }
         .sys-status.online { color: #22c55e; text-shadow: 0 0 8px rgba(34, 197, 94, 0.6); }
-        #image-preview { width: 100%; max-width: 180px; height: 180px; border: 2px dashed #7c2d12; display: flex; align-items: center; justify-content: center; background: #2a1005; color: #7c2d12; font-family: 'JetBrains Mono'; font-size: 12px; overflow: hidden; border-radius: 12px; margin-top: 10px; cursor: pointer; position: relative; margin-left: auto; margin-right: auto; }
+        #image-preview { width: 180px; height: 180px; border: 2px dashed #7c2d12; display: flex; align-items: center; justify-content: center; background: #2a1005; color: #7c2d12; font-family: 'JetBrains Mono'; font-size: 12px; overflow: hidden; border-radius: 12px; margin-top: 10px; cursor: pointer; position: relative; }
         #image-preview img { width: 100%; height: 100%; object-fit: cover; }
         /* DRAG AND DROP STATE */
         .drag-over { border-color: #22c55e !important; background-color: rgba(34, 197, 94, 0.2) !important; border-style: solid !important; transform: scale(1.02); }
@@ -79,11 +52,11 @@
         .mayhem-label { transition: color 0.4s; }
         .mayhem-label.active { color: #ef4444; }
         #logo-wrapper { 
-            width: 50px; 
-            height: 50px; 
+            width: 60px; 
+            height: 60px; 
             border-radius: 8px; 
             overflow: hidden; 
-            min-width: 50px;
+            min-width: 60px;
             animation: bounce 1s infinite alternate; 
         }
         #header-image { 
@@ -95,44 +68,22 @@
             from { transform: translateY(0); } 
             to { transform: translateY(-5px); } 
         }
-        .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); backdrop-filter: blur(5px); }
-        .modal-content { background-color: #2a1005; margin: 10% auto; padding: 20px; border: 4px solid #ea580c; width: 90%; max-width: 800px; border-radius: 12px; box-shadow: 0 0 20px rgba(234, 88, 12, 0.5); position: relative; }
-        
-        /* IMPROVED CLOSE BUTTON */
-        .close-btn { 
-            color: #fff; 
-            float: right; 
-            font-size: 24px; 
-            font-weight: bold; 
-            background: rgba(255, 255, 255, 0.1);
-            width: 36px;
-            height: 36px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            margin-top: -10px;
-            margin-right: -10px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        .close-btn:hover { background: rgba(255, 255, 255, 0.2); }
-
-        .leader-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
-        .leader-table th { text-align: left; padding: 8px; border-bottom: 2px solid #ea580c; color: #ea580c; text-transform: uppercase; font-size: 10px; }
-        .leader-table td { padding: 10px 8px; border-bottom: 1px solid rgba(234, 88, 12, 0.2); vertical-align: middle; }
+        .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); }
+        .modal-content { background-color: #2a1005; margin: 5% auto; padding: 30px; border: 4px solid #ea580c; width: 85%; max-width: 800px; border-radius: 12px; box-shadow: 0 0 20px rgba(234, 88, 12, 0.5); }
+        .close-btn { color: #aaa; float: right; font-size: 28px; font-weight: bold; }
+        .close-btn:hover, .close-btn:focus { color: #fff; text-decoration: none; cursor: pointer; }
+        .leader-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+        .leader-table th { text-align: left; padding: 10px; border-bottom: 2px solid #ea580c; color: #ea580c; text-transform: uppercase; font-size: 11px; }
+        .leader-table td { padding: 12px 10px; border-bottom: 1px solid rgba(234, 88, 12, 0.2); vertical-align: middle; }
         .leader-table tr:hover { background: rgba(234, 88, 12, 0.1); }
-        .token-img-sm { width: 28px; height: 28px; border-radius: 4px; object-fit: cover; display: inline-block; vertical-align: middle; margin-right: 6px; border: 1px solid #7c2d12; background-color: #2a1005; min-width: 28px; min-height: 28px; }
-        
-        .metric-card { background: rgba(0,0,0,0.2); border: 1px solid #ea580c; padding: 15px; border-radius: 8px; text-align: center; }
-        .metric-value { font-size: 20px; font-weight: bold; color: white; font-family: 'JetBrains Mono'; margin-top: 5px; }
-        .metric-label { font-size: 10px; color: #fdba74; text-transform: uppercase; letter-spacing: 1px; }
-        
-        .holder-check { color: #4ade80; font-weight: bold; margin-left: 4px; display: inline-flex; align-items: center; gap: 2px; font-size: 9px; background: rgba(34, 197, 94, 0.2); padding: 1px 4px; border-radius: 4px; border: 1px solid #22c55e; }
-        .badge-creator { color: #60a5fa; font-weight: bold; margin-left: 4px; display: inline-flex; align-items: center; gap: 2px; font-size: 9px; background: rgba(59, 130, 246, 0.2); padding: 1px 4px; border-radius: 4px; border: 1px solid #3b82f6; }
+        .token-img-sm { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; display: inline-block; vertical-align: middle; margin-right: 8px; border: 1px solid #7c2d12; background-color: #2a1005; min-width: 32px; min-height: 32px; }
+        .metric-card { background: rgba(0,0,0,0.2); border: 1px solid #ea580c; padding: 20px; border-radius: 8px; text-align: center; }
+        .metric-value { font-size: 24px; font-weight: bold; color: white; font-family: 'JetBrains Mono'; margin-top: 5px; }
+        .metric-label { font-size: 12px; color: #fdba74; text-transform: uppercase; letter-spacing: 1px; }
+        .holder-check { color: #4ade80; font-weight: bold; margin-left: 8px; display: inline-flex; align-items: center; gap: 2px; font-size: 10px; background: rgba(34, 197, 94, 0.2); padding: 2px 4px; border-radius: 4px; border: 1px solid #22c55e; }
+        .badge-creator { color: #60a5fa; font-weight: bold; margin-left: 8px; display: inline-flex; align-items: center; gap: 2px; font-size: 10px; background: rgba(59, 130, 246, 0.2); padding: 2px 4px; border-radius: 4px; border: 1px solid #3b82f6; }
         .badge-bonded { display: inline-block; background-color: #22c55e; color: #000; font-weight: bold; padding: 1px 4px; border-radius: 3px; font-size: 9px; margin-left: 6px; border: 1px solid #14532d; vertical-align: middle; }
         .badge-bonding { display: inline-block; background-color: #eab308; color: #000; font-weight: bold; padding: 1px 4px; border-radius: 3px; font-size: 9px; margin-left: 6px; border: 1px solid #713f12; vertical-align: middle; }
-        
         .tx-link { color: #a78bfa; text-decoration: underline; font-size: 10px; }
         .ca-display { word-break: break-all; user-select: all; cursor: copy; }
         /* Log Grid Styles */
@@ -193,28 +144,24 @@
 <div id="app-container">
     <div class="ticker-wrap"><div class="ticker" id="ticker-content"><span class="ticker-item text-orange-600">CONNECTING TO LAUNCH FEED...</span></div></div>
 
-    <!-- TOAST NOTIFICATION CONTAINER -->
-    <div id="status-msg" class="status-box"></div>
-
-    <div class="p-6 md:p-10">
-        <!-- Compact Header for Mobile -->
-        <div class="flex flex-col md:flex-row justify-between items-center md:items-start mb-8 border-b-4 border-orange-900 pb-6 gap-4">
-            <div class="flex items-center gap-4 w-full md:w-auto justify-center md:justify-start">
+    <div class="p-10">
+        <div class="flex justify-between items-start mb-10 border-b-4 border-orange-900 pb-8">
+            <div class="flex items-center gap-6">
                 <div id="logo-wrapper">
                     <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
                 </div>
-                <div><h1 class="text-3xl md:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1><p class="text-orange-400 text-xs md:text-sm font-mono uppercase tracking-widest">ASDev Flywheel Launcher</p></div>
+                <div><h1 class="text-4xl md:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1><p class="text-orange-400 text-sm font-mono uppercase tracking-widest mt-2">ASDev Airdrop and Flywheel Pumpfun Launcher</p></div>
             </div>
-            <div class="flex flex-col items-center md:items-end gap-3 w-full md:w-auto">
-                <div id="wallet-ui" class="hidden flex items-center gap-2 bg-orange-950 border border-orange-800 p-2 rounded-lg shadow-xl"><span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span><span id="wallet-addr" class="font-mono text-xs text-orange-200"></span><span id="wallet-bal" class="font-mono text-xs text-white font-bold ml-1 bg-orange-900/50 px-2 py-1 rounded">0.00 SOL</span><button id="refresh-btn" class="ml-1 text-orange-400 hover:text-white transition p-1 hover:bg-orange-800 rounded"><i data-lucide="refresh-cw" width="14"></i></button><button id="disconnect-btn" class="ml-1 text-red-400 hover:text-red-200 transition p-1 hover:bg-red-900/30 rounded"><i data-lucide="log-out" width="14"></i></button></div>
-                <button id="connect-btn" onclick="openWalletModal()" class="bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-6 py-2 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg hover:shadow-orange-900/40 w-full md:w-auto">Connect Wallet</button>
+            <div class="flex flex-col items-end gap-3">
+                <div id="wallet-ui" class="hidden flex items-center gap-3 bg-orange-950 border border-orange-800 p-3 rounded-lg shadow-xl"><span class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span><span id="wallet-addr" class="font-mono text-sm text-orange-200"></span><span id="wallet-bal" class="font-mono text-sm text-white font-bold ml-2 bg-orange-900/50 px-3 py-1 rounded">0.00 SOL</span><button id="refresh-btn" class="ml-2 text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded"><i data-lucide="refresh-cw" width="16"></i></button><button id="disconnect-btn" class="ml-1 text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded"><i data-lucide="log-out" width="16"></i></button></div>
+                <button id="connect-btn" onclick="openWalletModal()" class="bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-8 py-3 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg hover:shadow-orange-900/40">Connect Wallet</button>
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-10">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
             <div class="panel col-span-1 flex flex-col items-center justify-start h-full">
                 <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest w-full text-center border-b-2 border-orange-900/50 pb-3">Token Preview</h3>
-                <div class="text-center mb-4 min-h-[60px]"><h2 id="preview-name" class="text-xl md:text-2xl font-bold text-white break-words">Token Name</h2><p id="preview-ticker" class="text-orange-400 font-mono text-lg uppercase">$TICKER</p></div>
+                <div class="text-center mb-4 min-h-[60px]"><h2 id="preview-name" class="text-2xl font-bold text-white break-words">Token Name</h2><p id="preview-ticker" class="text-orange-400 font-mono text-lg uppercase">$TICKER</p></div>
                 
                 <!-- DRAG AND DROP ZONE -->
                 <div id="image-preview" class="mb-6 shadow-2xl shadow-orange-900/30 transition-all duration-300" onclick="document.getElementById('image-file').click()">
@@ -241,7 +188,7 @@
             </div>
         </div>
 
-        <div class="panel bg-gradient-to-r from-orange-950 to-[#2a1005] border-2 border-orange-800 mt-6 lg:col-span-3"> 
+        <div class="panel bg-gradient-to-r from-orange-950 to-[#2a1005] border-2 border-orange-800 mt-10 lg:col-span-3"> 
             <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-orange-900 pb-4">
                 <div class="flex justify-center items-center gap-4 w-full md:w-1/3 order-2 md:order-1 mb-4 md:mb-0">
                     <span class="mayhem-label text-orange-400 text-xs tracking-widest transition-colors duration-300" id="mayhem-status-label">MAYHEM MODE: OFF</span>
@@ -254,10 +201,11 @@
                 <div class="w-full md:w-1/3 order-3"><button id="deploy-btn" class="btn-action w-full hover:scale-[1.01] active:scale-[0.99] transition-transform py-3 text-lg">INITIATE LAUNCH SEQUENCE</button></div>
             </div>
             <div class="text-center text-sm text-orange-400 mb-4 pt-2"><span class="font-bold">Mayhem Mode:</span> <span class="text-xs">(Enables Pump.fun's advanced features. Use with caution. Default is Standard Deployment.)</span></div>
+            <div id="status-msg" class="status-box"></div>
         </div>
         
         <!-- KING OF THE PILL PANEL -->
-        <div id="koth-panel" class="panel koth-panel koth-glow mt-6 lg:col-span-3 hidden">
+        <div id="koth-panel" class="panel koth-panel koth-glow mt-8 lg:col-span-3 hidden">
             <div class="flex flex-col md:flex-row items-center justify-between gap-6">
                 <div class="flex items-center gap-4">
                     <div class="text-4xl">💊</div> 
@@ -267,35 +215,33 @@
                     </div>
                 </div>
                 
-                <div class="flex items-center gap-4 bg-black/40 p-3 rounded-lg border border-fuchsia-600/30 flex-1 justify-center w-full">
-                    <img id="koth-img" src="" class="w-10 h-10 rounded border border-fuchsia-500 object-cover hidden">
+                <div class="flex items-center gap-6 bg-black/40 p-3 rounded-lg border border-fuchsia-600/30 flex-1 justify-center">
+                    <img id="koth-img" src="" class="w-12 h-12 rounded border border-fuchsia-500 object-cover hidden">
                     <div class="text-center">
-                        <div id="koth-ticker" class="text-xl font-bold text-white font-mono">$????</div>
-                        <div id="koth-name" class="text-[10px] text-fuchsia-500 font-mono uppercase">LOADING...</div>
-                        <div id="koth-creator" class="text-[9px] text-fuchsia-400/70 font-mono mt-1">CREATOR: ?????...</div>
+                        <div id="koth-ticker" class="text-2xl font-bold text-white font-mono">$????</div>
+                        <div id="koth-name" class="text-xs text-fuchsia-500 font-mono uppercase">LOADING...</div>
+                        <div id="koth-creator" class="text-[10px] text-fuchsia-400/70 font-mono mt-1">CREATOR: ?????...</div>
                     </div>
                 </div>
 
-                <div class="flex justify-between w-full md:w-auto gap-8">
-                    <div class="text-center">
-                        <div class="text-[10px] text-fuchsia-500 uppercase font-mono mb-1">MARKET CAP</div>
-                        <div id="koth-mcap" class="text-xl font-bold text-white font-mono">$0</div>
-                    </div>
-                    
-                    <div class="text-right">
-                        <div class="text-[9px] text-fuchsia-200/60 uppercase font-mono mb-1">REWARD SHARE</div>
-                        <div class="text-lg font-bold text-fuchsia-400 font-mono">10%</div>
-                        <div class="text-[9px] text-fuchsia-500 font-mono">OF AIRDROPS</div>
-                    </div>
+                <div class="text-center">
+                    <div class="text-xs text-fuchsia-500 uppercase font-mono mb-1">MARKET CAP</div>
+                    <div id="koth-mcap" class="text-2xl font-bold text-white font-mono">$0</div>
+                </div>
+                
+                <div class="text-right">
+                    <div class="text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">REWARD SHARE</div>
+                    <div class="text-xl font-bold text-fuchsia-400 font-mono">10%</div>
+                    <div class="text-[10px] text-fuchsia-500 font-mono">OF AIRDROPS</div>
                 </div>
             </div>
         </div>
 
-        <div class="panel bg-black/30 border border-orange-900 mt-6 lg:col-span-3">
+        <div class="panel bg-black/30 border border-orange-900 mt-8 lg:col-span-3">
             <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
-                <div class="flex items-center gap-2 md:gap-4">
-                    <h3 class="text-orange-500 font-mono text-xs md:text-sm uppercase tracking-widest">🔥 TOP 10 (24H VOL)</h3>
-                    <span id="leaderboard-last-updated" class="text-orange-600 text-[10px] font-mono">Syncing...</span>
+                <div class="flex items-center gap-4">
+                    <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">🔥 TOP 10 LAUNCHES (BY 24H VOL)</h3>
+                    <span id="leaderboard-last-updated" class="text-orange-600 text-xs font-mono">Syncing...</span>
                 </div>
                 <div class="flex items-center gap-2">
                     <button onclick="toggleAllLaunchesModal()" class="text-orange-400 hover:text-white transition p-1 rounded hover:bg-orange-800" title="Expand to All Launches">
@@ -308,29 +254,28 @@
             </div>
             <div class="overflow-x-auto">
                 <table class="leader-table">
-                    <!-- RESPONSIVE TABLE HEADERS -->
-                    <thead><tr><th style="width: 40px;">#</th><th>Token</th><th class="text-right">MCAP</th><th class="text-right">Vol</th><th class="text-right">Act</th></tr></thead>
+                    <thead><tr><th style="width: 50px;">#</th><th>Token</th><th class="text-right">MCAP</th><th class="text-right">Vol (24H)</th><th class="text-right">Action</th></tr></thead>
                     <tbody id="leaderboard-body"><tr><td colspan="5" class="text-center text-orange-400 py-4">Scanning Chain Data...</td></tr></tbody>
                 </table>
             </div>
         </div>
 
         <!-- Airdrop Panel -->
-        <div class="panel bg-purple-950/30 border border-purple-800 mt-6 lg:col-span-3">
+        <div class="panel bg-purple-950/30 border border-purple-800 mt-8 lg:col-span-3">
             <div class="flex justify-between items-center border-b border-purple-800/50 pb-2 mb-4">
-                <h3 class="text-purple-400 font-mono text-xs md:text-sm uppercase tracking-widest">🪂 AIRDROP RESERVES</h3>
+                <h3 class="text-purple-400 font-mono text-sm uppercase tracking-widest">🪂 AIRDROP RESERVES & POINTS</h3>
                 <div class="flex items-center gap-4">
-                    <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400 hover:text-white transition font-mono text-[10px] md:text-xs underline p-1">USERS</button>
-                    <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-[10px] md:text-xs underline p-1">HISTORY</button>
+                    <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">EXPAND USERS</button>
+                    <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">VIEW HISTORY</button>
                 </div>
             </div>
-            <div class="flex flex-col md:flex-row items-stretch justify-between gap-6">
-                <div class="text-center w-full md:w-1/4 border-b md:border-b-0 md:border-r border-purple-800/30 pb-4 md:pb-0 pr-0 md:pr-4">
-                    <div class="text-[10px] text-purple-300 uppercase mb-2 tracking-widest">Dev Wallet Holdings</div>
-                    <div class="text-2xl md:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" id="airdrop-balance">0.00 <span class="text-lg align-top text-purple-400">$PUMP</span></div>
+            <div class="flex flex-col md:flex-row items-stretch justify-between gap-6 px-4">
+                <div class="text-center w-full md:w-1/4 border-r border-purple-800/30 pr-4">
+                    <div class="text-xs text-purple-300 uppercase mb-2 tracking-widest">Dev Wallet Holdings</div>
+                    <div class="text-3xl md:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" id="airdrop-balance">0.00 <span class="text-lg align-top text-purple-400">$PUMP</span></div>
                 </div>
                 
-                <div class="text-center w-full md:w-1/4 flex flex-col justify-center gap-3 border-b md:border-b-0 md:border-r border-purple-800/30 pb-4 md:pb-0 pr-0 md:pr-4">
+                <div class="text-center w-full md:w-1/4 flex flex-col justify-center gap-3 border-r border-purple-800/30 pr-4">
                     <div class="flex justify-between items-center px-4">
                         <span class="text-[10px] text-purple-300 uppercase tracking-widest">Top Holder Pts</span>
                         <span class="text-lg text-yellow-400 font-bold font-mono" id="user-top-positions">0</span>
@@ -341,68 +286,68 @@
                     </div>
                     <div class="flex justify-between items-center px-4">
                         <span class="text-[10px] text-purple-300 uppercase tracking-widest">ASDF Top 50</span>
-                        <span id="asdf-status" class="text-xs font-bold font-mono text-gray-500">CHECKING...</span>
+                        <span id="asdf-status" class="text-sm font-bold font-mono text-gray-500">CHECKING...</span>
                     </div>
                 </div>
 
-                <div class="text-center w-full md:w-1/4 flex flex-col justify-center items-center border-b md:border-b-0 md:border-r border-purple-800/30 pb-4 md:pb-0 pr-0 md:pr-4">
+                <div class="text-center w-full md:w-1/4 flex flex-col justify-center items-center border-r border-purple-800/30 pr-4">
                     <div class="flex justify-center items-center gap-2 mb-1">
-                        <div class="text-[10px] text-purple-300 uppercase tracking-widest">Total Points</div>
+                        <div class="text-xs text-purple-300 uppercase tracking-widest">Total Points</div>
                         <button onclick="toggleAirdropInfoModal()" class="p-0 text-purple-400 hover:text-white transition" title="View Update Information">
                             <i data-lucide="info" width="14" height="14"></i>
                         </button>
                     </div>
-                    <div class="text-4xl md:text-5xl text-white font-bold font-mono drop-shadow-[0_0_15px_rgba(234,179,8,0.6)]" id="user-total-points">0</div>
-                    <div id="points-multiplier-badge" class="hidden mt-1 px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold tracking-wider">2X MULTIPLIER ACTIVE</div>
+                    <div class="text-5xl text-white font-bold font-mono drop-shadow-[0_0_15px_rgba(234,179,8,0.6)]" id="user-total-points">0</div>
+                    <div id="points-multiplier-badge" class="hidden mt-1 px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[10px] text-green-400 font-bold tracking-wider">2X MULTIPLIER ACTIVE</div>
                 </div>
 
-                <div class="text-center w-full md:w-1/4 flex flex-col justify-center items-center bg-purple-900/20 rounded-lg py-4 md:py-2">
+                <div class="text-center w-full md:w-1/4 flex flex-col justify-center items-center bg-purple-900/20 rounded-lg py-2">
                     <div class="text-[10px] text-purple-300 uppercase mb-1 tracking-widest">Expected Airdrop</div>
-                    <div class="text-xl md:text-2xl text-green-400 font-bold font-mono" id="expected-airdrop">0.00</div>
+                    <div class="text-2xl text-green-400 font-bold font-mono" id="expected-airdrop">0.00</div>
                     <div class="text-[10px] text-purple-400 font-mono mt-1">$PUMP (Est)</div>
                 </div>
             </div>
         </div>
 
-        <div class="panel bg-orange-950/30 border border-orange-900 mt-6 lg:col-span-3">
+        <div class="panel bg-orange-950/30 border border-orange-900 mt-8 lg:col-span-3">
             <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
-                <h3 class="text-orange-500 font-mono text-xs md:text-sm uppercase tracking-widest">BUYBACK & FEE TRACKER</h3>
-                <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-[10px] md:text-xs underline p-1">EXPANDED LOGS</button>
+                <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">BUYBACK & FEE TRACKER</h3>
+                <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-xs underline p-1">VIEW EXPANDED LOGS</button>
             </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-                <div class="bg-black/30 p-2 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] text-orange-400 uppercase">Fee Balance</div>
-                    <div class="text-sm md:text-xl text-white font-bold font-mono mt-1"><span id="track-balance">0.0000</span> SOL</div>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
+                <div class="bg-black/30 p-4 rounded border border-orange-900/50">
+                    <div class="text-xs text-orange-400 uppercase">Current Fee Balance</div>
+                    <div class="text-xl text-white font-bold font-mono mt-1"><span id="track-balance">0.0000</span> SOL</div>
                 </div>
-                <div class="bg-black/30 p-2 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] text-orange-400 uppercase">Last Claim</div>
-                    <div class="text-sm md:text-xl text-green-400 font-bold font-mono mt-1"><span id="track-last-amt">0.0000</span> SOL</div>
+                <div class="bg-black/30 p-4 rounded border border-orange-900/50">
+                    <div class="text-xs text-orange-400 uppercase">Last Claim Amount</div>
+                    <div class="text-xl text-green-400 font-bold font-mono mt-1"><span id="track-last-amt">0.0000</span> SOL</div>
                 </div>
-                <div class="bg-black/30 p-2 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] text-orange-400 uppercase">Last Time</div>
-                    <div class="text-[10px] md:text-sm text-white font-mono mt-2" id="track-last-time">Never</div>
+                <div class="bg-black/30 p-4 rounded border border-orange-900/50">
+                    <div class="text-xs text-orange-400 uppercase">Last Claim Time</div>
+                    <div class="text-sm text-white font-mono mt-2" id="track-last-time">Never</div>
                 </div>
-                <div class="bg-black/30 p-2 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] text-orange-400 uppercase">Next Check</div>
-                    <div class="text-sm md:text-xl text-yellow-400 font-bold font-mono mt-1" id="track-next-check">--:--</div>
+                <div class="bg-black/30 p-4 rounded border border-orange-900/50">
+                    <div class="text-xs text-orange-400 uppercase">Next Check In</div>
+                    <div class="text-xl text-yellow-400 font-bold font-mono mt-1" id="track-next-check">--:--</div>
                 </div>
                 
                 <!-- Dynamic Conservation Notice -->
-                <div id="conservation-notice" class="conservation-notice col-span-2 md:col-span-4">
+                <div id="conservation-notice" class="conservation-notice col-span-1 md:col-span-4">
                     <div class="flex items-center justify-center gap-2 mb-1">
                         <i data-lucide="shield-alert" class="text-blue-400" width="16"></i>
-                        <span class="text-blue-300 font-bold uppercase text-[10px] md:text-xs">Conserving SOL for Airdrop</span>
+                        <span class="text-blue-300 font-bold uppercase">Conserving SOL for Airdrop</span>
                     </div>
-                    <div class="text-blue-200 text-[10px] md:text-xs">
+                    <div class="text-blue-200 text-xs">
                         Targeting <span id="cons-users" class="font-bold text-white">0</span> users. 
-                        Need <span id="cons-need" class="font-bold text-white">0.00</span> SOL.
+                        Need <span id="cons-need" class="font-bold text-white">0.0000</span> SOL (Have <span id="cons-have" class="text-gray-400">0.0000</span>).
                         <span id="cons-missing" class="text-yellow-400 ml-1"></span>
                     </div>
                 </div>
             </div>
         </div>
 
-        <div class="panel bg-orange-900/10 mt-6 lg:col-span-3">
+        <div class="panel bg-orange-900/10 mt-8 lg:col-span-3">
             <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-6">PLATFORM METRICS</h3>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div class="metric-card"><div class="metric-label">Lifetime Launches</div><div id="metric-launches" class="metric-value">0</div></div>
@@ -414,51 +359,130 @@
             </div>
         </div>
         
-        <div class="flex flex-col md:flex-row justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70 gap-2">
+        <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
             <div><span class="text-orange-600">RPC UPLINK: MAINNET PUBLIC</span></div>
             <div class="flex gap-4"><span>SYSTEM STATUS: <span id="sys-status" class="sys-status" onclick="toggleStatusModal()">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
         </div>
     </div>
 </div>
 
-<!-- Quick Start Modal -->
-<div id="quick-start-modal" class="modal">
-    <div class="modal-content border-orange-500">
-        <span class="close-btn" onclick="closeQuickStartModal()">&times;</span>
-        <h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-800/50 pb-2">🔥 WELCOME TO IGNITION</h3>
-        <div class="font-sans text-sm text-orange-100 space-y-4">
-            <p class="text-orange-200">The premier automated airdrop launcher for Pumpfun on Solana.</p>
-            
-            <div class="space-y-2">
-                <div class="flex items-start gap-3">
-                    <span class="text-xl">🚀</span>
-                    <div>
-                        <strong class="text-orange-400 block text-xs uppercase tracking-wider">Launch Instantly</strong>
-                        <span class="text-xs text-gray-400">Deploy tokens to Pump.fun for just 0.02 SOL.</span>
-                    </div>
-                </div>
-                
-                <div class="flex items-start gap-3">
-                    <span class="text-xl">♻️</span>
-                    <div>
-                        <strong class="text-green-400 block text-xs uppercase tracking-wider">The Flywheel</strong>
-                        <span class="text-xs text-gray-400">Fees automatically buy back <strong class="text-white">$PUMP</strong> every 5 mins.</span>
-                    </div>
-                </div>
+<!-- MODALS -->
+<div id="wallet-modal" class="modal">
+    <div class="modal-content border-orange-600" style="max-width: 450px;">
+        <span class="close-btn" onclick="closeWalletModal()">&times;</span>
+        <h3 class="text-orange-500 font-mono text-lg mb-6 uppercase tracking-widest border-b border-orange-900/50 pb-2">SELECT WALLET PROVIDER</h3>
+        <div id="wallet-list" class="flex flex-col gap-2">
+            <button onclick="selectWallet('phantom')" class="btn-wallet" id="btn-phantom">
+                <span class="flex items-center gap-3"><i data-lucide="ghost" width="20"></i> Phantom</span>
+                <span id="tag-phantom" class="hidden detected-tag">DETECTED</span>
+            </button>
+            <button onclick="selectWallet('solflare')" class="btn-wallet" id="btn-solflare">
+                <span class="flex items-center gap-3"><i data-lucide="flame" width="20"></i> Solflare</span>
+                <span id="tag-solflare" class="hidden detected-tag">DETECTED</span>
+            </button>
+            <button onclick="selectWallet('backpack')" class="btn-wallet" id="btn-backpack">
+                <span class="flex items-center gap-3"><i data-lucide="backpack" width="20"></i> Backpack</span>
+                <span id="tag-backpack" class="hidden detected-tag">DETECTED</span>
+            </button>
+        </div>
+        <p class="text-center text-xs text-orange-400/60 mt-4 font-mono">Selecting a wallet will prompt a connection request.</p>
+    </div>
+</div>
 
-                <div class="flex items-start gap-3">
-                    <span class="text-xl">🪂</span>
-                    <div>
-                        <strong class="text-purple-400 block text-xs uppercase tracking-wider">Earn Airdrops</strong>
-                        <span class="text-xs text-gray-400">Hold Top 10 tokens or create them to earn points. Dev wallet holdings are airdropped to you automatically.</span>
-                    </div>
-                </div>
-            </div>
+<div id="log-modal" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="closeLogModal()">&times;</span>
+        <h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FLYWHEEL & BUYBACK LOGS</h3>
+        <div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2 flex flex-col gap-2"></div>
+    </div>
+</div>
 
-            <button onclick="closeQuickStartModal()" class="w-full bg-orange-600 hover:bg-orange-500 text-white font-bold py-3 rounded mt-4 uppercase tracking-widest font-mono text-sm transition shadow-lg">LET'S PUMP!</button>
+<div id="holders-modal" class="modal">
+    <div class="modal-content border-orange-600" style="max-width: 400px;">
+        <span class="close-btn" onclick="closeHoldersModal()">&times;</span>
+        <h3 id="holders-modal-title" class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">Top Holders</h3>
+        <div id="holders-list" class="max-h-[60vh] overflow-y-auto pr-2 font-mono text-xs"></div>
+    </div>
+</div>
+
+<div id="status-modal" class="modal">
+    <div class="modal-content border-yellow-600" style="max-width: 450px;">
+        <span class="close-btn" onclick="closeStatusModal()">&times;</span>
+        <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2">SYSTEM STATUS DIAGNOSTICS</h3>
+        <div id="status-details-list" class="font-mono text-sm space-y-2"></div>
+        <p class="text-xs text-yellow-500 mt-4">If services are offline, automatic processes (like airdrops and buybacks) may be delayed or halted.</p>
+    </div>
+</div>
+
+<div id="all-launches-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAllLaunchesModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">ALL PLATFORM LAUNCHES</h3><div id="modal-all-launches-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
+
+<div id="all-eligible-users-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAllEligibleUsersModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">ELIGIBLE AIRDROP USERS & POINTS</h3><div id="modal-all-eligible-users-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
+
+<div id="airdrop-log-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAirdropLogModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">AIRDROP DISTRIBUTION HISTORY</h3><div id="modal-airdrop-log-content" class="max-h-[60vh] overflow-y-auto pr-2">Loading...</div></div></div>
+
+<div id="airdrop-info-modal" class="modal">
+    <div class="modal-content border-purple-600">
+        <span class="close-btn" onclick="closeAirdropInfoModal()">&times;</span>
+        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">AIRDROP POINT CALCULATION NOTES</h3>
+        <div class="font-sans text-sm text-purple-200 space-y-3">
+            <p>The **Total Points** and **Expected Airdrop** metrics shown are subject to the platform's background update cycles.</p>
+            <ul class="list-disc list-inside ml-4 space-y-1 text-purple-300">
+                <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 50 Holder**.</li>
+                <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
+                <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
+                <li class="mt-2"><span class="text-yellow-400">Formula:</span> (Holdings + (Created * 2)) * Multiplier</li>
+                <li class="mt-2 text-fuchsia-300 font-bold">💊 King of the Pill (KOTH): 10% of every airdrop goes directly to the Creator of the highest MCAP token, bypassing points logic.</li>
+            </ul>
         </div>
     </div>
 </div>
+
+<div id="about-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAboutModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FEE & BUYBACK MECHANICS</h3>
+    <div id="about-content-static">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 font-sans text-sm">
+            <div>
+                <h4 class="text-orange-400 font-bold mb-3 border-b border-orange-800 pb-1">1. REVENUE GENERATION</h4>
+                <p class="text-orange-200 mb-2">The platform generates revenue through two primary streams:</p>
+                <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
+                    <li><span class="text-white font-bold">Deployment Fee:</span> 0.02 SOL per token launch.</li>
+                    <li><span class="text-white font-bold">Trading Rewards:</span> 1% of the bonding curve volume (Creator Fee).</li>
+                </ul>
+
+                <h4 class="text-orange-400 font-bold mb-3 border-b border-orange-800 pb-1">2. THE FLYWHEEL (BUYBACKS)</h4>
+                <p class="text-orange-200 mb-2">Every 5 minutes, if the Fee Pool > 0.20 SOL:</p>
+                <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
+                    <li><span class="text-green-400 font-bold">95.0%</span>: Buys **$PUMP** (Sent to Dev Wallet).</li>
+                    <li><span class="text-red-400 font-bold">4.5%</span>: Sent to $ASDF Burns Wallet.</li>
+                    <li><span class="text-red-400 font-bold">0.5%</span>: Sent to Upkeep and Reserves Wallet.</li>
+                </ul>
+            </div>
+            
+            <div>
+                <h4 class="text-purple-400 font-bold mb-3 border-b border-purple-800 pb-1">3. POINTS SYSTEM (QUALIFICATION)</h4>
+                <p class="text-purple-200 mb-2">Users earn points by holding top tokens. No signup required.</p>
+                <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
+                    <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 50 Holder**.</li>
+                    <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
+                    <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
+                </ul>
+                <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
+                    <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">💊 KING OF THE PILL (NEW)</p>
+                    <p class="text-xs text-gray-300">The Creator of the highest Market Cap token receives <span class="text-white font-bold">10% of the entire Airdrop pot</span> immediately, before other points are calculated.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-6">
+            <h4 class="text-green-400 font-bold mb-3 border-b border-green-800 pb-1">4. AUTOMATED AIRDROP ENGINE</h4>
+            <p class="text-gray-300 mb-2">Runs automatically after the Flywheel check.</p>
+            <ul class="list-disc list-inside text-gray-400 space-y-1">
+                <li><span class="text-white font-bold">Trigger:</span> When Dev Wallet holds > 50,000 $PUMP and >0.25SOL.</li>
+                <li><span class="text-white font-bold">Action:</span> Distributes **99%** of the $PUMP balance to all qualified users.</li>
+                <li><span class="text-white font-bold">Distribution:</span> Proportional based on your share of the Total Global Points (minus 10% KOTH allocation).</li>
+            </ul>
+        </div>
+    </div>
+</div></div>
 
 <!-- Success Modal -->
 <div id="success-modal" class="modal" style="display: none;">
@@ -484,7 +508,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v21.3-MOBILE-FIX";
+    const FRONTEND_VERSION = "v21.3-IMG-FIX";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02;
@@ -596,8 +620,7 @@
         consUsers: document.getElementById('cons-users'),
         consNeed: document.getElementById('cons-need'),
         consHave: document.getElementById('cons-have'),
-        consMissing: document.getElementById('cons-missing'),
-        quickStartModal: document.getElementById('quick-start-modal')
+        consMissing: document.getElementById('cons-missing')
     };
 
     lucide.createIcons();
@@ -666,39 +689,32 @@
                 let imgSrc = resolveTokenImage(item.image);
                 
                 const holderMark = item.isUserTopHolder 
-                    ? `<span class="holder-check" title="You are a Top Holder">👑 HOLDER</span>` 
+                    ? `<span class="holder-check" title="You are a Top Holder">👑 TOP HOLDER</span>` 
                     : '';
                 
                 const creatorMark = (userPubkey && item.creator && userPubkey === item.creator)
-                    ? `<span class="badge-creator" title="You created this token">🛠️</span>`
+                    ? `<span class="badge-creator" title="You created this token">🛠️ CREATOR</span>`
                     : '';
                 
                 return `
                 <tr>
                     <td class="text-orange-500 font-bold">${index + 1}</td>
                     <td>
-                        <div class="flex items-center">
-                            <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
-                            <div class="flex flex-col">
-                                <div class="flex items-center gap-1">
-                                    <span class="text-white font-bold text-xs">${escapeHtml(item.ticker)}</span>
-                                    <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="text-[9px] text-gray-500 hover:text-orange-400 ml-1">↗</a>
-                                </div>
-                                <div class="flex gap-1">
-                                    ${creatorMark}
-                                    ${holderMark}
-                                    <span class="md:hidden text-[9px] text-gray-400">${item.complete ? 'BONDED' : 'PRE-BOND'}</span>
-                                </div>
-                            </div>
-                        </div>
+                        <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
+                        <span class="text-white font-bold">${escapeHtml(item.ticker)}</span>
+                        ${creatorMark}
+                        ${holderMark}
+                        ${badge}
+                        <div class="text-[10px] text-orange-300 mt-1 truncate max-w-[150px]">${escapeHtml(item.name)}</div>
                     </td>
-                    <td class="text-right text-green-400 font-bold font-mono text-xs">${formatMcap(displayMcap)}</td>
-                    <td class="text-right text-white font-bold text-xs">$${displayVol.toLocaleString()}</td>
+                    <td class="text-right text-green-400 font-bold font-mono">${formatMcap(displayMcap)}</td>
+                    <td class="text-right text-white font-bold">$${displayVol.toLocaleString()}</td>
                     <td class="text-right">
-                        <div class="flex gap-1 justify-end items-center">
-                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}')" class="text-[10px] bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition">
+                        <div class="flex gap-2 justify-end items-center">
+                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}')" class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition" title="View Top 50 Holders">
                                 👥
                             </button>
+                            <a href="${escapeHtml(tradeLink)}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a>
                         </div>
                     </td>
                 </tr>`;
@@ -718,7 +734,7 @@
         const list = document.getElementById('holders-list');
         const title = document.getElementById('holders-modal-title');
         modal.style.display = 'block';
-        title.innerText = `TOP 100: $${ticker}`;
+        title.innerText = `TOP 50: $${ticker}`;
         list.innerHTML = '<div class="text-center text-orange-400 p-4">Loading holder data...</div>';
         try {
             const res = await fetch(`${BACKEND_URL}/api/token-holders/${escapeHtml(mint)}`);
@@ -760,7 +776,7 @@
     const checkAsdfStatus = async () => {
         if (!userPubkey) {
             ui.asdfStatus.innerText = "NOT CONNECTED";
-            ui.asdfStatus.className = "text-xs font-bold font-mono text-gray-500";
+            ui.asdfStatus.className = "text-sm font-bold font-mono text-gray-500";
             ui.userTopPositions.innerText = "0";
             ui.userCreatedPositions.innerText = "0";
             ui.userTotalPoints.innerText = "0";
@@ -780,11 +796,11 @@
 
             if (data.isAsdfTop50) {
                 ui.asdfStatus.innerText = "YES (QUALIFIED)";
-                ui.asdfStatus.className = "text-xs font-bold font-mono text-green-400 animate-pulse";
+                ui.asdfStatus.className = "text-sm font-bold font-mono text-green-400 animate-pulse";
                 ui.pointsMultiplierBadge.classList.remove('hidden');
             } else {
                 ui.asdfStatus.innerText = "NO";
-                ui.asdfStatus.className = "text-xs font-bold font-mono text-red-400";
+                ui.asdfStatus.className = "text-sm font-bold font-mono text-red-400";
                 ui.pointsMultiplierBadge.classList.add('hidden');
             }
 
@@ -896,7 +912,7 @@
                     ui.consNotice.classList.add('conservation-active');
                     ui.consUsers.innerText = data.conservationStatus.eligibleCount;
                     ui.consNeed.innerText = parseFloat(data.conservationStatus.estimatedCost).toFixed(4);
-                    // ui.consHave.innerText = parseFloat(data.conservationStatus.currentSol).toFixed(4);
+                    ui.consHave.innerText = parseFloat(data.conservationStatus.currentSol).toFixed(4);
                     ui.consMissing.innerText = `(${data.conservationStatus.missingAtas} new wallets)`;
                 } else {
                     ui.consNotice.classList.remove('conservation-active');
@@ -1085,7 +1101,7 @@
                 const tableHTML = `
                     <table class="w-full text-left font-mono text-xs leader-table">
                         <thead class="text-orange-400 border-b border-orange-800">
-                            <tr><th class="p-2">#</th><th class="p-2">Token</th><th class="p-2 hidden md:table-cell">Creator</th><th class="p-2 text-right">MCAP</th><th class="p-2 text-right">Vol</th><th class="p-2 text-right">Status</th></tr>
+                            <tr><th class="p-2">#</th><th class="p-2">Token</th><th class="p-2">Creator</th><th class="p-2 text-right">MCAP</th><th class="p-2 text-right">Vol (24H)</th><th class="p-2 text-right">Status</th></tr>
                         </thead>
                         <tbody class="text-orange-200">
                             ${await Promise.all(tokens.map(async (item, index) => {
@@ -1099,15 +1115,10 @@
                                 <tr class="border-b border-orange-800/30 hover:bg-orange-900/20">
                                     <td class="p-2">${index + 1}</td>
                                     <td class="p-2">
-                                        <div class="flex flex-col">
-                                            <div class="flex items-center gap-1">
-                                                <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
-                                                <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="font-bold underline text-white text-xs">${escapeHtml(item.ticker)}</a>
-                                            </div>
-                                            <span class="md:hidden text-[9px] text-gray-400 pl-1">${escapeHtml(item.name).slice(0, 10)}</span>
-                                        </div>
+                                        <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
+                                        <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="font-bold underline text-white">${escapeHtml(item.ticker)}</a> (${escapeHtml(item.name)})
                                     </td>
-                                    <td class="p-2 text-orange-400 hidden md:table-cell">${escapeHtml(item.userPubkey?.slice(0, 5) || '?????')}...</td>
+                                    <td class="p-2 text-orange-400">${escapeHtml(item.userPubkey?.slice(0, 5) || '?????')}...</td>
                                     <td class="p-2 text-right font-bold text-green-400">${formatMcap(item.marketCap)}</td>
                                     <td class="p-2 text-right font-bold">$${(parseFloat(item.volume) || 0).toLocaleString()}</td>
                                     <td class="p-2 text-right">${badge}</td>
@@ -1219,7 +1230,7 @@
                 return `
                 <div class="log-entry">
                     <div class="flex justify-between items-center mb-1">
-                        <span class="text-orange-500 font-bold text-[10px]">[${time}] ${log.type}</span>
+                        <span class="text-orange-500 font-bold">[${time}] ${log.type}</span>
                         ${statusBadge}
                     </div>
                     <div class="bg-black/20 p-2 rounded border border-orange-900/30">
@@ -1285,13 +1296,7 @@
     const closeAboutModal = () => { ui.aboutModal.style.display = 'none'; };
     window.closeAboutModal = closeAboutModal;
 
-    const closeQuickStartModal = () => { 
-        ui.quickStartModal.style.display = 'none';
-        localStorage.setItem('hasSeenQuickStart', 'true');
-    };
-    window.closeQuickStartModal = closeQuickStartModal;
-
-    const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; setTimeout(() => { ui.statusBox.style.display = 'none'; }, 5000); };
+    const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; };
     const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
 
     const updateWalletUI = async (pubkey) => {
@@ -1535,12 +1540,6 @@
     };
     
     window.addEventListener('load', () => {
-        // Quick Start Logic
-        const hasSeenQuickStart = localStorage.getItem('hasSeenQuickStart');
-        if (!hasSeenQuickStart) {
-            ui.quickStartModal.style.display = 'block';
-        }
-
         const savedType = localStorage.getItem('connectedWalletType');
         if (savedType) {
             setTimeout(() => {
