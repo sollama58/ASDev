@@ -141,7 +141,8 @@ function init(deps) {
                 }
             });
         } catch (e) {
-            res.status(500).json({ error: "DB Error" });
+            logger.error('[Health] Endpoint error', { error: e.message, stack: e.stack });
+            res.status(500).json({ error: "Health check failed", details: e.message });
         }
     });
 
