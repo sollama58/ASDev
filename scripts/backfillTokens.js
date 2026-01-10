@@ -474,7 +474,8 @@ async function wipeTokens(db) {
     console.log(`   Deleted ${robinhoodResult.changes || 0} robinhood tokens`);
 
     // Clear vault scan progress logs so we do a full rescan
-    const progressResult = await db.run("DELETE FROM system_log WHERE key LIKE $1", ['vault_scan_%']);
+    // Progress is stored in the 'logs' table with type like 'vault_scan_%'
+    const progressResult = await db.run("DELETE FROM logs WHERE type LIKE $1", ['vault_scan_%']);
     console.log(`   Cleared ${progressResult.changes || 0} vault scan progress entries`);
 
     console.log('   ✅ Wipe complete');
@@ -486,12 +487,13 @@ async function wipeTokens(db) {
 async function verifyDatabaseSchema(db) {
     console.log('\n🔍 Verifying database schema...');
 
-    const requiredTables = ['tokens', 'robinhood_tokens', 'system_log'];
+    // 'logs' is the correct table name (not 'system_log')
+    const requiredTables = ['tokens', 'robinhood_tokens', 'logs'];
     const missingTables = [];
 
     for (const table of requiredTables) {
         try {
-            // Simple check: try to count rows (will fail if table doesn't exist)
+            // Simple check: try to select from table (will fail if table doesn't exist)
             await db.get(`SELECT 1 FROM ${table} LIMIT 1`);
         } catch (e) {
             missingTables.push(table);
