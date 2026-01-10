@@ -514,6 +514,8 @@ function initMetadataUpdaterWorker(deps) {
                         }
                     }
 
+                    // Update tokens that DexScreener has data for
+                    const misses = [];
                     for (const t of chunk) {
                         const data = updates.get(t.mint);
 
@@ -530,22 +532,33 @@ function initMetadataUpdaterWorker(deps) {
                                 );
                             }
                         } else {
-                            // Pump.fun fallback
-                            try {
-                                await delay(300);
-                                const pumpRes = await axios.get(
-                                    `https://frontend-api.pump.fun/coins/${t.mint}`,
-                                    { timeout: 3000 }
-                                );
-                                if (pumpRes.data) {
-                                    const mcap = pumpRes.data.usd_market_cap || 0;
+                            misses.push(t.mint);
+                        }
+                    }
+
+                    // Batch fetch Helius data for all DexScreener misses (1 call instead of N)
+                    if (misses.length > 0 && config.HELIUS_API_KEY) {
+                        try {
+                            const heliusRes = await axios.post(
+                                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+                                {
+                                    jsonrpc: '2.0',
+                                    id: '1',
+                                    method: 'getAssetBatch',
+                                    params: { ids: misses, displayOptions: { showFungible: true } }
+                                },
+                                { timeout: 10000 }
+                            );
+                            const assets = heliusRes.data?.result || [];
+                            for (const asset of assets) {
+                                if (asset?.id && asset?.token_info?.price_info?.total_price) {
                                     await db.run(
                                         `UPDATE tokens SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
-                                        [mcap, Date.now(), t.mint]
+                                        [asset.token_info.price_info.total_price, Date.now(), asset.id]
                                     );
                                 }
-                            } catch (pumpErr) { /* Silent fail */ }
-                        }
+                            }
+                        } catch (heliusErr) { /* Silent fail */ }
                     }
                     await delay(1500);
 

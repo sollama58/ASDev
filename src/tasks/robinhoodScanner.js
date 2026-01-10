@@ -114,20 +114,34 @@ function findOurShare(config, ourWallet) {
 }
 
 /**
- * Fetch token metadata from Pump.fun API
+ * Fetch token metadata from Helius DAS API
  */
-async function fetchPumpMetadata(mint) {
+async function fetchHeliusMetadata(mint) {
+    if (!config.HELIUS_API_KEY) {
+        return null;
+    }
     try {
-        const response = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, {
-            timeout: 5000
-        });
-        if (response.data) {
+        const response = await axios.post(
+            `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+            {
+                jsonrpc: '2.0',
+                id: '1',
+                method: 'getAsset',
+                params: { id: mint }
+            },
+            { timeout: 5000 }
+        );
+        const asset = response.data?.result;
+        if (asset) {
+            const metadata = asset.content?.metadata || {};
+            const files = asset.content?.files || [];
+            const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
             return {
-                name: response.data.name || 'Unknown',
-                ticker: response.data.symbol || 'UNKNOWN',
-                image: response.data.image_uri || null,
-                marketCap: response.data.usd_market_cap || 0,
-                creator: response.data.creator || null
+                name: metadata.name || 'Unknown',
+                ticker: metadata.symbol || 'UNKNOWN',
+                image: imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null,
+                marketCap: 0, // Will be fetched from DexScreener
+                creator: asset.creators?.[0]?.address || null
             };
         }
     } catch (e) {
@@ -267,7 +281,7 @@ async function scanForFeeSharingConfigs(deps) {
 
                         if (!existing) {
                             // Fetch metadata
-                            const pumpMeta = await fetchPumpMetadata(mintStr);
+                            const pumpMeta = await fetchHeliusMetadata(mintStr);
                             const dexMeta = await fetchDexScreenerMetadata(mintStr);
 
                             const metadata = {
@@ -335,7 +349,7 @@ async function updateRobinhoodTokenMetadata(deps) {
             try {
                 // Fetch updated metadata
                 const dexMeta = await fetchDexScreenerMetadata(token.mint);
-                const pumpMeta = !dexMeta ? await fetchPumpMetadata(token.mint) : null;
+                const pumpMeta = !dexMeta ? await fetchHeliusMetadata(token.mint) : null;
 
                 const updates = {
                     volume24h: dexMeta?.volume24h || token.volume24h || 0,
@@ -547,6 +561,6 @@ module.exports = {
     scanForFeeSharingConfigs,
     parseFeeSharingConfig,
     findOurShare,
-    fetchPumpMetadata,
+    fetchHeliusMetadata,
     fetchDexScreenerMetadata,
 };

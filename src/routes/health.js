@@ -238,7 +238,7 @@ function init(deps) {
     });
 
     // v13.0: Import token by mint address (admin only)
-    // Fetches metadata from Pump.fun/DexScreener and adds to tokens table
+    // Fetches metadata from Helius/DexScreener and adds to tokens table
     router.post('/admin/import-token', adminAuth, async (req, res) => {
         const axios = require('axios');
         const { PublicKey } = require('@solana/web3.js');
@@ -257,25 +257,40 @@ function init(deps) {
                 return res.status(400).json({ error: 'Invalid mint address' });
             }
 
-            // Fetch metadata from Pump.fun
-            let pumpMeta = null;
-            try {
-                const pumpRes = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, { timeout: 5000 });
-                if (pumpRes.data) {
-                    pumpMeta = {
-                        name: pumpRes.data.name || 'Unknown',
-                        ticker: pumpRes.data.symbol || 'UNKNOWN',
-                        image: pumpRes.data.image_uri || null,
-                        description: pumpRes.data.description || '',
-                        twitter: pumpRes.data.twitter || null,
-                        website: pumpRes.data.website || null,
-                        creator: pumpRes.data.creator || null,
-                        marketCap: pumpRes.data.usd_market_cap || 0,
-                        complete: pumpRes.data.complete || false
-                    };
+            // Fetch metadata from Helius DAS API
+            let heliusMeta = null;
+            if (config.HELIUS_API_KEY) {
+                try {
+                    const heliusRes = await axios.post(
+                        `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+                        {
+                            jsonrpc: '2.0',
+                            id: '1',
+                            method: 'getAsset',
+                            params: { id: mint, displayOptions: { showFungible: true } }
+                        },
+                        { timeout: 5000 }
+                    );
+                    const asset = heliusRes.data?.result;
+                    if (asset) {
+                        const metadata = asset.content?.metadata || {};
+                        const files = asset.content?.files || [];
+                        const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
+                        heliusMeta = {
+                            name: metadata.name || 'Unknown',
+                            ticker: metadata.symbol || 'UNKNOWN',
+                            image: imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null,
+                            description: metadata.description || '',
+                            twitter: asset.content?.links?.twitter || null,
+                            website: asset.content?.links?.external_url || null,
+                            creator: asset.creators?.[0]?.address || null,
+                            marketCap: asset.token_info?.price_info?.total_price || 0,
+                            complete: false
+                        };
+                    }
+                } catch (e) {
+                    logger.debug('Helius metadata fetch failed', { error: e.message });
                 }
-            } catch (e) {
-                logger.debug('Pump.fun metadata fetch failed', { error: e.message });
             }
 
             // Fetch from DexScreener for additional data
@@ -297,21 +312,21 @@ function init(deps) {
                 logger.debug('DexScreener metadata fetch failed', { error: e.message });
             }
 
-            if (!pumpMeta && !dexMeta) {
-                return res.status(404).json({ error: 'Token not found on Pump.fun or DexScreener' });
+            if (!heliusMeta && !dexMeta) {
+                return res.status(404).json({ error: 'Token not found on Helius or DexScreener' });
             }
 
             const metadata = {
-                name: pumpMeta?.name || dexMeta?.name || 'Unknown Token',
-                ticker: pumpMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
-                image: pumpMeta?.image || dexMeta?.image || null,
-                description: pumpMeta?.description || '',
-                twitter: pumpMeta?.twitter || null,
-                website: pumpMeta?.website || null,
-                creator: pumpMeta?.creator || null,
-                marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || 0,
+                name: heliusMeta?.name || dexMeta?.name || 'Unknown Token',
+                ticker: heliusMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
+                image: heliusMeta?.image || dexMeta?.image || null,
+                description: heliusMeta?.description || '',
+                twitter: heliusMeta?.twitter || null,
+                website: heliusMeta?.website || null,
+                creator: heliusMeta?.creator || null,
+                marketCap: dexMeta?.marketCap || heliusMeta?.marketCap || 0,
                 volume24h: dexMeta?.volume24h || 0,
-                complete: pumpMeta?.complete || false
+                complete: heliusMeta?.complete || false
             };
 
             // Determine which table to insert into

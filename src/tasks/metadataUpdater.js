@@ -1,11 +1,50 @@
 /**
  * Metadata Updater Task
- * Updates token metadata (market data) from DexScreener and Pump.fun
+ * Updates token metadata (market data) from DexScreener
  * NO IPFS SCRAPING - Prevents Rate Limits
  */
 const axios = require('axios');
 const config = require('../config/env');
 const { logger } = require('../services');
+
+/**
+ * Batch fetch market data from Helius DAS API (fallback when DexScreener has no data)
+ * Uses getAssetBatch to fetch up to 1000 assets in a single call
+ * @param {string[]} mints - Array of mint addresses
+ * @returns {Map<string, {marketCap: number}>} Map of mint -> market data
+ */
+async function fetchHeliusMarketDataBatch(mints) {
+    const results = new Map();
+    if (!config.HELIUS_API_KEY || mints.length === 0) {
+        return results;
+    }
+    try {
+        const response = await axios.post(
+            `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+            {
+                jsonrpc: '2.0',
+                id: '1',
+                method: 'getAssetBatch',
+                params: {
+                    ids: mints,
+                    displayOptions: { showFungible: true }
+                }
+            },
+            { timeout: 10000 }
+        );
+        const assets = response.data?.result || [];
+        for (const asset of assets) {
+            if (asset?.id && asset?.token_info?.price_info?.total_price) {
+                results.set(asset.id, {
+                    marketCap: asset.token_info.price_info.total_price
+                });
+            }
+        }
+    } catch (e) {
+        // Silent fail
+    }
+    return results;
+}
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -56,9 +95,11 @@ async function updateMetadata(deps) {
                 }
             }
 
+            // Update tokens that DexScreener has data for
+            const misses = [];
             for (const t of chunk) {
                 const data = updates.get(t.mint);
-                
+
                 if (data) {
                     // Update market data. If DexScreener has an image, use it to ensure we have *something*
                     if (data.imageUrl) {
@@ -73,22 +114,21 @@ async function updateMetadata(deps) {
                         );
                     }
                 } else {
-                    // DexScreener miss -> Pump.fun Fallback (Market Data Only)
-                    try {
-                        await delay(300); 
-                        const pumpRes = await axios.get(
-                            `https://frontend-api.pump.fun/coins/${t.mint}`,
-                            { timeout: 3000 }
+                    misses.push(t.mint);
+                }
+            }
+
+            // Batch fetch Helius data for all DexScreener misses (1 call instead of N)
+            if (misses.length > 0) {
+                const heliusData = await fetchHeliusMarketDataBatch(misses);
+                for (const mint of misses) {
+                    const data = heliusData.get(mint);
+                    if (data?.marketCap) {
+                        await db.run(
+                            `UPDATE tokens SET marketCap = ?, lastUpdated = ? WHERE mint = ?`,
+                            [data.marketCap, Date.now(), mint]
                         );
-                        if (pumpRes.data) {
-                            const mcap = pumpRes.data.usd_market_cap || 0;
-                            // Do NOT scrape image from Pump here, just mcap
-                            await db.run(
-                                `UPDATE tokens SET marketCap = ?, lastUpdated = ? WHERE mint = ?`,
-                                [mcap, Date.now(), t.mint]
-                            );
-                        }
-                    } catch (pumpErr) { /* Silent fail */ }
+                    }
                 }
             }
             await delay(1500);

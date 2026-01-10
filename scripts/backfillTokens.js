@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Token Backfill Script (v2.0 - Optimized)
+ * Token Backfill Script (v2.1 - Helius DAS)
  *
  * Efficiently discovers tokens where we receive fees:
- * 1. Tokens created by our dev wallet (via Pump.fun API - 1 call)
+ * 1. Tokens created by our dev wallet (via Helius DAS API)
  * 2. Fee-sharing partnerships (via on-chain memcmp filters - efficient)
  *
- * Previous version was RPC-heavy (1000+ calls scanning transaction history).
- * This version uses only 2 efficient data sources.
+ * Uses Helius getAssetsByCreator for creator token discovery.
+ * Requires HELIUS_API_KEY environment variable.
  *
  * Usage: node scripts/backfillTokens.js [--dry-run]
  */
@@ -25,25 +25,39 @@ const database = require('../src/services/postgres');
 const DRY_RUN = process.argv.includes('--dry-run');
 
 /**
- * Fetch token metadata from Pump.fun API
+ * Fetch token metadata from Helius DAS API
  */
-async function fetchPumpMetadata(mint) {
+async function fetchHeliusMetadata(mint) {
+    if (!config.HELIUS_API_KEY) {
+        return null;
+    }
     try {
-        const response = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, {
-            timeout: 5000
-        });
-        if (response.data) {
+        const response = await axios.post(
+            `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+            {
+                jsonrpc: '2.0',
+                id: '1',
+                method: 'getAsset',
+                params: { id: mint }
+            },
+            { timeout: 5000 }
+        );
+        const asset = response.data?.result;
+        if (asset) {
+            const metadata = asset.content?.metadata || {};
+            const files = asset.content?.files || [];
+            const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
             return {
-                name: response.data.name || 'Unknown',
-                ticker: response.data.symbol || 'UNKNOWN',
-                description: response.data.description || '',
-                image: response.data.image_uri || null,
-                metadataUri: response.data.metadata_uri || null,
-                twitter: response.data.twitter || null,
-                website: response.data.website || null,
-                marketCap: response.data.usd_market_cap || 0,
-                creator: response.data.creator || null,
-                complete: response.data.complete || false
+                name: metadata.name || 'Unknown',
+                ticker: metadata.symbol || 'UNKNOWN',
+                description: metadata.description || '',
+                image: imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null,
+                metadataUri: asset.content?.json_uri || null,
+                twitter: asset.content?.links?.twitter || null,
+                website: asset.content?.links?.external_url || null,
+                marketCap: 0, // Helius doesn't provide market cap, will be fetched from DexScreener
+                creator: asset.creators?.[0]?.address || null,
+                complete: false
             };
         }
     } catch (e) {
@@ -339,46 +353,78 @@ async function backfillRobinhoodTokens(db, tokens) {
 }
 
 /**
- * Scan Pump.fun API for all tokens by creator
+ * Scan Helius DAS API for all tokens by creator
  */
-async function scanPumpFunAPI(devPubkey) {
-    console.log('\n📡 Querying Pump.fun API for tokens by creator...');
+async function scanHeliusForCreatorTokens(devPubkey) {
+    console.log('\n📡 Querying Helius DAS API for tokens by creator...');
+
+    if (!config.HELIUS_API_KEY) {
+        console.log('   ⚠️  HELIUS_API_KEY not configured - skipping creator token scan');
+        return [];
+    }
 
     const foundTokens = [];
+    let page = 1;
+    const limit = 1000;
 
     try {
-        // Pump.fun has an API endpoint for getting coins by creator
-        const response = await axios.get(`https://frontend-api.pump.fun/coins/user-created-coins/${devPubkey}`, {
-            timeout: 10000
-        });
+        while (true) {
+            const response = await axios.post(
+                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+                {
+                    jsonrpc: '2.0',
+                    id: '1',
+                    method: 'getAssetsByCreator',
+                    params: {
+                        creatorAddress: devPubkey,
+                        page: page,
+                        limit: limit
+                    }
+                },
+                { timeout: 15000 }
+            );
 
-        if (response.data && Array.isArray(response.data)) {
-            for (const coin of response.data) {
-                foundTokens.push({
-                    mint: coin.mint,
-                    name: coin.name,
-                    ticker: coin.symbol,
-                    description: coin.description || '',
-                    image: coin.image_uri || null,
-                    metadataUri: coin.metadata_uri || null,
-                    twitter: coin.twitter || '',
-                    website: coin.website || '',
-                    marketCap: coin.usd_market_cap || 0,
-                    complete: coin.complete || false,
-                    discoveredFrom: 'pump_api'
-                });
-                console.log(`   Found: ${coin.symbol} (${coin.mint.slice(0, 8)}...)`);
+            const result = response.data?.result;
+            if (!result || !result.items || result.items.length === 0) {
+                break;
             }
+
+            for (const asset of result.items) {
+                // Only include fungible tokens (not NFTs)
+                if (asset.interface === 'FungibleToken' || asset.interface === 'FungibleAsset') {
+                    const metadata = asset.content?.metadata || {};
+                    const files = asset.content?.files || [];
+                    const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
+
+                    foundTokens.push({
+                        mint: asset.id,
+                        name: metadata.name || 'Unknown',
+                        ticker: metadata.symbol || 'UNKNOWN',
+                        description: metadata.description || '',
+                        image: imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null,
+                        metadataUri: asset.content?.json_uri || null,
+                        twitter: asset.content?.links?.twitter || '',
+                        website: asset.content?.links?.external_url || '',
+                        marketCap: 0, // Will be fetched from DexScreener
+                        complete: false,
+                        discoveredFrom: 'helius_api'
+                    });
+                    console.log(`   Found: ${metadata.symbol || 'UNKNOWN'} (${asset.id.slice(0, 8)}...)`);
+                }
+            }
+
+            // Check if there are more pages
+            if (result.items.length < limit) {
+                break;
+            }
+            page++;
+            await new Promise(r => setTimeout(r, 300)); // Rate limit protection
         }
 
-        console.log(`   Found ${foundTokens.length} tokens from Pump.fun API`);
+        console.log(`   Found ${foundTokens.length} fungible tokens from Helius API`);
 
     } catch (e) {
-        if (e.response?.status === 404) {
-            console.log('   ℹ️  No tokens found for this creator on Pump.fun API');
-        } else {
-            console.log(`   ⚠️  Pump.fun API error: ${e.message}`);
-        }
+        console.log(`   ⚠️  Helius API error: ${e.message}`);
     }
 
     return foundTokens;
@@ -417,8 +463,8 @@ async function main() {
     const allTokens = [];
     const allRobinhoodTokens = [];
 
-    // 1. Scan Pump.fun API for tokens created by us (1 API call - very efficient)
-    const apiTokens = await scanPumpFunAPI(devKeypair.publicKey.toString());
+    // 1. Scan Helius DAS API for tokens created by us
+    const apiTokens = await scanHeliusForCreatorTokens(devKeypair.publicKey.toString());
     allTokens.push(...apiTokens);
 
     // 2. Scan for Robinhood fee-sharing partnerships (uses memcmp filters - efficient)
@@ -461,9 +507,8 @@ async function main() {
     console.log('                       BACKFILL COMPLETE                        ');
     console.log('═══════════════════════════════════════════════════════════════');
     console.log('\n📊 RPC Efficiency:');
-    console.log('   - Pump.fun API: 1 call (tokens we created)');
+    console.log('   - Helius DAS API: paginated calls (tokens we created)');
     console.log('   - Robinhood scan: ~10 calls (memcmp filtered)');
-    console.log('   - Total: ~11 RPC calls (vs 1000+ in previous version)');
 
     await db.close();
     process.exit(0);
