@@ -6,7 +6,9 @@
     "start": "node src/index.js",
     "start:legacy": "node server.js",
     "dev": "node --watch src/index.js",
-    "migrate": "node scripts/migrate-to-postgres.js"
+    "migrate": "node scripts/migrate-to-postgres.js",
+    "backfill": "node scripts/backfillTokens.js",
+    "backfill:dry": "node scripts/backfillTokens.js --dry-run"
   },
   "overrides": {
     "bigint-buffer": "^1.1.5"

@@ -109,11 +109,31 @@ function initDeployWorker(deps) {
             logger.info(`Transaction Confirmed: ${sig}`);
 
             // CRITICAL: Save data with the explicit Image URL we got from Pinata
-            await saveTokenData(userPubkey, mint.toString(), { 
-                name, ticker, description, twitter: twitterHandle, 
-                website, image, // <-- This is now the URL
-                isMayhemMode, metadataUri 
+            logger.info(`[Deploy] Saving token to database...`, {
+                mint: mint.toString(),
+                ticker,
+                name,
+                userPubkey,
+                hasImage: !!image,
+                hasMetadataUri: !!metadataUri
             });
+
+            try {
+                await saveTokenData(userPubkey, mint.toString(), {
+                    name, ticker, description, twitter: twitterHandle,
+                    website, image, // <-- This is now the URL
+                    isMayhemMode, metadataUri
+                });
+                logger.info(`[Deploy] Token saved to database successfully: ${ticker} (${mint.toString()})`);
+            } catch (dbError) {
+                logger.error(`[Deploy] FAILED to save token to database`, {
+                    error: dbError.message,
+                    mint: mint.toString(),
+                    ticker
+                });
+                // Don't throw - token was created on-chain, we don't want to refund
+                // But log it prominently for debugging
+            }
 
             // Queue social post
             await redis.addSocialJob({ name, ticker, mint: mint.toString() });

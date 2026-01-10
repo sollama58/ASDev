@@ -401,8 +401,19 @@ async function logPurchase(type, data) {
 
 async function saveTokenData(pubkey, mint, metadata) {
     const db = getDB();
+
+    // Validate required fields
+    if (!mint) {
+        logger.error("[PostgreSQL] Save Token Error: mint address is required");
+        throw new Error("mint address is required");
+    }
+    if (!metadata || !metadata.ticker || !metadata.name) {
+        logger.error("[PostgreSQL] Save Token Error: metadata.ticker and metadata.name are required", { mint, metadata });
+        throw new Error("metadata.ticker and metadata.name are required");
+    }
+
     try {
-        await db.run(`
+        const result = await db.run(`
             INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (mint) DO UPDATE SET
@@ -414,11 +425,15 @@ async function saveTokenData(pubkey, mint, metadata) {
                 "metadataUri" = EXCLUDED."metadataUri",
                 image = EXCLUDED.image,
                 "isMayhemMode" = EXCLUDED."isMayhemMode"
-        `, [pubkey, mint, metadata.ticker, metadata.name, metadata.description,
-            metadata.twitter, metadata.website, metadata.metadataUri,
-            metadata.image, metadata.isMayhemMode ? 1 : 0, Date.now()]);
+        `, [pubkey, mint, metadata.ticker, metadata.name, metadata.description || '',
+            metadata.twitter || '', metadata.website || '', metadata.metadataUri || '',
+            metadata.image || '', metadata.isMayhemMode ? 1 : 0, Date.now()]);
+
+        logger.info("[PostgreSQL] Token saved successfully", { mint, ticker: metadata.ticker, changes: result.changes });
+        return result;
     } catch (e) {
-        logger.error("[PostgreSQL] Save Token Error", { error: e.message });
+        logger.error("[PostgreSQL] Save Token Error", { error: e.message, mint, ticker: metadata?.ticker });
+        throw e; // Re-throw so caller knows the save failed
     }
 }
 

@@ -440,6 +440,41 @@ function init(deps) {
         }
     });
 
+    // ========== DIAGNOSTIC ENDPOINT ==========
+    // Provides database health check and token count information
+    router.get('/debug/db-status', async (req, res) => {
+        try {
+            const tokenCount = await db.get('SELECT COUNT(*) as count FROM tokens');
+            const robinhoodCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
+            const holderCount = await db.get('SELECT COUNT(*) as count FROM token_holders');
+            const recentTokens = await db.all('SELECT mint, ticker, name, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 5');
+            const lastBackendUpdate = await redis.getLastBackendUpdate();
+
+            res.json({
+                status: 'connected',
+                tables: {
+                    tokens: parseInt(tokenCount?.count) || 0,
+                    robinhood_tokens: parseInt(robinhoodCount?.count) || 0,
+                    token_holders: parseInt(holderCount?.count) || 0
+                },
+                recentTokens: recentTokens.map(t => ({
+                    mint: t.mint,
+                    ticker: t.ticker,
+                    name: t.name,
+                    createdAt: t.timestamp ? new Date(t.timestamp).toISOString() : null
+                })),
+                lastBackendUpdate: lastBackendUpdate ? new Date(lastBackendUpdate).toISOString() : null,
+                serverTime: new Date().toISOString()
+            });
+        } catch (e) {
+            res.status(500).json({
+                status: 'error',
+                error: e.message,
+                serverTime: new Date().toISOString()
+            });
+        }
+    });
+
     return router;
 }
 
