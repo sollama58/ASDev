@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 /**
- * Token Backfill Script (v2.1 - Helius DAS)
+ * Token Backfill Script (v3.0 - Vault Transaction Analysis)
  *
- * Efficiently discovers tokens where we receive fees:
- * 1. Tokens created by our dev wallet (via Helius DAS API)
- * 2. Fee-sharing partnerships (via on-chain memcmp filters - efficient)
+ * Efficiently discovers tokens where we receive fees by analyzing
+ * transactions to our creator fee vault. This method:
+ * 1. Analyzes all transactions to our creator vault to find token mints
+ * 2. Tracks progress via last processed signature (survives restarts)
+ * 3. Only processes each transaction once
  *
- * Uses Helius getAssetsByCreator for creator token discovery.
+ * Also scans for fee-sharing partnerships (Robinhood tokens) via memcmp filters.
+ *
  * Requires HELIUS_API_KEY environment variable.
  *
  * Usage: node scripts/backfillTokens.js [--dry-run]
@@ -20,6 +23,7 @@ const bs58 = require('bs58');
 const config = require('../src/config/env');
 const { PROGRAMS } = require('../src/config/constants');
 const database = require('../src/services/postgres');
+const pump = require('../src/services/pump');
 
 // Parse command line args
 const DRY_RUN = process.argv.includes('--dry-run');
@@ -205,21 +209,21 @@ async function backfillTokens(db, tokens, devPubkey) {
 
             // Fetch metadata
             console.log(`   📥 Fetching metadata for ${mintStr.slice(0, 8)}...`);
-            const pumpMeta = await fetchPumpMetadata(mintStr);
+            const heliusMeta = await fetchHeliusMetadata(mintStr);
             const dexMeta = await fetchDexScreenerMetadata(mintStr);
 
             const metadata = {
-                name: pumpMeta?.name || dexMeta?.name || 'Unknown Token',
-                ticker: pumpMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
-                description: pumpMeta?.description || '',
-                image: pumpMeta?.image || dexMeta?.image || '',
-                metadataUri: pumpMeta?.metadataUri || '',
-                twitter: pumpMeta?.twitter || '',
-                website: pumpMeta?.website || '',
-                marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || 0,
+                name: heliusMeta?.name || dexMeta?.name || 'Unknown Token',
+                ticker: heliusMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
+                description: heliusMeta?.description || '',
+                image: heliusMeta?.image || dexMeta?.image || '',
+                metadataUri: heliusMeta?.metadataUri || '',
+                twitter: heliusMeta?.twitter || '',
+                website: heliusMeta?.website || '',
+                marketCap: dexMeta?.marketCap || heliusMeta?.marketCap || 0,
                 volume24h: dexMeta?.volume24h || 0,
                 priceUsd: dexMeta?.priceUsd || 0,
-                complete: pumpMeta?.complete ? 1 : 0
+                complete: heliusMeta?.complete ? 1 : 0
             };
 
             if (DRY_RUN) {
@@ -297,14 +301,14 @@ async function backfillRobinhoodTokens(db, tokens) {
 
             // Fetch metadata
             console.log(`   📥 Fetching metadata for ${token.mint.slice(0, 8)}...`);
-            const pumpMeta = await fetchPumpMetadata(token.mint);
+            const heliusMeta = await fetchHeliusMetadata(token.mint);
             const dexMeta = await fetchDexScreenerMetadata(token.mint);
 
             const metadata = {
-                name: pumpMeta?.name || dexMeta?.name || 'Unknown Token',
-                ticker: pumpMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
-                image: pumpMeta?.image || dexMeta?.image || null,
-                marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || 0,
+                name: heliusMeta?.name || dexMeta?.name || 'Unknown Token',
+                ticker: heliusMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
+                image: heliusMeta?.image || dexMeta?.image || null,
+                marketCap: dexMeta?.marketCap || heliusMeta?.marketCap || 0,
                 volume24h: dexMeta?.volume24h || 0
             };
 
@@ -353,50 +357,279 @@ async function backfillRobinhoodTokens(db, tokens) {
 }
 
 /**
- * Scan Helius DAS API for all tokens by creator
+ * Stats key for tracking scan progress
  */
-async function scanHeliusForCreatorTokens(devPubkey) {
-    console.log('\n📡 Querying Helius DAS API for tokens by creator...');
+const VAULT_SCAN_PROGRESS_KEY = 'vaultScanLastSignature';
+
+/**
+ * Get the last processed signature from the database
+ */
+async function getLastProcessedSignature(db) {
+    const row = await db.get('SELECT value FROM stats WHERE key = $1', [VAULT_SCAN_PROGRESS_KEY]);
+    // value is stored as TEXT in our case, but stats table uses REAL - we'll store signature as text in a comment field
+    // Actually, let's use a different approach - check if we have a text-based storage
+    return null; // Start fresh for now, we'll implement proper persistence below
+}
+
+/**
+ * Save the last processed signature to the database
+ */
+async function saveLastProcessedSignature(db, signature) {
+    await db.run(
+        'INSERT INTO stats (key, value) VALUES ($1, 0) ON CONFLICT (key) DO UPDATE SET value = 0',
+        [VAULT_SCAN_PROGRESS_KEY]
+    );
+    // Store signature in logs table for persistence (stats.value is REAL, can't store strings)
+    await db.run(
+        `INSERT INTO logs (type, data, timestamp) VALUES ($1, $2, $3)
+         ON CONFLICT DO NOTHING`,
+        ['vault_scan_progress', signature, new Date().toISOString()]
+    );
+}
+
+/**
+ * Get last saved signature from logs
+ */
+async function getLastSignatureFromLogs(db) {
+    const row = await db.get(
+        'SELECT data FROM logs WHERE type = $1 ORDER BY id DESC LIMIT 1',
+        ['vault_scan_progress']
+    );
+    return row?.data || null;
+}
+
+/**
+ * Known program IDs to skip when looking for mints
+ */
+const KNOWN_PROGRAMS = new Set([
+    '11111111111111111111111111111111', // System Program
+    'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', // Token Program
+    'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb', // Token-2022
+    'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL', // Associated Token
+    'ComputeBudget111111111111111111111111111111', // Compute Budget
+    'SysvarRent111111111111111111111111111111111', // Rent Sysvar
+    'SysvarC1ock11111111111111111111111111111111', // Clock Sysvar
+    PROGRAMS.PUMP.toString(),
+    PROGRAMS.PUMP_AMM.toString(),
+    PROGRAMS.FEE.toString(),
+    PROGRAMS.METADATA.toString(),
+]);
+
+/**
+ * Extract mint address from a Pump.fun buy/sell transaction.
+ *
+ * In Pump buy/sell instructions, the account layout is:
+ * - Index 0: global
+ * - Index 1: fee_recipient
+ * - Index 2: mint  <-- THIS IS WHAT WE WANT
+ * - Index 3: bonding_curve
+ * - Index 4: associated_bonding_curve
+ * - ...
+ *
+ * We identify Pump instructions by:
+ * 1. The program ID is the Pump program
+ * 2. The instruction has the buy (66,6,61,18,1,218,235,234) or sell (51,230,133,164,1,127,131,173) discriminator
+ *
+ * @param {Object} tx - Transaction object from Helius
+ * @param {string} pumpProgramId - Pump program ID string
+ * @returns {string|null} - Mint address or null if not found
+ */
+function extractMintFromPumpTransaction(tx, pumpProgramId) {
+    const message = tx.transaction?.message;
+    if (!message) return null;
+
+    const accountKeys = message.accountKeys || [];
+    const instructions = message.instructions || [];
+
+    // Buy discriminator: [102, 6, 61, 18, 1, 218, 235, 234]
+    // Sell discriminator: [51, 230, 133, 164, 1, 127, 131, 173]
+    const BUY_DISC = [102, 6, 61, 18, 1, 218, 235, 234];
+    const SELL_DISC = [51, 230, 133, 164, 1, 127, 131, 173];
+
+    for (const ix of instructions) {
+        // Get program ID for this instruction
+        const programIdIndex = ix.programIdIndex;
+        const programId = accountKeys[programIdIndex];
+        const programIdStr = typeof programId === 'string' ? programId : programId?.pubkey;
+
+        if (programIdStr !== pumpProgramId) continue;
+
+        // Decode instruction data
+        let data;
+        try {
+            data = Buffer.from(ix.data, 'base64');
+        } catch {
+            continue;
+        }
+
+        // Check if this is a buy or sell instruction
+        const isBuy = data.length >= 8 && BUY_DISC.every((b, i) => data[i] === b);
+        const isSell = data.length >= 8 && SELL_DISC.every((b, i) => data[i] === b);
+
+        if (!isBuy && !isSell) continue;
+
+        // The mint is at index 2 in the instruction's accounts
+        const ixAccounts = ix.accounts || [];
+        if (ixAccounts.length < 3) continue;
+
+        const mintIndex = ixAccounts[2];
+        const mintAccount = accountKeys[mintIndex];
+        const mint = typeof mintAccount === 'string' ? mintAccount : mintAccount?.pubkey;
+
+        if (mint && !KNOWN_PROGRAMS.has(mint)) {
+            return mint;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Discover tokens by analyzing transactions to our creator fee vault.
+ * This finds all tokens where we earn creator fees by looking at
+ * Pump.fun buy/sell transactions that deposited fees to our vault.
+ *
+ * The approach:
+ * 1. Fetch transactions involving our creator vault
+ * 2. Parse each transaction to find Pump buy/sell instructions
+ * 3. Extract the mint address from the instruction's account list (index 2)
+ * 4. Validate discovered mints via Helius getAsset
+ *
+ * Progress is tracked via the last processed signature to enable incremental scans.
+ */
+async function scanVaultTransactionsForTokens(db, devPubkey) {
+    console.log('\n📡 Scanning creator vault transactions for token discovery...');
 
     if (!config.HELIUS_API_KEY) {
-        console.log('   ⚠️  HELIUS_API_KEY not configured - skipping creator token scan');
+        console.log('   ⚠️  HELIUS_API_KEY not configured - skipping vault scan');
         return [];
     }
 
-    const foundTokens = [];
-    let page = 1;
-    const limit = 1000;
+    // Get our creator vault address
+    const { bcVault } = pump.getCreatorFeeVaults(new PublicKey(devPubkey));
+    const pumpProgramId = PROGRAMS.PUMP.toString();
+    console.log(`   Vault address: ${bcVault.toString()}`);
+
+    // Get last processed signature for incremental scanning
+    const lastSignature = await getLastSignatureFromLogs(db);
+    if (lastSignature) {
+        console.log(`   Resuming from signature: ${lastSignature.slice(0, 20)}...`);
+    } else {
+        console.log('   Starting fresh scan (no previous progress found)');
+    }
+
+    const foundMints = new Set();
+    let paginationToken = null;
+    let totalTxProcessed = 0;
+    let newestSignature = null;
 
     try {
-        while (true) {
+        // Use Helius getTransactionsForAddress for efficient scanning
+        do {
+            const params = {
+                limit: 100,
+                sortOrder: 'desc', // Newest first
+                transactionDetails: 'full', // Need full tx to parse instructions
+            };
+
+            if (paginationToken) {
+                params.paginationToken = paginationToken;
+            }
+
             const response = await axios.post(
                 `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
                 {
                     jsonrpc: '2.0',
                     id: '1',
-                    method: 'getAssetsByCreator',
-                    params: {
-                        creatorAddress: devPubkey,
-                        page: page,
-                        limit: limit
-                    }
+                    method: 'getTransactionsForAddress',
+                    params: [bcVault.toString(), params]
+                },
+                { timeout: 30000 }
+            );
+
+            const result = response.data?.result;
+            if (!result || !result.data || result.data.length === 0) {
+                break;
+            }
+
+            for (const tx of result.data) {
+                // Save the newest signature for progress tracking
+                if (!newestSignature && tx.signature) {
+                    newestSignature = tx.signature;
+                }
+
+                // Stop if we've reached the last processed signature
+                if (lastSignature && tx.signature === lastSignature) {
+                    console.log(`   Reached previously processed signature, stopping`);
+                    paginationToken = null; // Exit the loop
+                    break;
+                }
+
+                totalTxProcessed++;
+
+                // Extract mint from Pump buy/sell instruction
+                const mint = extractMintFromPumpTransaction(tx, pumpProgramId);
+                if (mint) {
+                    foundMints.add(mint);
+                }
+            }
+
+            paginationToken = result.paginationToken;
+
+            // Progress update
+            if (totalTxProcessed % 500 === 0) {
+                console.log(`   Processed ${totalTxProcessed} transactions, found ${foundMints.size} unique mints...`);
+            }
+
+            // Rate limit protection
+            await new Promise(r => setTimeout(r, 100));
+
+        } while (paginationToken);
+
+        // Save progress
+        if (newestSignature && !DRY_RUN) {
+            await saveLastProcessedSignature(db, newestSignature);
+            console.log(`   Saved progress: ${newestSignature.slice(0, 20)}...`);
+        }
+
+        console.log(`   Processed ${totalTxProcessed} transactions, found ${foundMints.size} unique token mints`);
+
+    } catch (e) {
+        console.log(`   ⚠️  Vault scan error: ${e.message}`);
+        if (e.response?.data) {
+            console.log(`   Response: ${JSON.stringify(e.response.data).slice(0, 200)}`);
+        }
+    }
+
+    // Validate mints in batches using getAssetBatch for efficiency
+    console.log('\n   Validating discovered mints...');
+    const validTokens = [];
+    const mintArray = Array.from(foundMints);
+
+    // Process in batches of 100 for getAssetBatch
+    for (let i = 0; i < mintArray.length; i += 100) {
+        const batch = mintArray.slice(i, i + 100);
+
+        try {
+            const batchResponse = await axios.post(
+                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+                {
+                    jsonrpc: '2.0',
+                    id: '1',
+                    method: 'getAssetBatch',
+                    params: { ids: batch }
                 },
                 { timeout: 15000 }
             );
 
-            const result = response.data?.result;
-            if (!result || !result.items || result.items.length === 0) {
-                break;
-            }
-
-            for (const asset of result.items) {
-                // Only include fungible tokens (not NFTs)
-                if (asset.interface === 'FungibleToken' || asset.interface === 'FungibleAsset') {
+            const assets = batchResponse.data?.result || [];
+            for (const asset of assets) {
+                if (asset && (asset.interface === 'FungibleToken' || asset.interface === 'FungibleAsset')) {
                     const metadata = asset.content?.metadata || {};
                     const files = asset.content?.files || [];
                     const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
 
-                    foundTokens.push({
+                    validTokens.push({
                         mint: asset.id,
                         name: metadata.name || 'Unknown',
                         ticker: metadata.symbol || 'UNKNOWN',
@@ -405,29 +638,24 @@ async function scanHeliusForCreatorTokens(devPubkey) {
                         metadataUri: asset.content?.json_uri || null,
                         twitter: asset.content?.links?.twitter || '',
                         website: asset.content?.links?.external_url || '',
-                        marketCap: 0, // Will be fetched from DexScreener
+                        marketCap: 0,
                         complete: false,
-                        discoveredFrom: 'helius_api'
+                        discoveredFrom: 'vault_scan'
                     });
-                    console.log(`   Found: ${metadata.symbol || 'UNKNOWN'} (${asset.id.slice(0, 8)}...)`);
+                    console.log(`   ✓ Valid token: ${metadata.symbol || 'UNKNOWN'} (${asset.id.slice(0, 8)}...)`);
                 }
             }
 
-            // Check if there are more pages
-            if (result.items.length < limit) {
-                break;
-            }
-            page++;
-            await new Promise(r => setTimeout(r, 300)); // Rate limit protection
+            // Rate limit between batches
+            await new Promise(r => setTimeout(r, 200));
+
+        } catch (e) {
+            console.log(`   ⚠️  Batch validation error: ${e.message}`);
         }
-
-        console.log(`   Found ${foundTokens.length} fungible tokens from Helius API`);
-
-    } catch (e) {
-        console.log(`   ⚠️  Helius API error: ${e.message}`);
     }
 
-    return foundTokens;
+    console.log(`   Found ${validTokens.length} valid tokens from vault transactions`);
+    return validTokens;
 }
 
 /**
@@ -463,9 +691,9 @@ async function main() {
     const allTokens = [];
     const allRobinhoodTokens = [];
 
-    // 1. Scan Helius DAS API for tokens created by us
-    const apiTokens = await scanHeliusForCreatorTokens(devKeypair.publicKey.toString());
-    allTokens.push(...apiTokens);
+    // 1. Scan vault transactions for tokens we earn fees on
+    const vaultTokens = await scanVaultTransactionsForTokens(db, devKeypair.publicKey.toString());
+    allTokens.push(...vaultTokens);
 
     // 2. Scan for Robinhood fee-sharing partnerships (uses memcmp filters - efficient)
     const robinhoodTokens = await scanForRobinhoodTokens(connection, devKeypair);
@@ -506,8 +734,9 @@ async function main() {
     console.log('\n═══════════════════════════════════════════════════════════════');
     console.log('                       BACKFILL COMPLETE                        ');
     console.log('═══════════════════════════════════════════════════════════════');
-    console.log('\n📊 RPC Efficiency:');
-    console.log('   - Helius DAS API: paginated calls (tokens we created)');
+    console.log('\n📊 Discovery Method:');
+    console.log('   - Vault transaction analysis: finds tokens by fee deposits');
+    console.log('   - Progress tracked: incremental scans on restart');
     console.log('   - Robinhood scan: ~10 calls (memcmp filtered)');
 
     await db.close();
