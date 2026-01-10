@@ -26,27 +26,62 @@ ensureDir(DATA_DIR);
 // Database instance
 let db = null;
 
-// Cache
+// SCALABILITY FIX: LRU Cache with max size and automatic cleanup
+const MAX_CACHE_SIZE = 1000;
 const cache = new Map();
+let cacheCleanupInterval = null;
+
+function ensureCacheSize() {
+    // If cache exceeds max size, remove oldest entries (first in Map)
+    while (cache.size > MAX_CACHE_SIZE) {
+        const firstKey = cache.keys().next().value;
+        cache.delete(firstKey);
+    }
+}
 
 async function smartCache(key, ttlSeconds, fetchFunction) {
     const now = Date.now();
     const cached = cache.get(key);
 
     if (cached && (now - cached.timestamp) < ttlSeconds * 1000) {
+        // Move to end of Map for LRU behavior
+        cache.delete(key);
+        cache.set(key, cached);
         return cached.value;
     }
 
     try {
         const value = await fetchFunction();
         if (value !== undefined && value !== null) {
+            // Remove old entry if exists
+            cache.delete(key);
             cache.set(key, { value, timestamp: now });
+            ensureCacheSize();
         }
         return value;
     } catch (e) {
         if (cached) return cached.value;
         throw e;
     }
+}
+
+// SCALABILITY FIX: Periodically clean up expired cache entries
+function startCacheCleanup() {
+    if (cacheCleanupInterval) return;
+    cacheCleanupInterval = setInterval(() => {
+        const now = Date.now();
+        const DEFAULT_TTL = 60 * 1000; // 1 minute default TTL for cleanup
+        let removed = 0;
+        for (const [key, entry] of cache.entries()) {
+            if (now - entry.timestamp > DEFAULT_TTL * 5) { // Remove entries 5x older than default TTL
+                cache.delete(key);
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            logger.debug(`[Cache] Cleaned up ${removed} expired entries. Current size: ${cache.size}`);
+        }
+    }, 5 * 60 * 1000); // Run every 5 minutes
 }
 
 async function initDB() {
@@ -229,6 +264,9 @@ async function initDB() {
         `);
 
         logger.info(`DB Initialized at ${DB_PATH}`);
+
+        // SCALABILITY FIX: Start cache cleanup routine
+        startCacheCleanup();
     } catch (e) {
         logger.error('Database initialization failed', { error: e.message });
         throw e;

@@ -296,24 +296,32 @@ function initHolderScannerWorker(deps) {
                         logger.error(`[Worker] Failed to scan holders for ${token.mint}`, { error: scanErr.message });
                     }
 
-                    // Update database
+                    // Update database - SCALABILITY FIX: Use batch insert instead of N+1 queries
                     await db.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
 
                     if (holdersToInsert.length > 0) {
-                        let rank = 1;
-                        for (const h of holdersToInsert) {
-                            await db.run(
-                                'INSERT INTO token_holders (mint, "holderPubkey", rank, "lastUpdated") VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
-                                [h.mint, h.owner, rank, Date.now()]
-                            );
-                            rank++;
+                        // Batch insert up to 50 holders at a time
+                        const BATCH_SIZE = 50;
+                        const now = Date.now();
+                        for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
+                            const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
+                            const values = batch.map((h, idx) => {
+                                const rank = i + idx + 1;
+                                return `('${h.mint}', '${h.owner}', ${rank}, ${now})`;
+                            }).join(',');
+
+                            await db.run(`
+                                INSERT INTO token_holders (mint, "holderPubkey", rank, "lastUpdated")
+                                VALUES ${values}
+                                ON CONFLICT DO NOTHING
+                            `);
                         }
                     }
                 } catch (e) {
                     logger.error(`[Worker] Holder update loop error for ${token.mint}: ${e.message}`);
                 }
 
-                await delay(2000);
+                await delay(500); // SCALABILITY FIX: Reduced from 2000ms to 500ms
             }
 
             // 6. Fetch ASDF Top 100 holders from Redis
@@ -430,7 +438,7 @@ function initHolderScannerWorker(deps) {
             logger.error('[Worker] Holder scanner error', { error: e.message });
             throw e;
         }
-    }, { concurrency: 1 });
+    }, { concurrency: 2 }); // SCALABILITY FIX: Increased concurrency from 1 to 2
 
     // Schedule recurring jobs
     setInterval(async () => {
@@ -465,8 +473,19 @@ function initMetadataUpdaterWorker(deps) {
         logger.info('[Worker] Starting metadata updater job...');
 
         try {
-            const tokens = await db.all('SELECT mint FROM tokens');
-            const chunks = chunkArray(tokens, 30);
+            // SCALABILITY FIX: Add pagination to avoid loading all tokens into memory
+            const TOKENS_PER_PAGE = 100;
+            let offset = 0;
+            let totalScanned = 0;
+
+            while (true) {
+                const tokens = await db.all('SELECT mint FROM tokens ORDER BY "lastUpdated" ASC NULLS FIRST LIMIT $1 OFFSET $2', [TOKENS_PER_PAGE, offset]);
+                if (tokens.length === 0) break;
+
+                totalScanned += tokens.length;
+                offset += TOKENS_PER_PAGE;
+
+                const chunks = chunkArray(tokens, 30);
 
             for (const chunk of chunks) {
                 const mints = chunk.map(t => t.mint).join(',');
@@ -539,16 +558,17 @@ function initMetadataUpdaterWorker(deps) {
                     }
                 }
             }
+            } // End pagination while loop
 
             await redis.setLastBackendUpdate(Date.now());
-            logger.info(`[Worker] Metadata update complete. Tokens scanned: ${tokens.length}`);
-            return { success: true, tokensScanned: tokens.length };
+            logger.info(`[Worker] Metadata update complete. Tokens scanned: ${totalScanned}`);
+            return { success: true, tokensScanned: totalScanned };
 
         } catch (e) {
             logger.error('[Worker] Metadata updater error', { error: e.message });
             throw e;
         }
-    }, { concurrency: 1 });
+    }, { concurrency: 2 }); // SCALABILITY FIX: Increased concurrency from 1 to 2
 
     // Schedule recurring jobs
     setInterval(async () => {

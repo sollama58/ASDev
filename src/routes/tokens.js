@@ -16,10 +16,14 @@ const router = express.Router();
 function init(deps) {
     const { db, globalState, devKeypair } = deps;
 
-    // Get all launches
+    // Get all launches - SCALABILITY FIX: Added pagination
     router.get('/all-launches', async (req, res) => {
         try {
-            const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC');
+            const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Max 100
+            const offset = parseInt(req.query.offset) || 0;
+
+            const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT $1 OFFSET $2', [limit, offset]);
+            const total = await db.get('SELECT COUNT(*) as count FROM tokens');
             const allLaunches = rows.map(r => ({
                 mint: r.mint,
                 userPubkey: r.userPubkey,
@@ -31,7 +35,11 @@ function init(deps) {
                 volume: r.volume24h,
                 complete: !!r.complete
             }));
-            res.json({ tokens: allLaunches, lastUpdate: globalState.lastBackendUpdate });
+            res.json({
+                tokens: allLaunches,
+                lastUpdate: globalState.lastBackendUpdate,
+                pagination: { limit, offset, total: parseInt(total?.count) || 0 }
+            });
         } catch (e) {
             res.status(500).json({ tokens: [], lastUpdate: Date.now() });
         }

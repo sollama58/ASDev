@@ -36,12 +36,23 @@ async function updateAsdfHolders(deps) {
         });
 
         const parsedAccounts = accounts.map(acc => {
-            const data = Buffer.from(acc.account.data);
-            // SPL Layout: Mint(0-32), Owner(32-64), Amount(64-72)
-            const owner = new PublicKey(data.slice(32, 64)).toString();
-            const amount = new BN(data.slice(64, 72), 'le');
-            return { owner, amount };
+            try {
+                const data = Buffer.from(acc.account.data);
+                // BUG FIX: Validate data length before parsing
+                if (data.length < 72) {
+                    logger.debug('ASDF Sync: Skipping malformed account data', { length: data.length });
+                    return null;
+                }
+                // SPL Layout: Mint(0-32), Owner(32-64), Amount(64-72)
+                const owner = new PublicKey(data.slice(32, 64)).toString();
+                const amount = new BN(data.slice(64, 72), 'le');
+                return { owner, amount };
+            } catch (e) {
+                logger.debug('ASDF Sync: Failed to parse account', { error: e.message });
+                return null;
+            }
         })
+        .filter(acc => acc !== null) // BUG FIX: Filter out failed parses
         .sort((a, b) => b.amount.cmp(a.amount)); // Descending sort
 
         // Extract Top 100

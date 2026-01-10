@@ -25,6 +25,16 @@ const GLOBAL_STATE_KEYS = {
     USER_POINTS_MAP: 'globalState:userPointsMap',
 };
 
+// SCALABILITY FIX: TTLs for global state keys (in seconds)
+const GLOBAL_STATE_TTL = {
+    LAST_BACKEND_UPDATE: 300,       // 5 minutes - refreshed frequently
+    ASDF_TOP100_HOLDERS: 600,       // 10 minutes - updated every 2 mins
+    TOTAL_POINTS: 600,              // 10 minutes
+    DEV_PUMP_HOLDINGS: 600,         // 10 minutes
+    USER_EXPECTED_AIRDROPS: 600,    // 10 minutes
+    USER_POINTS_MAP: 600,           // 10 minutes
+};
+
 /**
  * Initialize Redis connection and queues
  */
@@ -139,7 +149,8 @@ async function getJob(jobId) {
  */
 async function setLastBackendUpdate(timestamp) {
     if (!redisConnection) return;
-    await redisConnection.set(GLOBAL_STATE_KEYS.LAST_BACKEND_UPDATE, timestamp.toString());
+    // SCALABILITY FIX: Add TTL to prevent stale data
+    await redisConnection.set(GLOBAL_STATE_KEYS.LAST_BACKEND_UPDATE, timestamp.toString(), 'EX', GLOBAL_STATE_TTL.LAST_BACKEND_UPDATE);
 }
 
 async function getLastBackendUpdate() {
@@ -155,7 +166,14 @@ async function setAsdfTop100Holders(holders) {
     if (!redisConnection) return;
     await redisConnection.del(GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS);
     if (holders.length > 0) {
-        await redisConnection.sadd(GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS, ...holders);
+        // SCALABILITY FIX: Chunk large arrays to prevent memory issues
+        const CHUNK_SIZE = 100;
+        for (let i = 0; i < holders.length; i += CHUNK_SIZE) {
+            const chunk = holders.slice(i, i + CHUNK_SIZE);
+            await redisConnection.sadd(GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS, ...chunk);
+        }
+        // SCALABILITY FIX: Add TTL
+        await redisConnection.expire(GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS, GLOBAL_STATE_TTL.ASDF_TOP100_HOLDERS);
     }
 }
 
@@ -175,7 +193,8 @@ async function isAsdfTop100Holder(pubkey) {
  */
 async function setTotalPoints(points) {
     if (!redisConnection) return;
-    await redisConnection.set(GLOBAL_STATE_KEYS.TOTAL_POINTS, points.toString());
+    // SCALABILITY FIX: Add TTL
+    await redisConnection.set(GLOBAL_STATE_KEYS.TOTAL_POINTS, points.toString(), 'EX', GLOBAL_STATE_TTL.TOTAL_POINTS);
 }
 
 async function getTotalPoints() {
@@ -189,7 +208,8 @@ async function getTotalPoints() {
  */
 async function setDevPumpHoldings(holdings) {
     if (!redisConnection) return;
-    await redisConnection.set(GLOBAL_STATE_KEYS.DEV_PUMP_HOLDINGS, holdings.toString());
+    // SCALABILITY FIX: Add TTL
+    await redisConnection.set(GLOBAL_STATE_KEYS.DEV_PUMP_HOLDINGS, holdings.toString(), 'EX', GLOBAL_STATE_TTL.DEV_PUMP_HOLDINGS);
 }
 
 async function getDevPumpHoldings() {
@@ -231,11 +251,19 @@ async function setAllUserExpectedAirdrops(map) {
     if (!redisConnection) return;
     await redisConnection.del(GLOBAL_STATE_KEYS.USER_EXPECTED_AIRDROPS);
     if (map.size > 0) {
-        const pipeline = redisConnection.pipeline();
-        for (const [key, val] of map.entries()) {
-            pipeline.hset(GLOBAL_STATE_KEYS.USER_EXPECTED_AIRDROPS, key, val.toString());
+        // SCALABILITY FIX: Chunk pipeline operations to prevent memory issues
+        const CHUNK_SIZE = 1000;
+        const entries = Array.from(map.entries());
+        for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
+            const chunk = entries.slice(i, i + CHUNK_SIZE);
+            const pipeline = redisConnection.pipeline();
+            for (const [key, val] of chunk) {
+                pipeline.hset(GLOBAL_STATE_KEYS.USER_EXPECTED_AIRDROPS, key, val.toString());
+            }
+            await pipeline.exec();
         }
-        await pipeline.exec();
+        // SCALABILITY FIX: Add TTL
+        await redisConnection.expire(GLOBAL_STATE_KEYS.USER_EXPECTED_AIRDROPS, GLOBAL_STATE_TTL.USER_EXPECTED_AIRDROPS);
     }
 }
 
@@ -272,11 +300,19 @@ async function setAllUserPoints(map) {
     if (!redisConnection) return;
     await redisConnection.del(GLOBAL_STATE_KEYS.USER_POINTS_MAP);
     if (map.size > 0) {
-        const pipeline = redisConnection.pipeline();
-        for (const [key, val] of map.entries()) {
-            pipeline.hset(GLOBAL_STATE_KEYS.USER_POINTS_MAP, key, val.toString());
+        // SCALABILITY FIX: Chunk pipeline operations to prevent memory issues
+        const CHUNK_SIZE = 1000;
+        const entries = Array.from(map.entries());
+        for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
+            const chunk = entries.slice(i, i + CHUNK_SIZE);
+            const pipeline = redisConnection.pipeline();
+            for (const [key, val] of chunk) {
+                pipeline.hset(GLOBAL_STATE_KEYS.USER_POINTS_MAP, key, val.toString());
+            }
+            await pipeline.exec();
         }
-        await pipeline.exec();
+        // SCALABILITY FIX: Add TTL
+        await redisConnection.expire(GLOBAL_STATE_KEYS.USER_POINTS_MAP, GLOBAL_STATE_TTL.USER_POINTS_MAP);
     }
 }
 

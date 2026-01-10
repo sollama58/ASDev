@@ -12,17 +12,21 @@ const { pump, logger } = require('../services');
 const router = express.Router();
 
 // Admin auth middleware for sensitive endpoints
+// SECURITY FIX: Always require admin key in all environments
 const adminAuth = (req, res, next) => {
     const apiKey = req.headers['x-admin-key'];
     const expectedKey = process.env.ADMIN_API_KEY;
 
-    // If no admin key configured, block access in production
-    if (!expectedKey && process.env.NODE_ENV === 'production') {
-        return res.status(403).json({ error: 'Debug endpoint disabled in production' });
+    // SECURITY: Always require admin key - no environment exceptions
+    if (!expectedKey) {
+        logger.warn('Admin endpoint accessed but ADMIN_API_KEY not configured');
+        return res.status(403).json({ error: 'Admin endpoints not configured' });
     }
 
-    // If admin key configured, require it
-    if (expectedKey && apiKey !== expectedKey) {
+    // Use timing-safe comparison to prevent timing attacks
+    const crypto = require('crypto');
+    if (!apiKey || apiKey.length !== expectedKey.length ||
+        !crypto.timingSafeEqual(Buffer.from(apiKey), Buffer.from(expectedKey))) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
 

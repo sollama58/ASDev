@@ -11,10 +11,10 @@ const { BN } = require('@coral-xyz/anchor');
 const axios = require('axios');
 const config = require('../config/env');
 const { PROGRAMS, TOKENS } = require('../config/constants');
-const { logger, pump } = require('../services');
+const { logger, pump, mutex } = require('../services');
 
-// Scanner state
-let isScanning = false;
+// RACE CONDITION FIX: Use mutex instead of boolean flag
+const scannerMutex = mutex.getMutex('robinhood_scanner');
 let websocketSubscription = null;
 
 // Known fee sharing config discriminator (first 8 bytes)
@@ -106,7 +106,7 @@ function findOurShare(config, ourWallet) {
         if (sh.pubkey.toString() === ourWalletStr) {
             return {
                 shareBps: sh.shareBps,
-                sharePercent: sh.shareBps / 100
+                sharePercent: sh.shareBps / 100  // BUG FIX: This is BPS so /100 gives percent (1000 bps = 10%)
             };
         }
     }
@@ -196,8 +196,12 @@ async function scanForOurCreatedTokens(deps) {
 async function scanForFeeSharingConfigs(deps) {
     const { connection, devKeypair, db } = deps;
 
-    if (isScanning) return;
-    isScanning = true;
+    // RACE CONDITION FIX: Use mutex for atomic locking
+    const release = await scannerMutex.tryAcquire();
+    if (!release) {
+        logger.debug('[Robinhood] Skipping scan - already in progress');
+        return;
+    }
 
     try {
         logger.info('[Robinhood] Scanning for fee sharing configs...');
@@ -313,7 +317,8 @@ async function scanForFeeSharingConfigs(deps) {
     } catch (e) {
         logger.error('[Robinhood] Scan error', { error: e.message });
     } finally {
-        isScanning = false;
+        // RACE CONDITION FIX: Release mutex
+        await release();
     }
 }
 

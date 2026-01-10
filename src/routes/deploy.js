@@ -18,11 +18,13 @@ function init(deps) {
 
     // Test vanity grinder
     router.get('/test-vanity', async (req, res) => {
-        // ... (existing code, unchanged)
         try {
             const keypair = await vanity.getMintKeypair();
             res.json({ success: true, address: keypair.publicKey.toBase58() });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) {
+            logger.error("Vanity grinder error", { error: e.message });
+            res.status(500).json({ error: "Vanity grinder unavailable" }); // SECURITY: Generic error
+        }
     });
 
     // Prepare metadata
@@ -45,8 +47,9 @@ function init(deps) {
             
             res.json({ success: true, ...result });
         } catch (err) {
-            logger.error("Metadata Prep Error", { error: err.message });
-            res.status(500).json({ error: err.message });
+            logger.error("Metadata Prep Error", { error: err.message, stack: err.stack });
+            // SECURITY FIX: Don't expose internal error messages
+            res.status(500).json({ error: "Failed to prepare metadata. Please try again." });
         }
     });
 
@@ -74,12 +77,13 @@ function init(deps) {
 
             res.json({ success: true, jobId: job.id, message: "Queued" });
         } catch (err) {
-            logger.error("Deploy API Error", { error: err.message });
-            res.status(500).json({ error: err.message });
+            logger.error("Deploy API Error", { error: err.message, stack: err.stack });
+            // SECURITY FIX: Don't expose internal error messages
+            res.status(500).json({ error: "Deployment failed. Please try again." });
         }
     });
 
-    // Job status (unchanged)
+    // Job status
     router.get('/job-status/:id', async (req, res) => {
         const job = await redis.getJob(req.params.id);
         if (!job) return res.status(404).json({ error: "Job not found" });

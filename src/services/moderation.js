@@ -11,12 +11,19 @@ const logger = require('./logger');
  * Returns true if safe, false if unsafe
  */
 async function checkContentSafety(base64Data) {
-    // 1. Check if key exists
+    // SECURITY FIX: Fail closed if no API key configured
     if (!config.CLARIFAI_API_KEY) {
-        return true; // Fail open if no key
+        logger.warn('Content moderation BLOCKED: CLARIFAI_API_KEY not configured (fail-closed mode)');
+        return false; // SECURITY: Fail closed - block content if moderation unavailable
     }
 
-    // 2. Clean the key
+    // SECURITY FIX: Validate input size to prevent DoS (max 10MB base64 ~ 7.5MB image)
+    if (base64Data && base64Data.length > 10 * 1024 * 1024) {
+        logger.warn('Content moderation BLOCKED: Image too large', { size: base64Data.length });
+        return false;
+    }
+
+    // Clean the key
     const cleanKey = config.CLARIFAI_API_KEY.trim();
 
     // Helper to attempt request with specific auth header
@@ -61,8 +68,8 @@ async function checkContentSafety(base64Data) {
         }
 
         if (!response.data || !response.data.outputs || !response.data.outputs[0]) {
-            logger.warn("Clarifai response malformed", { data: response.data });
-            return true; // Fail open on bad response format
+            logger.warn("Clarifai response malformed - BLOCKING content", { data: response.data });
+            return false; // SECURITY: Fail closed on bad response format
         }
 
         const concepts = response.data.outputs[0].data.concepts;
@@ -77,11 +84,11 @@ async function checkContentSafety(base64Data) {
         return true;
 
     } catch (e) {
-        // FAIL OPEN: If the moderation service fails (e.g. Auth Error, Rate Limit, Network Error),
-        // we log the warning but ALLOW the content to proceed so the app doesn't break.
+        // SECURITY FIX: FAIL CLOSED - If moderation service fails, block content
+        // This prevents potentially harmful content from being uploaded when moderation is unavailable
         const status = e.response ? e.response.status : 'Unknown';
-        logger.warn(`Content safety check failed (${status}) - Bypassing`, { error: e.message });
-        return true;
+        logger.error(`Content safety check failed (${status}) - BLOCKING content (fail-closed mode)`, { error: e.message });
+        return false;
     }
 }
 

@@ -14,10 +14,11 @@ const {
 } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, pump, solana, jupiter, redis } = require('../services');
+const { logger, pump, solana, jupiter, redis, mutex } = require('../services');
 
-let isBuybackRunning = false;
-let isAirdropping = false;
+// RACE CONDITION FIX: Use mutex for atomic lock/unlock instead of boolean flags
+const buybackMutex = mutex.getMutex('flywheel_buyback');
+const airdropMutex = mutex.getMutex('flywheel_airdrop');
 
 // Import Robinhood scanner for fee claiming
 const robinhoodScanner = require('./robinhoodScanner');
@@ -242,8 +243,12 @@ async function claimRobinhoodFees(deps) {
 async function processAirdrop(deps) {
     const { connection, devKeypair, db, globalState } = deps;
 
-    if (isAirdropping) return;
-    isAirdropping = true;
+    // RACE CONDITION FIX: Use mutex for atomic locking
+    const release = await airdropMutex.tryAcquire();
+    if (!release) {
+        logger.debug('[Airdrop] Skipping - already in progress');
+        return;
+    }
 
     try {
         // Get current SOL balance available for airdrop
@@ -257,8 +262,7 @@ async function processAirdrop(deps) {
 
         // Basic Threshold Check - need at least MIN_AIRDROP_POOL SOL after reserve
         if (availableForAirdrop < MIN_AIRDROP_POOL) {
-            isAirdropping = false;
-            return;
+            return; // Lock will be released in finally block
         }
 
         logger.info(`SOL AIRDROP TRIGGERED: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available for distribution`);
@@ -298,9 +302,10 @@ async function processAirdrop(deps) {
                             if (holderBalance <= BigInt(0)) continue;
 
                             // Calculate proportional share
+                            // BUG FIX: Added check for kothHolders.length to prevent division by zero
                             const share = totalBalance > BigInt(0)
                                 ? Number((BigInt(kothAmount) * holderBalance) / totalBalance)
-                                : Math.floor(kothAmount / kothHolders.length);
+                                : (kothHolders.length > 0 ? Math.floor(kothAmount / kothHolders.length) : 0);
 
                             if (share > 0) {
                                 kothBatch.push({ user: new PublicKey(holder.holderPubkey), amount: share });
@@ -355,8 +360,7 @@ async function processAirdrop(deps) {
             .filter(user => user.points > 0);
 
         if (totalPoints === 0 || userPoints.length === 0) {
-             isAirdropping = false;
-             return;
+             return; // Lock will be released in finally block
         }
 
         logger.info(`Distributing ${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL to ${userPoints.length} users (Community Pool)`);
@@ -437,7 +441,8 @@ async function processAirdrop(deps) {
     } catch (e) {
         logger.error("SOL Airdrop Failed", { error: e.message });
     } finally {
-        isAirdropping = false;
+        // RACE CONDITION FIX: Release mutex
+        await release();
     }
 }
 
@@ -505,8 +510,12 @@ async function sendSolAirdropBatch(batch, deps) {
 async function runPurchaseAndFees(deps) {
     const { connection, devKeypair, db, globalState, recordClaim, updateNextCheckTime, logPurchase } = deps;
 
-    if (isBuybackRunning) return;
-    isBuybackRunning = true;
+    // RACE CONDITION FIX: Use mutex for atomic locking
+    const release = await buybackMutex.tryAcquire();
+    if (!release) {
+        logger.debug('[Flywheel] Skipping - already in progress');
+        return;
+    }
 
     let logData = {
         status: 'SKIPPED',
@@ -631,7 +640,8 @@ async function runPurchaseAndFees(deps) {
         await logPurchase('FLYWHEEL_CYCLE', logData);
         logger.error("CRITICAL FLYWHEEL ERROR", { message: e.message });
     } finally {
-        isBuybackRunning = false;
+        // RACE CONDITION FIX: Release mutex
+        await release();
         await updateNextCheckTime();
     }
 }

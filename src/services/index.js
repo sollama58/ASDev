@@ -13,6 +13,7 @@ const pump = require('./pump');
 const twitter = require('./twitter');
 const moderation = require('./moderation');
 const jupiter = require('./jupiter');
+const mutex = require('./mutex');
 
 // v13.0: Use PostgreSQL as the database layer
 const database = postgres;
@@ -29,4 +30,5 @@ module.exports = {
     twitter,
     moderation,
     jupiter,
+    mutex,
 };
