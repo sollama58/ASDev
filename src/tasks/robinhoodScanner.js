@@ -205,9 +205,26 @@ async function scanForOurCreatedTokens(deps) {
             return;
         }
 
-        // Validate mints and get metadata + market data (DexScreener included)
-        const validTokens = await mintExtractor.validateMintsBatch(Array.from(foundMints), { fetchMarketData: true });
-        logger.info(`[Robinhood] Validated ${validTokens.length} tokens from vault transactions`);
+        // VALIDATION: Verify we are actually a fee recipient for each discovered mint
+        // This double-checks on-chain data to prevent false positives
+        logger.info('[Robinhood] Verifying fee recipient status for discovered mints...');
+        const verifiedMints = await mintExtractor.filterMintsWeAreRecipientFor(
+            Array.from(foundMints),
+            devKeypair.publicKey.toString(),
+            connection
+        );
+
+        if (verifiedMints.length === 0) {
+            logger.info('[Robinhood] No verified mints after fee recipient check');
+            return;
+        }
+
+        // Validate verified mints and get metadata + market data (DexScreener included)
+        const validTokens = await mintExtractor.validateMintsBatch(
+            verifiedMints.map(v => v.mint),
+            { fetchMarketData: true }
+        );
+        logger.info(`[Robinhood] Validated ${validTokens.length} tokens from ${verifiedMints.length} verified mints`);
 
         // Insert/update discovered tokens in database
         let newTokensInserted = 0;

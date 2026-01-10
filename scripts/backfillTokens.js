@@ -411,9 +411,10 @@ async function backfillRobinhoodTokens(db, tokens) {
  *
  * @param {Object} db - Database instance
  * @param {string} devPubkey - Developer wallet public key
+ * @param {Object} connection - Solana connection for on-chain verification
  * @returns {Array} - Array of validated token objects
  */
-async function scanVaultTransactionsForTokens(db, devPubkey) {
+async function scanVaultTransactionsForTokens(db, devPubkey, connection) {
     console.log('\n📡 Scanning creator fee vaults for token discovery...');
     console.log('   (Using shared mintExtractor - scans both BC and AMM vaults)');
 
@@ -443,9 +444,24 @@ async function scanVaultTransactionsForTokens(db, devPubkey) {
         return [];
     }
 
-    // Validate mints using the shared module
-    console.log('\n   Validating discovered mints...');
-    const validTokens = await mintExtractor.validateMintsBatch(Array.from(foundMints));
+    // VALIDATION: Verify we are actually a fee recipient for each discovered mint
+    // This double-checks on-chain data to prevent false positives
+    console.log('\n   🔍 Verifying fee recipient status on-chain...');
+    const verifiedMints = await mintExtractor.filterMintsWeAreRecipientFor(
+        Array.from(foundMints),
+        devPubkey,
+        connection
+    );
+    console.log(`   ✓ Verified ${verifiedMints.length}/${foundMints.size} mints as fee recipients`);
+
+    if (verifiedMints.length === 0) {
+        console.log('   No mints verified as fee recipients');
+        return [];
+    }
+
+    // Validate verified mints using the shared module
+    console.log('\n   Validating verified mints...');
+    const validTokens = await mintExtractor.validateMintsBatch(verifiedMints.map(v => v.mint));
 
     // Add additional fields expected by the backfill script
     const enrichedTokens = validTokens.map(token => ({
@@ -565,7 +581,7 @@ async function main() {
     const existingMints = new Set();
 
     // 1. Scan vault transactions for tokens we earn fees on
-    const vaultTokens = await scanVaultTransactionsForTokens(db, devKeypair.publicKey.toString());
+    const vaultTokens = await scanVaultTransactionsForTokens(db, devKeypair.publicKey.toString(), connection);
     for (const token of vaultTokens) {
         allTokens.push(token);
         existingMints.add(token.mint);

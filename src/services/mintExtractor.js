@@ -847,6 +847,127 @@ async function validateMintsBatch(mints, options = {}) {
     return validTokens;
 }
 
+/**
+ * Verify that a wallet is a fee recipient for a given token mint
+ * Checks both bonding curve (pre-graduation) and AMM pool (post-graduation)
+ *
+ * @param {string} mint - Token mint address
+ * @param {string} creatorPubkey - Creator wallet public key to verify
+ * @param {Object} connection - Solana connection object
+ * @returns {Promise<{isRecipient: boolean, source: string|null}>}
+ */
+async function verifyFeeRecipient(mint, creatorPubkey, connection) {
+    try {
+        const mintPubkey = new PublicKey(mint);
+        const creatorKey = new PublicKey(creatorPubkey);
+
+        // Derive bonding curve address for this mint
+        const [bondingCurve] = PublicKey.findProgramAddressSync(
+            [Buffer.from("bonding-curve"), mintPubkey.toBuffer()],
+            PROGRAMS.PUMP
+        );
+
+        // Try to fetch bonding curve account
+        try {
+            const bcAccountInfo = await connection.getAccountInfo(bondingCurve);
+            if (bcAccountInfo && bcAccountInfo.data.length >= 72) {
+                // Bonding curve account layout:
+                // - 8 bytes: discriminator
+                // - 8 bytes: virtual_token_reserves
+                // - 8 bytes: virtual_sol_reserves
+                // - 8 bytes: real_token_reserves
+                // - 8 bytes: real_sol_reserves
+                // - 8 bytes: token_total_supply
+                // - 1 byte: complete (bool)
+                // - 32 bytes: creator (pubkey) - at offset 49
+                const creatorOffset = 49;
+                if (bcAccountInfo.data.length >= creatorOffset + 32) {
+                    const storedCreator = new PublicKey(bcAccountInfo.data.slice(creatorOffset, creatorOffset + 32));
+                    if (storedCreator.equals(creatorKey)) {
+                        return { isRecipient: true, source: 'bonding_curve' };
+                    }
+                }
+            }
+        } catch (e) {
+            // Bonding curve may not exist (graduated token) - continue to AMM check
+            logger.debug(`[MintExtractor] BC check failed for ${mint.slice(0, 8)}...: ${e.message}`);
+        }
+
+        // Derive AMM pool address for this mint
+        const [poolAuthority] = PublicKey.findProgramAddressSync(
+            [Buffer.from("pool-authority"), mintPubkey.toBuffer()],
+            PROGRAMS.PUMP_AMM
+        );
+
+        const WSOL = new PublicKey('So11111111111111111111111111111111111111112');
+        const [pool] = PublicKey.findProgramAddressSync(
+            [Buffer.from("pool"), poolAuthority.toBuffer(), mintPubkey.toBuffer(), WSOL.toBuffer()],
+            PROGRAMS.PUMP_AMM
+        );
+
+        // Try to fetch AMM pool account
+        try {
+            const poolAccountInfo = await connection.getAccountInfo(pool);
+            if (poolAccountInfo && poolAccountInfo.data.length >= 200) {
+                // AMM Pool account layout (approximate):
+                // - 8 bytes: discriminator
+                // - 1 byte: pool_bump
+                // - 2 bytes: index
+                // - 32 bytes: creator
+                // - 32 bytes: base_mint
+                // - 32 bytes: quote_mint
+                // - 32 bytes: lp_mint
+                // ... more fields
+                // Creator is at offset 11
+                const creatorOffset = 11;
+                if (poolAccountInfo.data.length >= creatorOffset + 32) {
+                    const storedCreator = new PublicKey(poolAccountInfo.data.slice(creatorOffset, creatorOffset + 32));
+                    if (storedCreator.equals(creatorKey)) {
+                        return { isRecipient: true, source: 'amm_pool' };
+                    }
+                }
+            }
+        } catch (e) {
+            logger.debug(`[MintExtractor] AMM check failed for ${mint.slice(0, 8)}...: ${e.message}`);
+        }
+
+        // Neither BC nor AMM has us as creator
+        return { isRecipient: false, source: null };
+
+    } catch (e) {
+        logger.warn(`[MintExtractor] Fee recipient verification failed for ${mint}`, { error: e.message });
+        return { isRecipient: false, source: null };
+    }
+}
+
+/**
+ * Filter an array of mints to only those where we are a fee recipient
+ *
+ * @param {Array<string>} mints - Array of mint addresses
+ * @param {string} creatorPubkey - Creator wallet to verify
+ * @param {Object} connection - Solana connection
+ * @returns {Promise<Array<{mint: string, source: string}>>} - Filtered mints with source info
+ */
+async function filterMintsWeAreRecipientFor(mints, creatorPubkey, connection) {
+    const verified = [];
+
+    for (const mint of mints) {
+        const result = await verifyFeeRecipient(mint, creatorPubkey, connection);
+        if (result.isRecipient) {
+            verified.push({ mint, source: result.source });
+            logger.debug(`[MintExtractor] Verified ${mint.slice(0, 8)}... as fee recipient (${result.source})`);
+        } else {
+            logger.debug(`[MintExtractor] Rejected ${mint.slice(0, 8)}... - not a fee recipient`);
+        }
+
+        // Rate limit
+        await new Promise(r => setTimeout(r, 50));
+    }
+
+    logger.info(`[MintExtractor] Fee recipient verification: ${verified.length}/${mints.length} mints verified`);
+    return verified;
+}
+
 module.exports = {
     // Core extraction functions
     extractMintFromTransaction,
@@ -864,6 +985,10 @@ module.exports = {
     // Validation & Market Data
     validateMintsBatch,
     fetchDexScreenerData,
+
+    // Fee recipient verification
+    verifyFeeRecipient,
+    filterMintsWeAreRecipientFor,
 
     // Constants (for external use if needed)
     DISCRIMINATORS,
