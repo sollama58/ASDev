@@ -6,6 +6,8 @@
  * v12.0 - New feature for fee sharing partnerships
  * v13.0 - Fixed to properly discover mints and scan creator vaults
  * v14.0 - Added vault transaction scanning for complete token discovery
+ * v15.0 - Removed automatic token scanning; tokens are now registered via API
+ *         Kept: fee sharing config scanning, holder updates, metadata updates
  */
 const { PublicKey } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
@@ -611,15 +613,72 @@ async function getRobinhoodPendingFees(deps) {
 }
 
 /**
+ * Update market data for all registered tokens
+ * v15.0 - Fetches fresh market data from DexScreener for existing tokens
+ */
+async function updateRegisteredTokensMarketData(deps) {
+    const { db } = deps;
+
+    try {
+        // Get all registered tokens
+        const tokens = await db.all('SELECT mint, ticker FROM tokens WHERE mint IS NOT NULL');
+
+        if (tokens.length === 0) return;
+
+        let tokensUpdated = 0;
+        for (const token of tokens) {
+            try {
+                const dexMeta = await fetchDexScreenerMetadata(token.mint);
+                if (dexMeta && (dexMeta.marketCap > 0 || dexMeta.volume24h > 0)) {
+                    await db.run(`
+                        UPDATE tokens SET
+                            ticker = COALESCE(NULLIF($1, 'UNKNOWN'), ticker),
+                            name = COALESCE(NULLIF($2, 'Unknown'), name),
+                            image = COALESCE(NULLIF($3, ''), image),
+                            volume24h = CASE WHEN $4 > 0 THEN $4 ELSE volume24h END,
+                            "marketCap" = CASE WHEN $5 > 0 THEN $5 ELSE "marketCap" END
+                        WHERE mint = $6
+                    `, [
+                        dexMeta.ticker || 'UNKNOWN',
+                        dexMeta.name || 'Unknown',
+                        dexMeta.image || '',
+                        dexMeta.volume24h || 0,
+                        dexMeta.marketCap || 0,
+                        token.mint
+                    ]);
+                    tokensUpdated++;
+                }
+
+                // Rate limit API calls
+                await new Promise(r => setTimeout(r, 300));
+            } catch (e) {
+                logger.debug(`[Robinhood] Failed to update market data for ${token.mint}`, { error: e.message });
+            }
+        }
+
+        if (tokensUpdated > 0) {
+            logger.debug(`[Robinhood] Updated market data for ${tokensUpdated} registered tokens`);
+        }
+    } catch (e) {
+        logger.error('[Robinhood] Market data update error', { error: e.message });
+    }
+}
+
+/**
  * Main update function - runs periodically
+ * v15.0: Removed automatic vault scanning - tokens are now registered via API
  */
 async function updateRobinhoodState(deps) {
     try {
-        // v14.0: Scan vault transactions for token discovery
-        // This finds ALL tokens where we receive fees (from both BC and AMM)
-        await scanForOurCreatedTokens(deps);
+        // v15.0: Automatic token discovery removed
+        // Tokens are now registered by developers via POST /api/register-token
+        // This ensures only authorized creators can add tokens to the platform
+
+        // Update market data for registered tokens
+        await updateRegisteredTokensMarketData(deps);
 
         // Scan for new fee sharing configs (Robinhood partnerships)
+        // This still runs to detect external tokens sharing fees with us
         await scanForFeeSharingConfigs(deps);
 
         // Update holders for existing Robinhood tokens
@@ -662,6 +721,7 @@ module.exports = {
     stop,
     updateRobinhoodState,
     updateRobinhoodHolders,
+    updateRegisteredTokensMarketData,
     getRobinhoodPendingFees,
     scanForFeeSharingConfigs,
     parseFeeSharingConfig,

@@ -3,141 +3,526 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v13.0-POSTGRES</title>
+    <title>IGNITION - ASDev Launcher</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        /* TERMINAL FIRE THEME */
-        body { background-color: #2a1005; color: #ffedd5; font-family: 'Comic Neue', cursive; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 40px 20px; }
+        /* HOLDEX-STYLE DARK THEME v25.0 */
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #16161f;
+            --bg-hover: #1c1c28;
+            --border-primary: #2a2a3a;
+            --border-accent: #f59e0b;
+            --text-primary: #ffffff;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            --accent-orange: #f59e0b;
+            --accent-amber: #fbbf24;
+            --accent-green: #22c55e;
+            --accent-red: #ef4444;
+            --accent-purple: #a855f7;
+            --accent-blue: #3b82f6;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
-        #app-container { width: 100%; max-width: 1100px; background-color: #451a03; border: 6px solid #7c2d12; border-radius: 20px; overflow: hidden; box-shadow: 0 40px 80px rgba(0,0,0,0.95); position: relative; }
-        .ticker-wrap { width: 100%; background-color: #2a1005; border-bottom: 2px solid #7c2d12; overflow: hidden; height: 40px; display: flex; align-items: center; position: relative; }
-        .ticker { display: flex; gap: 2rem; white-space: nowrap; animation: marquee 80s linear infinite; font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #fb923c; }
+
+        #app-container {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-primary);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        /* Ticker */
+        .ticker-wrap {
+            width: 100%;
+            background-color: var(--bg-primary);
+            border-bottom: 1px solid var(--border-primary);
+            overflow: hidden;
+            height: 36px;
+            display: flex;
+            align-items: center;
+        }
+        .ticker {
+            display: flex;
+            gap: 2rem;
+            white-space: nowrap;
+            animation: marquee 80s linear infinite;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
         .ticker-item { display: inline-flex; align-items: center; gap: 6px; }
-        .ticker-item a { color: #4ade80; text-decoration: underline; transition: color 0.2s; }
-        .ticker-item a:hover { color: #ffffff; }
+        .ticker-item a { color: var(--accent-green); text-decoration: none; transition: color 0.2s; }
+        .ticker-item a:hover { color: var(--text-primary); text-decoration: underline; }
         @keyframes marquee { 0% { transform: translateX(100%); } 100% { transform: translateX(-100%); } }
-        .panel { background: rgba(20, 10, 5, 0.6); border: 2px solid #ea580c; border-radius: 12px; box-shadow: 6px 6px 0 #9a3412; padding: 32px; margin-bottom: 32px; }
-        .input-field { background: #2a1005; border: 2px solid #7c2d12; color: #fb923c; font-family: 'JetBrains Mono', monospace; width: 100%; padding: 16px; margin-bottom: 20px; outline: none; transition: border-color 0.2s; border-radius: 6px; font-size: 16px; }
-        .input-field:focus { border-color: #ea580c; }
-        input[type="file"]::file-selector-button { background: #ea580c; border: none; color: #2a1005; padding: 10px 16px; font-family: 'JetBrains Mono'; font-weight: bold; cursor: pointer; margin-right: 15px; border-radius: 4px; }
-        .btn-action { background: #ea580c; border: 2px solid #9a3412; color: #2a1005; font-weight: bold; font-family: 'JetBrains Mono'; text-transform: uppercase; width: 100%; padding: 20px; font-size: 20px; cursor: pointer; transition: all 0.1s; box-shadow: 5px 5px 0 #7c2d12; border-radius: 8px; }
-        .btn-action:hover { background: #f97316; transform: translate(-1px, -1px); box-shadow: 6px 6px 0 #7c2d12; }
-        .btn-action:active { transform: translate(2px, 2px); box-shadow: 0 0 0; }
-        .btn-action:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(100%); transform: none; box-shadow: none; }
-        .status-box { background: rgba(0,0,0,0.3); border: 1px solid #ea580c; color: #fdba74; padding: 16px; font-size: 16px; font-family: 'JetBrains Mono'; text-align: center; margin-top: 20px; display: none; border-radius: 6px; }
-        .status-success { border-color: #22c55e; color: #4ade80; background: rgba(20, 83, 45, 0.3); }
-        .status-error { border-color: #ef4444; color: #fca5a5; background: rgba(127, 29, 29, 0.3); }
-        .sys-status { color: #ef4444; font-weight: bold; transition: color 0.5s; cursor: pointer; }
-        .sys-status.online { color: #22c55e; text-shadow: 0 0 8px rgba(34, 197, 94, 0.6); }
-        #image-preview { width: 180px; height: 180px; border: 2px dashed #7c2d12; display: flex; align-items: center; justify-content: center; background: #2a1005; color: #7c2d12; font-family: 'JetBrains Mono'; font-size: 12px; overflow: hidden; border-radius: 12px; margin-top: 10px; cursor: pointer; position: relative; }
+
+        /* Cards/Panels */
+        .panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border-primary);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .panel:hover { border-color: #3a3a4a; }
+
+        /* Inputs */
+        .input-field {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-primary);
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            width: 100%;
+            padding: 14px 16px;
+            margin-bottom: 16px;
+            outline: none;
+            transition: all 0.2s;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .input-field:focus { border-color: var(--accent-orange); background: var(--bg-secondary); }
+        .input-field::placeholder { color: var(--text-muted); }
+
+        input[type="file"]::file-selector-button {
+            background: var(--accent-orange);
+            border: none;
+            color: #000;
+            padding: 8px 16px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            cursor: pointer;
+            margin-right: 12px;
+            border-radius: 6px;
+        }
+
+        /* Primary Action Button */
+        .btn-action {
+            background: linear-gradient(135deg, var(--accent-orange) 0%, #d97706 100%);
+            border: none;
+            color: #000;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            width: 100%;
+            padding: 16px 24px;
+            font-size: 15px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-radius: 10px;
+        }
+        .btn-action:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(245, 158, 11, 0.3); }
+        .btn-action:active { transform: translateY(0); }
+        .btn-action:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+        /* Status Messages */
+        .status-box {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-primary);
+            color: var(--text-secondary);
+            padding: 14px;
+            font-size: 14px;
+            font-family: 'JetBrains Mono', monospace;
+            text-align: center;
+            margin-top: 16px;
+            display: none;
+            border-radius: 8px;
+        }
+        .status-success { border-color: var(--accent-green); color: var(--accent-green); background: rgba(34, 197, 94, 0.1); }
+        .status-error { border-color: var(--accent-red); color: var(--accent-red); background: rgba(239, 68, 68, 0.1); }
+
+        .sys-status { color: var(--accent-red); font-weight: 600; transition: color 0.3s; cursor: pointer; }
+        .sys-status.online { color: var(--accent-green); }
+
+        /* Image Preview */
+        #image-preview {
+            width: 160px;
+            height: 160px;
+            border: 2px dashed var(--border-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-primary);
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            overflow: hidden;
+            border-radius: 12px;
+            margin-top: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        #image-preview:hover { border-color: var(--accent-orange); }
         #image-preview img { width: 100%; height: 100%; object-fit: cover; }
-        /* DRAG AND DROP STATE */
-        .drag-over { border-color: #22c55e !important; background-color: rgba(34, 197, 94, 0.2) !important; border-style: solid !important; transform: scale(1.02); }
-        
-        .log-entry { border-bottom: 1px solid rgba(234, 88, 12, 0.3); padding: 12px 0; font-family: 'JetBrains Mono'; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+        .drag-over { border-color: var(--accent-green) !important; background-color: rgba(34, 197, 94, 0.1) !important; border-style: solid !important; }
+
+        /* Logs */
+        .log-entry { border-bottom: 1px solid var(--border-primary); padding: 12px 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
         .log-entry:last-child { border-bottom: none; }
-        .log-skipped { color: #fdba74; opacity: 0.8; }
-        .log-success { color: #4ade80; font-weight: bold; }
-        .log-error { color: #ef4444; }
+        .log-skipped { color: var(--text-muted); }
+        .log-success { color: var(--accent-green); font-weight: 500; }
+        .log-error { color: var(--accent-red); }
+
+        /* Toggle Switch */
         .toggle-switch { display: flex; align-items: center; }
         .toggle-switch input { display: none; }
-        .toggle-switch .slider { cursor: pointer; width: 60px; height: 34px; background-color: #7c2d12; transition: .4s; border-radius: 34px; position: relative; box-shadow: inset 0 0 4px rgba(0,0,0,0.5); min-width: 60px; }
-        .toggle-switch .slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
-        .toggle-switch input:checked + .slider { background-color: #ef4444; } 
-        .toggle-switch input:checked + .slider:before { transform: translateX(26px); }
-        .mayhem-label { transition: color 0.4s; }
-        .mayhem-label.active { color: #ef4444; }
-        #logo-wrapper { 
-            width: 60px; 
-            height: 60px; 
-            border-radius: 8px; 
-            overflow: hidden; 
-            min-width: 60px;
-            animation: bounce 1s infinite alternate; 
+        .toggle-switch .slider {
+            cursor: pointer;
+            width: 52px;
+            height: 28px;
+            background-color: var(--border-primary);
+            transition: .3s;
+            border-radius: 28px;
+            position: relative;
+            min-width: 52px;
         }
-        #header-image { 
-            width: 100%; 
-            height: 100%; 
-            object-fit: cover; 
+        .toggle-switch .slider:before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
         }
-        @keyframes bounce { 
-            from { transform: translateY(0); } 
-            to { transform: translateY(-5px); } 
+        .toggle-switch input:checked + .slider { background-color: var(--accent-red); }
+        .toggle-switch input:checked + .slider:before { transform: translateX(24px); }
+        .mayhem-label { transition: color 0.3s; color: var(--text-secondary); }
+        .mayhem-label.active { color: var(--accent-red); }
+
+        /* Logo */
+        #logo-wrapper {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            overflow: hidden;
+            min-width: 56px;
+            border: 2px solid var(--border-primary);
         }
-        .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8); }
-        .modal-content { background-color: #2a1005; margin: 5% auto; padding: 30px; border: 4px solid #ea580c; width: 85%; max-width: 800px; border-radius: 12px; box-shadow: 0 0 20px rgba(234, 88, 12, 0.5); }
-        .close-btn { color: #aaa; float: right; font-size: 28px; font-weight: bold; }
-        .close-btn:hover, .close-btn:focus { color: #fff; text-decoration: none; cursor: pointer; }
+        #header-image { width: 100%; height: 100%; object-fit: cover; }
+
+        /* Modals */
+        .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0, 0, 0, 0.85); backdrop-filter: blur(4px); }
+        .modal-content {
+            background-color: var(--bg-card);
+            margin: 4% auto;
+            padding: 28px;
+            border: 1px solid var(--border-primary);
+            width: 90%;
+            max-width: 800px;
+            border-radius: 16px;
+        }
+        .close-btn { color: var(--text-muted); float: right; font-size: 24px; font-weight: bold; line-height: 1; }
+        .close-btn:hover { color: var(--text-primary); cursor: pointer; }
+
+        /* Leaderboard Table */
         .leader-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
-        .leader-table th { text-align: left; padding: 10px; border-bottom: 2px solid #ea580c; color: #ea580c; text-transform: uppercase; font-size: 11px; }
-        .leader-table td { padding: 12px 10px; border-bottom: 1px solid rgba(234, 88, 12, 0.2); vertical-align: middle; }
-        .leader-table tr:hover { background: rgba(234, 88, 12, 0.1); }
-        .token-img-sm { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; display: inline-block; vertical-align: middle; margin-right: 8px; border: 1px solid #7c2d12; background-color: #2a1005; min-width: 32px; min-height: 32px; }
-        .metric-card { background: rgba(0,0,0,0.2); border: 1px solid #ea580c; padding: 20px; border-radius: 8px; text-align: center; }
-        .metric-value { font-size: 24px; font-weight: bold; color: white; font-family: 'JetBrains Mono'; margin-top: 5px; }
-        .metric-label { font-size: 12px; color: #fdba74; text-transform: uppercase; letter-spacing: 1px; }
-        .holder-check { color: #4ade80; font-weight: bold; margin-left: 8px; display: inline-flex; align-items: center; gap: 2px; font-size: 10px; background: rgba(34, 197, 94, 0.2); padding: 2px 4px; border-radius: 4px; border: 1px solid #22c55e; }
-        .badge-creator { color: #60a5fa; font-weight: bold; margin-left: 8px; display: inline-flex; align-items: center; gap: 2px; font-size: 10px; background: rgba(59, 130, 246, 0.2); padding: 2px 4px; border-radius: 4px; border: 1px solid #3b82f6; }
-        .badge-robinhood { color: #a855f7; font-weight: bold; margin-left: 8px; display: inline-flex; align-items: center; gap: 2px; font-size: 10px; background: rgba(168, 85, 247, 0.2); padding: 2px 4px; border-radius: 4px; border: 1px solid #a855f7; }
-        .badge-bonded { display: inline-block; background-color: #22c55e; color: #000; font-weight: bold; padding: 1px 4px; border-radius: 3px; font-size: 9px; margin-left: 6px; border: 1px solid #14532d; vertical-align: middle; }
-        .badge-bonding { display: inline-block; background-color: #eab308; color: #000; font-weight: bold; padding: 1px 4px; border-radius: 3px; font-size: 9px; margin-left: 6px; border: 1px solid #713f12; vertical-align: middle; }
-        .tx-link { color: #a78bfa; text-decoration: underline; font-size: 10px; }
+        .leader-table th {
+            text-align: left;
+            padding: 12px 10px;
+            border-bottom: 1px solid var(--border-primary);
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+        .leader-table td { padding: 14px 10px; border-bottom: 1px solid var(--border-primary); vertical-align: middle; }
+        .leader-table tr:hover { background: var(--bg-hover); }
+        .leader-table tr:last-child td { border-bottom: none; }
+
+        .token-img-sm {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            object-fit: cover;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 10px;
+            border: 1px solid var(--border-primary);
+            background-color: var(--bg-primary);
+        }
+
+        /* Metric Cards */
+        .metric-card {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-primary);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            transition: border-color 0.2s;
+        }
+        .metric-card:hover { border-color: #3a3a4a; }
+        .metric-value { font-size: 24px; font-weight: 700; color: var(--text-primary); font-family: 'JetBrains Mono', monospace; margin-top: 6px; }
+        .metric-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; font-weight: 500; }
+
+        /* Badges */
+        .holder-check {
+            color: var(--accent-amber);
+            font-weight: 600;
+            margin-left: 8px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            background: rgba(251, 191, 36, 0.15);
+            padding: 3px 8px;
+            border-radius: 20px;
+        }
+        .badge-creator {
+            color: var(--accent-blue);
+            font-weight: 600;
+            margin-left: 8px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            background: rgba(59, 130, 246, 0.15);
+            padding: 3px 8px;
+            border-radius: 20px;
+        }
+        .badge-robinhood {
+            color: var(--accent-purple);
+            font-weight: 600;
+            margin-left: 8px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            background: rgba(168, 85, 247, 0.15);
+            padding: 3px 8px;
+            border-radius: 20px;
+        }
+        .badge-bonded {
+            display: inline-block;
+            background-color: var(--accent-green);
+            color: #000;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-size: 9px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .badge-bonding {
+            display: inline-block;
+            background-color: var(--accent-amber);
+            color: #000;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-size: 9px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        /* Score Badges (HOLDEX-style) */
+        .score-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .score-gold { background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); color: #000; }
+        .score-silver { background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%); color: #000; }
+        .score-bronze { background: linear-gradient(135deg, #d97706 0%, #b45309 100%); color: #000; }
+
+        .tx-link { color: var(--accent-purple); text-decoration: none; font-size: 11px; }
+        .tx-link:hover { text-decoration: underline; }
         .ca-display { word-break: break-all; user-select: all; cursor: copy; }
-        /* Log Grid Styles */
+
+        /* Log Grid */
         .log-grid { display: grid; grid-template-columns: 100px 1fr; gap: 8px; font-size: 11px; }
-        .log-label { color: #fdba74; font-weight: bold; text-transform: uppercase; }
-        .log-value { color: #ffedd5; word-break: break-all; }
-        .status-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 10px; text-transform: uppercase; }
-        .badge-skipped { background: rgba(234, 88, 12, 0.2); color: #fb923c; border: 1px solid #ea580c; }
-        .badge-success { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid #22c55e; }
-        .badge-error { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; }
-        .status-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px dashed rgba(255, 255, 255, 0.1); }
+        .log-label { color: var(--text-muted); font-weight: 500; text-transform: uppercase; }
+        .log-value { color: var(--text-primary); word-break: break-all; }
+
+        .status-badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-weight: 600; font-size: 10px; text-transform: uppercase; }
+        .badge-skipped { background: rgba(245, 158, 11, 0.15); color: var(--accent-orange); }
+        .badge-success { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); }
+        .badge-error { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
+
+        .status-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border-primary); }
         .status-item:last-child { border-bottom: none; }
-        .status-icon { margin-right: 10px; }
-        .text-green { color: #4ade80; }
-        .text-red { color: #ef4444; }
+        .status-icon { margin-right: 8px; }
+        .text-green { color: var(--accent-green); }
+        .text-red { color: var(--accent-red); }
+
         /* Wallet Modal Buttons */
         .btn-wallet {
             width: 100%;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            background: #2a1005;
-            border: 1px solid #7c2d12;
-            padding: 15px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-primary);
+            padding: 16px;
             margin-bottom: 10px;
-            border-radius: 8px;
-            color: #fb923c;
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: bold;
+            border-radius: 10px;
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
             transition: all 0.2s;
             cursor: pointer;
         }
         .btn-wallet:hover {
-            background: #451a03;
-            border-color: #ea580c;
-            transform: translateX(5px);
+            background: var(--bg-hover);
+            border-color: var(--accent-orange);
         }
         .btn-wallet .detected-tag {
             font-size: 10px;
-            background: #22c55e;
+            background: var(--accent-green);
             color: #000;
-            padding: 2px 6px;
-            border-radius: 4px;
-            margin-left: 10px;
+            padding: 3px 8px;
+            border-radius: 20px;
+            font-weight: 600;
         }
-        /* KOTH Styles */
-        .koth-panel { background: linear-gradient(135deg, #1a0b2e 0%, #000000 100%); border: 3px solid #d946ef; box-shadow: 0 0 20px rgba(217, 70, 239, 0.3); }
+
+        /* KOTH Panel */
+        .koth-panel {
+            background: linear-gradient(135deg, #1a0b2e 0%, var(--bg-primary) 100%);
+            border: 1px solid var(--accent-purple);
+        }
         .koth-title { text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
         .koth-glow { animation: glow 2s infinite alternate; }
-        @keyframes glow { from { box-shadow: 0 0 10px rgba(217, 70, 239, 0.2); } to { box-shadow: 0 0 25px rgba(217, 70, 239, 0.7); } }
+        @keyframes glow { from { box-shadow: 0 0 10px rgba(168, 85, 247, 0.2); } to { box-shadow: 0 0 25px rgba(168, 85, 247, 0.4); } }
+
         /* Conservation Notice */
-        .conservation-notice { grid-column: 1 / -1; margin-top: 10px; background: rgba(59, 130, 246, 0.2); border: 1px solid #3b82f6; padding: 10px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px; display: none; }
+        .conservation-notice {
+            grid-column: 1 / -1;
+            margin-top: 12px;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            display: none;
+        }
         .conservation-active { display: block; }
+
+        /* Tab Navigation */
+        .tab-container {
+            display: flex;
+            gap: 2px;
+            background: var(--bg-primary);
+            padding: 4px;
+            border-radius: 10px;
+            margin-bottom: 24px;
+        }
+        .tab-btn {
+            padding: 12px 24px;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-radius: 8px;
+            flex: 1;
+            text-align: center;
+        }
+        .tab-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+        .tab-btn.active {
+            background: var(--accent-orange);
+            color: #000;
+            font-weight: 600;
+        }
+        .tab-content { display: none; animation: fadeIn 0.3s ease; }
+        .tab-content.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Registration Panel */
+        .register-panel {
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.05) 0%, var(--bg-card) 100%);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+        .register-panel h3 { color: var(--accent-green); }
+        .register-input {
+            background: var(--bg-primary);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            width: 100%;
+            padding: 14px 16px;
+            margin-bottom: 16px;
+            outline: none;
+            transition: all 0.2s;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .register-input:focus { border-color: var(--accent-green); }
+        .register-input::placeholder { color: var(--text-muted); }
+        .btn-register {
+            background: linear-gradient(135deg, var(--accent-green) 0%, #16a34a 100%);
+            border: none;
+            color: #000;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            text-transform: uppercase;
+            width: 100%;
+            padding: 14px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-radius: 10px;
+        }
+        .btn-register:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(34, 197, 94, 0.3); }
+        .btn-register:active { transform: translateY(0); }
+        .btn-register:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        .verification-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .verification-success { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); }
+        .verification-error { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
+        .verification-pending { background: rgba(251, 191, 36, 0.15); color: var(--accent-amber); }
+
+        /* Utility overrides for tailwind compatibility */
+        .text-orange-500 { color: var(--accent-orange) !important; }
+        .text-orange-400 { color: var(--accent-amber) !important; }
+        .text-orange-300 { color: #fcd34d !important; }
+        .text-orange-200 { color: #fde68a !important; }
+        .text-green-400 { color: var(--accent-green) !important; }
+        .text-purple-400 { color: var(--accent-purple) !important; }
+        .text-blue-400 { color: var(--accent-blue) !important; }
+        .border-orange-900 { border-color: var(--border-primary) !important; }
+        .border-orange-800 { border-color: var(--border-primary) !important; }
+        .bg-orange-950 { background-color: var(--bg-card) !important; }
+        .bg-orange-900 { background-color: var(--bg-hover) !important; }
+        .bg-black\\/30 { background-color: var(--bg-primary) !important; }
     </style>
 </head>
 <body>
@@ -146,7 +531,7 @@
     <div class="ticker-wrap"><div class="ticker" id="ticker-content"><span class="ticker-item text-orange-600">CONNECTING TO LAUNCH FEED...</span></div></div>
 
     <div class="p-10">
-        <div class="flex justify-between items-start mb-10 border-b-4 border-orange-900 pb-8">
+        <div class="flex justify-between items-start mb-6 border-b-4 border-orange-900 pb-8">
             <div class="flex items-center gap-6">
                 <div id="logo-wrapper">
                     <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
@@ -159,115 +544,29 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
-            <div class="panel col-span-1 flex flex-col items-center justify-start h-full">
-                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest w-full text-center border-b-2 border-orange-900/50 pb-3">Token Preview</h3>
-                <div class="text-center mb-4 min-h-[60px]"><h2 id="preview-name" class="text-2xl font-bold text-white break-words">Token Name</h2><p id="preview-ticker" class="text-orange-400 font-mono text-lg uppercase">$TICKER</p></div>
-                
-                <!-- DRAG AND DROP ZONE -->
-                <div id="image-preview" class="mb-6 shadow-2xl shadow-orange-900/30 transition-all duration-300" onclick="document.getElementById('image-file').click()">
-                    <div class="text-center pointer-events-none">
-                        <div class="text-2xl mb-2">📁</div>
-                        <div class="text-xs font-bold text-orange-400">DRAG & DROP<br>OR CLICK TO UPLOAD</div>
-                    </div>
-                </div>
-                
-                <input type="file" id="image-file" class="hidden" accept="image/png, image/jpeg, image/gif" onchange="previewImage(event)">
-                <p class="text-xs text-orange-400 font-mono text-center mt-2">Required: PNG, JPG, GIF.<br>Max size 4MB.</p>
-            </div>
-            <div class="panel col-span-2">
-                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-orange-900/50 pb-3">Token Metadata</h3>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div><label class="block text-sm text-orange-300 font-mono mb-2">NAME <span class="text-red-500">*</span></label><input type="text" id="name" class="input-field" placeholder="e.g. Infernal Coin" maxlength="32" oninput="updatePreview()"></div>
-                    <div><label class="block text-sm text-orange-300 font-mono mb-2">TICKER <span class="text-red-500">*</span></label><input type="text" id="ticker" class="input-field" placeholder="e.g. BURN (Max 11 Chars)" maxlength="11" oninput="updatePreview()"></div>
-                </div>
-                <label class="block text-sm text-orange-300 font-mono mb-2">DESCRIPTION (Max 75 Chars)</label><textarea id="desc" class="input-field h-32" placeholder="Description of the asset (Max 75 chars)..." maxlength="75"></textarea>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div><label class="block text-sm text-orange-300 font-mono mb-2">TWITTER (OPTIONAL)</label><input type="url" id="twitter" class="input-field" placeholder="https://x.com/username"></div>
-                    <div><label class="block text-sm text-orange-300 font-mono mb-2">WEBSITE (OPTIONAL)</label><input type="url" id="website" class="input-field" placeholder="https://project.io"></div>
-                </div>
-            </div>
+        <!-- TAB NAVIGATION -->
+        <div class="tab-container">
+            <button class="tab-btn active" onclick="switchTab('dashboard')" data-tab="dashboard">
+                <i data-lucide="layout-dashboard" class="inline-block w-4 h-4 mr-2"></i>Dashboard
+            </button>
+            <button class="tab-btn" onclick="switchTab('launcher')" data-tab="launcher">
+                <i data-lucide="rocket" class="inline-block w-4 h-4 mr-2"></i>Launcher
+            </button>
+            <button class="tab-btn" onclick="switchTab('register')" data-tab="register">
+                <i data-lucide="file-plus" class="inline-block w-4 h-4 mr-2"></i>Register Token
+            </button>
         </div>
 
-        <div class="panel bg-gradient-to-r from-orange-950 to-[#2a1005] border-2 border-orange-800 mt-10 lg:col-span-3"> 
-            <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-orange-900 pb-4">
-                <div class="flex justify-center items-center gap-4 w-full md:w-1/3 order-2 md:order-1 mb-4 md:mb-0">
-                    <span class="mayhem-label text-orange-400 text-xs tracking-widest transition-colors duration-300" id="mayhem-status-label">MAYHEM MODE: OFF</span>
-                    <label class="toggle-switch"><input type="checkbox" id="mayhem-toggle"><span class="slider"></span></label>
-                </div>
-                <div class="flex flex-col items-center w-full md:w-1/3 order-1 md:order-2">
-                    <span class="text-orange-400 text-xs tracking-widest mb-1">DEPLOYMENT FEE</span>
-                    <span class="text-white font-bold text-2xl">0.02 SOL</span>
-                </div>
-                <div class="w-full md:w-1/3 order-3"><button id="deploy-btn" class="btn-action w-full hover:scale-[1.01] active:scale-[0.99] transition-transform py-3 text-lg">INITIATE LAUNCH SEQUENCE</button></div>
-            </div>
-            <div class="text-center text-sm text-orange-400 mb-4 pt-2"><span class="font-bold">Mayhem Mode:</span> <span class="text-xs">(Enables Pump.fun's advanced features. Use with caution. Default is Standard Deployment.)</span></div>
-            <div id="status-msg" class="status-box"></div>
-        </div>
-        
-        <!-- KING OF THE PILL PANEL -->
-        <div id="koth-panel" class="panel koth-panel koth-glow mt-8 lg:col-span-3 hidden">
-            <div class="flex flex-col md:flex-row items-center justify-between gap-6">
-                <div class="flex items-center gap-4">
-                    <div class="text-4xl">💊</div>
-                    <div>
-                        <h3 class="text-fuchsia-400 font-mono font-bold text-lg uppercase tracking-widest koth-title">KING OF THE PILL</h3>
-                        <p class="text-fuchsia-200/80 text-xs font-mono">HIGHEST MARKET CAP LAUNCH</p>
-                    </div>
-                </div>
+        <!-- TAB: DASHBOARD (Airdrop & Leaderboard) -->
+        <div id="tab-dashboard" class="tab-content active">
 
-                <div class="flex items-center gap-6 bg-black/40 p-3 rounded-lg border border-fuchsia-600/30 flex-1 justify-center">
-                    <img id="koth-img" src="" class="w-12 h-12 rounded border border-fuchsia-500 object-cover hidden">
-                    <div class="text-center">
-                        <div id="koth-ticker" class="text-2xl font-bold text-white font-mono">$????</div>
-                        <div id="koth-name" class="text-xs text-fuchsia-500 font-mono uppercase">LOADING...</div>
-                        <div id="koth-holders" class="text-[10px] text-green-400 font-mono mt-1">HOLDERS GET 10% BONUS!</div>
-                    </div>
-                </div>
-
-                <div class="text-center">
-                    <div class="text-xs text-fuchsia-500 uppercase font-mono mb-1">MARKET CAP</div>
-                    <div id="koth-mcap" class="text-2xl font-bold text-white font-mono">$0</div>
-                </div>
-
-                <div class="text-right">
-                    <div class="text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">HOLDER BONUS</div>
-                    <div class="text-xl font-bold text-green-400 font-mono">10%</div>
-                    <div class="text-[10px] text-fuchsia-500 font-mono">TO ALL HOLDERS</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="panel bg-black/30 border border-orange-900 mt-8 lg:col-span-3">
-            <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
-                <div class="flex items-center gap-4">
-                    <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">🔥 TOP 10 LAUNCHES (BY 24H VOL)</h3>
-                    <span id="leaderboard-last-updated" class="text-orange-600 text-xs font-mono">Syncing...</span>
-                </div>
-                <div class="flex items-center gap-2">
-                    <button onclick="toggleAllLaunchesModal()" class="text-orange-400 hover:text-white transition p-1 rounded hover:bg-orange-800" title="Expand to All Launches">
-                        <i data-lucide="maximize-2" width="16"></i>
-                    </button>
-                    <button onclick="updateLeaderboard()" class="text-orange-400 hover:text-white transition p-1 rounded hover:bg-orange-800" title="Refresh Leaderboard">
-                        <i data-lucide="refresh-cw" width="16"></i>
-                    </button>
-                </div>
-            </div>
-            <div class="overflow-x-auto">
-                <table class="leader-table">
-                    <thead><tr><th style="width: 50px;">#</th><th>Token</th><th class="text-right">MCAP</th><th class="text-right">Vol (24H)</th><th class="text-right">Action</th></tr></thead>
-                    <tbody id="leaderboard-body"><tr><td colspan="5" class="text-center text-orange-400 py-4">Scanning Chain Data...</td></tr></tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Airdrop Panel -->
-        <div class="panel bg-purple-950/30 border border-purple-800 mt-8 lg:col-span-3">
+        <!-- Airdrop Panel - NOW PROMINENT AT TOP -->
+        <div class="panel bg-purple-950/30 border border-purple-800 mb-8">
             <div class="flex justify-between items-center border-b border-purple-800/50 pb-2 mb-4">
-                <h3 class="text-purple-400 font-mono text-sm uppercase tracking-widest">🪂 AIRDROP RESERVES & POINTS</h3>
+                <h3 class="text-purple-400 font-mono text-sm uppercase tracking-widest">🪂 AIRDROP STATUS & POINTS</h3>
                 <div class="flex items-center gap-4">
-                    <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">EXPAND USERS</button>
-                    <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">VIEW HISTORY</button>
+                    <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">ELIGIBLE USERS</button>
+                    <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">HISTORY</button>
                 </div>
             </div>
             <div class="flex flex-col md:flex-row items-stretch justify-between gap-6 px-4">
@@ -275,7 +574,7 @@
                     <div class="text-xs text-purple-300 uppercase mb-2 tracking-widest">SOL Airdrop Pool</div>
                     <div class="text-3xl md:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" id="airdrop-balance">0.00 <span class="text-lg align-top text-purple-400">SOL</span></div>
                 </div>
-                
+
                 <div class="text-center w-full md:w-1/4 flex flex-col justify-center gap-3 border-r border-purple-800/30 pr-4">
                     <div class="flex justify-between items-center px-4">
                         <span class="text-[10px] text-purple-300 uppercase tracking-widest">Top Holder Pts</span>
@@ -310,10 +609,68 @@
             </div>
         </div>
 
-        <div class="panel bg-orange-950/30 border border-orange-900 mt-8 lg:col-span-3">
+        <!-- KING OF THE PILL PANEL -->
+        <div id="koth-panel" class="panel koth-panel koth-glow mb-8 hidden">
+            <div class="flex flex-col md:flex-row items-center justify-between gap-6">
+                <div class="flex items-center gap-4">
+                    <div class="text-4xl">💊</div>
+                    <div>
+                        <h3 class="text-fuchsia-400 font-mono font-bold text-lg uppercase tracking-widest koth-title">KING OF THE PILL</h3>
+                        <p class="text-fuchsia-200/80 text-xs font-mono">HIGHEST MARKET CAP LAUNCH</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-6 bg-black/40 p-3 rounded-lg border border-fuchsia-600/30 flex-1 justify-center">
+                    <img id="koth-img" src="" class="w-12 h-12 rounded border border-fuchsia-500 object-cover hidden">
+                    <div class="text-center">
+                        <div id="koth-ticker" class="text-2xl font-bold text-white font-mono">$????</div>
+                        <div id="koth-name" class="text-xs text-fuchsia-500 font-mono uppercase">LOADING...</div>
+                        <div id="koth-holders" class="text-[10px] text-green-400 font-mono mt-1">HOLDERS GET 10% BONUS!</div>
+                    </div>
+                </div>
+
+                <div class="text-center">
+                    <div class="text-xs text-fuchsia-500 uppercase font-mono mb-1">MARKET CAP</div>
+                    <div id="koth-mcap" class="text-2xl font-bold text-white font-mono">$0</div>
+                </div>
+
+                <div class="text-right">
+                    <div class="text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">HOLDER BONUS</div>
+                    <div class="text-xl font-bold text-green-400 font-mono">10%</div>
+                    <div class="text-[10px] text-fuchsia-500 font-mono">TO ALL HOLDERS</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TOP 10 LEADERBOARD -->
+        <div class="panel bg-black/30 border border-orange-900 mb-8">
+            <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
+                <div class="flex items-center gap-4">
+                    <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">🔥 TOP 10 LAUNCHES (BY 24H VOL)</h3>
+                    <span id="leaderboard-last-updated" class="text-orange-600 text-xs font-mono">Syncing...</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="toggleAllLaunchesModal()" class="text-orange-400 hover:text-white transition p-1 rounded hover:bg-orange-800" title="Expand to All Launches">
+                        <i data-lucide="maximize-2" width="16"></i>
+                    </button>
+                    <button onclick="updateLeaderboard()" class="text-orange-400 hover:text-white transition p-1 rounded hover:bg-orange-800" title="Refresh Leaderboard">
+                        <i data-lucide="refresh-cw" width="16"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="leader-table">
+                    <thead><tr><th style="width: 50px;">#</th><th>Token</th><th class="text-right">MCAP</th><th class="text-right">Vol (24H)</th><th class="text-right">Action</th></tr></thead>
+                    <tbody id="leaderboard-body"><tr><td colspan="5" class="text-center text-orange-400 py-4">Scanning Chain Data...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Fee Tracker -->
+        <div class="panel bg-orange-950/30 border border-orange-900 mb-8">
             <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
                 <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">BUYBACK & FEE TRACKER</h3>
-                <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-xs underline p-1">VIEW EXPANDED LOGS</button>
+                <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-xs underline p-1">VIEW LOGS</button>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
                 <div class="bg-black/30 p-4 rounded border border-orange-900/50">
@@ -332,7 +689,7 @@
                     <div class="text-xs text-orange-400 uppercase">Next Check In</div>
                     <div class="text-xl text-yellow-400 font-bold font-mono mt-1" id="track-next-check">--:--</div>
                 </div>
-                
+
                 <!-- Dynamic Conservation Notice -->
                 <div id="conservation-notice" class="conservation-notice col-span-1 md:col-span-4">
                     <div class="flex items-center justify-center gap-2 mb-1">
@@ -340,7 +697,7 @@
                         <span class="text-blue-300 font-bold uppercase">Conserving SOL for Airdrop</span>
                     </div>
                     <div class="text-blue-200 text-xs">
-                        Targeting <span id="cons-users" class="font-bold text-white">0</span> users. 
+                        Targeting <span id="cons-users" class="font-bold text-white">0</span> users.
                         Need <span id="cons-need" class="font-bold text-white">0.0000</span> SOL (Have <span id="cons-have" class="text-gray-400">0.0000</span>).
                         <span id="cons-missing" class="text-yellow-400 ml-1"></span>
                     </div>
@@ -348,46 +705,195 @@
             </div>
         </div>
 
-        <div class="panel bg-orange-900/10 mt-8 lg:col-span-3">
-            <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-6">PLATFORM METRICS</h3>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div class="metric-card"><div class="metric-label">Lifetime Launches</div><div id="metric-launches" class="metric-value">0</div></div>
-                <div class="metric-card"><div class="metric-label">Total SOL Airdropped</div><div id="metric-pump" class="metric-value">0.00</div></div>
-                <div class="metric-card"><div class="metric-label">Total Daily Volume</div><div id="metric-fees" class="metric-value">$0.00</div></div>
+        <!-- Platform Metrics & Robinhood -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <!-- Platform Metrics -->
+            <div class="panel bg-orange-900/10">
+                <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-6">PLATFORM METRICS</h3>
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="metric-card"><div class="metric-label">Launches</div><div id="metric-launches" class="metric-value">0</div></div>
+                    <div class="metric-card"><div class="metric-label">SOL Airdropped</div><div id="metric-pump" class="metric-value">0.00</div></div>
+                    <div class="metric-card"><div class="metric-label">Daily Volume</div><div id="metric-fees" class="metric-value">$0.00</div></div>
+                </div>
+                <div class="text-center mt-4">
+                    <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-xs border border-orange-700 hover:bg-orange-800 px-4 py-2 rounded transition">ℹ️ FEE MECHANICS</button>
+                </div>
             </div>
-            <div class="text-center mt-6">
-                <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-xs border border-orange-700 hover:bg-orange-800 px-4 py-2 rounded transition">ℹ️ VIEW FEE & BUYBACK MECHANICS</button>
+
+            <!-- Robinhood Section -->
+            <div class="panel bg-green-900/10" id="robinhood-section">
+                <h3 class="text-green-400 font-mono text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-6 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                    ROBINHOOD PARTNERSHIPS
+                </h3>
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="metric-card" style="border-color: #22c55e;">
+                        <div class="metric-label" style="color: #86efac;">Partners</div>
+                        <div id="robinhood-token-count" class="metric-value" style="color: #4ade80;">0</div>
+                    </div>
+                    <div class="metric-card" style="border-color: #22c55e;">
+                        <div class="metric-label" style="color: #86efac;">Fees</div>
+                        <div id="robinhood-fees" class="metric-value" style="color: #4ade80;">0.00</div>
+                    </div>
+                    <div class="metric-card" style="border-color: #22c55e;">
+                        <div class="metric-label" style="color: #86efac;">Your Holdings</div>
+                        <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80;">-</div>
+                    </div>
+                </div>
+                <div class="text-center mt-4 flex justify-center gap-2">
+                    <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-xs border border-green-700 hover:bg-green-800 px-3 py-2 rounded transition">🤝 PARTNERS</button>
+                    <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-xs border border-green-700 hover:bg-green-800 px-3 py-2 rounded transition">ℹ️ INFO</button>
+                </div>
             </div>
         </div>
 
-        <!-- ROBINHOOD BOT SECTION (v12.0) -->
-        <div class="panel bg-green-900/10 mt-8 lg:col-span-3" id="robinhood-section">
-            <h3 class="text-green-400 font-mono text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-6 flex items-center gap-2">
-                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
-                ROBINHOOD BOT - FEE SHARING PARTNERSHIPS
-            </h3>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div class="metric-card" style="border-color: #22c55e;">
-                    <div class="metric-label" style="color: #86efac;">Active Partnerships</div>
-                    <div id="robinhood-token-count" class="metric-value" style="color: #4ade80;">0</div>
+        </div><!-- END TAB: DASHBOARD -->
+
+        <!-- TAB: LAUNCHER -->
+        <div id="tab-launcher" class="tab-content">
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
+            <div class="panel col-span-1 flex flex-col items-center justify-start h-full">
+                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest w-full text-center border-b-2 border-orange-900/50 pb-3">Token Preview</h3>
+                <div class="text-center mb-4 min-h-[60px]"><h2 id="preview-name" class="text-2xl font-bold text-white break-words">Token Name</h2><p id="preview-ticker" class="text-orange-400 font-mono text-lg uppercase">$TICKER</p></div>
+                
+                <!-- DRAG AND DROP ZONE -->
+                <div id="image-preview" class="mb-6 shadow-2xl shadow-orange-900/30 transition-all duration-300" onclick="document.getElementById('image-file').click()">
+                    <div class="text-center pointer-events-none">
+                        <div class="text-2xl mb-2">📁</div>
+                        <div class="text-xs font-bold text-orange-400">DRAG & DROP<br>OR CLICK TO UPLOAD</div>
+                    </div>
                 </div>
-                <div class="metric-card" style="border-color: #22c55e;">
-                    <div class="metric-label" style="color: #86efac;">Total Fees Collected</div>
-                    <div id="robinhood-fees" class="metric-value" style="color: #4ade80;">0.0000 SOL</div>
+                
+                <input type="file" id="image-file" class="hidden" accept="image/png, image/jpeg, image/gif" onchange="previewImage(event)">
+                <p class="text-xs text-orange-400 font-mono text-center mt-2">Required: PNG, JPG, GIF.<br>Max size 4MB.</p>
+            </div>
+            <div class="panel col-span-2">
+                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-orange-900/50 pb-3">Token Metadata</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div><label class="block text-sm text-orange-300 font-mono mb-2">NAME <span class="text-red-500">*</span></label><input type="text" id="name" class="input-field" placeholder="e.g. Infernal Coin" maxlength="32" oninput="updatePreview()"></div>
+                    <div><label class="block text-sm text-orange-300 font-mono mb-2">TICKER <span class="text-red-500">*</span></label><input type="text" id="ticker" class="input-field" placeholder="e.g. BURN (Max 11 Chars)" maxlength="11" oninput="updatePreview()"></div>
                 </div>
-                <div class="metric-card" style="border-color: #22c55e;">
-                    <div class="metric-label" style="color: #86efac;">Your RH Holdings</div>
-                    <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80;">-</div>
+                <label class="block text-sm text-orange-300 font-mono mb-2">DESCRIPTION (Max 75 Chars)</label><textarea id="desc" class="input-field h-32" placeholder="Description of the asset (Max 75 chars)..." maxlength="75"></textarea>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div><label class="block text-sm text-orange-300 font-mono mb-2">TWITTER (OPTIONAL)</label><input type="url" id="twitter" class="input-field" placeholder="https://x.com/username"></div>
+                    <div><label class="block text-sm text-orange-300 font-mono mb-2">WEBSITE (OPTIONAL)</label><input type="url" id="website" class="input-field" placeholder="https://project.io"></div>
                 </div>
             </div>
-            <div class="text-center mt-6 flex justify-center gap-4">
-                <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-xs border border-green-700 hover:bg-green-800 px-4 py-2 rounded transition">🤝 VIEW PARTNER TOKENS</button>
-                <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-xs border border-green-700 hover:bg-green-800 px-4 py-2 rounded transition">ℹ️ HOW ROBINHOOD WORKS</button>
-            </div>
-            <p class="text-xs text-green-300/70 text-center mt-4 font-mono">
-                External tokens sharing creator fees with us. Hold these tokens to earn bonus airdrop points!
-            </p>
         </div>
+
+        <div class="panel bg-gradient-to-r from-orange-950 to-[#2a1005] border-2 border-orange-800 mt-10 lg:col-span-3">
+            <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b border-orange-900 pb-4">
+                <div class="flex justify-center items-center gap-4 w-full md:w-1/3 order-2 md:order-1 mb-4 md:mb-0">
+                    <span class="mayhem-label text-orange-400 text-xs tracking-widest transition-colors duration-300" id="mayhem-status-label">MAYHEM MODE: OFF</span>
+                    <label class="toggle-switch"><input type="checkbox" id="mayhem-toggle"><span class="slider"></span></label>
+                </div>
+                <div class="flex flex-col items-center w-full md:w-1/3 order-1 md:order-2">
+                    <span class="text-orange-400 text-xs tracking-widest mb-1">DEPLOYMENT FEE</span>
+                    <span class="text-white font-bold text-2xl">0.02 SOL</span>
+                </div>
+                <div class="w-full md:w-1/3 order-3"><button id="deploy-btn" class="btn-action w-full hover:scale-[1.01] active:scale-[0.99] transition-transform py-3 text-lg">INITIATE LAUNCH SEQUENCE</button></div>
+            </div>
+            <div class="text-center text-sm text-orange-400 mb-4 pt-2"><span class="font-bold">Mayhem Mode:</span> <span class="text-xs">(Enables Pump.fun's advanced features. Use with caution. Default is Standard Deployment.)</span></div>
+            <div id="status-msg" class="status-box"></div>
+        </div>
+
+        </div><!-- END TAB: LAUNCHER -->
+
+        <!-- TAB: REGISTER TOKEN -->
+        <div id="tab-register" class="tab-content">
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
+            <!-- Registration Form -->
+            <div class="panel register-panel">
+                <h3 class="text-green-400 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-green-900/50 pb-3">Register Your Token</h3>
+
+                <div class="mb-6">
+                    <p class="text-green-200/80 text-sm mb-4">
+                        Register your Pump.fun token to join the IGNITION ecosystem. Your token will appear on the leaderboard, and holders will earn airdrop points.
+                    </p>
+                    <div class="bg-green-900/30 p-3 rounded border border-green-700/50 text-xs text-green-300">
+                        <strong>Requirements:</strong> You must be the creator (fee recipient) of the token to register it.
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-sm text-green-300 font-mono mb-2">TOKEN MINT ADDRESS <span class="text-red-500">*</span></label>
+                    <input type="text" id="register-mint" class="register-input" placeholder="Enter token mint address (e.g., 9zB5wR...)" maxlength="50">
+                </div>
+
+                <div id="register-verification-status" class="mb-4 hidden">
+                    <!-- Will be populated by JS -->
+                </div>
+
+                <div id="register-token-preview" class="mb-6 hidden">
+                    <div class="bg-black/30 p-4 rounded border border-green-700/50">
+                        <div class="flex items-center gap-4">
+                            <img id="register-preview-img" src="" class="w-16 h-16 rounded border border-green-600 object-cover">
+                            <div>
+                                <div id="register-preview-ticker" class="text-xl font-bold text-white font-mono">$TOKEN</div>
+                                <div id="register-preview-name" class="text-sm text-green-400">Token Name</div>
+                                <div id="register-preview-mcap" class="text-xs text-gray-400 mt-1">MCAP: $0</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="verify-token-btn" onclick="verifyTokenForRegistration()" class="btn-register mb-3">
+                    <i data-lucide="search" class="inline-block w-4 h-4 mr-2"></i>VERIFY TOKEN
+                </button>
+
+                <button id="register-token-btn" onclick="registerToken()" class="btn-register hidden" disabled>
+                    <i data-lucide="check-circle" class="inline-block w-4 h-4 mr-2"></i>REGISTER TOKEN
+                </button>
+
+                <div id="register-status-msg" class="status-box mt-4"></div>
+            </div>
+
+            <!-- Registration Info -->
+            <div class="panel bg-black/30 border border-green-900/50">
+                <h3 class="text-green-400 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-green-900/50 pb-3">How It Works</h3>
+
+                <div class="space-y-6">
+                    <div class="flex gap-4">
+                        <div class="w-10 h-10 bg-green-900/50 rounded-full flex items-center justify-center text-green-400 font-bold flex-shrink-0">1</div>
+                        <div>
+                            <h4 class="text-white font-bold mb-1">Enter Your Token Mint</h4>
+                            <p class="text-green-200/70 text-sm">Paste the mint address of your Pump.fun token. This is the contract address shown on pump.fun.</p>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4">
+                        <div class="w-10 h-10 bg-green-900/50 rounded-full flex items-center justify-center text-green-400 font-bold flex-shrink-0">2</div>
+                        <div>
+                            <h4 class="text-white font-bold mb-1">Verification</h4>
+                            <p class="text-green-200/70 text-sm">We verify on-chain that your connected wallet is the creator (fee recipient) of the token. Only creators can register their tokens.</p>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4">
+                        <div class="w-10 h-10 bg-green-900/50 rounded-full flex items-center justify-center text-green-400 font-bold flex-shrink-0">3</div>
+                        <div>
+                            <h4 class="text-white font-bold mb-1">Join the Ecosystem</h4>
+                            <p class="text-green-200/70 text-sm">Once registered, your token appears on the leaderboard and your holders can earn airdrop points!</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-8 p-4 bg-purple-900/30 rounded border border-purple-700/50">
+                    <h4 class="text-purple-400 font-bold text-sm mb-2">Benefits of Registration</h4>
+                    <ul class="text-purple-200/80 text-xs space-y-1">
+                        <li>- Token appears on IGNITION leaderboard</li>
+                        <li>- Top 50 holders earn airdrop points</li>
+                        <li>- Market data tracked (MCAP, Volume)</li>
+                        <li>- Creator earns +2 bonus points</li>
+                        <li>- Eligible for King of the Pill bonus</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        </div><!-- END TAB: REGISTER -->
 
         <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
             <div><span class="text-orange-600">RPC UPLINK: MAINNET PUBLIC</span></div>
@@ -600,7 +1106,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v23.0-ROBINHOOD";
+    const FRONTEND_VERSION = "v25.0-HOLDEX";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02;
@@ -1783,6 +2289,240 @@
                 });
             }, 500);
         }
+    });
+
+    // ========== TAB NAVIGATION (v24.0) ==========
+    const switchTab = (tabName) => {
+        // Update tab buttons
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.tab === tabName) {
+                btn.classList.add('active');
+            }
+        });
+
+        // Update tab content
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.remove('active');
+        });
+        const targetTab = document.getElementById(`tab-${tabName}`);
+        if (targetTab) {
+            targetTab.classList.add('active');
+        }
+
+        // Re-init icons for new tab
+        lucide.createIcons();
+    };
+    window.switchTab = switchTab;
+
+    // ========== TOKEN REGISTRATION (v24.0) ==========
+    let registrationVerified = false;
+    let registrationTokenData = null;
+
+    const showRegisterStatus = (msg, type) => {
+        const statusBox = document.getElementById('register-status-msg');
+        statusBox.innerText = msg;
+        statusBox.style.display = 'block';
+        if (type === 'error') statusBox.className = 'status-box status-error';
+        else if (type === 'success') statusBox.className = 'status-box status-success';
+        else statusBox.className = 'status-box';
+    };
+
+    const hideRegisterStatus = () => {
+        document.getElementById('register-status-msg').style.display = 'none';
+    };
+
+    const verifyTokenForRegistration = async () => {
+        const mintInput = document.getElementById('register-mint');
+        const mint = mintInput.value.trim();
+
+        if (!mint) {
+            showRegisterStatus('Please enter a token mint address', 'error');
+            return;
+        }
+
+        if (!userPubkey) {
+            showRegisterStatus('Please connect your wallet first', 'error');
+            return;
+        }
+
+        // Validate mint format (basic check for base58)
+        if (mint.length < 32 || mint.length > 50) {
+            showRegisterStatus('Invalid mint address format', 'error');
+            return;
+        }
+
+        const verifyBtn = document.getElementById('verify-token-btn');
+        const registerBtn = document.getElementById('register-token-btn');
+        const verificationStatus = document.getElementById('register-verification-status');
+        const tokenPreview = document.getElementById('register-token-preview');
+
+        verifyBtn.disabled = true;
+        verifyBtn.innerHTML = '<i data-lucide="loader" class="inline-block w-4 h-4 mr-2 animate-spin"></i>VERIFYING...';
+        lucide.createIcons();
+
+        try {
+            // First check if already registered
+            const checkRes = await fetchWithRetry(`${BACKEND_URL}/api/check-registration/${mint}`);
+            const checkData = await checkRes.json();
+
+            if (checkData.registered) {
+                verificationStatus.innerHTML = `
+                    <div class="verification-badge verification-error">
+                        <i data-lucide="x-circle" width="16"></i>
+                        Already Registered
+                    </div>
+                `;
+                verificationStatus.classList.remove('hidden');
+                showRegisterStatus(`This token is already registered by ${checkData.token.creator?.slice(0, 8)}...`, 'error');
+                lucide.createIcons();
+                return;
+            }
+
+            // Verify creator ownership
+            const verifyRes = await fetchWithRetry(`${BACKEND_URL}/api/verify-creator`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mint, creatorPubkey: userPubkey })
+            });
+            const verifyData = await verifyRes.json();
+
+            if (!verifyData.success) {
+                throw new Error(verifyData.error || 'Verification failed');
+            }
+
+            if (!verifyData.isCreator) {
+                verificationStatus.innerHTML = `
+                    <div class="verification-badge verification-error">
+                        <i data-lucide="x-circle" width="16"></i>
+                        Not the Creator
+                    </div>
+                    <p class="text-xs text-red-400 mt-2">Your wallet is not the fee recipient for this token.</p>
+                `;
+                verificationStatus.classList.remove('hidden');
+                showRegisterStatus('You are not the creator of this token', 'error');
+                lucide.createIcons();
+                return;
+            }
+
+            // Successfully verified - show preview
+            verificationStatus.innerHTML = `
+                <div class="verification-badge verification-success">
+                    <i data-lucide="check-circle" width="16"></i>
+                    Verified via ${verifyData.source === 'bonding_curve' ? 'Bonding Curve' : 'AMM Pool'}
+                </div>
+            `;
+            verificationStatus.classList.remove('hidden');
+
+            // Try to fetch token preview data from DexScreener
+            try {
+                const previewRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+                const previewData = await previewRes.json();
+                const pair = previewData.pairs?.[0];
+
+                if (pair) {
+                    document.getElementById('register-preview-img').src = resolveTokenImage(pair.info?.imageUrl || '');
+                    document.getElementById('register-preview-ticker').textContent = `$${pair.baseToken?.symbol || 'TOKEN'}`;
+                    document.getElementById('register-preview-name').textContent = pair.baseToken?.name || 'Unknown Token';
+                    document.getElementById('register-preview-mcap').textContent = `MCAP: ${formatMcap(pair.marketCap)}`;
+                    tokenPreview.classList.remove('hidden');
+                }
+            } catch (e) {
+                // Token preview is optional
+                console.warn('Could not fetch token preview', e);
+            }
+
+            registrationVerified = true;
+            registrationTokenData = { mint, creatorPubkey: userPubkey };
+
+            // Show register button
+            registerBtn.classList.remove('hidden');
+            registerBtn.disabled = false;
+            verifyBtn.classList.add('hidden');
+
+            showRegisterStatus('Token verified! Click REGISTER TOKEN to complete.', 'success');
+
+        } catch (e) {
+            console.error('Verification error:', e);
+            verificationStatus.innerHTML = `
+                <div class="verification-badge verification-error">
+                    <i data-lucide="alert-triangle" width="16"></i>
+                    Verification Failed
+                </div>
+            `;
+            verificationStatus.classList.remove('hidden');
+            showRegisterStatus('Error: ' + (e.message || 'Verification failed'), 'error');
+        } finally {
+            verifyBtn.disabled = false;
+            verifyBtn.innerHTML = '<i data-lucide="search" class="inline-block w-4 h-4 mr-2"></i>VERIFY TOKEN';
+            lucide.createIcons();
+        }
+    };
+    window.verifyTokenForRegistration = verifyTokenForRegistration;
+
+    const registerToken = async () => {
+        if (!registrationVerified || !registrationTokenData) {
+            showRegisterStatus('Please verify the token first', 'error');
+            return;
+        }
+
+        const registerBtn = document.getElementById('register-token-btn');
+        registerBtn.disabled = true;
+        registerBtn.innerHTML = '<i data-lucide="loader" class="inline-block w-4 h-4 mr-2 animate-spin"></i>REGISTERING...';
+        lucide.createIcons();
+
+        try {
+            const res = await fetchWithRetry(`${BACKEND_URL}/api/register-token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(registrationTokenData)
+            });
+
+            const data = await res.json();
+
+            if (!data.success) {
+                throw new Error(data.error || 'Registration failed');
+            }
+
+            // Success!
+            showRegisterStatus(`Token ${data.token.ticker} registered successfully!`, 'success');
+
+            // Reset form
+            document.getElementById('register-mint').value = '';
+            document.getElementById('register-verification-status').classList.add('hidden');
+            document.getElementById('register-token-preview').classList.add('hidden');
+            registerBtn.classList.add('hidden');
+            document.getElementById('verify-token-btn').classList.remove('hidden');
+
+            registrationVerified = false;
+            registrationTokenData = null;
+
+            // Refresh leaderboard to show new token
+            setTimeout(() => {
+                updateLeaderboard();
+                refreshAllData();
+            }, 2000);
+
+        } catch (e) {
+            console.error('Registration error:', e);
+            showRegisterStatus('Error: ' + (e.message || 'Registration failed'), 'error');
+        } finally {
+            registerBtn.disabled = false;
+            registerBtn.innerHTML = '<i data-lucide="check-circle" class="inline-block w-4 h-4 mr-2"></i>REGISTER TOKEN';
+            lucide.createIcons();
+        }
+    };
+    window.registerToken = registerToken;
+
+    // Reset registration state when mint input changes
+    document.getElementById('register-mint')?.addEventListener('input', () => {
+        registrationVerified = false;
+        registrationTokenData = null;
+        document.getElementById('register-verification-status').classList.add('hidden');
+        document.getElementById('register-token-preview').classList.add('hidden');
+        document.getElementById('register-token-btn').classList.add('hidden');
+        document.getElementById('verify-token-btn').classList.remove('hidden');
+        hideRegisterStatus();
     });
 </script>
 

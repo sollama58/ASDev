@@ -2,11 +2,12 @@
  * Token Routes
  * Token listing, leaderboard, and holder endpoints
  * v13.0 - Updated for PostgreSQL
+ * v15.0 - Added developer token registration endpoint
  */
 const express = require('express');
 const axios = require('axios');
 const { isValidPubkey } = require('./solana');
-const { redis } = require('../services');
+const { redis, mintExtractor, logger } = require('../services');
 
 const router = express.Router();
 
@@ -14,7 +15,7 @@ const router = express.Router();
  * Initialize routes with dependencies
  */
 function init(deps) {
-    const { db, globalState, devKeypair } = deps;
+    const { db, globalState, devKeypair, connection } = deps;
 
     // Get all launches - SCALABILITY FIX: Added pagination
     router.get('/all-launches', async (req, res) => {
@@ -445,6 +446,232 @@ function init(deps) {
             });
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
+        }
+    });
+
+    // ========== TOKEN REGISTRATION ENDPOINT (v15.0) ==========
+    // Allows developers to register their tokens for the platform
+    // Replaces automatic scanning with explicit registration
+
+    /**
+     * POST /register-token
+     * Register a token for the platform
+     *
+     * Required:
+     * - mint: Token mint address
+     * - creatorPubkey: Creator wallet address (must match on-chain creator)
+     *
+     * The endpoint verifies that creatorPubkey is actually the fee recipient
+     * for the token by checking on-chain bonding curve and AMM pool data.
+     */
+    router.post('/register-token', async (req, res) => {
+        try {
+            const { mint, creatorPubkey } = req.body;
+
+            // Validate inputs
+            if (!mint || !creatorPubkey) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing required fields: mint and creatorPubkey'
+                });
+            }
+
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid mint address'
+                });
+            }
+
+            if (!isValidPubkey(creatorPubkey)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid creator address'
+                });
+            }
+
+            // Check if token is already registered
+            const existingToken = await db.get('SELECT id, mint FROM tokens WHERE mint = $1', [mint]);
+            if (existingToken) {
+                return res.status(409).json({
+                    success: false,
+                    error: 'Token already registered',
+                    mint
+                });
+            }
+
+            // Verify that creatorPubkey is actually the fee recipient on-chain
+            // This checks both bonding curve (pre-graduation) and AMM pool (post-graduation)
+            logger.info(`[TokenRegistration] Verifying fee recipient for ${mint.slice(0, 8)}...`);
+
+            const verification = await mintExtractor.verifyFeeRecipient(
+                mint,
+                creatorPubkey,
+                connection
+            );
+
+            if (!verification.isRecipient) {
+                logger.warn(`[TokenRegistration] Rejected: ${creatorPubkey.slice(0, 8)}... is not fee recipient for ${mint.slice(0, 8)}...`);
+                return res.status(403).json({
+                    success: false,
+                    error: 'Verification failed: The provided creator address is not the fee recipient for this token',
+                    mint
+                });
+            }
+
+            logger.info(`[TokenRegistration] Verified: ${creatorPubkey.slice(0, 8)}... is fee recipient via ${verification.source}`);
+
+            // Fetch token metadata
+            const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
+
+            if (validTokens.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Could not fetch token metadata. Ensure this is a valid Pump.fun token.',
+                    mint
+                });
+            }
+
+            const token = validTokens[0];
+
+            // Insert token into database
+            await db.run(`
+                INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp, volume24h, "priceUsd", "marketCap", complete)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            `, [
+                creatorPubkey,
+                token.mint,
+                token.ticker,
+                token.name,
+                token.description || '',
+                token.twitter || '',
+                token.website || '',
+                token.metadataUri || '',
+                token.image || '',
+                0,
+                Date.now(),
+                token.volume24h || 0,
+                token.priceUsd || 0,
+                token.marketCap || 0,
+                0
+            ]);
+
+            logger.info(`[TokenRegistration] Registered: ${token.ticker} (${mint.slice(0, 8)}...) by ${creatorPubkey.slice(0, 8)}...`);
+
+            res.json({
+                success: true,
+                message: 'Token registered successfully',
+                token: {
+                    mint: token.mint,
+                    ticker: token.ticker,
+                    name: token.name,
+                    image: token.image,
+                    marketCap: token.marketCap,
+                    volume24h: token.volume24h,
+                    creator: creatorPubkey,
+                    verifiedVia: verification.source
+                }
+            });
+
+        } catch (e) {
+            logger.error('[TokenRegistration] Error', { error: e.message, stack: e.stack });
+            res.status(500).json({
+                success: false,
+                error: 'Internal server error during registration'
+            });
+        }
+    });
+
+    /**
+     * GET /check-registration/:mint
+     * Check if a token is registered and get its status
+     */
+    router.get('/check-registration/:mint', async (req, res) => {
+        try {
+            const { mint } = req.params;
+
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid mint address'
+                });
+            }
+
+            const token = await db.get(
+                'SELECT mint, ticker, name, image, "userPubkey", "marketCap", volume24h, timestamp FROM tokens WHERE mint = $1',
+                [mint]
+            );
+
+            if (token) {
+                res.json({
+                    registered: true,
+                    token: {
+                        mint: token.mint,
+                        ticker: token.ticker,
+                        name: token.name,
+                        image: token.image,
+                        creator: token.userPubkey,
+                        marketCap: token.marketCap,
+                        volume24h: token.volume24h,
+                        registeredAt: token.timestamp
+                    }
+                });
+            } else {
+                res.json({
+                    registered: false,
+                    mint
+                });
+            }
+        } catch (e) {
+            res.status(500).json({
+                success: false,
+                error: 'Database error'
+            });
+        }
+    });
+
+    /**
+     * POST /verify-creator
+     * Pre-check if a wallet is the fee recipient for a token (without registering)
+     * Useful for frontend validation before attempting registration
+     */
+    router.post('/verify-creator', async (req, res) => {
+        try {
+            const { mint, creatorPubkey } = req.body;
+
+            if (!mint || !creatorPubkey) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing required fields: mint and creatorPubkey'
+                });
+            }
+
+            if (!isValidPubkey(mint) || !isValidPubkey(creatorPubkey)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid address format'
+                });
+            }
+
+            const verification = await mintExtractor.verifyFeeRecipient(
+                mint,
+                creatorPubkey,
+                connection
+            );
+
+            res.json({
+                success: true,
+                isCreator: verification.isRecipient,
+                source: verification.source,
+                mint,
+                creatorPubkey
+            });
+
+        } catch (e) {
+            res.status(500).json({
+                success: false,
+                error: 'Verification error'
+            });
         }
     });
 
