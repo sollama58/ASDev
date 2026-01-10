@@ -1,11 +1,12 @@
 {
   "name": "asdf-launcher",
-  "version": "10.26.35",
+  "version": "13.0.0",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "start:legacy": "node server.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "migrate": "node scripts/migrate-to-postgres.js"
   },
   "overrides": {
     "bigint-buffer": "^1.1.5"
@@ -29,6 +30,7 @@
     "helmet": "^8.1.0",
     "ioredis": "^5.4.0",
     "node-addon-api": "^7.1.0",
+    "pg": "^8.16.3",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.6",
     "twitter-api-v2": "^1.15.0",
