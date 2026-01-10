@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v12.0-ROBINHOOD</title>
+    <title>ASDev Launcher v13.0-POSTGRES</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -208,19 +208,19 @@
         <div id="koth-panel" class="panel koth-panel koth-glow mt-8 lg:col-span-3 hidden">
             <div class="flex flex-col md:flex-row items-center justify-between gap-6">
                 <div class="flex items-center gap-4">
-                    <div class="text-4xl">💊</div> 
+                    <div class="text-4xl">💊</div>
                     <div>
                         <h3 class="text-fuchsia-400 font-mono font-bold text-lg uppercase tracking-widest koth-title">KING OF THE PILL</h3>
                         <p class="text-fuchsia-200/80 text-xs font-mono">HIGHEST MARKET CAP LAUNCH</p>
                     </div>
                 </div>
-                
+
                 <div class="flex items-center gap-6 bg-black/40 p-3 rounded-lg border border-fuchsia-600/30 flex-1 justify-center">
                     <img id="koth-img" src="" class="w-12 h-12 rounded border border-fuchsia-500 object-cover hidden">
                     <div class="text-center">
                         <div id="koth-ticker" class="text-2xl font-bold text-white font-mono">$????</div>
                         <div id="koth-name" class="text-xs text-fuchsia-500 font-mono uppercase">LOADING...</div>
-                        <div id="koth-creator" class="text-[10px] text-fuchsia-400/70 font-mono mt-1">CREATOR: ?????...</div>
+                        <div id="koth-holders" class="text-[10px] text-green-400 font-mono mt-1">HOLDERS GET 10% BONUS!</div>
                     </div>
                 </div>
 
@@ -228,11 +228,11 @@
                     <div class="text-xs text-fuchsia-500 uppercase font-mono mb-1">MARKET CAP</div>
                     <div id="koth-mcap" class="text-2xl font-bold text-white font-mono">$0</div>
                 </div>
-                
+
                 <div class="text-right">
-                    <div class="text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">REWARD SHARE</div>
-                    <div class="text-xl font-bold text-fuchsia-400 font-mono">10%</div>
-                    <div class="text-[10px] text-fuchsia-500 font-mono">OF AIRDROPS</div>
+                    <div class="text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">HOLDER BONUS</div>
+                    <div class="text-xl font-bold text-green-400 font-mono">10%</div>
+                    <div class="text-[10px] text-fuchsia-500 font-mono">TO ALL HOLDERS</div>
                 </div>
             </div>
         </div>
@@ -464,7 +464,7 @@
                 <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
                 <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 100 Holder of **$ASDF**.</li>
                 <li class="mt-2"><span class="text-yellow-400">Formula:</span> (Holdings + (Created * 2)) * Multiplier</li>
-                <li class="mt-2 text-fuchsia-300 font-bold">💊 King of the Pill (KOTH): 10% of every airdrop goes directly to the Creator of the highest MCAP token, bypassing points logic.</li>
+                <li class="mt-2 text-fuchsia-300 font-bold">💊 King of the Pill (KOTH): 10% of every airdrop is distributed to ALL HOLDERS of the highest MCAP token, proportional to their holdings!</li>
             </ul>
         </div>
     </div>
@@ -499,8 +499,8 @@
                     <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
                 </ul>
                 <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
-                    <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">💊 KING OF THE PILL (NEW)</p>
-                    <p class="text-xs text-gray-300">The Creator of the highest Market Cap token receives <span class="text-white font-bold">10% of the entire Airdrop pot</span> immediately, before other points are calculated.</p>
+                    <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">💊 KING OF THE PILL (v13.0)</p>
+                    <p class="text-xs text-gray-300"><span class="text-white font-bold">10% of the entire Airdrop pot</span> is distributed to all holders of the highest Market Cap token, proportional to their holdings!</p>
                 </div>
             </div>
         </div>
@@ -706,7 +706,7 @@
         kothName: document.getElementById('koth-name'),
         kothMcap: document.getElementById('koth-mcap'),
         kothImg: document.getElementById('koth-img'),
-        kothCreator: document.getElementById('koth-creator'),
+        kothHolders: document.getElementById('koth-holders'),
         consNotice: document.getElementById('conservation-notice'),
         consUsers: document.getElementById('cons-users'),
         consNeed: document.getElementById('cons-need'),
@@ -859,11 +859,11 @@
     const updateExpectedAirdropDisplay = (expectedAmount) => {
         const amount = parseFloat(expectedAmount);
         if (amount <= 0) {
-            ui.expectedAirdrop.innerText = '0.0000';
+            ui.expectedAirdrop.innerText = '0.00';
         } else if (amount < 0.0001) {
             ui.expectedAirdrop.innerText = amount.toExponential(2);
         } else {
-            ui.expectedAirdrop.innerText = amount.toFixed(4);
+            ui.expectedAirdrop.innerText = amount.toFixed(2);
         }
     };
     
@@ -938,14 +938,13 @@
                 if (data.found && data.token) {
                     const panel = document.getElementById('koth-panel');
                     if (panel) panel.classList.remove('hidden');
-                    
+
                     ui.kothTicker.innerText = `$${escapeHtml(data.token.ticker)}`;
                     ui.kothName.innerText = escapeHtml(data.token.name);
                     ui.kothMcap.innerText = formatMcap(data.token.marketCap);
-                    
-                    // NEW: Display Creator
-                    const creator = data.token.creator || '?????';
-                    ui.kothCreator.innerText = `CREATOR: ${creator.slice(0, 5)}...`;
+
+                    // v13.0: KOTH bonus now goes to all holders, not just creator
+                    ui.kothHolders.innerText = 'HOLDERS GET 10% BONUS!';
 
                     if (data.token.image) {
                         ui.kothImg.src = resolveTokenImage(data.token.image);
@@ -979,7 +978,7 @@
                 if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches; 
                 // v11.0: Display SOL airdrop total (or legacy PUMP for backwards compat)
                 if (data.totalSolAirdropped !== undefined && parseFloat(data.totalSolAirdropped) > 0) {
-                    ui.metricPump.innerText = parseFloat(data.totalSolAirdropped).toFixed(4) + ' SOL';
+                    ui.metricPump.innerText = parseFloat(data.totalSolAirdropped).toFixed(2) + ' SOL';
                 } else if (data.totalAirdropped !== undefined) {
                     // Backwards compatibility: show old PUMP airdrops if no SOL airdrops yet
                     const totalPump = parseFloat(data.totalAirdropped);
@@ -1005,7 +1004,7 @@
                 // v11.0: Display SOL airdrop pool instead of PUMP holdings
                 if (data.airdropPoolSol !== undefined) {
                     const airdropPoolSol = parseFloat(data.airdropPoolSol);
-                    ui.airdropBalance.innerHTML = `${airdropPoolSol.toFixed(4)} <span class="text-lg align-top text-purple-400">SOL</span>`;
+                    ui.airdropBalance.innerHTML = `${airdropPoolSol.toFixed(2)} <span class="text-lg align-top text-purple-400">SOL</span>`;
                 } else if (data.pumpHoldings !== undefined) {
                     // Fallback for backwards compatibility
                     currentPumpHoldings = parseFloat(data.pumpHoldings);
@@ -1019,8 +1018,8 @@
                 if (data.conservationStatus && data.conservationStatus.isConserving) {
                     ui.consNotice.classList.add('conservation-active');
                     ui.consUsers.innerText = data.conservationStatus.eligibleCount;
-                    ui.consNeed.innerText = parseFloat(data.conservationStatus.estimatedCost).toFixed(4);
-                    ui.consHave.innerText = parseFloat(data.conservationStatus.currentSol).toFixed(4);
+                    ui.consNeed.innerText = parseFloat(data.conservationStatus.estimatedCost).toFixed(2);
+                    ui.consHave.innerText = parseFloat(data.conservationStatus.currentSol).toFixed(2);
                     ui.consMissing.innerText = `(${data.conservationStatus.missingAtas} new wallets)`;
                 } else {
                     ui.consNotice.classList.remove('conservation-active');
@@ -1029,7 +1028,7 @@
                 // v12.0: Update Robinhood stats from health response
                 if (data.robinhood) {
                     document.getElementById('robinhood-token-count').textContent = data.robinhood.activeTokens || 0;
-                    document.getElementById('robinhood-fees').textContent = `${(data.robinhood.totalFeesCollectedSol || 0).toFixed(4)} SOL`;
+                    document.getElementById('robinhood-fees').textContent = `${(data.robinhood.totalFeesCollectedSol || 0).toFixed(2)} SOL`;
                 }
             } else { 
                 status = 'OFFLINE';
@@ -1285,7 +1284,7 @@
                                     <td class="p-2 text-right text-blue-400">${(user.created || 0) * 2}</td>
                                     <td class="p-2 text-right">${multiplierBadge}</td>
                                     <td class="p-2 text-right text-yellow-400 font-bold">${user.points}</td>
-                                    <td class="p-2 text-right text-green-400 font-bold">${parseFloat(user.expectedAirdrop).toFixed(4)} SOL</td>
+                                    <td class="p-2 text-right text-green-400 font-bold">${parseFloat(user.expectedAirdrop).toFixed(2)} SOL</td>
                                 </tr>
                                 `;
                             }).join('')}
@@ -1329,7 +1328,7 @@
                     let displayValue = value;
                     if (key.toLowerCase().includes('sol') || key.toLowerCase().includes('fees')) {
                         const numVal = parseFloat(value);
-                        if (!isNaN(numVal)) displayValue = numVal.toFixed(4) + ' SOL';
+                        if (!isNaN(numVal)) displayValue = numVal.toFixed(2) + ' SOL';
                     }
                     if (key === 'kothWinner') {
                         displayValue = value || 'N/A';
@@ -1387,7 +1386,7 @@
                                     const details = JSON.parse(log.details || '{}');
                                     if (details.currency === 'SOL') {
                                         currency = 'SOL';
-                                        amountDisplay = parseFloat(log.amount).toFixed(4);
+                                        amountDisplay = parseFloat(log.amount).toFixed(2);
                                     }
                                 } catch(e) {}
 
@@ -1483,7 +1482,7 @@
                                     </div>
                                 </td>
                                 <td class="p-2 text-right text-green-400 font-bold">${t.feeSharePercent.toFixed(1)}%</td>
-                                <td class="p-2 text-right text-white">${t.totalFeesCollected.toFixed(4)} SOL</td>
+                                <td class="p-2 text-right text-white">${t.totalFeesCollected.toFixed(2)} SOL</td>
                                 <td class="p-2 text-right">
                                     ${t.mint ? `<a href="${PUMPFUN_URL_BASE}${t.mint}" target="_blank" class="text-green-400 hover:text-white text-xs underline">View</a>` : '-'}
                                 </td>
@@ -1504,7 +1503,7 @@
             const stats = await res.json();
 
             document.getElementById('robinhood-token-count').textContent = stats.activeTokens || 0;
-            document.getElementById('robinhood-fees').textContent = `${(stats.totalFeesCollectedSol || 0).toFixed(4)} SOL`;
+            document.getElementById('robinhood-fees').textContent = `${(stats.totalFeesCollectedSol || 0).toFixed(2)} SOL`;
 
             // Check user's Robinhood holdings if connected
             if (userPubkey) {

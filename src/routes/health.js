@@ -90,9 +90,9 @@ function init(deps) {
                     logger.debug('Failed to fetch PUMP holdings', { error: e.message });
                 }
 
-                // v12.0: Robinhood stats
-                const robinhoodTokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE isActive = 1');
-                const robinhoodTotalFees = await db.get('SELECT SUM(totalFeesCollected) as total FROM robinhood_tokens');
+                // v12.0: Robinhood stats (v13.0: PostgreSQL syntax)
+                const robinhoodTokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
+                const robinhoodTotalFees = await db.get('SELECT SUM("totalFeesCollected") as total FROM robinhood_tokens');
 
                 return {
                     stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped, totalSolAirdropped,

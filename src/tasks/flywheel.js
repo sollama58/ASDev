@@ -3,6 +3,7 @@
  * Fee collection, buyback, and SOL airdrop distribution
  *
  * v11.0 - Changed from PUMP token airdrops to direct SOL airdrops
+ * v13.0 - KOTH bonus now distributed to all holders of king token (not just creator)
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -269,30 +270,76 @@ async function processAirdrop(deps) {
         let kothTxSignature = null;
 
         // 1. Identify King of the Hill (Highest MCAP)
-        const kothToken = await db.get('SELECT userPubkey, ticker, mint FROM tokens ORDER BY marketCap DESC LIMIT 1');
+        const kothToken = await db.get('SELECT userPubkey, ticker, mint FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
 
-        // 2. Process KOTH Payout (10%)
-        if (kothToken && kothToken.userPubkey) {
+        // 2. Process KOTH Payout (10%) - v13.0: Now distributed to all holders of the king token
+        if (kothToken && kothToken.mint) {
             kothAmount = Math.floor(totalDistributable * 0.10);
             communityAmount = totalDistributable - kothAmount;
 
-            logger.info(`👑 King of the Hill found: ${kothToken.ticker} (${(kothAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL prize)`);
+            // Get all holders of the king token
+            const kothHolders = await db.all(
+                'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
+                [kothToken.mint]
+            );
 
-            try {
-                // Send specific transaction for KOTH
-                const kothBatch = [{ user: new PublicKey(kothToken.userPubkey), amount: kothAmount }];
-                kothTxSignature = await sendSolAirdropBatch(kothBatch, deps);
+            if (kothHolders && kothHolders.length > 0) {
+                logger.info(`👑 King of the Hill: ${kothToken.ticker} - Distributing ${(kothAmount / LAMPORTS_PER_SOL).toFixed(2)} SOL to ${kothHolders.length} holders`);
 
-                if (kothTxSignature) {
-                    logger.info(`✅ KOTH SOL Payout Sent: ${kothTxSignature}`);
-                } else {
-                    logger.error("❌ KOTH Payout Failed - returning funds to community pool");
-                    // If fails, put money back in community pot
+                try {
+                    // Calculate total balance for proportional distribution
+                    const totalBalance = kothHolders.reduce((sum, h) => sum + BigInt(h.balance || '0'), BigInt(0));
+
+                    // Build KOTH distribution batch (proportional to holdings)
+                    const kothBatch = [];
+                    for (const holder of kothHolders) {
+                        try {
+                            const holderBalance = BigInt(holder.balance || '0');
+                            if (holderBalance <= BigInt(0)) continue;
+
+                            // Calculate proportional share
+                            const share = totalBalance > BigInt(0)
+                                ? Number((BigInt(kothAmount) * holderBalance) / totalBalance)
+                                : Math.floor(kothAmount / kothHolders.length);
+
+                            if (share > 0) {
+                                kothBatch.push({ user: new PublicKey(holder.holderPubkey), amount: share });
+                            }
+                        } catch (e) {
+                            logger.debug(`Skipping invalid KOTH holder: ${holder.holderPubkey}`);
+                        }
+                    }
+
+                    // Send KOTH distributions in batches
+                    const KOTH_BATCH_SIZE = 15;
+                    let kothSignatures = [];
+                    for (let i = 0; i < kothBatch.length; i += KOTH_BATCH_SIZE) {
+                        const batch = kothBatch.slice(i, i + KOTH_BATCH_SIZE);
+                        const sig = await sendSolAirdropBatch(batch, deps);
+                        if (sig) {
+                            kothSignatures.push(sig);
+                        }
+                        if (i + KOTH_BATCH_SIZE < kothBatch.length) {
+                            await new Promise(r => setTimeout(r, 500));
+                        }
+                    }
+
+                    if (kothSignatures.length > 0) {
+                        kothTxSignature = kothSignatures.join(',');
+                        logger.info(`✅ KOTH Holder Payout Complete: ${kothSignatures.length} transactions sent to ${kothBatch.length} holders`);
+                    } else {
+                        logger.error("❌ KOTH Payout Failed - returning funds to community pool");
+                        communityAmount += kothAmount;
+                        kothAmount = 0;
+                    }
+                } catch (e) {
+                    logger.error(`KOTH Logic Error: ${e.message}`);
                     communityAmount += kothAmount;
                     kothAmount = 0;
                 }
-            } catch (e) {
-                logger.error(`KOTH Logic Error: ${e.message}`);
+            } else {
+                // No holders found, return to community pool
+                logger.info(`👑 King of the Hill: ${kothToken.ticker} - No holders found, returning to community pool`);
                 communityAmount += kothAmount;
                 kothAmount = 0;
             }
@@ -361,17 +408,27 @@ async function processAirdrop(deps) {
         const totalDistributedSol = totalDistributable / LAMPORTS_PER_SOL;
         const kothAmountSol = kothAmount / LAMPORTS_PER_SOL;
 
+        // v13.0: Track KOTH holder recipients count
+        const kothHolderCount = kothToken?.mint ? (await db.get(
+            'SELECT COUNT(*) as count FROM token_holders WHERE mint = $1',
+            [kothToken.mint]
+        ))?.count || 0 : 0;
+
         const details = JSON.stringify({
             success: successfulBatches,
             failed: failedBatches,
             kothWinner: kothToken?.ticker || 'None',
             kothAmount: kothAmountSol,
+            kothHolders: kothAmount > 0 ? kothHolderCount : 0, // v13.0: Number of KOTH holders who received
             currency: 'SOL' // Mark as SOL airdrop for backwards compatibility
         });
 
+        // v13.0: Recipients now includes KOTH holders instead of just creator
+        const totalRecipients = userPoints.length + (kothAmount > 0 ? kothHolderCount : 0);
+
         await db.run(
             'INSERT INTO airdrop_logs (amount, recipients, "totalPoints", signatures, details, timestamp) VALUES ($1, $2, $3, $4, $5, $6)',
-            [totalDistributedSol, userPoints.length + (kothAmount > 0 ? 1 : 0), totalPoints, allSignatures.join(','), details, new Date().toISOString()]
+            [totalDistributedSol, totalRecipients, totalPoints, allSignatures.join(','), details, new Date().toISOString()]
         );
 
         // Clear status after run
