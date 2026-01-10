@@ -42,10 +42,10 @@ function init(deps) {
             // Select token with highest market cap
             // Ensure we only select valid tokens (non-null marketCap)
             const koth = await db.get(`
-                SELECT mint, userPubkey, name, ticker, image, marketCap, volume24h 
-                FROM tokens 
-                WHERE marketCap > 0 
-                ORDER BY marketCap DESC 
+                SELECT mint, "userPubkey", name, ticker, image, "marketCap", volume24h
+                FROM tokens
+                WHERE "marketCap" > 0
+                ORDER BY "marketCap" DESC
                 LIMIT 1
             `);
             
@@ -115,7 +115,7 @@ function init(deps) {
     // Recent launches
     router.get('/recent-launches', async (req, res) => {
         try {
-            const rows = await db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10');
+            const rows = await db.all('SELECT "userPubkey", ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10');
             res.json(rows.map(r => ({
                 userSnippet: r.userPubkey.slice(0, 5),
                 ticker: r.ticker,
