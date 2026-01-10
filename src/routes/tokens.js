@@ -449,9 +449,9 @@ function init(deps) {
         }
     });
 
-    // ========== TOKEN REGISTRATION ENDPOINT (v15.0) ==========
-    // Allows developers to register their tokens for the platform
-    // Replaces automatic scanning with explicit registration
+    // ========== TOKEN REGISTRATION ENDPOINT (v16.0) ==========
+    // Allows anyone to register tokens that share fees with our platform wallet
+    // Verifies our central wallet is listed as a fee recipient on-chain
 
     /**
      * POST /register-token
@@ -459,20 +459,23 @@ function init(deps) {
      *
      * Required:
      * - mint: Token mint address
-     * - creatorPubkey: Creator wallet address (must match on-chain creator)
      *
-     * The endpoint verifies that creatorPubkey is actually the fee recipient
-     * for the token by checking on-chain bonding curve and AMM pool data.
+     * Optional:
+     * - submitterPubkey: Wallet of the person submitting (for tracking)
+     *
+     * The endpoint verifies that our platform wallet (devKeypair) is a fee
+     * recipient for the token by checking on-chain bonding curve and AMM pool data.
+     * This ensures only tokens that share fees with us can be registered.
      */
     router.post('/register-token', async (req, res) => {
         try {
-            const { mint, creatorPubkey } = req.body;
+            const { mint, submitterPubkey } = req.body;
 
             // Validate inputs
-            if (!mint || !creatorPubkey) {
+            if (!mint) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Missing required fields: mint and creatorPubkey'
+                    error: 'Missing required field: mint'
                 });
             }
 
@@ -480,13 +483,6 @@ function init(deps) {
                 return res.status(400).json({
                     success: false,
                     error: 'Invalid mint address'
-                });
-            }
-
-            if (!isValidPubkey(creatorPubkey)) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Invalid creator address'
                 });
             }
 
@@ -500,26 +496,30 @@ function init(deps) {
                 });
             }
 
-            // Verify that creatorPubkey is actually the fee recipient on-chain
+            // Get our platform wallet address
+            const platformWallet = devKeypair.publicKey.toString();
+
+            // Verify that our platform wallet is a fee recipient on-chain
             // This checks both bonding curve (pre-graduation) and AMM pool (post-graduation)
-            logger.info(`[TokenRegistration] Verifying fee recipient for ${mint.slice(0, 8)}...`);
+            logger.info(`[TokenRegistration] Verifying platform wallet is fee recipient for ${mint.slice(0, 8)}...`);
 
             const verification = await mintExtractor.verifyFeeRecipient(
                 mint,
-                creatorPubkey,
+                platformWallet,
                 connection
             );
 
             if (!verification.isRecipient) {
-                logger.warn(`[TokenRegistration] Rejected: ${creatorPubkey.slice(0, 8)}... is not fee recipient for ${mint.slice(0, 8)}...`);
+                logger.warn(`[TokenRegistration] Rejected: Platform wallet is not fee recipient for ${mint.slice(0, 8)}...`);
                 return res.status(403).json({
                     success: false,
-                    error: 'Verification failed: The provided creator address is not the fee recipient for this token',
-                    mint
+                    error: 'Verification failed: This token does not share fees with the IGNITION platform. The token creator must add our wallet as a fee recipient on Pump.fun.',
+                    mint,
+                    platformWallet
                 });
             }
 
-            logger.info(`[TokenRegistration] Verified: ${creatorPubkey.slice(0, 8)}... is fee recipient via ${verification.source}`);
+            logger.info(`[TokenRegistration] Verified: Platform wallet is fee recipient via ${verification.source}`);
 
             // Fetch token metadata
             const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
@@ -535,11 +535,16 @@ function init(deps) {
             const token = validTokens[0];
 
             // Insert token into database
+            // Use submitterPubkey if provided, otherwise use 'platform_registered'
+            const registeredBy = submitterPubkey && isValidPubkey(submitterPubkey)
+                ? submitterPubkey
+                : 'platform_registered';
+
             await db.run(`
                 INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp, volume24h, "priceUsd", "marketCap", complete)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             `, [
-                creatorPubkey,
+                registeredBy,
                 token.mint,
                 token.ticker,
                 token.name,
@@ -556,11 +561,11 @@ function init(deps) {
                 0
             ]);
 
-            logger.info(`[TokenRegistration] Registered: ${token.ticker} (${mint.slice(0, 8)}...) by ${creatorPubkey.slice(0, 8)}...`);
+            logger.info(`[TokenRegistration] Registered: ${token.ticker} (${mint.slice(0, 8)}...) - fee sharing verified via ${verification.source}`);
 
             res.json({
                 success: true,
-                message: 'Token registered successfully',
+                message: 'Token registered successfully! Fee sharing verified.',
                 token: {
                     mint: token.mint,
                     ticker: token.ticker,
@@ -568,7 +573,6 @@ function init(deps) {
                     image: token.image,
                     marketCap: token.marketCap,
                     volume24h: token.volume24h,
-                    creator: creatorPubkey,
                     verifiedVia: verification.source
                 }
             });
@@ -631,40 +635,77 @@ function init(deps) {
     });
 
     /**
-     * POST /verify-creator
-     * Pre-check if a wallet is the fee recipient for a token (without registering)
+     * POST /verify-token
+     * Pre-check if our platform wallet is a fee recipient for a token (without registering)
      * Useful for frontend validation before attempting registration
      */
-    router.post('/verify-creator', async (req, res) => {
+    router.post('/verify-token', async (req, res) => {
         try {
-            const { mint, creatorPubkey } = req.body;
+            const { mint } = req.body;
 
-            if (!mint || !creatorPubkey) {
+            if (!mint) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Missing required fields: mint and creatorPubkey'
+                    error: 'Missing required field: mint'
                 });
             }
 
-            if (!isValidPubkey(mint) || !isValidPubkey(creatorPubkey)) {
+            if (!isValidPubkey(mint)) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Invalid address format'
+                    error: 'Invalid mint address'
                 });
             }
 
+            // Get our platform wallet address
+            const platformWallet = devKeypair.publicKey.toString();
+
+            // Check if already registered
+            const existingToken = await db.get('SELECT mint, ticker, name FROM tokens WHERE mint = $1', [mint]);
+            if (existingToken) {
+                return res.json({
+                    success: true,
+                    isEligible: false,
+                    alreadyRegistered: true,
+                    token: existingToken,
+                    mint
+                });
+            }
+
+            // Verify platform wallet is fee recipient
             const verification = await mintExtractor.verifyFeeRecipient(
                 mint,
-                creatorPubkey,
+                platformWallet,
                 connection
             );
 
+            // Also fetch token metadata for preview
+            let tokenPreview = null;
+            if (verification.isRecipient) {
+                try {
+                    const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
+                    if (validTokens.length > 0) {
+                        tokenPreview = {
+                            ticker: validTokens[0].ticker,
+                            name: validTokens[0].name,
+                            image: validTokens[0].image,
+                            marketCap: validTokens[0].marketCap,
+                            volume24h: validTokens[0].volume24h
+                        };
+                    }
+                } catch (e) {
+                    // Metadata fetch failed, but verification still valid
+                }
+            }
+
             res.json({
                 success: true,
-                isCreator: verification.isRecipient,
+                isEligible: verification.isRecipient,
+                alreadyRegistered: false,
                 source: verification.source,
                 mint,
-                creatorPubkey
+                platformWallet,
+                tokenPreview
             });
 
         } catch (e) {

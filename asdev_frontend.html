@@ -806,14 +806,14 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
             <!-- Registration Form -->
             <div class="panel register-panel">
-                <h3 class="text-green-400 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-green-900/50 pb-3">Register Your Token</h3>
+                <h3 class="text-green-400 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-green-900/50 pb-3">Register a Token</h3>
 
                 <div class="mb-6">
                     <p class="text-green-200/80 text-sm mb-4">
-                        Register your Pump.fun token to join the IGNITION ecosystem. Your token will appear on the leaderboard, and holders will earn airdrop points.
+                        Register any Pump.fun token that shares fees with IGNITION. Once registered, the token appears on the leaderboard and holders can earn airdrop points.
                     </p>
                     <div class="bg-green-900/30 p-3 rounded border border-green-700/50 text-xs text-green-300">
-                        <strong>Requirements:</strong> You must be the creator (fee recipient) of the token to register it.
+                        <strong>Requirement:</strong> The token creator must have added our platform wallet as a fee recipient on Pump.fun.
                     </div>
                 </div>
 
@@ -840,7 +840,7 @@
                 </div>
 
                 <button id="verify-token-btn" onclick="verifyTokenForRegistration()" class="btn-register mb-3">
-                    <i data-lucide="search" class="inline-block w-4 h-4 mr-2"></i>VERIFY TOKEN
+                    <i data-lucide="search" class="inline-block w-4 h-4 mr-2"></i>VERIFY FEE SHARING
                 </button>
 
                 <button id="register-token-btn" onclick="registerToken()" class="btn-register hidden" disabled>
@@ -858,16 +858,16 @@
                     <div class="flex gap-4">
                         <div class="w-10 h-10 bg-green-900/50 rounded-full flex items-center justify-center text-green-400 font-bold flex-shrink-0">1</div>
                         <div>
-                            <h4 class="text-white font-bold mb-1">Enter Your Token Mint</h4>
-                            <p class="text-green-200/70 text-sm">Paste the mint address of your Pump.fun token. This is the contract address shown on pump.fun.</p>
+                            <h4 class="text-white font-bold mb-1">Creator Shares Fees</h4>
+                            <p class="text-green-200/70 text-sm">The token creator must add IGNITION's wallet as a fee recipient on Pump.fun. This shares a portion of trading fees with us.</p>
                         </div>
                     </div>
 
                     <div class="flex gap-4">
                         <div class="w-10 h-10 bg-green-900/50 rounded-full flex items-center justify-center text-green-400 font-bold flex-shrink-0">2</div>
                         <div>
-                            <h4 class="text-white font-bold mb-1">Verification</h4>
-                            <p class="text-green-200/70 text-sm">We verify on-chain that your connected wallet is the creator (fee recipient) of the token. Only creators can register their tokens.</p>
+                            <h4 class="text-white font-bold mb-1">Enter Token Mint</h4>
+                            <p class="text-green-200/70 text-sm">Paste the token's mint address. We verify on-chain that our platform is listed as a fee recipient.</p>
                         </div>
                     </div>
 
@@ -875,7 +875,7 @@
                         <div class="w-10 h-10 bg-green-900/50 rounded-full flex items-center justify-center text-green-400 font-bold flex-shrink-0">3</div>
                         <div>
                             <h4 class="text-white font-bold mb-1">Join the Ecosystem</h4>
-                            <p class="text-green-200/70 text-sm">Once registered, your token appears on the leaderboard and your holders can earn airdrop points!</p>
+                            <p class="text-green-200/70 text-sm">Once verified and registered, the token appears on the leaderboard and holders start earning airdrop points!</p>
                         </div>
                     </div>
                 </div>
@@ -886,9 +886,17 @@
                         <li>- Token appears on IGNITION leaderboard</li>
                         <li>- Top 50 holders earn airdrop points</li>
                         <li>- Market data tracked (MCAP, Volume)</li>
-                        <li>- Creator earns +2 bonus points</li>
                         <li>- Eligible for King of the Pill bonus</li>
+                        <li>- Shared fees fund the airdrop pool</li>
                     </ul>
+                </div>
+
+                <div class="mt-4 p-4 bg-amber-900/20 rounded border border-amber-700/50">
+                    <h4 class="text-amber-400 font-bold text-sm mb-2">For Token Creators</h4>
+                    <p class="text-amber-200/80 text-xs">
+                        To enable fee sharing, go to your token on Pump.fun and add our wallet as a fee recipient. Our platform wallet:
+                    </p>
+                    <code class="block mt-2 text-xs text-amber-300 bg-black/30 p-2 rounded break-all select-all">FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB</code>
                 </div>
             </div>
         </div>
@@ -1106,7 +1114,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v25.0-HOLDEX";
+    const FRONTEND_VERSION = "v26.0-FEESHARE";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02;
@@ -2341,11 +2349,6 @@
             return;
         }
 
-        if (!userPubkey) {
-            showRegisterStatus('Please connect your wallet first', 'error');
-            return;
-        }
-
         // Validate mint format (basic check for base58)
         if (mint.length < 32 || mint.length > 50) {
             showRegisterStatus('Invalid mint address format', 'error');
@@ -2362,28 +2365,11 @@
         lucide.createIcons();
 
         try {
-            // First check if already registered
-            const checkRes = await fetchWithRetry(`${BACKEND_URL}/api/check-registration/${mint}`);
-            const checkData = await checkRes.json();
-
-            if (checkData.registered) {
-                verificationStatus.innerHTML = `
-                    <div class="verification-badge verification-error">
-                        <i data-lucide="x-circle" width="16"></i>
-                        Already Registered
-                    </div>
-                `;
-                verificationStatus.classList.remove('hidden');
-                showRegisterStatus(`This token is already registered by ${checkData.token.creator?.slice(0, 8)}...`, 'error');
-                lucide.createIcons();
-                return;
-            }
-
-            // Verify creator ownership
-            const verifyRes = await fetchWithRetry(`${BACKEND_URL}/api/verify-creator`, {
+            // Use the new verify-token endpoint which checks if platform wallet is fee recipient
+            const verifyRes = await fetchWithRetry(`${BACKEND_URL}/api/verify-token`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mint, creatorPubkey: userPubkey })
+                body: JSON.stringify({ mint })
             });
             const verifyData = await verifyRes.json();
 
@@ -2391,16 +2377,31 @@
                 throw new Error(verifyData.error || 'Verification failed');
             }
 
-            if (!verifyData.isCreator) {
+            // Check if already registered
+            if (verifyData.alreadyRegistered) {
                 verificationStatus.innerHTML = `
                     <div class="verification-badge verification-error">
                         <i data-lucide="x-circle" width="16"></i>
-                        Not the Creator
+                        Already Registered
                     </div>
-                    <p class="text-xs text-red-400 mt-2">Your wallet is not the fee recipient for this token.</p>
                 `;
                 verificationStatus.classList.remove('hidden');
-                showRegisterStatus('You are not the creator of this token', 'error');
+                showRegisterStatus(`This token ($${verifyData.token?.ticker || 'TOKEN'}) is already registered`, 'error');
+                lucide.createIcons();
+                return;
+            }
+
+            // Check if platform wallet is fee recipient
+            if (!verifyData.isEligible) {
+                verificationStatus.innerHTML = `
+                    <div class="verification-badge verification-error">
+                        <i data-lucide="x-circle" width="16"></i>
+                        Fee Sharing Not Enabled
+                    </div>
+                    <p class="text-xs text-red-400 mt-2">This token does not share fees with IGNITION. The creator must add our wallet as a fee recipient on Pump.fun.</p>
+                `;
+                verificationStatus.classList.remove('hidden');
+                showRegisterStatus('Token does not share fees with our platform', 'error');
                 lucide.createIcons();
                 return;
             }
@@ -2409,38 +2410,47 @@
             verificationStatus.innerHTML = `
                 <div class="verification-badge verification-success">
                     <i data-lucide="check-circle" width="16"></i>
-                    Verified via ${verifyData.source === 'bonding_curve' ? 'Bonding Curve' : 'AMM Pool'}
+                    Fee Sharing Verified via ${verifyData.source === 'bonding_curve' ? 'Bonding Curve' : 'AMM Pool'}
                 </div>
             `;
             verificationStatus.classList.remove('hidden');
 
-            // Try to fetch token preview data from DexScreener
-            try {
-                const previewRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
-                const previewData = await previewRes.json();
-                const pair = previewData.pairs?.[0];
+            // Show token preview if available from verification response
+            if (verifyData.tokenPreview) {
+                document.getElementById('register-preview-img').src = resolveTokenImage(verifyData.tokenPreview.image || '');
+                document.getElementById('register-preview-ticker').textContent = `$${verifyData.tokenPreview.ticker || 'TOKEN'}`;
+                document.getElementById('register-preview-name').textContent = verifyData.tokenPreview.name || 'Unknown Token';
+                document.getElementById('register-preview-mcap').textContent = `MCAP: ${formatMcap(verifyData.tokenPreview.marketCap)}`;
+                tokenPreview.classList.remove('hidden');
+            } else {
+                // Try to fetch token preview data from DexScreener as fallback
+                try {
+                    const previewRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+                    const previewData = await previewRes.json();
+                    const pair = previewData.pairs?.[0];
 
-                if (pair) {
-                    document.getElementById('register-preview-img').src = resolveTokenImage(pair.info?.imageUrl || '');
-                    document.getElementById('register-preview-ticker').textContent = `$${pair.baseToken?.symbol || 'TOKEN'}`;
-                    document.getElementById('register-preview-name').textContent = pair.baseToken?.name || 'Unknown Token';
-                    document.getElementById('register-preview-mcap').textContent = `MCAP: ${formatMcap(pair.marketCap)}`;
-                    tokenPreview.classList.remove('hidden');
+                    if (pair) {
+                        document.getElementById('register-preview-img').src = resolveTokenImage(pair.info?.imageUrl || '');
+                        document.getElementById('register-preview-ticker').textContent = `$${pair.baseToken?.symbol || 'TOKEN'}`;
+                        document.getElementById('register-preview-name').textContent = pair.baseToken?.name || 'Unknown Token';
+                        document.getElementById('register-preview-mcap').textContent = `MCAP: ${formatMcap(pair.marketCap)}`;
+                        tokenPreview.classList.remove('hidden');
+                    }
+                } catch (e) {
+                    // Token preview is optional
+                    console.warn('Could not fetch token preview', e);
                 }
-            } catch (e) {
-                // Token preview is optional
-                console.warn('Could not fetch token preview', e);
             }
 
             registrationVerified = true;
-            registrationTokenData = { mint, creatorPubkey: userPubkey };
+            registrationTokenData = { mint, submitterPubkey: userPubkey || null };
 
             // Show register button
             registerBtn.classList.remove('hidden');
             registerBtn.disabled = false;
             verifyBtn.classList.add('hidden');
 
-            showRegisterStatus('Token verified! Click REGISTER TOKEN to complete.', 'success');
+            showRegisterStatus('Fee sharing verified! Click REGISTER TOKEN to complete.', 'success');
 
         } catch (e) {
             console.error('Verification error:', e);
@@ -2454,7 +2464,7 @@
             showRegisterStatus('Error: ' + (e.message || 'Verification failed'), 'error');
         } finally {
             verifyBtn.disabled = false;
-            verifyBtn.innerHTML = '<i data-lucide="search" class="inline-block w-4 h-4 mr-2"></i>VERIFY TOKEN';
+            verifyBtn.innerHTML = '<i data-lucide="search" class="inline-block w-4 h-4 mr-2"></i>VERIFY FEE SHARING';
             lucide.createIcons();
         }
     };
@@ -2485,7 +2495,7 @@
             }
 
             // Success!
-            showRegisterStatus(`Token ${data.token.ticker} registered successfully!`, 'success');
+            showRegisterStatus(`Token ${data.token.ticker} registered successfully! Fee sharing verified.`, 'success');
 
             // Reset form
             document.getElementById('register-mint').value = '';
