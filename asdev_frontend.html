@@ -742,8 +742,8 @@
         try {
             const res = await fetch(`${BACKEND_URL}/api/pump-proxy/${PUMP_CONTRACT}`);
             const data = await res.json();
-            if (data && data.virtual_sol_reserves && data.virtual_token_reserves) {
-                pumpPriceCache = data.virtual_sol_reserves / data.virtual_token_reserves;
+            if (data && data.priceNative) {
+                pumpPriceCache = parseFloat(data.priceNative);
             }
         } catch (e) {}
     };

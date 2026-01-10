@@ -163,19 +163,28 @@ function init(deps) {
         }
     });
 
-    // Proxy for pump.fun API (avoids CORS issues on frontend)
+    // Proxy for token price data (uses DexScreener API)
     router.get('/pump-proxy/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
             if (!isValidPubkey(mint)) {
                 return res.status(400).json({ error: "Invalid mint address" });
             }
-            const response = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, {
+            const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
                 timeout: 5000
             });
-            res.json(response.data);
+            const pairs = response.data?.pairs || [];
+            if (pairs.length > 0) {
+                const pair = pairs[0];
+                res.json({
+                    priceUsd: parseFloat(pair.priceUsd) || 0,
+                    priceNative: parseFloat(pair.priceNative) || 0
+                });
+            } else {
+                res.json({ priceUsd: 0, priceNative: 0 });
+            }
         } catch (e) {
-            res.status(500).json({ error: "Failed to fetch from pump.fun" });
+            res.status(500).json({ error: "Failed to fetch price data" });
         }
     });
 
