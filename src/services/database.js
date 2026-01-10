@@ -136,7 +136,8 @@ async function initDB() {
             'lastClaimTimestamp',
             'lastClaimAmountLamports',
             'nextCheckTimestamp',
-            'lifetimeCreatorFeesLamports' // Ensure this is also initialized
+            'lifetimeCreatorFeesLamports', // Ensure this is also initialized
+            'lifetimeRobinhoodFeesLamports' // v12.0: Track fees from Robinhood partnerships
         ];
 
         for (const key of statsKeys) {
@@ -181,6 +182,38 @@ async function initDB() {
                 rank INTEGER,
                 percentage REAL,
                 updatedAt INTEGER
+            )
+        `);
+
+        // Robinhood Bot Tables (v12.0 - External tokens sharing fees with us)
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS robinhood_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mint TEXT UNIQUE,
+                ticker TEXT,
+                name TEXT,
+                image TEXT,
+                creatorPubkey TEXT,
+                feeShareBps INTEGER DEFAULT 0,
+                isGraduated INTEGER DEFAULT 0,
+                discoveredAt INTEGER,
+                lastFeesClaimed INTEGER,
+                totalFeesCollected REAL DEFAULT 0,
+                volume24h REAL DEFAULT 0,
+                marketCap REAL DEFAULT 0,
+                isActive INTEGER DEFAULT 1
+            )
+        `);
+
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS robinhood_token_holders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mint TEXT,
+                holderPubkey TEXT,
+                balance TEXT,
+                rank INTEGER,
+                updatedAt INTEGER,
+                UNIQUE(mint, holderPubkey)
             )
         `);
 

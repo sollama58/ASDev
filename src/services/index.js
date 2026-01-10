@@ -1,9 +1,10 @@
 /**
  * Services Index
  * Central export for all services
+ * v13.0 - PostgreSQL + Redis globalState
  */
 const logger = require('./logger');
-const database = require('./database');
+const postgres = require('./postgres');
 const solana = require('./solana');
 const vanity = require('./vanity');
 const pinata = require('./pinata');
@@ -13,9 +14,13 @@ const twitter = require('./twitter');
 const moderation = require('./moderation');
 const jupiter = require('./jupiter');
 
+// v13.0: Use PostgreSQL as the database layer
+const database = postgres;
+
 module.exports = {
     logger,
     database,
+    postgres,
     solana,
     vanity,
     pinata,

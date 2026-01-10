@@ -175,15 +175,67 @@ function buildClaimFeesData() {
     return Buffer.from([20, 22, 86, 123, 198, 28, 219, 132]);
 }
 
+/**
+ * Get fee sharing config PDA for a creator
+ * This is used when a creator enables fee sharing with other wallets
+ */
+function getFeeSharingConfigPDA(creator) {
+    const [sharingConfig] = PublicKey.findProgramAddressSync(
+        [Buffer.from("fee_sharing_config"), creator.toBuffer()],
+        PROGRAMS.PUMP
+    );
+    return sharingConfig;
+}
+
+/**
+ * Get distribute creator fees instruction data
+ * Used to distribute fees from a sharing config to all shareholders
+ */
+function buildDistributeFeesData() {
+    // distribute_creator_fees discriminator
+    return Buffer.from([202, 87, 148, 171, 74, 66, 138, 57]);
+}
+
+/**
+ * Get creator vaults for a fee sharing shareholder
+ * When we are a shareholder, we need to derive vaults based on the sharing_config PDA
+ * which becomes the new "creator" for that token
+ *
+ * @param {PublicKey} originalCreator - The original token creator
+ * @returns {Object} Vault addresses for the sharing config
+ */
+function getShareholderFeeVaults(originalCreator) {
+    // The sharing_config PDA becomes the new coin_creator
+    const sharingConfigPDA = getFeeSharingConfigPDA(originalCreator);
+
+    // Derive vaults using the sharing config as the creator
+    const [bcVault] = PublicKey.findProgramAddressSync(
+        [Buffer.from("creator-vault"), sharingConfigPDA.toBuffer()],
+        PROGRAMS.PUMP
+    );
+
+    const [ammVaultAuth] = PublicKey.findProgramAddressSync(
+        [Buffer.from("creator_vault"), sharingConfigPDA.toBuffer()],
+        PROGRAMS.PUMP_AMM
+    );
+
+    const ammVaultAta = getAssociatedTokenAddress(TOKENS.WSOL, ammVaultAuth, true);
+
+    return { bcVault, ammVaultAuth, ammVaultAta, sharingConfigPDA };
+}
+
 module.exports = {
     getATA,
     getPumpPDAs,
     getPumpAmmPDAs,
     getCreatorFeeVaults,
+    getFeeSharingConfigPDA,
+    getShareholderFeeVaults,
     calculateTokensForSol,
     serializeString,
     buildCreateInstructionData,
     buildBuyInstructionData,
     buildSellInstructionData,
     buildClaimFeesData,
+    buildDistributeFeesData,
 };

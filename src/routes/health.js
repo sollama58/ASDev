@@ -51,9 +51,13 @@ function init(deps) {
                 const volRes = await db.get('SELECT SUM(volume24h) as total FROM tokens');
                 const totalVolume = volRes?.total || 0;
 
-                // Get total airdropped PUMP
+                // Get total airdropped (v11.0: Now can be SOL or PUMP, check details for currency)
                 const airdropRes = await db.get('SELECT SUM(CAST(amount AS REAL)) as total FROM airdrop_logs');
                 const totalAirdropped = airdropRes?.total || 0;
+
+                // Get SOL-specific airdrops (v11.0)
+                const solAirdropRes = await db.get(`SELECT SUM(CAST(amount AS REAL)) as total FROM airdrop_logs WHERE details LIKE '%"currency":"SOL"%'`);
+                const totalSolAirdropped = solAirdropRes?.total || 0;
 
                 const currentBalance = await connection.getBalance(devKeypair.publicKey);
 
@@ -86,7 +90,15 @@ function init(deps) {
                     logger.debug('Failed to fetch PUMP holdings', { error: e.message });
                 }
 
-                return { stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped };
+                // v12.0: Robinhood stats
+                const robinhoodTokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE isActive = 1');
+                const robinhoodTotalFees = await db.get('SELECT SUM(totalFeesCollected) as total FROM robinhood_tokens');
+
+                return {
+                    stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped, totalSolAirdropped,
+                    robinhoodTokenCount: robinhoodTokenCount?.count || 0,
+                    robinhoodTotalFees: robinhoodTotalFees?.total || 0
+                };
             });
 
             const totalFeesLamports = (cachedHealth.stats.lifetimeFeesLamports || 0) +
@@ -108,9 +120,21 @@ function init(deps) {
                 lastClaimAmount: (cachedHealth.stats.lastClaimAmountLamports / LAMPORTS_PER_SOL).toFixed(4),
                 nextCheckTime: cachedHealth.stats.nextCheckTimestamp || (Date.now() + 5*60*1000),
                 totalVolume: cachedHealth.totalVolume,
+                // v11.0: Legacy PUMP airdrop total (for backwards compatibility)
                 totalAirdropped: cachedHealth.totalAirdropped,
+                // v11.0: SOL airdrop total (new)
+                totalSolAirdropped: cachedHealth.totalSolAirdropped || 0,
+                // v11.0: Current airdrop pool available (SOL balance minus reserve)
+                airdropPoolSol: Math.max(0, (cachedHealth.currentBalance / LAMPORTS_PER_SOL) - 0.5).toFixed(4),
+                airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
                 // Pass dynamic conservation status to frontend
-                conservationStatus: globalState.conservationStatus || null
+                conservationStatus: globalState.conservationStatus || null,
+                // v12.0: Robinhood Bot stats
+                robinhood: {
+                    activeTokens: cachedHealth.robinhoodTokenCount || 0,
+                    totalFeesCollectedSol: cachedHealth.robinhoodTotalFees || 0,
+                    lifetimeFeesLamports: cachedHealth.stats.lifetimeRobinhoodFeesLamports || 0
+                }
             });
         } catch (e) {
             res.status(500).json({ error: "DB Error" });

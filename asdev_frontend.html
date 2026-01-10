@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASDev Launcher v10.26.37</title>
+    <title>ASDev Launcher v12.0-ROBINHOOD</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -271,8 +271,8 @@
             </div>
             <div class="flex flex-col md:flex-row items-stretch justify-between gap-6 px-4">
                 <div class="text-center w-full md:w-1/4 border-r border-purple-800/30 pr-4">
-                    <div class="text-xs text-purple-300 uppercase mb-2 tracking-widest">Dev Wallet Holdings</div>
-                    <div class="text-3xl md:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" id="airdrop-balance">0.00 <span class="text-lg align-top text-purple-400">$PUMP</span></div>
+                    <div class="text-xs text-purple-300 uppercase mb-2 tracking-widest">SOL Airdrop Pool</div>
+                    <div class="text-3xl md:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" id="airdrop-balance">0.00 <span class="text-lg align-top text-purple-400">SOL</span></div>
                 </div>
                 
                 <div class="text-center w-full md:w-1/4 flex flex-col justify-center gap-3 border-r border-purple-800/30 pr-4">
@@ -303,8 +303,8 @@
 
                 <div class="text-center w-full md:w-1/4 flex flex-col justify-center items-center bg-purple-900/20 rounded-lg py-2">
                     <div class="text-[10px] text-purple-300 uppercase mb-1 tracking-widest">Expected Airdrop</div>
-                    <div class="text-2xl text-green-400 font-bold font-mono" id="expected-airdrop">0.00</div>
-                    <div class="text-[10px] text-purple-400 font-mono mt-1">$PUMP (Est)</div>
+                    <div class="text-2xl text-green-400 font-bold font-mono" id="expected-airdrop">0.0000</div>
+                    <div class="text-[10px] text-purple-400 font-mono mt-1">SOL (Est)</div>
                 </div>
             </div>
         </div>
@@ -351,14 +351,43 @@
             <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-6">PLATFORM METRICS</h3>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div class="metric-card"><div class="metric-label">Lifetime Launches</div><div id="metric-launches" class="metric-value">0</div></div>
-                <div class="metric-card"><div class="metric-label">Total $PUMP Airdropped</div><div id="metric-pump" class="metric-value">0</div></div>
+                <div class="metric-card"><div class="metric-label">Total SOL Airdropped</div><div id="metric-pump" class="metric-value">0.00</div></div>
                 <div class="metric-card"><div class="metric-label">Total Daily Volume</div><div id="metric-fees" class="metric-value">$0.00</div></div>
             </div>
             <div class="text-center mt-6">
                 <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-xs border border-orange-700 hover:bg-orange-800 px-4 py-2 rounded transition">ℹ️ VIEW FEE & BUYBACK MECHANICS</button>
             </div>
         </div>
-        
+
+        <!-- ROBINHOOD BOT SECTION (v12.0) -->
+        <div class="panel bg-green-900/10 mt-8 lg:col-span-3" id="robinhood-section">
+            <h3 class="text-green-400 font-mono text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-6 flex items-center gap-2">
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                ROBINHOOD BOT - FEE SHARING PARTNERSHIPS
+            </h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="metric-card" style="border-color: #22c55e;">
+                    <div class="metric-label" style="color: #86efac;">Active Partnerships</div>
+                    <div id="robinhood-token-count" class="metric-value" style="color: #4ade80;">0</div>
+                </div>
+                <div class="metric-card" style="border-color: #22c55e;">
+                    <div class="metric-label" style="color: #86efac;">Total Fees Collected</div>
+                    <div id="robinhood-fees" class="metric-value" style="color: #4ade80;">0.0000 SOL</div>
+                </div>
+                <div class="metric-card" style="border-color: #22c55e;">
+                    <div class="metric-label" style="color: #86efac;">Your RH Holdings</div>
+                    <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80;">-</div>
+                </div>
+            </div>
+            <div class="text-center mt-6 flex justify-center gap-4">
+                <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-xs border border-green-700 hover:bg-green-800 px-4 py-2 rounded transition">🤝 VIEW PARTNER TOKENS</button>
+                <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-xs border border-green-700 hover:bg-green-800 px-4 py-2 rounded transition">ℹ️ HOW ROBINHOOD WORKS</button>
+            </div>
+            <p class="text-xs text-green-300/70 text-center mt-4 font-mono">
+                External tokens sharing creator fees with us. Hold these tokens to earn bonus airdrop points!
+            </p>
+        </div>
+
         <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
             <div><span class="text-orange-600">RPC UPLINK: MAINNET PUBLIC</span></div>
             <div class="flex gap-4"><span>SYSTEM STATUS: <span id="sys-status" class="sys-status" onclick="toggleStatusModal()">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
@@ -423,13 +452,17 @@
 <div id="airdrop-info-modal" class="modal">
     <div class="modal-content border-purple-600">
         <span class="close-btn" onclick="closeAirdropInfoModal()">&times;</span>
-        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">AIRDROP POINT CALCULATION NOTES</h3>
+        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">SOL AIRDROP POINT CALCULATION</h3>
         <div class="font-sans text-sm text-purple-200 space-y-3">
+            <div class="bg-green-900/30 p-3 rounded border border-green-700/50 mb-4">
+                <p class="text-green-400 font-bold text-xs uppercase mb-1">💰 DIRECT SOL AIRDROPS</p>
+                <p class="text-xs text-gray-300">Airdrops are now distributed in **SOL** directly to your wallet - no token accounts needed!</p>
+            </div>
             <p>The **Total Points** and **Expected Airdrop** metrics shown are subject to the platform's background update cycles.</p>
             <ul class="list-disc list-inside ml-4 space-y-1 text-purple-300">
-                <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 50 Holder**.</li>
+                <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 100 Holder**.</li>
                 <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
-                <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
+                <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 100 Holder of **$ASDF**.</li>
                 <li class="mt-2"><span class="text-yellow-400">Formula:</span> (Holdings + (Created * 2)) * Multiplier</li>
                 <li class="mt-2 text-fuchsia-300 font-bold">💊 King of the Pill (KOTH): 10% of every airdrop goes directly to the Creator of the highest MCAP token, bypassing points logic.</li>
             </ul>
@@ -448,10 +481,10 @@
                     <li><span class="text-white font-bold">Trading Rewards:</span> 1% of the bonding curve volume (Creator Fee).</li>
                 </ul>
 
-                <h4 class="text-orange-400 font-bold mb-3 border-b border-orange-800 pb-1">2. THE FLYWHEEL (BUYBACKS)</h4>
+                <h4 class="text-orange-400 font-bold mb-3 border-b border-orange-800 pb-1">2. THE FLYWHEEL (FEE DISTRIBUTION)</h4>
                 <p class="text-orange-200 mb-2">Every 5 minutes, if the Fee Pool > 0.20 SOL:</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <li><span class="text-green-400 font-bold">95.0%</span>: Buys **$PUMP** (Sent to Dev Wallet).</li>
+                    <li><span class="text-green-400 font-bold">95.0%</span>: Goes to **SOL Airdrop Pool** (for direct distribution).</li>
                     <li><span class="text-red-400 font-bold">4.5%</span>: Sent to $ASDF Burns Wallet.</li>
                     <li><span class="text-red-400 font-bold">0.5%</span>: Sent to Upkeep and Reserves Wallet.</li>
                 </ul>
@@ -476,13 +509,71 @@
             <h4 class="text-green-400 font-bold mb-3 border-b border-green-800 pb-1">4. AUTOMATED AIRDROP ENGINE</h4>
             <p class="text-gray-300 mb-2">Runs automatically after the Flywheel check.</p>
             <ul class="list-disc list-inside text-gray-400 space-y-1">
-                <li><span class="text-white font-bold">Trigger:</span> When Dev Wallet holds > 50,000 $PUMP and >0.25SOL.</li>
-                <li><span class="text-white font-bold">Action:</span> Distributes **99%** of the $PUMP balance to all qualified users.</li>
+                <li><span class="text-white font-bold">Trigger:</span> When SOL Airdrop Pool > 0.1 SOL (after 0.5 SOL reserve).</li>
+                <li><span class="text-white font-bold">Action:</span> Distributes **99%** of the SOL pool directly to all qualified users.</li>
                 <li><span class="text-white font-bold">Distribution:</span> Proportional based on your share of the Total Global Points (minus 10% KOTH allocation).</li>
             </ul>
         </div>
     </div>
 </div></div>
+
+<!-- Robinhood Partner Tokens Modal (v12.0) -->
+<div id="robinhood-modal" class="modal">
+    <div class="modal-content border-green-600" style="max-width: 800px;">
+        <span class="close-btn text-green-400" onclick="closeRobinhoodModal()">&times;</span>
+        <h3 class="text-green-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-green-800/50 pb-2">ROBINHOOD PARTNER TOKENS</h3>
+        <p class="text-xs text-green-300/70 mb-4 font-mono">External PumpFun tokens that share creator fees with us. Hold these to earn bonus airdrop points!</p>
+        <div id="robinhood-tokens-list" class="max-h-[60vh] overflow-y-auto pr-2">
+            <div class="text-center text-green-400/50 py-8 font-mono text-sm">Loading partner tokens...</div>
+        </div>
+    </div>
+</div>
+
+<!-- Robinhood Info Modal (v12.0) -->
+<div id="robinhood-info-modal" class="modal">
+    <div class="modal-content border-green-600">
+        <span class="close-btn text-green-400" onclick="closeRobinhoodInfoModal()">&times;</span>
+        <h3 class="text-green-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-green-800/50 pb-2">HOW ROBINHOOD BOT WORKS</h3>
+        <div class="font-sans text-sm text-green-200 space-y-4">
+            <div class="bg-green-900/30 p-4 rounded border border-green-700/50">
+                <p class="text-green-400 font-bold text-xs uppercase mb-2">NEW PUMPFUN FEATURE: CREATOR REWARDS SHARING</p>
+                <p class="text-xs text-gray-300">PumpFun now allows token creators to share their 1% creator fees with other wallets. When another creator adds our wallet as a fee shareholder, we automatically detect it and include their token in our ecosystem.</p>
+            </div>
+
+            <div>
+                <h4 class="text-green-400 font-bold mb-2 border-b border-green-800 pb-1">AUTOMATIC DETECTION</h4>
+                <ul class="list-disc list-inside text-gray-400 space-y-1">
+                    <li>Our bot monitors the Solana blockchain for fee sharing configs</li>
+                    <li>When a token shares fees with us, it's automatically added as a "Robinhood Token"</li>
+                    <li>No manual registration required - fully automated</li>
+                </ul>
+            </div>
+
+            <div>
+                <h4 class="text-green-400 font-bold mb-2 border-b border-green-800 pb-1">HOW YOU BENEFIT</h4>
+                <ul class="list-disc list-inside text-gray-400 space-y-1">
+                    <li><span class="text-white font-bold">+1 Point</span> for every Robinhood token where you're a Top 100 holder</li>
+                    <li>These points stack with your regular leaderboard holdings</li>
+                    <li>More Robinhood partnerships = more airdrop opportunities!</li>
+                </ul>
+            </div>
+
+            <div>
+                <h4 class="text-green-400 font-bold mb-2 border-b border-green-800 pb-1">FOR TOKEN CREATORS</h4>
+                <ul class="list-disc list-inside text-gray-400 space-y-1">
+                    <li>Share fees with our wallet to join the Robinhood network</li>
+                    <li>Your holders gain airdrop eligibility automatically</li>
+                    <li>Creates additional incentives for holders to stay in your token</li>
+                </ul>
+            </div>
+
+            <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 mt-4">
+                <p class="text-purple-400 font-bold text-xs uppercase mb-1">COMBINED POINTS FORMULA</p>
+                <p class="text-xs text-gray-300">(Leaderboard Holdings + (Created * 2) + <span class="text-green-400">Robinhood Holdings</span>) * ASDF Multiplier</p>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- Success Modal -->
 <div id="success-modal" class="modal" style="display: none;">
@@ -508,7 +599,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v21.3-IMG-FIX";
+    const FRONTEND_VERSION = "v23.0-ROBINHOOD";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
     const DEPLOYMENT_FEE = 0.02;
@@ -764,12 +855,15 @@
     window.closeHoldersModal = closeHoldersModal;
     window.viewTokenHolders = viewTokenHolders;
 
+    // v11.0: Updated for SOL display with appropriate decimal places
     const updateExpectedAirdropDisplay = (expectedAmount) => {
         const amount = parseFloat(expectedAmount);
-        if (amount > 0 && amount < 0.1) {
-            ui.expectedAirdrop.innerText = amount.toPrecision(6);
+        if (amount <= 0) {
+            ui.expectedAirdrop.innerText = '0.0000';
+        } else if (amount < 0.0001) {
+            ui.expectedAirdrop.innerText = amount.toExponential(2);
         } else {
-            ui.expectedAirdrop.innerText = amount.toLocaleString('en-US', {maximumFractionDigits: 2});
+            ui.expectedAirdrop.innerText = amount.toFixed(4);
         }
     };
     
@@ -883,8 +977,17 @@
                     ui.metricFees.innerText = data.lifetimeFees + " SOL"; 
                 }
                 if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches; 
-                if (data.totalAirdropped !== undefined) {
-                    ui.metricPump.innerText = parseFloat(data.totalAirdropped).toLocaleString('en-US', {maximumFractionDigits: 0});
+                // v11.0: Display SOL airdrop total (or legacy PUMP for backwards compat)
+                if (data.totalSolAirdropped !== undefined && parseFloat(data.totalSolAirdropped) > 0) {
+                    ui.metricPump.innerText = parseFloat(data.totalSolAirdropped).toFixed(4) + ' SOL';
+                } else if (data.totalAirdropped !== undefined) {
+                    // Backwards compatibility: show old PUMP airdrops if no SOL airdrops yet
+                    const totalPump = parseFloat(data.totalAirdropped);
+                    if (totalPump > 0) {
+                        ui.metricPump.innerText = totalPump.toLocaleString('en-US', {maximumFractionDigits: 0}) + ' $PUMP';
+                    } else {
+                        ui.metricPump.innerText = '0.00 SOL';
+                    }
                 } else if (data.totalPumpTokensBought) {
                     ui.metricPump.innerText = data.totalPumpTokensBought;
                 }
@@ -899,7 +1002,12 @@
                 if (data.nextCheckTime) {
                     nextCheckTime = data.nextCheckTime;
                 }
-                if (data.pumpHoldings !== undefined) {
+                // v11.0: Display SOL airdrop pool instead of PUMP holdings
+                if (data.airdropPoolSol !== undefined) {
+                    const airdropPoolSol = parseFloat(data.airdropPoolSol);
+                    ui.airdropBalance.innerHTML = `${airdropPoolSol.toFixed(4)} <span class="text-lg align-top text-purple-400">SOL</span>`;
+                } else if (data.pumpHoldings !== undefined) {
+                    // Fallback for backwards compatibility
                     currentPumpHoldings = parseFloat(data.pumpHoldings);
                     ui.airdropBalance.innerHTML = `${currentPumpHoldings.toLocaleString('en-US', {maximumFractionDigits: 0})} <span class="text-lg align-top text-purple-400">$PUMP</span>`;
                 }
@@ -916,6 +1024,12 @@
                     ui.consMissing.innerText = `(${data.conservationStatus.missingAtas} new wallets)`;
                 } else {
                     ui.consNotice.classList.remove('conservation-active');
+                }
+
+                // v12.0: Update Robinhood stats from health response
+                if (data.robinhood) {
+                    document.getElementById('robinhood-token-count').textContent = data.robinhood.activeTokens || 0;
+                    document.getElementById('robinhood-fees').textContent = `${(data.robinhood.totalFeesCollectedSol || 0).toFixed(4)} SOL`;
                 }
             } else { 
                 status = 'OFFLINE';
@@ -1156,7 +1270,7 @@
                     <p class="text-purple-300 font-mono text-sm mb-4">Total Global Points: <span class="text-white font-bold">${data.totalPoints.toLocaleString()}</span> | Total Eligible Users: <span class="text-white font-bold">${users.length}</span></p>
                     <table class="w-full text-left font-mono text-xs">
                         <thead class="text-purple-400 border-b border-purple-800">
-                            <tr><th class="p-2">#</th><th class="p-2">Wallet (Snippet)</th><th class="p-2 text-right">Holder Pts</th><th class="p-2 text-right">Creator Pts</th><th class="p-2 text-right">Multiplier</th><th class="p-2 text-right">Points</th><th class="p-2 text-right">Est. Airdrop</th></tr>
+                            <tr><th class="p-2">#</th><th class="p-2">Wallet (Snippet)</th><th class="p-2 text-right">Holder Pts</th><th class="p-2 text-right">Creator Pts</th><th class="p-2 text-right">Multiplier</th><th class="p-2 text-right">Points</th><th class="p-2 text-right">Est. SOL Airdrop</th></tr>
                         </thead>
                         <tbody class="text-purple-200">
                             ${users.sort((a, b) => b.points - a.points).map((user, index) => {
@@ -1171,7 +1285,7 @@
                                     <td class="p-2 text-right text-blue-400">${(user.created || 0) * 2}</td>
                                     <td class="p-2 text-right">${multiplierBadge}</td>
                                     <td class="p-2 text-right text-yellow-400 font-bold">${user.points}</td>
-                                    <td class="p-2 text-right text-green-400 font-bold">${parseFloat(user.expectedAirdrop).toLocaleString('en-US', {maximumFractionDigits: 2})} $PUMP</td>
+                                    <td class="p-2 text-right text-green-400 font-bold">${parseFloat(user.expectedAirdrop).toFixed(4)} SOL</td>
                                 </tr>
                                 `;
                             }).join('')}
@@ -1247,6 +1361,7 @@
     const closeLogModal = () => { ui.logModal.style.display = 'none'; };
     window.closeLogModal = closeLogModal;
 
+    // v11.0: Updated to show currency type (SOL vs legacy PUMP) for backwards compatibility
     const toggleAirdropLogModal = async () => {
         ui.airdropLogModal.style.display = 'block';
         ui.modalAirdropLogContent.innerHTML = '<div class="text-center text-purple-400 p-4">Loading History...</div>';
@@ -1261,24 +1376,41 @@
                 ui.modalAirdropLogContent.innerHTML = `
                     <table class="w-full text-left font-mono text-xs">
                         <thead class="text-purple-400 border-b border-purple-800">
-                            <tr><th class="p-2">Date/Time</th><th class="p-2">Amount</th><th class="p-2">Users</th><th class="p-2">Total Pts</th><th class="p-2 text-right">TXs</th></tr>
+                            <tr><th class="p-2">Date/Time</th><th class="p-2">Amount</th><th class="p-2">Currency</th><th class="p-2">Users</th><th class="p-2">Total Pts</th><th class="p-2 text-right">TXs</th></tr>
                         </thead>
                         <tbody class="text-purple-200">
-                            ${logs.map(log => `
+                            ${logs.map(log => {
+                                // Parse details to check currency type (v11.0 compatibility)
+                                let currency = '$PUMP';
+                                let amountDisplay = parseFloat(log.amount).toFixed(2);
+                                try {
+                                    const details = JSON.parse(log.details || '{}');
+                                    if (details.currency === 'SOL') {
+                                        currency = 'SOL';
+                                        amountDisplay = parseFloat(log.amount).toFixed(4);
+                                    }
+                                } catch(e) {}
+
+                                const currencyBadge = currency === 'SOL'
+                                    ? '<span class="px-1.5 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold">SOL</span>'
+                                    : '<span class="px-1.5 py-0.5 bg-purple-500/20 border border-purple-500 rounded text-[9px] text-purple-400 font-bold">$PUMP</span>';
+
+                                return `
                                 <tr class="border-b border-purple-800/30 hover:bg-purple-900/20">
-                                    <td class="p-2">${new Date(log.timestamp).toLocaleString()}</td> 
-                                    <td class="p-2 font-bold text-green-400">${parseFloat(log.amount).toFixed(2)}</td>
+                                    <td class="p-2">${new Date(log.timestamp).toLocaleString()}</td>
+                                    <td class="p-2 font-bold text-green-400">${amountDisplay}</td>
+                                    <td class="p-2">${currencyBadge}</td>
                                     <td class="p-2">${log.recipients}</td>
                                     <td class="p-2">${log.totalPoints || '-'}</td>
                                     <td class="p-2 text-right">
-                                        ${log.signatures ? log.signatures.split(',').map((sig, i) => 
-                                            sig.startsWith('KOTH') 
+                                        ${log.signatures ? log.signatures.split(',').map((sig, i) =>
+                                            sig.startsWith('KOTH')
                                             ? `<a href="https://solscan.io/tx/${sig.split(':')[1]}" target="_blank" class="tx-link text-fuchsia-400">[💊]</a>`
                                             : `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link">[TX ${i+1}]</a>`
                                         ).join(' ') : 'Pending'}
                                     </td>
                                 </tr>
-                            `).join('')}
+                            `}).join('')}
                         </tbody>
                     </table>
                 `;
@@ -1295,6 +1427,97 @@
     window.toggleAboutModal = toggleAboutModal;
     const closeAboutModal = () => { ui.aboutModal.style.display = 'none'; };
     window.closeAboutModal = closeAboutModal;
+
+    // Robinhood Modal Functions (v12.0)
+    const toggleRobinhoodModal = async () => {
+        document.getElementById('robinhood-modal').style.display = 'block';
+        await loadRobinhoodTokens();
+    };
+    window.toggleRobinhoodModal = toggleRobinhoodModal;
+
+    const closeRobinhoodModal = () => { document.getElementById('robinhood-modal').style.display = 'none'; };
+    window.closeRobinhoodModal = closeRobinhoodModal;
+
+    const toggleRobinhoodInfoModal = () => { document.getElementById('robinhood-info-modal').style.display = 'block'; };
+    window.toggleRobinhoodInfoModal = toggleRobinhoodInfoModal;
+
+    const closeRobinhoodInfoModal = () => { document.getElementById('robinhood-info-modal').style.display = 'none'; };
+    window.closeRobinhoodInfoModal = closeRobinhoodInfoModal;
+
+    const loadRobinhoodTokens = async () => {
+        const container = document.getElementById('robinhood-tokens-list');
+        try {
+            const res = await fetchWithRetry(`${BACKEND_URL}/api/robinhood/tokens`);
+            const data = await res.json();
+
+            if (!data.tokens || data.tokens.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-8">
+                        <p class="text-green-400/70 font-mono text-sm mb-2">No Robinhood partnerships yet</p>
+                        <p class="text-xs text-gray-500">When token creators share fees with our wallet, they'll appear here automatically.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = `
+                <table class="leader-table" style="border-color: #166534;">
+                    <thead>
+                        <tr>
+                            <th class="p-2" style="color: #22c55e;">Token</th>
+                            <th class="p-2 text-right" style="color: #22c55e;">Fee Share</th>
+                            <th class="p-2 text-right" style="color: #22c55e;">Fees Collected</th>
+                            <th class="p-2 text-right" style="color: #22c55e;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${data.tokens.map((t, i) => `
+                            <tr class="hover:bg-green-900/20">
+                                <td class="p-2">
+                                    <div class="flex items-center gap-2">
+                                        <img src="${resolveTokenImage(t.image)}" class="token-img-sm" onerror="this.src='https://placehold.co/32x32/333/fff?text=?'" loading="lazy">
+                                        <div>
+                                            <span class="text-white font-bold">${escapeHtml(t.ticker)}</span>
+                                            <span class="text-xs text-gray-500 block">${t.mint ? t.mint.slice(0, 8) + '...' : 'Pending'}</span>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="p-2 text-right text-green-400 font-bold">${t.feeSharePercent.toFixed(1)}%</td>
+                                <td class="p-2 text-right text-white">${t.totalFeesCollected.toFixed(4)} SOL</td>
+                                <td class="p-2 text-right">
+                                    ${t.mint ? `<a href="${PUMPFUN_URL_BASE}${t.mint}" target="_blank" class="text-green-400 hover:text-white text-xs underline">View</a>` : '-'}
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        } catch (e) {
+            console.error('Failed to load Robinhood tokens:', e);
+            container.innerHTML = `<div class="text-center text-red-400 py-8 font-mono text-sm">Failed to load partner tokens</div>`;
+        }
+    };
+
+    const updateRobinhoodStats = async () => {
+        try {
+            const res = await fetchWithRetry(`${BACKEND_URL}/api/robinhood/stats`);
+            const stats = await res.json();
+
+            document.getElementById('robinhood-token-count').textContent = stats.activeTokens || 0;
+            document.getElementById('robinhood-fees').textContent = `${(stats.totalFeesCollectedSol || 0).toFixed(4)} SOL`;
+
+            // Check user's Robinhood holdings if connected
+            if (userPubkey) {
+                const userRes = await fetchWithRetry(`${BACKEND_URL}/api/robinhood/check-holder?userPubkey=${userPubkey}`);
+                const userData = await userRes.json();
+                document.getElementById('robinhood-user-positions').textContent = userData.positions > 0 ? `${userData.positions} tokens` : 'None';
+            } else {
+                document.getElementById('robinhood-user-positions').textContent = '-';
+            }
+        } catch (e) {
+            console.error('Failed to update Robinhood stats:', e);
+        }
+    };
 
     const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; };
     const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
@@ -1313,8 +1536,9 @@
         ui.walletUI.classList.add('flex');
         ui.walletAddr.innerText = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4);
         await refreshWalletBalance();
-        updateLeaderboard(); 
+        updateLeaderboard();
         checkAsdfStatus();
+        updateRobinhoodStats(); // v12.0: Update user's Robinhood holdings
     };
 
     const openWalletModal = () => {

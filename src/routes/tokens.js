@@ -1,9 +1,11 @@
 /**
  * Token Routes
  * Token listing, leaderboard, and holder endpoints
+ * v13.0 - Updated for PostgreSQL
  */
 const express = require('express');
 const { isValidPubkey } = require('./solana');
+const { redis } = require('../services');
 
 const router = express.Router();
 
@@ -83,9 +85,9 @@ function init(deps) {
             let userHoldings = new Set();
             if (userPubkey && rows.length > 0) {
                 const mints = rows.map(r => r.mint);
-                const placeholders = mints.map(() => '?').join(',');
+                const placeholders = mints.map((_, i) => `$${i + 2}`).join(',');
                 const holdings = await db.all(
-                    `SELECT mint FROM token_holders WHERE holderPubkey = ? AND mint IN (${placeholders})`,
+                    `SELECT mint FROM token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`,
                     [userPubkey, ...mints]
                 );
                 userHoldings = new Set(holdings.map(h => h.mint));
@@ -128,7 +130,7 @@ function init(deps) {
     router.get('/token/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
-            const token = await db.get('SELECT tweetUrl FROM tokens WHERE mint = ?', [mint]);
+            const token = await db.get('SELECT "tweetUrl" FROM tokens WHERE mint = $1', [mint]);
             res.json(token || {});
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
@@ -140,7 +142,7 @@ function init(deps) {
         try {
             const { mint } = req.params;
             const holders = await db.all(
-                'SELECT rank, holderPubkey FROM token_holders WHERE mint = ? ORDER BY rank ASC LIMIT 50',
+                'SELECT rank, "holderPubkey" FROM token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 50',
                 [mint]
             );
             res.json(holders);
@@ -150,12 +152,14 @@ function init(deps) {
     });
 
     // Check holder status
+    // v11.0: Now returns expected SOL airdrop amount instead of PUMP
     router.get('/check-holder', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
             return res.json({
                 isHolder: false, isAsdfTop50: false, points: 0,
-                multiplier: 1, heldPositionsCount: 0, createdPositionsCount: 0, expectedAirdrop: 0
+                multiplier: 1, heldPositionsCount: 0, createdPositionsCount: 0,
+                expectedAirdrop: 0, expectedAirdropCurrency: 'SOL'
             });
         }
         if (!isValidPubkey(userPubkey)) {
@@ -170,22 +174,23 @@ function init(deps) {
             let createdPositionsCount = 0;
 
             if (top10Mints.length > 0) {
-                const placeholders = top10Mints.map(() => '?').join(',');
+                const placeholders = top10Mints.map((_, i) => `$${i + 2}`).join(',');
 
-                const query = `SELECT COUNT(*) as count FROM token_holders WHERE holderPubkey = ? AND mint IN (${placeholders})`;
+                const query = `SELECT COUNT(*) as count FROM token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`;
                 const result = await db.get(query, [userPubkey, ...top10Mints]);
-                heldPositionsCount = result?.count || 0;
+                heldPositionsCount = parseInt(result?.count) || 0;
 
-                const creatorQuery = `SELECT COUNT(*) as count FROM tokens WHERE userPubkey = ? AND mint IN (${placeholders})`;
+                const creatorQuery = `SELECT COUNT(*) as count FROM tokens WHERE "userPubkey" = $1 AND mint IN (${placeholders})`;
                 const creatorRes = await db.get(creatorQuery, [userPubkey, ...top10Mints]);
-                createdPositionsCount = creatorRes?.count || 0;
+                createdPositionsCount = parseInt(creatorRes?.count) || 0;
             }
 
-            const isAsdfTop50 = globalState.asdfTop50Holders.has(userPubkey);
+            // v13.0: Fetch from Redis for cross-process consistency
+            const isAsdfTop50 = await redis.isAsdfTop100Holder(userPubkey);
             const totalBase = heldPositionsCount + (createdPositionsCount * 2);
             const multiplier = isAsdfTop50 ? 2 : 1;
             const points = totalBase * multiplier;
-            const expectedAirdrop = globalState.userExpectedAirdrops.get(userPubkey) || 0;
+            const expectedAirdrop = await redis.getUserExpectedAirdrop(userPubkey);
 
             res.json({
                 isHolder: heldPositionsCount > 0,
@@ -194,7 +199,8 @@ function init(deps) {
                 multiplier,
                 heldPositionsCount,
                 createdPositionsCount,
-                expectedAirdrop
+                expectedAirdrop,
+                expectedAirdropCurrency: 'SOL' // v11.0: Now in SOL
             });
         } catch (e) {
             res.status(500).json({ error: "DB Error", expectedAirdrop: 0 });
@@ -202,21 +208,22 @@ function init(deps) {
     });
 
     // Eligible users for airdrop
+    // v11.0: Now returns expected SOL airdrop amounts
     router.get('/all-eligible-users', async (req, res) => {
         try {
-            const top10 = await db.all('SELECT mint, userPubkey FROM tokens ORDER BY volume24h DESC LIMIT 10');
+            const top10 = await db.all('SELECT mint, "userPubkey" FROM tokens ORDER BY volume24h DESC LIMIT 10');
             const top10Mints = top10.map(t => t.mint);
 
             if (top10Mints.length === 0) {
-                return res.json({ users: [], totalPoints: 0 });
+                return res.json({ users: [], totalPoints: 0, currency: 'SOL' });
             }
 
-            const placeholders = top10Mints.map(() => '?').join(',');
+            const placeholders = top10Mints.map((_, i) => `$${i + 1}`).join(',');
             const rows = await db.all(`
-                SELECT holderPubkey, COUNT(*) as positionCount
+                SELECT "holderPubkey", COUNT(*) as "positionCount"
                 FROM token_holders
                 WHERE mint IN (${placeholders})
-                GROUP BY holderPubkey
+                GROUP BY "holderPubkey"
             `, top10Mints);
 
             let userPointsMap = new Map();
@@ -224,7 +231,7 @@ function init(deps) {
             rows.forEach(row => {
                 userPointsMap.set(row.holderPubkey, {
                     pubkey: row.holderPubkey,
-                    holderPositions: row.positionCount,
+                    holderPositions: parseInt(row.positionCount),
                     createdPositions: 0
                 });
             });
@@ -241,17 +248,21 @@ function init(deps) {
                 }
             });
 
+            // v13.0: Fetch from Redis for cross-process consistency
+            const asdfTop100Holders = await redis.getAsdfTop100Holders();
+            const allUserExpectedAirdrops = await redis.getAllUserExpectedAirdrops();
+
             const eligibleUsers = [];
             let calculatedTotalPoints = 0;
 
             for (const user of userPointsMap.values()) {
                 if (user.pubkey === devKeypair.publicKey.toString()) continue;
 
-                const isAsdfTop50 = globalState.asdfTop50Holders.has(user.pubkey);
+                const isAsdfTop50 = asdfTop100Holders.has(user.pubkey);
                 const multiplier = isAsdfTop50 ? 2 : 1;
                 const totalBasePoints = user.holderPositions + (user.createdPositions * 2);
                 const points = totalBasePoints * multiplier;
-                const expectedAirdrop = globalState.userExpectedAirdrops.get(user.pubkey) || 0;
+                const expectedAirdrop = allUserExpectedAirdrops.get(user.pubkey) || 0;
 
                 if (points > 0) {
                     eligibleUsers.push({
@@ -260,13 +271,14 @@ function init(deps) {
                         positions: user.holderPositions,
                         created: user.createdPositions,
                         isAsdfTop50,
-                        expectedAirdrop
+                        expectedAirdrop,
+                        expectedAirdropCurrency: 'SOL' // v11.0: Now in SOL
                     });
                     calculatedTotalPoints += points;
                 }
             }
 
-            res.json({ users: eligibleUsers, totalPoints: calculatedTotalPoints });
+            res.json({ users: eligibleUsers, totalPoints: calculatedTotalPoints, currency: 'SOL' });
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
         }
@@ -277,6 +289,101 @@ function init(deps) {
         try {
             const logs = await db.all('SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT 20');
             res.json(logs);
+        } catch (e) {
+            res.status(500).json({ error: "DB Error" });
+        }
+    });
+
+    // ========== ROBINHOOD BOT ENDPOINTS (v12.0) ==========
+
+    // Get all Robinhood tokens (external tokens sharing fees with us)
+    router.get('/robinhood/tokens', async (req, res) => {
+        try {
+            const tokens = await db.all(`
+                SELECT mint, ticker, name, image, "creatorPubkey", "feeShareBps",
+                       "isGraduated", "discoveredAt", "totalFeesCollected", volume24h, "marketCap", "isActive"
+                FROM robinhood_tokens
+                WHERE "isActive" = 1
+                ORDER BY "totalFeesCollected" DESC
+            `);
+
+            const formattedTokens = tokens.map(t => ({
+                mint: t.mint,
+                ticker: t.ticker || 'Unknown',
+                name: t.name || 'Robinhood Token',
+                image: t.image,
+                creator: t.creatorPubkey,
+                feeSharePercent: t.feeShareBps / 100,
+                isGraduated: !!t.isGraduated,
+                discoveredAt: t.discoveredAt,
+                totalFeesCollected: t.totalFeesCollected || 0,
+                volume24h: t.volume24h || 0,
+                marketCap: t.marketCap || 0
+            }));
+
+            res.json({
+                tokens: formattedTokens,
+                count: tokens.length,
+                lastUpdate: globalState.lastBackendUpdate
+            });
+        } catch (e) {
+            res.status(500).json({ error: "DB Error", tokens: [] });
+        }
+    });
+
+    // Get holders for a specific Robinhood token
+    router.get('/robinhood/holders/:mint', async (req, res) => {
+        try {
+            const { mint } = req.params;
+            const holders = await db.all(
+                'SELECT rank, "holderPubkey" FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 50',
+                [mint]
+            );
+            res.json(holders);
+        } catch (e) {
+            res.status(500).json({ error: "DB Error" });
+        }
+    });
+
+    // Get Robinhood stats summary
+    router.get('/robinhood/stats', async (req, res) => {
+        try {
+            const tokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
+            const totalFees = await db.get('SELECT SUM("totalFeesCollected") as total FROM robinhood_tokens');
+            const holderCount = await db.get('SELECT COUNT(DISTINCT "holderPubkey") as count FROM robinhood_token_holders');
+            const stats = await db.get('SELECT value FROM stats WHERE key = $1', ['lifetimeRobinhoodFeesLamports']);
+
+            res.json({
+                activeTokens: parseInt(tokenCount?.count) || 0,
+                totalFeesCollectedSol: totalFees?.total || 0,
+                uniqueHolders: parseInt(holderCount?.count) || 0,
+                lifetimeFeesLamports: stats?.value || 0
+            });
+        } catch (e) {
+            res.status(500).json({ error: "DB Error" });
+        }
+    });
+
+    // Check if a user holds any Robinhood tokens
+    router.get('/robinhood/check-holder', async (req, res) => {
+        const { userPubkey } = req.query;
+        if (!userPubkey) {
+            return res.json({ isRobinhoodHolder: false, positions: 0 });
+        }
+        if (!isValidPubkey(userPubkey)) {
+            return res.status(400).json({ error: "Invalid Solana address" });
+        }
+
+        try {
+            const result = await db.get(
+                'SELECT COUNT(*) as count FROM robinhood_token_holders WHERE "holderPubkey" = $1',
+                [userPubkey]
+            );
+
+            res.json({
+                isRobinhoodHolder: (parseInt(result?.count) || 0) > 0,
+                positions: parseInt(result?.count) || 0
+            });
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
         }

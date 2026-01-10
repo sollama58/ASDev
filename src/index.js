@@ -1,6 +1,7 @@
 /**
  * ASDev
  * Main Entry Point
+ * v13.0 - PostgreSQL + Redis globalState
  */
 require('dotenv').config();
 
@@ -20,14 +21,35 @@ const { logger, database, redis, twitter, solana } = require('./services');
 const routes = require('./routes');
 const tasks = require('./tasks');
 
-// Global state (shared across modules)
+// v13.0: Global state is now stored in Redis for cross-process sharing
+// This local object serves as a proxy/fallback for compatibility
 const globalState = {
-    lastBackendUpdate: Date.now(),
-    asdfTop50Holders: new Set(),
-    totalPoints: 0,
-    devPumpHoldings: 0,
-    userExpectedAirdrops: new Map(),
-    userPointsMap: new Map(),
+    // These are now backed by Redis - use redis.getXxx() for actual values
+    get lastBackendUpdate() { return this._lastBackendUpdate || Date.now(); },
+    set lastBackendUpdate(val) { this._lastBackendUpdate = val; redis.setLastBackendUpdate(val).catch(() => {}); },
+
+    get asdfTop50Holders() { return this._asdfTop50Holders || new Set(); },
+    set asdfTop50Holders(val) { this._asdfTop50Holders = val; redis.setAsdfTop100Holders([...val]).catch(() => {}); },
+
+    get totalPoints() { return this._totalPoints || 0; },
+    set totalPoints(val) { this._totalPoints = val; redis.setTotalPoints(val).catch(() => {}); },
+
+    get devPumpHoldings() { return this._devPumpHoldings || 0; },
+    set devPumpHoldings(val) { this._devPumpHoldings = val; redis.setDevPumpHoldings(val).catch(() => {}); },
+
+    get userExpectedAirdrops() { return this._userExpectedAirdrops || new Map(); },
+    set userExpectedAirdrops(val) { this._userExpectedAirdrops = val; redis.setAllUserExpectedAirdrops(val).catch(() => {}); },
+
+    get userPointsMap() { return this._userPointsMap || new Map(); },
+    set userPointsMap(val) { this._userPointsMap = val; redis.setAllUserPoints(val).catch(() => {}); },
+
+    // Internal storage
+    _lastBackendUpdate: Date.now(),
+    _asdfTop50Holders: new Set(),
+    _totalPoints: 0,
+    _devPumpHoldings: 0,
+    _userExpectedAirdrops: new Map(),
+    _userPointsMap: new Map(),
 };
 
 /**
@@ -36,12 +58,13 @@ const globalState = {
 async function main() {
     logger.info(`Starting ASDev ${config.VERSION}...`);
 
-    // Initialize database
+    // Initialize Redis first (needed for globalState)
+    redis.init();
+
+    // v13.0: Initialize PostgreSQL database
     await database.initDB();
     const db = database.getDB();
-
-    // Initialize Redis
-    redis.init();
+    logger.info('[Database] PostgreSQL initialized with connection pooling');
 
     // Initialize Twitter
     twitter.init();

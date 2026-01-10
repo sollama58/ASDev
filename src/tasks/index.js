@@ -1,29 +1,30 @@
 /**
  * Tasks Index
  * Central export for all background tasks
+ * v13.0 - Worker-based architecture with Redis queues
  */
 const holderScanner = require('./holderScanner');
 const metadataUpdater = require('./metadataUpdater');
 const asdfSync = require('./asdfSync');
 const flywheel = require('./flywheel');
+const robinhoodScanner = require('./robinhoodScanner');
 const workers = require('./workers');
 const { vanity, logger } = require('../services');
 const config = require('../config/env');
 
 /**
  * Start all background tasks
+ * v13.0: Uses worker queues for heavy tasks
  */
 function startAll(deps) {
-    // Start holder scanner
-    holderScanner.start(deps);
+    // v13.0: Use worker-based architecture for heavy tasks
+    // These run as BullMQ workers with Redis-backed queues
+    workers.initHolderScannerWorker(deps);
+    workers.initMetadataUpdaterWorker(deps);
+    workers.initRobinhoodScannerWorker(deps);
+    workers.initAsdfSyncWorker(deps);
 
-    // Start metadata updater
-    metadataUpdater.start(deps);
-
-    // Start ASDF sync
-    asdfSync.start(deps);
-
-    // Start flywheel
+    // Start flywheel (still runs in main process - timing critical)
     flywheel.start(deps);
 
     // Start vanity pool auto-refill
@@ -31,11 +32,11 @@ function startAll(deps) {
         vanity.startAutoRefill();
     }
 
-    // Initialize workers
+    // Initialize deploy and social workers
     workers.initDeployWorker(deps);
     workers.initSocialWorker(deps);
 
-    logger.info("All background tasks started");
+    logger.info("All background tasks started (v13.0 - Worker Architecture)");
 }
 
 module.exports = {
@@ -43,6 +44,7 @@ module.exports = {
     metadataUpdater,
     asdfSync,
     flywheel,
+    robinhoodScanner,
     workers,
     startAll,
 };

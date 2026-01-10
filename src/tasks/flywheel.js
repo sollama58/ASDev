@@ -1,20 +1,25 @@
 /**
  * Flywheel Task
- * Fee collection, buyback, and airdrop distribution
+ * Fee collection, buyback, and SOL airdrop distribution
+ *
+ * v11.0 - Changed from PUMP token airdrops to direct SOL airdrops
+ * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
 const {
     getAssociatedTokenAddress, getAccount, createAssociatedTokenAccountInstruction,
-    createAssociatedTokenAccountIdempotentInstruction, createTransferCheckedInstruction,
     createCloseAccountInstruction, TOKEN_PROGRAM_ID
 } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, pump, solana, jupiter } = require('../services');
+const { logger, pump, solana, jupiter, redis } = require('../services');
 
 let isBuybackRunning = false;
 let isAirdropping = false;
+
+// Import Robinhood scanner for fee claiming
+const robinhoodScanner = require('./robinhoodScanner');
 
 /**
  * Claim creator fees from bonding curve and AMM
@@ -103,8 +108,135 @@ async function claimCreatorFees(deps) {
 }
 
 /**
- * Process airdrop distribution
- * Updated with "King of the Hill" (KOTH) Logic and Dynamic Cost Check
+ * Claim creator fees from Robinhood tokens (external tokens sharing fees with us)
+ * v12.0 - New feature for fee sharing partnerships
+ *
+ * Note: For fee sharing configs, we need to call distribute_creator_fees first
+ * to have fees distributed to all shareholders, then claim our share
+ */
+async function claimRobinhoodFees(deps) {
+    const { connection, devKeypair, db } = deps;
+
+    let totalClaimed = 0;
+    const claimedTokens = [];
+
+    try {
+        // Get all active Robinhood tokens
+        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1');
+
+        for (const token of tokens) {
+            try {
+                const creatorPubkey = new PublicKey(token.creatorPubkey);
+                const { bcVault, ammVaultAuth, ammVaultAta, sharingConfigPDA } = pump.getShareholderFeeVaults(creatorPubkey);
+
+                const tx = new Transaction();
+                solana.addPriorityFee(tx);
+
+                let tokenClaimed = 0;
+                let claimedSomething = false;
+
+                // First, try to distribute fees from the sharing config
+                // This moves fees from the shared vault to individual shareholders
+                try {
+                    const distributeDiscriminator = pump.buildDistributeFeesData();
+                    const [eventAuthority] = PublicKey.findProgramAddressSync(
+                        [Buffer.from("__event_authority")], PROGRAMS.PUMP
+                    );
+
+                    // Build distribute instruction
+                    // Account order: sharing_config, creator_vault, shareholders..., system_program, event_authority, program
+                    const distributeKeys = [
+                        { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
+                        { pubkey: bcVault, isSigner: false, isWritable: true },
+                        // Shareholders are derived from the config
+                        { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true }, // Our wallet as shareholder
+                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                        { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                        { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+                    ];
+
+                    // Check if there are fees to distribute
+                    const bcInfo = await connection.getAccountInfo(bcVault);
+                    if (bcInfo && bcInfo.lamports > 5000) { // More than rent-exempt minimum
+                        tx.add(new TransactionInstruction({
+                            keys: distributeKeys,
+                            programId: PROGRAMS.PUMP,
+                            data: distributeDiscriminator
+                        }));
+                        claimedSomething = true;
+
+                        // Calculate our share
+                        const ourShare = Math.floor((bcInfo.lamports - 5000) * (token.feeShareBps / 10000));
+                        tokenClaimed += ourShare;
+                    }
+                } catch (e) {
+                    logger.debug(`[Robinhood] Distribute fees failed for ${token.creatorPubkey}`, { error: e.message });
+                }
+
+                // Also check AMM vault for graduated tokens
+                try {
+                    const ammVaultAtaKey = await ammVaultAta;
+                    const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
+
+                    if (new BN(bal.value.amount).gt(new BN(0))) {
+                        // Similar process for AMM fees
+                        const [ammEventAuthority] = PublicKey.findProgramAddressSync(
+                            [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
+                        );
+
+                        // For AMM, we might need different instruction
+                        // The exact instruction depends on PumpFun's AMM fee sharing implementation
+                        const ourShare = Math.floor(parseInt(bal.value.amount) * (token.feeShareBps / 10000));
+                        tokenClaimed += ourShare;
+                    }
+                } catch (e) {
+                    logger.debug(`[Robinhood] AMM fee check failed for ${token.creatorPubkey}`, { error: e.message });
+                }
+
+                // Execute transaction if we have something to claim
+                if (claimedSomething && tx.instructions.length > 1) { // More than just priority fee
+                    try {
+                        tx.feePayer = devKeypair.publicKey;
+                        await solana.sendTxWithRetry(tx, [devKeypair]);
+
+                        totalClaimed += tokenClaimed;
+                        claimedTokens.push({
+                            ticker: token.ticker || token.creatorPubkey.slice(0, 8),
+                            amount: tokenClaimed
+                        });
+
+                        // Update token stats
+                        await db.run(
+                            'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2 WHERE id = $3',
+                            [Date.now(), tokenClaimed / LAMPORTS_PER_SOL, token.id]
+                        );
+
+                        logger.info(`[Robinhood] Claimed ${(tokenClaimed / LAMPORTS_PER_SOL).toFixed(6)} SOL from ${token.ticker || 'Unknown'}`);
+                    } catch (e) {
+                        logger.debug(`[Robinhood] Claim tx failed for ${token.creatorPubkey}`, { error: e.message });
+                    }
+                }
+
+                await new Promise(r => setTimeout(r, 500)); // Rate limiting between tokens
+
+            } catch (e) {
+                logger.error(`[Robinhood] Fee claim error for ${token.creatorPubkey}`, { error: e.message });
+            }
+        }
+    } catch (e) {
+        logger.error('[Robinhood] Claim fees error', { error: e.message });
+    }
+
+    return { totalClaimed, claimedTokens };
+}
+
+/**
+ * Process SOL airdrop distribution
+ * Updated with "King of the Hill" (KOTH) Logic
+ *
+ * v11.0 - Now distributes SOL directly instead of PUMP tokens
+ * This uses the same distribution rules (points, percentages) but sends SOL
+ * Benefits: No ATA creation needed, lower transaction costs, simpler logic
  */
 async function processAirdrop(deps) {
     const { connection, devKeypair, db, globalState } = deps;
@@ -113,54 +245,46 @@ async function processAirdrop(deps) {
     isAirdropping = true;
 
     try {
-        const balance = globalState.devPumpHoldings;
-        // Basic Threshold Check
-        if (balance <= 50000) {
-            isAirdropping = false;
-            return;
-        }
-
-        // --- FINAL SAFETY CHECK ---
+        // Get current SOL balance available for airdrop
         const solBalance = await connection.getBalance(devKeypair.publicKey);
-        // Use the cached calculation from flywheel if available, otherwise safe fallback
-        const cachedCost = globalState.conservationStatus?.estimatedCost || (0.05 * LAMPORTS_PER_SOL);
-        
-        if (solBalance < cachedCost) {
-            logger.warn(`Airdrop Skipped: Insufficient SOL (Final Check). Need ${(cachedCost/LAMPORTS_PER_SOL).toFixed(4)}, Have ${(solBalance/LAMPORTS_PER_SOL).toFixed(4)}`);
+
+        // Calculate airdrop pool: SOL balance minus safety reserve (0.5 SOL for operations)
+        const SAFETY_RESERVE = 0.5 * LAMPORTS_PER_SOL;
+        const MIN_AIRDROP_POOL = 0.1 * LAMPORTS_PER_SOL; // Minimum 0.1 SOL to trigger airdrop
+
+        const availableForAirdrop = solBalance - SAFETY_RESERVE;
+
+        // Basic Threshold Check - need at least MIN_AIRDROP_POOL SOL after reserve
+        if (availableForAirdrop < MIN_AIRDROP_POOL) {
             isAirdropping = false;
             return;
         }
-        // --------------------------------
 
-        logger.info(`AIRDROP TRIGGERED: Balance ${balance} PUMP > 50,000`);
+        logger.info(`SOL AIRDROP TRIGGERED: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available for distribution`);
 
-        // Total Amount to be distributed (99% of holdings)
-        const totalDistributable = balance * 0.99;
+        // Total Amount to be distributed (99% of available pool)
+        const totalDistributable = Math.floor(availableForAirdrop * 0.99);
         let kothAmount = 0;
         let communityAmount = totalDistributable;
         let kothTxSignature = null;
 
         // 1. Identify King of the Hill (Highest MCAP)
         const kothToken = await db.get('SELECT userPubkey, ticker, mint FROM tokens ORDER BY marketCap DESC LIMIT 1');
-        
-        const devPumpAta = await getAssociatedTokenAddress(
-            TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
-        );
 
         // 2. Process KOTH Payout (10%)
         if (kothToken && kothToken.userPubkey) {
-            kothAmount = totalDistributable * 0.10;
-            communityAmount = totalDistributable * 0.90;
+            kothAmount = Math.floor(totalDistributable * 0.10);
+            communityAmount = totalDistributable - kothAmount;
 
-            logger.info(`👑 King of the Hill found: ${kothToken.ticker} ($${kothAmount.toFixed(2)} PUMP prize)`);
+            logger.info(`👑 King of the Hill found: ${kothToken.ticker} (${(kothAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL prize)`);
 
             try {
                 // Send specific transaction for KOTH
-                const kothBatch = [{ user: new PublicKey(kothToken.userPubkey), amount: new BN(kothAmount * 1000000) }];
-                kothTxSignature = await sendAirdropBatch(kothBatch, devPumpAta, deps);
-                
+                const kothBatch = [{ user: new PublicKey(kothToken.userPubkey), amount: kothAmount }];
+                kothTxSignature = await sendSolAirdropBatch(kothBatch, deps);
+
                 if (kothTxSignature) {
-                    logger.info(`✅ KOTH Payout Sent: ${kothTxSignature}`);
+                    logger.info(`✅ KOTH SOL Payout Sent: ${kothTxSignature}`);
                 } else {
                     logger.error("❌ KOTH Payout Failed - returning funds to community pool");
                     // If fails, put money back in community pot
@@ -175,22 +299,26 @@ async function processAirdrop(deps) {
         }
 
         // 3. Process Community Distribution (Remaining 90%)
-        const communityAmountInt = new BN(communityAmount * 1000000); // 6 decimals
-        const userPoints = Array.from(globalState.userPointsMap.entries())
+        // v13.0: Fetch from Redis for cross-process consistency
+        const userPointsMap = await redis.getAllUserPoints();
+        const totalPoints = await redis.getTotalPoints();
+
+        const userPoints = Array.from(userPointsMap.entries())
             .map(([pubkey, points]) => ({ pubkey: new PublicKey(pubkey), points }))
             .filter(user => user.points > 0);
 
-        if (globalState.totalPoints === 0 || userPoints.length === 0) {
+        if (totalPoints === 0 || userPoints.length === 0) {
              isAirdropping = false;
              return;
         }
 
-        logger.info(`Distributing ${communityAmount} PUMP to ${userPoints.length} users (Community Pool)`);
+        logger.info(`Distributing ${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL to ${userPoints.length} users (Community Pool)`);
 
-        const BATCH_SIZE = 8;
+        // SOL transfers can handle more per batch since no ATA creation needed
+        const BATCH_SIZE = 15;
         let currentBatch = [];
         let allSignatures = [];
-        
+
         // Add KOTH sig if it exists
         if (kothTxSignature) allSignatures.push(`KOTH:${kothTxSignature}`);
 
@@ -198,13 +326,14 @@ async function processAirdrop(deps) {
         let failedBatches = 0;
 
         for (const user of userPoints) {
-            const share = communityAmountInt.mul(new BN(user.points)).div(new BN(globalState.totalPoints));
-            if (share.eqn(0)) continue;
+            // Calculate share in lamports
+            const share = Math.floor((communityAmount * user.points) / totalPoints);
+            if (share <= 0) continue;
 
             currentBatch.push({ user: user.pubkey, amount: share });
 
             if (currentBatch.length >= BATCH_SIZE) {
-                const sig = await sendAirdropBatch(currentBatch, devPumpAta, deps);
+                const sig = await sendSolAirdropBatch(currentBatch, deps);
                 if (sig) {
                     allSignatures.push(sig);
                     successfulBatches++;
@@ -212,12 +341,12 @@ async function processAirdrop(deps) {
                     failedBatches++;
                 }
                 currentBatch = [];
-                await new Promise(r => setTimeout(r, 1000));
+                await new Promise(r => setTimeout(r, 500)); // Shorter delay for SOL transfers
             }
         }
 
         if (currentBatch.length > 0) {
-            const sig = await sendAirdropBatch(currentBatch, devPumpAta, deps);
+            const sig = await sendSolAirdropBatch(currentBatch, deps);
             if (sig) {
                 allSignatures.push(sig);
                 successfulBatches++;
@@ -226,91 +355,95 @@ async function processAirdrop(deps) {
             }
         }
 
-        logger.info(`Airdrop Complete. Success: ${successfulBatches}, Failed: ${failedBatches}`);
+        logger.info(`SOL Airdrop Complete. Success: ${successfulBatches}, Failed: ${failedBatches}`);
 
-        const details = JSON.stringify({ success: successfulBatches, failed: failedBatches, kothWinner: kothToken?.ticker || 'None', kothAmount: kothAmount });
+        // Log in SOL (convert from lamports for display)
+        const totalDistributedSol = totalDistributable / LAMPORTS_PER_SOL;
+        const kothAmountSol = kothAmount / LAMPORTS_PER_SOL;
+
+        const details = JSON.stringify({
+            success: successfulBatches,
+            failed: failedBatches,
+            kothWinner: kothToken?.ticker || 'None',
+            kothAmount: kothAmountSol,
+            currency: 'SOL' // Mark as SOL airdrop for backwards compatibility
+        });
+
         await db.run(
-            'INSERT INTO airdrop_logs (amount, recipients, totalPoints, signatures, details, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-            [totalDistributable, userPoints.length + (kothAmount > 0 ? 1 : 0), globalState.totalPoints, allSignatures.join(','), details, new Date().toISOString()]
+            'INSERT INTO airdrop_logs (amount, recipients, "totalPoints", signatures, details, timestamp) VALUES ($1, $2, $3, $4, $5, $6)',
+            [totalDistributedSol, userPoints.length + (kothAmount > 0 ? 1 : 0), totalPoints, allSignatures.join(','), details, new Date().toISOString()]
         );
-        
+
         // Clear status after run
         globalState.conservationStatus = null;
-        
+
     } catch (e) {
-        logger.error("Airdrop Failed", { error: e.message });
+        logger.error("SOL Airdrop Failed", { error: e.message });
     } finally {
         isAirdropping = false;
     }
 }
 
 /**
- * Send a batch of airdrop transfers
- * Enhanced: Skips invalid ATAs instead of failing the whole batch
+ * Send a batch of SOL airdrop transfers
+ * v11.0 - Simplified: No ATA creation needed, just native SOL transfers
+ *
+ * @param {Array} batch - Array of {user: PublicKey, amount: number (lamports)}
+ * @param {Object} deps - Dependencies including connection and devKeypair
+ * @returns {string|null} - Transaction signature or null on failure
  */
-async function sendAirdropBatch(batch, sourceAta, deps) {
+async function sendSolAirdropBatch(batch, deps) {
     const { connection, devKeypair } = deps;
 
     try {
         const tx = new Transaction();
         solana.addPriorityFee(tx);
 
-        // 1. Resolve ATAs safely
+        // Filter valid items and add SOL transfer instructions
         const validItems = [];
-        const atas = [];
 
         for (const item of batch) {
             try {
-                // Safely derive ATA. If pubkey is somehow invalid, this might throw.
-                const ata = await getAssociatedTokenAddress(TOKENS.PUMP, item.user, false, PROGRAMS.TOKEN_2022);
-                validItems.push(item);
-                atas.push(ata);
+                // Validate the pubkey
+                const userPubkey = item.user instanceof PublicKey ? item.user : new PublicKey(item.user);
+
+                // Skip if amount is too small (dust)
+                if (item.amount < 1000) { // Less than 0.000001 SOL
+                    logger.debug(`Skipping dust amount for ${userPubkey.toString()}: ${item.amount} lamports`);
+                    continue;
+                }
+
+                validItems.push({ user: userPubkey, amount: item.amount });
             } catch (err) {
-                logger.warn(`Skipping invalid user in airdrop batch: ${item.user.toString()}`);
+                logger.warn(`Skipping invalid user in SOL airdrop batch: ${item.user?.toString?.() || 'unknown'}`);
             }
         }
 
         if (validItems.length === 0) return null;
 
-        // 2. Fetch Infos for valid items only
-        let infos = null;
-        let retries = 3;
-        while (retries > 0) {
-            try {
-                infos = await connection.getMultipleAccountsInfo(atas);
-                break;
-            } catch (err) {
-                retries--;
-                if (retries === 0) throw new Error(`Failed to fetch account infos`);
-                await new Promise(r => setTimeout(r, 1500));
-            }
+        // Add SOL transfer instructions for each valid recipient
+        for (const item of validItems) {
+            tx.add(SystemProgram.transfer({
+                fromPubkey: devKeypair.publicKey,
+                toPubkey: item.user,
+                lamports: item.amount
+            }));
         }
-
-        // 3. Build TX with valid items only
-        validItems.forEach((item, idx) => {
-            const ata = atas[idx];
-            // If info is null, it means account doesn't exist -> Create it (Idempotent)
-            if (!infos[idx]) {
-                tx.add(createAssociatedTokenAccountIdempotentInstruction(
-                    devKeypair.publicKey, ata, item.user, TOKENS.PUMP, PROGRAMS.TOKEN_2022
-                ));
-            }
-            tx.add(createTransferCheckedInstruction(
-                sourceAta, TOKENS.PUMP, ata, devKeypair.publicKey,
-                BigInt(item.amount.toString()), 6, [], PROGRAMS.TOKEN_2022
-            ));
-        });
 
         const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
         return sig;
     } catch (e) {
-        logger.error(`Airdrop batch failed`, { error: e.message });
+        logger.error(`SOL Airdrop batch failed`, { error: e.message });
         return null;
     }
 }
 
 /**
  * Run the main flywheel cycle
+ *
+ * v11.0 - Simplified: No ATA cost calculations needed for SOL airdrops
+ * The flywheel now collects fees, distributes to fee wallets, and triggers
+ * SOL airdrops when balance exceeds threshold
  */
 async function runPurchaseAndFees(deps) {
     const { connection, devKeypair, db, globalState, recordClaim, updateNextCheckTime, logPurchase } = deps;
@@ -322,11 +455,10 @@ async function runPurchaseAndFees(deps) {
         status: 'SKIPPED',
         reason: 'Unknown',
         feesCollected: 0,
+        robinhoodFeesCollected: 0,
         solSpent: 0,
-        tokensBought: 0,
         transfer9_5: 0,
-        transfer0_5: 0,
-        pumpBuySig: null
+        transfer0_5: 0
     };
 
     try {
@@ -358,7 +490,7 @@ async function runPurchaseAndFees(deps) {
             claimedAmount = await claimCreatorFees(deps);
 
             if (claimedAmount > 0) {
-                await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [claimedAmount, 'lifetimeCreatorFeesLamports']);
+                await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [claimedAmount, 'lifetimeCreatorFeesLamports']);
                 await recordClaim(claimedAmount);
             }
             await new Promise(r => setTimeout(r, 2000));
@@ -366,164 +498,73 @@ async function runPurchaseAndFees(deps) {
             logData.reason = `Threshold not met`;
         }
 
+        // v12.0: Claim fees from Robinhood tokens (external tokens sharing fees with us)
+        try {
+            const { totalClaimed: robinhoodClaimed, claimedTokens } = await claimRobinhoodFees(deps);
+            if (robinhoodClaimed > 0) {
+                logger.info(`[Robinhood] Total claimed: ${(robinhoodClaimed / LAMPORTS_PER_SOL).toFixed(6)} SOL from ${claimedTokens.length} tokens`);
+                logData.robinhoodFeesCollected = robinhoodClaimed / LAMPORTS_PER_SOL;
+                claimedAmount += robinhoodClaimed;
+
+                // Track lifetime Robinhood fees
+                await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [robinhoodClaimed, 'lifetimeRobinhoodFeesLamports']);
+            }
+        } catch (e) {
+            logger.debug('[Robinhood] Fee claiming skipped', { error: e.message });
+        }
+
         const realBalance = await connection.getBalance(devKeypair.publicKey);
-        // Default buffer for normal operations
-        let dynamicSafetyBuffer = 0.05 * LAMPORTS_PER_SOL; 
 
-        // --- CONSERVATION & EXCESS LOGIC ---
-        const pumpBalance = globalState.devPumpHoldings || 0;
-        const AIRDROP_THRESHOLD = 50000;
-        const ATA_RENT_COST = 0.00203928 * LAMPORTS_PER_SOL; // Precise rent cost
-        
-        let proceedWithBuyback = true;
-        let conservationStatus = null;
+        // v11.0: Simplified airdrop status for SOL airdrops (no ATA costs)
+        // v13.0: Fetch from Redis for cross-process consistency
+        const SAFETY_RESERVE = 0.5 * LAMPORTS_PER_SOL;
+        const MIN_AIRDROP_POOL = 0.1 * LAMPORTS_PER_SOL;
+        const currentUserPointsMap = await redis.getAllUserPoints();
+        const eligibleUsers = Array.from(currentUserPointsMap.keys());
+        const availableForAirdrop = realBalance - SAFETY_RESERVE;
 
-        if (pumpBalance > AIRDROP_THRESHOLD) {
-            logger.info("Flywheel: PUMP Threshold met. Calculating precise airdrop costs...");
-            
-            const eligibleUsers = Array.from(globalState.userPointsMap.keys());
-            let missingAtaCount = 0;
-            
-            if (eligibleUsers.length > 0) {
-                // Batch check ATAs to be precise
-                const BATCH_SIZE = 100;
-                for (let i = 0; i < eligibleUsers.length; i += BATCH_SIZE) {
-                    const batch = eligibleUsers.slice(i, i + BATCH_SIZE);
-                    const validAtas = [];
+        // Update conservation status (simplified - no ATA calculations)
+        globalState.conservationStatus = {
+            eligibleCount: eligibleUsers.length,
+            missingAtas: 0, // Not applicable for SOL airdrops
+            estimatedCost: SAFETY_RESERVE / LAMPORTS_PER_SOL,
+            currentSol: realBalance / LAMPORTS_PER_SOL,
+            availableForAirdrop: availableForAirdrop / LAMPORTS_PER_SOL,
+            isConserving: false, // Never conserving for SOL airdrops (no ATA rent)
+            currency: 'SOL'
+        };
 
-                    // Step 1: Derive ATAs safely (don't fail batch on one bad key)
-                    for (const u of batch) {
-                        try {
-                            const pk = new PublicKey(u);
-                            const ata = await getAssociatedTokenAddress(TOKENS.PUMP, pk, false, PROGRAMS.TOKEN_2022);
-                            validAtas.push(ata);
-                        } catch (e) {
-                            // Invalid Pubkey? Just ignore it for calculation purposes.
-                            // If it's invalid, we can't airdrop to it anyway.
-                            logger.warn(`Conservation Check: Invalid pubkey found: ${u}`);
-                        }
-                    }
+        // Fee distribution when we have claimed fees
+        if (claimedAmount > 0) {
+            const spendable = claimedAmount;
+            const MIN_SPEND = 0.02 * LAMPORTS_PER_SOL;
 
-                    if (validAtas.length === 0) continue;
+            if (spendable > MIN_SPEND) {
+                // Distribution: 95% goes to airdrop pool, 4.5% ASDF Fee, 0.5% Upkeep
+                const transfer9_5 = Math.floor(spendable * 0.045);
+                const transfer0_5 = Math.floor(spendable * 0.005);
+                // Remaining 95% stays in wallet for SOL airdrops
 
-                    // Step 2: Check on-chain
-                    try {
-                        const infos = await connection.getMultipleAccountsInfo(validAtas);
-                        // Count null accounts (they need creation)
-                        missingAtaCount += infos.filter(info => !info).length;
-                    } catch (err) {
-                        logger.error("Error checking ATAs batch", {error: err.message});
-                        // Fallback: assume all valid in this batch are missing (safety)
-                        missingAtaCount += validAtas.length;
-                    }
-                }
-            }
-            
-            // Base Cost = Rent for new accounts + standard transaction fee buffer
-            const estimatedAirdropCost = (missingAtaCount * ATA_RENT_COST) + (0.05 * LAMPORTS_PER_SOL);
-            
-            // Excess logic: Maintain 1 SOL buffer ON TOP of estimated costs
-            const ONE_SOL = 1 * LAMPORTS_PER_SOL;
-            const requiredReserve = estimatedAirdropCost + ONE_SOL;
+                logData.solSpent = (transfer9_5 + transfer0_5) / LAMPORTS_PER_SOL;
+                logData.transfer9_5 = transfer9_5 / LAMPORTS_PER_SOL;
+                logData.transfer0_5 = transfer0_5 / LAMPORTS_PER_SOL;
 
-            conservationStatus = {
-                eligibleCount: eligibleUsers.length,
-                missingAtas: missingAtaCount,
-                estimatedCost: estimatedAirdropCost / LAMPORTS_PER_SOL,
-                currentSol: realBalance / LAMPORTS_PER_SOL,
-                pumpBalance: pumpBalance,
-                isConserving: realBalance < estimatedAirdropCost // Only "conserving" if we can't afford the airdrop
-            };
-            
-            globalState.conservationStatus = conservationStatus;
-
-            if (realBalance < estimatedAirdropCost) {
-                // CASE 1: NOT ENOUGH FOR AIRDROP -> Stop Buyback, Conserve SOL
-                logger.info(`Flywheel: Conserving SOL. Need ${conservationStatus.estimatedCost.toFixed(4)}, Have ${conservationStatus.currentSol.toFixed(4)}.`);
-                logData.status = 'CONSERVING_SOL';
-                logData.reason = `Saving for Airdrop (${missingAtaCount} new wallets)`;
-                proceedWithBuyback = false;
-            } else if (realBalance > requiredReserve) {
-                // CASE 2: EXCESS FUNDS -> Enable Buyback with EXCESS only
-                // We set the safety buffer to the required reserve so we don't dip below it
-                logger.info(`Flywheel: Excess SOL detected (${conservationStatus.currentSol.toFixed(4)}). Buying PUMP with excess (Reserve: ${(requiredReserve/LAMPORTS_PER_SOL).toFixed(4)}).`);
-                dynamicSafetyBuffer = requiredReserve;
-                logData.reason = 'Excess SOL Buyback';
-                proceedWithBuyback = true;
+                // Fee distribution
+                const feeTx = new Transaction();
+                solana.addPriorityFee(feeTx);
+                feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_95, lamports: transfer9_5 }));
+                feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_05, lamports: transfer0_5 }));
+                await solana.sendTxWithRetry(feeTx, [devKeypair]);
+                logger.info("Fees Distributed (5% to wallets, 95% retained for SOL airdrop pool)");
+                logData.status = 'SUCCESS';
+                logData.reason = 'Fees Distributed';
             } else {
-                // CASE 3: ENOUGH FOR AIRDROP, BUT NO EXCESS -> Skip Buyback, Trigger Airdrop
-                logger.info(`Flywheel: Ready for Airdrop. Triggering distribution.`);
-                logData.reason = 'Ready for Airdrop';
-                proceedWithBuyback = false; 
-            }
-        } else {
-            // Clear status if under threshold
-            globalState.conservationStatus = null;
-        }
-        // --------------------------
-
-        if (proceedWithBuyback) {
-            // Check against dynamic buffer
-            if (realBalance < dynamicSafetyBuffer) {
-                logData.reason = 'LOW BALANCE (Below Buffer)';
-                logData.status = 'LOW_BALANCE_SKIP';
-            } else if (claimedAmount > 0 || (pumpBalance > AIRDROP_THRESHOLD)) {
-                
-                // Determine spendable amount
-                let spendable = Math.min(claimedAmount, realBalance - dynamicSafetyBuffer);
-                
-                // If in "Excess Mode", allow spending more of the excess
-                if (pumpBalance > AIRDROP_THRESHOLD) {
-                    spendable = realBalance - dynamicSafetyBuffer;
-                    // Cap single buy size to 5 SOL for safety/slippage
-                    if (spendable > 5 * LAMPORTS_PER_SOL) spendable = 5 * LAMPORTS_PER_SOL;
-                }
-
-                const MIN_SPEND = 0.05 * LAMPORTS_PER_SOL;
-
-                if (spendable > MIN_SPEND) {
-                    // Distribution: 95% Buyback, 4.5% ASDF Fee, 0.5% Upkeep
-                    const transfer9_5 = Math.floor(spendable * 0.045);
-                    const transfer0_5 = Math.floor(spendable * 0.005);
-                    const solBuyAmount = Math.floor(spendable * 0.95);
-
-                    logData.solSpent = (solBuyAmount + transfer9_5 + transfer0_5) / LAMPORTS_PER_SOL;
-                    logData.transfer9_5 = transfer9_5 / LAMPORTS_PER_SOL;
-                    logData.transfer0_5 = transfer0_5 / LAMPORTS_PER_SOL;
-
-                    // Fee distribution
-                    const feeTx = new Transaction();
-                    solana.addPriorityFee(feeTx);
-                    feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_95, lamports: transfer9_5 }));
-                    feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_05, lamports: transfer0_5 }));
-                    await solana.sendTxWithRetry(feeTx, [devKeypair]);
-                    logger.info("Fees Distributed");
-
-                    // DIRECT BUY: Swap SOL -> PUMP using Jupiter
-                    const swapResult = await jupiter.swapSolToToken(solBuyAmount, TOKENS.PUMP, devKeypair, connection);
-                    
-                    if (swapResult && swapResult.signature) {
-                        logData.pumpBuySig = swapResult.signature;
-                        logData.tokensBought = swapResult.outAmount;
-                        logData.status = 'SUCCESS';
-                        logData.reason = pumpBalance > AIRDROP_THRESHOLD ? 'Excess SOL Buyback' : 'Flywheel Complete';
-                        
-                        // Update Stats
-                        await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [solBuyAmount, 'totalPumpBoughtLamports']);
-                        
-                        // Convert raw units to float (Assuming 6 decimals for PUMP/Token-2022)
-                        const tokensBoughtVal = parseFloat(swapResult.outAmount) / 1000000;
-                        await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [tokensBoughtVal, 'totalPumpTokensBought']);
-                    } else {
-                        logData.status = 'BUY_FAIL';
-                    }
-                } else {
-                    logData.status = 'LOW_SPEND_SKIP';
-                }
+                logData.status = 'LOW_SPEND_SKIP';
+                logData.reason = 'Claimed amount too small';
             }
         }
 
-        // Try to airdrop (internally checks balance & threshold)
+        // Try SOL airdrop (internally checks balance & threshold)
         await processAirdrop(deps);
         await logPurchase('FLYWHEEL_CYCLE', logData);
 
@@ -546,4 +587,4 @@ function start(deps) {
     logger.info("Flywheel started (5 min interval)");
 }
 
-module.exports = { claimCreatorFees, processAirdrop, runPurchaseAndFees, start };
+module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, sendSolAirdropBatch, runPurchaseAndFees, start };

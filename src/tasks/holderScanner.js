@@ -135,29 +135,56 @@ async function updateGlobalState(deps) {
             );
 
             for (const row of rows) {
-                rawPointsMap.set(row.holderPubkey, { holderPoints: row.positionCount, creatorPoints: 0 });
+                rawPointsMap.set(row.holderPubkey, { holderPoints: row.positionCount, creatorPoints: 0, robinhoodPoints: 0 });
             }
 
             for (const token of topTokens) {
                 if (token.userPubkey) {
-                    const entry = rawPointsMap.get(token.userPubkey) || { holderPoints: 0, creatorPoints: 0 };
+                    const entry = rawPointsMap.get(token.userPubkey) || { holderPoints: 0, creatorPoints: 0, robinhoodPoints: 0 };
                     entry.creatorPoints += 1;
                     rawPointsMap.set(token.userPubkey, entry);
                 }
             }
+        }
 
-            for (const [pubkey, data] of rawPointsMap.entries()) {
-                if (pubkey === devKeypair.publicKey.toString()) continue;
+        // v12.0: Include Robinhood token holders in points calculation
+        // Holders of tokens that share fees with us also earn airdrop eligibility
+        try {
+            const robinhoodTokens = await db.all('SELECT mint FROM robinhood_tokens WHERE isActive = 1 AND mint IS NOT NULL LIMIT 10');
+            const robinhoodMints = robinhoodTokens.map(t => t.mint).filter(m => m);
 
-                // CHECK ASDF MULTIPLIER (Now Top 100)
-                const isAsdfTop100 = globalState.asdfTop50Holders.has(pubkey);
-                
-                const basePoints = data.holderPoints + (data.creatorPoints * 2);
-                const totalPoints = basePoints * (isAsdfTop100 ? 2 : 1);
+            if (robinhoodMints.length > 0) {
+                const rhPlaceholders = robinhoodMints.map(() => '?').join(',');
+                const robinhoodRows = await db.all(
+                    `SELECT holderPubkey, COUNT(*) as positionCount FROM robinhood_token_holders WHERE mint IN (${rhPlaceholders}) GROUP BY holderPubkey`,
+                    robinhoodMints
+                );
 
-                if (totalPoints > 0) {
-                    tempTotalPoints += totalPoints;
+                for (const row of robinhoodRows) {
+                    const entry = rawPointsMap.get(row.holderPubkey) || { holderPoints: 0, creatorPoints: 0, robinhoodPoints: 0 };
+                    entry.robinhoodPoints = row.positionCount;
+                    rawPointsMap.set(row.holderPubkey, entry);
                 }
+
+                logger.debug(`[Robinhood] Included ${robinhoodRows.length} unique holders from ${robinhoodMints.length} Robinhood tokens`);
+            }
+        } catch (e) {
+            logger.debug('[Robinhood] Holder points calculation skipped', { error: e.message });
+        }
+
+        // Calculate final points including Robinhood holdings
+        for (const [pubkey, data] of rawPointsMap.entries()) {
+            if (pubkey === devKeypair.publicKey.toString()) continue;
+
+            // CHECK ASDF MULTIPLIER (Now Top 100)
+            const isAsdfTop100 = globalState.asdfTop50Holders.has(pubkey);
+
+            // Base points: holder positions + creator bonus (2x) + robinhood holder positions
+            const basePoints = data.holderPoints + (data.creatorPoints * 2) + (data.robinhoodPoints || 0);
+            const totalPoints = basePoints * (isAsdfTop100 ? 2 : 1);
+
+            if (totalPoints > 0) {
+                tempTotalPoints += totalPoints;
             }
         }
 
@@ -172,13 +199,14 @@ async function updateGlobalState(deps) {
             if (pubkey === devKeypair.publicKey.toString()) continue;
 
             const isAsdfTop100 = globalState.asdfTop50Holders.has(pubkey);
-            const points = (data.holderPoints + (data.creatorPoints * 2)) * (isAsdfTop100 ? 2 : 1);
+            // Include robinhood points in the calculation
+            const points = (data.holderPoints + (data.creatorPoints * 2) + (data.robinhoodPoints || 0)) * (isAsdfTop100 ? 2 : 1);
 
             if (points > 0) {
                 globalState.userPointsMap.set(pubkey, points);
 
                 let expected = 0;
-                
+
                 if (communityPot > 0 && globalState.totalPoints > 0) {
                     const share = points / globalState.totalPoints;
                     expected = share * communityPot;
