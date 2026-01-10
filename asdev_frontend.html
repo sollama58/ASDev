@@ -82,6 +82,7 @@
         .metric-label { font-size: 12px; color: #fdba74; text-transform: uppercase; letter-spacing: 1px; }
         .holder-check { color: #4ade80; font-weight: bold; margin-left: 8px; display: inline-flex; align-items: center; gap: 2px; font-size: 10px; background: rgba(34, 197, 94, 0.2); padding: 2px 4px; border-radius: 4px; border: 1px solid #22c55e; }
         .badge-creator { color: #60a5fa; font-weight: bold; margin-left: 8px; display: inline-flex; align-items: center; gap: 2px; font-size: 10px; background: rgba(59, 130, 246, 0.2); padding: 2px 4px; border-radius: 4px; border: 1px solid #3b82f6; }
+        .badge-robinhood { color: #a855f7; font-weight: bold; margin-left: 8px; display: inline-flex; align-items: center; gap: 2px; font-size: 10px; background: rgba(168, 85, 247, 0.2); padding: 2px 4px; border-radius: 4px; border: 1px solid #a855f7; }
         .badge-bonded { display: inline-block; background-color: #22c55e; color: #000; font-weight: bold; padding: 1px 4px; border-radius: 3px; font-size: 9px; margin-left: 6px; border: 1px solid #14532d; vertical-align: middle; }
         .badge-bonding { display: inline-block; background-color: #eab308; color: #000; font-weight: bold; padding: 1px 4px; border-radius: 3px; font-size: 9px; margin-left: 6px; border: 1px solid #713f12; vertical-align: middle; }
         .tx-link { color: #a78bfa; text-decoration: underline; font-size: 10px; }
@@ -786,13 +787,19 @@
                 const creatorMark = (userPubkey && item.creator && userPubkey === item.creator)
                     ? `<span class="badge-creator" title="You created this token">🛠️ CREATOR</span>`
                     : '';
-                
+
+                // v13.0: Robinhood badge for fee-sharing external tokens
+                const robinhoodMark = item.isRobinhood
+                    ? `<span class="badge-robinhood" title="External Token (Fee Share Partner)">🏹 ROBINHOOD</span>`
+                    : '';
+
                 return `
                 <tr>
                     <td class="text-orange-500 font-bold">${index + 1}</td>
                     <td>
                         <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
                         <span class="text-white font-bold">${escapeHtml(item.ticker)}</span>
+                        ${robinhoodMark}
                         ${creatorMark}
                         ${holderMark}
                         ${badge}
@@ -802,7 +809,7 @@
                     <td class="text-right text-white font-bold">$${displayVol.toLocaleString()}</td>
                     <td class="text-right">
                         <div class="flex gap-2 justify-end items-center">
-                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}')" class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition" title="View Top 50 Holders">
+                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}', ${!!item.isRobinhood})" class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition" title="View Top 50 Holders">
                                 👥
                             </button>
                             <a href="${escapeHtml(tradeLink)}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a>
@@ -820,15 +827,19 @@
     };
     window.updateLeaderboard = updateLeaderboard;
 
-    const viewTokenHolders = async (mint, ticker) => {
+    const viewTokenHolders = async (mint, ticker, isRobinhood = false) => {
         const modal = document.getElementById('holders-modal');
         const list = document.getElementById('holders-list');
         const title = document.getElementById('holders-modal-title');
         modal.style.display = 'block';
-        title.innerText = `TOP 50: $${ticker}`;
+        title.innerText = `TOP 50: $${ticker}${isRobinhood ? ' (Robinhood)' : ''}`;
         list.innerHTML = '<div class="text-center text-orange-400 p-4">Loading holder data...</div>';
         try {
-            const res = await fetch(`${BACKEND_URL}/api/token-holders/${escapeHtml(mint)}`);
+            // Use different endpoint for Robinhood tokens
+            const endpoint = isRobinhood
+                ? `${BACKEND_URL}/api/robinhood/holders/${escapeHtml(mint)}`
+                : `${BACKEND_URL}/api/token-holders/${escapeHtml(mint)}`;
+            const res = await fetch(endpoint);
             if (!res.ok) throw new Error("Failed to fetch");
             const holders = await res.json();
             if (holders.length === 0) {

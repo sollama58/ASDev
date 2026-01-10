@@ -71,7 +71,7 @@ function init(deps) {
         }
     });
 
-    // Leaderboard
+    // Leaderboard - Shows all tokens where dev wallet receives fees (launched + robinhood)
     router.get('/leaderboard', async (req, res) => {
         const { userPubkey } = req.query;
         // Validate userPubkey if provided
@@ -79,35 +79,60 @@ function init(deps) {
             return res.status(400).json({ error: "Invalid Solana address" });
         }
         try {
-            const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10');
+            // Combine launched tokens and active robinhood tokens
+            // Use UNION ALL to merge both sources, preserving creator info
+            const rows = await db.all(`
+                SELECT mint, "userPubkey" as creator, name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'launched' as source
+                FROM tokens
+                UNION ALL
+                SELECT mint, "creatorPubkey" as creator, name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source
+                FROM robinhood_tokens
+                WHERE "isActive" = 1
+                ORDER BY volume24h DESC
+                LIMIT 10
+            `);
 
-            // Batch query for user holder status (avoid N+1)
+            // Batch query for user holder status (check both holder tables)
             let userHoldings = new Set();
             if (userPubkey && rows.length > 0) {
                 const mints = rows.map(r => r.mint);
                 const placeholders = mints.map((_, i) => `$${i + 2}`).join(',');
-                const holdings = await db.all(
+
+                // Check token_holders (launched tokens)
+                const launchedHoldings = await db.all(
                     `SELECT mint FROM token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`,
                     [userPubkey, ...mints]
                 );
-                userHoldings = new Set(holdings.map(h => h.mint));
+
+                // Check robinhood_token_holders (robinhood tokens)
+                const robinhoodHoldings = await db.all(
+                    `SELECT mint FROM robinhood_token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`,
+                    [userPubkey, ...mints]
+                );
+
+                userHoldings = new Set([
+                    ...launchedHoldings.map(h => h.mint),
+                    ...robinhoodHoldings.map(h => h.mint)
+                ]);
             }
 
             const leaderboard = rows.map(r => ({
                 mint: r.mint,
-                creator: r.userPubkey,
+                creator: r.creator,
                 name: r.name,
                 ticker: r.ticker,
                 image: r.image,
                 metadataUri: r.metadataUri,
-                price: (r.marketCap / 1000000000).toFixed(6),
+                price: ((r.marketCap || 0) / 1000000000).toFixed(6),
                 marketCap: r.marketCap || 0,
                 volume: r.volume24h,
                 isUserTopHolder: userHoldings.has(r.mint),
-                complete: !!r.complete
+                complete: !!r.complete,
+                isRobinhood: r.source === 'robinhood'
             }));
             res.json({ tokens: leaderboard, lastUpdate: globalState.lastBackendUpdate });
         } catch (e) {
+            console.error("Leaderboard Error:", e);
             res.status(500).json({ tokens: [], lastUpdate: Date.now() });
         }
     });
