@@ -18,9 +18,10 @@
  *
  * Requires HELIUS_API_KEY environment variable.
  *
- * Usage: node scripts/backfillTokens.js [--dry-run] [--reset]
+ * Usage: node scripts/backfillTokens.js [--dry-run] [--reset] [--wipe]
  *   --dry-run  Preview changes without modifying the database
  *   --reset    Force full rescan (ignore saved progress)
+ *   --wipe     Clear all existing tokens before backfilling (DESTRUCTIVE)
  */
 require('dotenv').config();
 
@@ -37,6 +38,7 @@ const mintExtractor = require('../src/services/mintExtractor');
 // Parse command line args
 const DRY_RUN = process.argv.includes('--dry-run');
 const RESET_PROGRESS = process.argv.includes('--reset');
+const WIPE_TOKENS = process.argv.includes('--wipe');
 
 /**
  * Fetch token metadata from Helius DAS API
@@ -388,12 +390,13 @@ async function scanVaultTransactionsForTokens(db, devPubkey) {
     }
 
     // Use the shared mintExtractor module
+    // Force reset progress if wipe was requested (we need to rescan everything)
     const { foundMints, bcStats, ammStats } = await mintExtractor.scanCreatorVaultsForMints({
         creatorPubkey: new PublicKey(devPubkey),
         db,
         getCreatorFeeVaults: pump.getCreatorFeeVaults,
         saveProgress: !DRY_RUN,
-        resetProgress: RESET_PROGRESS,
+        resetProgress: RESET_PROGRESS || WIPE_TOKENS,
     });
 
     // Summary
@@ -424,6 +427,55 @@ async function scanVaultTransactionsForTokens(db, devPubkey) {
 }
 
 /**
+ * Wipe all tokens from the database
+ */
+async function wipeTokens(db) {
+    console.log('\n🗑️  Wiping all tokens from database...');
+
+    // Clear tokens table
+    const tokenResult = await db.run('DELETE FROM tokens');
+    console.log(`   Deleted ${tokenResult.changes || 0} tokens`);
+
+    // Clear robinhood_tokens table
+    const robinhoodResult = await db.run('DELETE FROM robinhood_tokens');
+    console.log(`   Deleted ${robinhoodResult.changes || 0} robinhood tokens`);
+
+    // Clear vault scan progress logs so we do a full rescan
+    const progressResult = await db.run("DELETE FROM system_log WHERE key LIKE $1", ['vault_scan_%']);
+    console.log(`   Cleared ${progressResult.changes || 0} vault scan progress entries`);
+
+    console.log('   ✅ Wipe complete');
+}
+
+/**
+ * Verify database schema is properly set up
+ */
+async function verifyDatabaseSchema(db) {
+    console.log('\n🔍 Verifying database schema...');
+
+    const requiredTables = ['tokens', 'robinhood_tokens', 'system_log'];
+    const missingTables = [];
+
+    for (const table of requiredTables) {
+        try {
+            // Simple check: try to count rows (will fail if table doesn't exist)
+            await db.get(`SELECT 1 FROM ${table} LIMIT 1`);
+        } catch (e) {
+            missingTables.push(table);
+        }
+    }
+
+    if (missingTables.length > 0) {
+        console.log(`   ⚠️  Missing tables: ${missingTables.join(', ')}`);
+        console.log('   Database initialization should have created these.');
+        return false;
+    }
+
+    console.log('   ✅ All required tables exist');
+    return true;
+}
+
+/**
  * Main function
  */
 async function main() {
@@ -434,6 +486,9 @@ async function main() {
     if (RESET_PROGRESS) {
         console.log('🔄 RESET MODE: Will perform full vault scan (ignoring saved progress)');
     }
+    if (WIPE_TOKENS) {
+        console.log('🗑️  WIPE MODE: Will delete all existing tokens before backfilling');
+    }
     console.log('');
 
     // Initialize connection
@@ -443,10 +498,21 @@ async function main() {
     console.log(`🔗 RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : 'Mainnet'}`);
     console.log(`👛 Dev Wallet: ${devKeypair.publicKey.toString()}`);
 
-    // Initialize database
+    // Initialize database (this creates tables if they don't exist)
+    console.log('\n📦 Initializing database...');
     await database.initDB();
     const db = database.getDB();
     console.log('✅ Database connected');
+
+    // Verify schema is properly set up
+    await verifyDatabaseSchema(db);
+
+    // Wipe tokens if requested
+    if (WIPE_TOKENS && !DRY_RUN) {
+        await wipeTokens(db);
+    } else if (WIPE_TOKENS && DRY_RUN) {
+        console.log('\n🗑️  [DRY RUN] Would wipe all tokens from database');
+    }
 
     // Get current counts
     const tokenCount = await db.get('SELECT COUNT(*) as count FROM tokens');

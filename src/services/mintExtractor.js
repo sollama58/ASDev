@@ -225,18 +225,145 @@ function extractMintFromTransaction(tx) {
     mint = extractMintFromAmmTransaction(tx, ammProgramId);
     if (mint) return mint;
 
+    // Fallback: Try to find mint from enhanced transaction data (Helius parsed format)
+    mint = extractMintFromEnhancedTx(tx);
+    if (mint) return mint;
+
+    return null;
+}
+
+/**
+ * Extract mint from Helius enhanced/parsed transaction format
+ * Helius can return transactions in an enhanced format with tokenTransfers, etc.
+ *
+ * @param {Object} tx - Transaction object from Helius
+ * @returns {string|null} - Mint address or null if not found
+ */
+function extractMintFromEnhancedTx(tx) {
+    // Check for Helius enhanced transaction format
+    // This format includes parsed tokenTransfers array
+    const tokenTransfers = tx.tokenTransfers || [];
+    for (const transfer of tokenTransfers) {
+        const mint = transfer.mint;
+        if (mint && !KNOWN_PROGRAMS.has(mint)) {
+            return mint;
+        }
+    }
+
+    // Check accountData for token accounts
+    const accountData = tx.accountData || [];
+    for (const acc of accountData) {
+        if (acc.tokenBalanceChanges) {
+            for (const change of acc.tokenBalanceChanges) {
+                const mint = change.mint;
+                if (mint && !KNOWN_PROGRAMS.has(mint)) {
+                    return mint;
+                }
+            }
+        }
+    }
+
+    // Check events for token info
+    const events = tx.events || {};
+    if (events.swap) {
+        const tokenInputs = events.swap.tokenInputs || [];
+        const tokenOutputs = events.swap.tokenOutputs || [];
+        for (const tok of [...tokenInputs, ...tokenOutputs]) {
+            const mint = tok.mint || tok.tokenMint;
+            if (mint && !KNOWN_PROGRAMS.has(mint)) {
+                return mint;
+            }
+        }
+    }
+
+    // Check instructions for program interactions
+    const instructions = tx.instructions || [];
+    for (const ix of instructions) {
+        // Check if this is a Pump.fun instruction with accounts
+        if (ix.programId === PROGRAMS.PUMP.toString() || ix.programId === PROGRAMS.PUMP_AMM.toString()) {
+            const accounts = ix.accounts || [];
+            // For Pump.fun, mint is typically one of the first few accounts
+            for (let i = 0; i < Math.min(accounts.length, 10); i++) {
+                const acc = accounts[i];
+                const accStr = typeof acc === 'string' ? acc : acc?.pubkey;
+                if (accStr && !KNOWN_PROGRAMS.has(accStr) && accStr.length >= 32) {
+                    // Quick validation: Pump mints typically end in "pump"
+                    if (accStr.endsWith('pump') || accStr.endsWith('Pump')) {
+                        return accStr;
+                    }
+                }
+            }
+        }
+
+        // Check inner instructions
+        const innerIxs = ix.innerInstructions || [];
+        for (const inner of innerIxs) {
+            if (inner.programId === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb' ||
+                inner.programId === 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') {
+                const accounts = inner.accounts || [];
+                for (const acc of accounts) {
+                    const accStr = typeof acc === 'string' ? acc : acc?.pubkey;
+                    if (accStr && !KNOWN_PROGRAMS.has(accStr) && accStr.length >= 32) {
+                        return accStr;
+                    }
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Extract the source address (bonding curve or pool) from a vault transaction.
+ * This is the address that sent SOL to our vault.
+ *
+ * @param {Object} tx - Transaction object from Helius
+ * @param {string} vaultAddress - Our vault address
+ * @returns {string|null} - Source address or null
+ */
+function extractSourceAddress(tx, vaultAddress) {
+    // Check native transfers (enhanced format)
+    const nativeTransfers = tx.nativeTransfers || [];
+    for (const transfer of nativeTransfers) {
+        if (transfer.toUserAccount === vaultAddress && transfer.fromUserAccount) {
+            return transfer.fromUserAccount;
+        }
+    }
+
+    // Check account keys for the sender (RPC format)
+    // In a fee transfer, the source is typically one of the first writable accounts
+    const message = tx.transaction?.message;
+    if (message) {
+        const accountKeys = message.accountKeys || [];
+        // The fee source is usually the account that had SOL debited
+        // Look for accounts that aren't our vault or system programs
+        for (const key of accountKeys) {
+            const keyStr = typeof key === 'string' ? key : key?.pubkey;
+            if (keyStr && keyStr !== vaultAddress && !KNOWN_PROGRAMS.has(keyStr)) {
+                // Return the first non-program, non-vault account as potential source
+                return keyStr;
+            }
+        }
+    }
+
     return null;
 }
 
 /**
  * Scan a vault address for transactions and extract mints
  *
+ * Deduplication strategy:
+ * - Each bonding curve/pool has a unique address
+ * - We track which source addresses we've seen
+ * - Once we see a source, we've found that token - skip future txs from same source
+ *
  * @param {Object} options - Scan options
  * @param {string} options.vaultAddress - Vault address to scan
  * @param {string} options.vaultType - 'bc' or 'amm' for logging
  * @param {string|null} options.lastSignature - Last processed signature (for resuming)
  * @param {Set} options.foundMints - Set to add discovered mints to
- * @param {Set} options.processedSignatures - Set of already processed tx signatures
+ * @param {Set} options.processedSources - Set of already processed source addresses (BC/pools)
  * @param {Function} options.onProgress - Optional progress callback
  * @returns {Object} - Scan statistics { txProcessed, mintsFound, newestSignature }
  */
@@ -246,7 +373,7 @@ async function scanVaultForMints(options) {
         vaultType = 'unknown',
         lastSignature = null,
         foundMints = new Set(),
-        processedSignatures = new Set(),
+        processedSources = new Set(),
         onProgress = null,
     } = options;
 
@@ -258,38 +385,75 @@ async function scanVaultForMints(options) {
     let paginationToken = null;
     let txProcessed = 0;
     let mintsFound = 0;
+    let sourcesSkipped = 0;
     let newestSignature = null;
     let reachedLastProcessed = false;
 
     try {
         do {
+            // Use Helius Enhanced Transactions API for parsed data
+            // This gives us tokenTransfers, accountData with balance changes, etc.
             const params = {
                 limit: 100,
                 sortOrder: 'desc',
                 transactionDetails: 'full',
+                // Request enhanced/parsed format
+                commitment: 'confirmed',
             };
 
             if (paginationToken) {
                 params.paginationToken = paginationToken;
             }
 
-            const response = await axios.post(
-                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
-                {
-                    jsonrpc: '2.0',
-                    id: '1',
-                    method: 'getTransactionsForAddress',
-                    params: [vaultAddress, params]
-                },
-                { timeout: 30000 }
-            );
+            // First try the enhanced API endpoint
+            let response;
+            try {
+                response = await axios.get(
+                    `https://api.helius.xyz/v0/addresses/${vaultAddress}/transactions?api-key=${config.HELIUS_API_KEY}&limit=${params.limit}${paginationToken ? `&before=${paginationToken}` : ''}`,
+                    { timeout: 30000 }
+                );
+                // Enhanced API returns array directly
+                if (Array.isArray(response.data)) {
+                    response = { data: { result: { data: response.data } } };
+                }
+            } catch (enhancedErr) {
+                // Fallback to standard RPC
+                logger.debug(`[MintExtractor] Enhanced API failed, using standard RPC: ${enhancedErr.message}`);
+                response = await axios.post(
+                    `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+                    {
+                        jsonrpc: '2.0',
+                        id: '1',
+                        method: 'getTransactionsForAddress',
+                        params: [vaultAddress, params]
+                    },
+                    { timeout: 30000 }
+                );
+            }
 
-            const result = response.data?.result;
-            if (!result || !result.data || result.data.length === 0) {
+            // Handle both enhanced API (array) and standard RPC (result.data)
+            let txData;
+            let nextPaginationToken = null;
+
+            if (Array.isArray(response.data)) {
+                // Enhanced API returns array directly
+                txData = response.data;
+                // For enhanced API, use last signature for pagination
+                if (txData.length > 0) {
+                    nextPaginationToken = txData[txData.length - 1].signature;
+                }
+            } else {
+                // Standard RPC format
+                const result = response.data?.result;
+                txData = result?.data || [];
+                nextPaginationToken = result?.paginationToken;
+            }
+
+            if (!txData || txData.length === 0) {
                 break;
             }
 
-            for (const tx of result.data) {
+            for (const tx of txData) {
                 // Track newest signature for progress
                 if (!newestSignature && tx.signature) {
                     newestSignature = tx.signature;
@@ -298,27 +462,41 @@ async function scanVaultForMints(options) {
                 // Stop if we've reached previously processed signature
                 if (lastSignature && tx.signature === lastSignature) {
                     reachedLastProcessed = true;
-                    paginationToken = null;
+                    nextPaginationToken = null;
                     break;
                 }
 
-                // Skip if already processed (deduplication)
-                if (processedSignatures.has(tx.signature)) {
+                txProcessed++;
+
+                // Extract the source address (bonding curve or pool that sent fees)
+                const sourceAddress = extractSourceAddress(tx, vaultAddress);
+
+                // Skip if we've already processed this source (same BC/pool)
+                // Each BC/pool corresponds to one token, so we only need to process once
+                if (sourceAddress && processedSources.has(sourceAddress)) {
+                    sourcesSkipped++;
                     continue;
                 }
-                processedSignatures.add(tx.signature);
-
-                txProcessed++;
 
                 // Extract mint using unified extractor
                 const mint = extractMintFromTransaction(tx);
                 if (mint && !foundMints.has(mint)) {
                     foundMints.add(mint);
                     mintsFound++;
+                    logger.debug(`[MintExtractor] Found mint: ${mint.slice(0, 8)}... from source ${sourceAddress?.slice(0, 8) || 'unknown'}...`);
+
+                    // Mark this source as processed so we skip future txs from it
+                    if (sourceAddress) {
+                        processedSources.add(sourceAddress);
+                    }
+                } else if (sourceAddress) {
+                    // Even if we didn't find a mint, mark the source as seen
+                    // to avoid re-processing transactions from the same BC/pool
+                    processedSources.add(sourceAddress);
                 }
             }
 
-            paginationToken = result.paginationToken;
+            paginationToken = nextPaginationToken;
 
             // Progress callback
             if (onProgress && txProcessed > 0 && txProcessed % 500 === 0) {
@@ -334,7 +512,8 @@ async function scanVaultForMints(options) {
         logger.error(`[MintExtractor] Vault scan error for ${vaultType}`, { error: e.message });
     }
 
-    return { txProcessed, mintsFound, newestSignature };
+    logger.debug(`[MintExtractor] ${vaultType.toUpperCase()} scan: ${txProcessed} txs, ${mintsFound} mints, ${sourcesSkipped} duplicate sources skipped`);
+    return { txProcessed, mintsFound, sourcesSkipped, newestSignature };
 }
 
 /**
@@ -388,7 +567,7 @@ async function scanCreatorVaultsForMints(options) {
     const { bcVault, ammVaultAuth } = getCreatorFeeVaults(creatorPubkey);
 
     const foundMints = new Set();
-    const processedSignatures = new Set();
+    const processedSources = new Set(); // Track unique source addresses (BC/pools)
 
     // Get progress from database (unless resetProgress is true)
     const bcProgressKey = `vault_scan_bc_${creatorPubkey.toString().slice(0, 8)}`;
@@ -419,7 +598,7 @@ async function scanCreatorVaultsForMints(options) {
         vaultType: 'bc',
         lastSignature: bcLastSig,
         foundMints,
-        processedSignatures,
+        processedSources,
         onProgress: ({ vaultType, txProcessed, mintsFound }) => {
             logger.debug(`[MintExtractor] [${vaultType.toUpperCase()}] Processed ${txProcessed} txs, found ${mintsFound} mints`);
         },
@@ -431,7 +610,7 @@ async function scanCreatorVaultsForMints(options) {
         vaultType: 'amm',
         lastSignature: ammLastSig,
         foundMints,
-        processedSignatures,
+        processedSources,
         onProgress: ({ vaultType, txProcessed, mintsFound }) => {
             logger.debug(`[MintExtractor] [${vaultType.toUpperCase()}] Processed ${txProcessed} txs, found ${mintsFound} mints`);
         },
@@ -589,6 +768,8 @@ module.exports = {
     extractMintFromTransaction,
     extractMintFromPumpTransaction,
     extractMintFromAmmTransaction,
+    extractMintFromEnhancedTx,
+    extractSourceAddress,
     matchesDiscriminator,
 
     // Vault scanning
