@@ -97,8 +97,19 @@ async function createSchema() {
             "marketCap" REAL DEFAULT 0,
             "holderCount" INTEGER DEFAULT 0,
             "tweetUrl" TEXT,
-            complete INTEGER DEFAULT 0
+            complete INTEGER DEFAULT 0,
+            "lastUpdated" BIGINT
         )
+    `);
+
+    // Migration: Add lastUpdated column if it doesn't exist (for existing databases)
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tokens' AND column_name = 'lastUpdated') THEN
+                ALTER TABLE tokens ADD COLUMN "lastUpdated" BIGINT;
+            END IF;
+        END $$;
     `);
 
     // Token holders table with index
