@@ -15,9 +15,11 @@ const config = require('../config/env');
 const logger = require('./logger');
 
 /**
- * Known program IDs to skip when looking for mints
+ * Known program IDs and tokens to skip when looking for mints
+ * Includes system programs, wrapped tokens, and stablecoins
  */
 const KNOWN_PROGRAMS = new Set([
+    // System Programs
     '11111111111111111111111111111111', // System Program
     'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', // Token Program
     'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb', // Token-2022
@@ -25,7 +27,23 @@ const KNOWN_PROGRAMS = new Set([
     'ComputeBudget111111111111111111111111111111', // Compute Budget
     'SysvarRent111111111111111111111111111111111', // Rent Sysvar
     'SysvarC1ock11111111111111111111111111111111', // Clock Sysvar
+
+    // Wrapped SOL (quote token for Pump.fun)
     'So11111111111111111111111111111111111111112', // WSOL
+
+    // Stablecoins - NOT our tokens, skip these
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+    'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+    'USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX',  // USDH
+    'USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA',  // USDS
+    'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm', // WIF (not stablecoin but wrapped)
+    'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',  // mSOL
+    'bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1',  // bSOL
+    'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn', // JitoSOL
+    '7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj', // stSOL
+    'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', // BONK (skip large popular tokens)
+
+    // Pump.fun programs
     PROGRAMS.PUMP.toString(),
     PROGRAMS.PUMP_AMM.toString(),
     PROGRAMS.FEE.toString(),
@@ -671,6 +689,9 @@ async function fetchDexScreenerData(mint) {
 /**
  * Validate mints in batches using Helius getAssetBatch + DexScreener for market data
  *
+ * For old tokens that Helius doesn't have, falls back to DexScreener as primary source.
+ * This ensures we don't lose tokens just because they're not in Helius's index.
+ *
  * @param {Array<string>} mints - Array of mint addresses to validate
  * @param {Object} options - Options
  * @param {boolean} options.fetchMarketData - Whether to fetch market data from DexScreener (default: true)
@@ -679,84 +700,147 @@ async function fetchDexScreenerData(mint) {
 async function validateMintsBatch(mints, options = {}) {
     const { fetchMarketData = true } = options;
 
-    if (!config.HELIUS_API_KEY) {
-        logger.warn('[MintExtractor] HELIUS_API_KEY not configured - skipping validation');
-        return [];
-    }
-
     const validTokens = [];
     const mintArray = Array.isArray(mints) ? mints : Array.from(mints);
+    const processedMints = new Set();
 
-    // Process in batches of 100 (Helius limit)
-    for (let i = 0; i < mintArray.length; i += 100) {
-        const batch = mintArray.slice(i, i + 100);
+    // Phase 1: Try Helius first for tokens that have metadata indexed
+    if (config.HELIUS_API_KEY) {
+        // Process in batches of 100 (Helius limit)
+        for (let i = 0; i < mintArray.length; i += 100) {
+            const batch = mintArray.slice(i, i + 100);
 
-        try {
-            const batchResponse = await axios.post(
-                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
-                {
-                    jsonrpc: '2.0',
-                    id: '1',
-                    method: 'getAssetBatch',
-                    params: { ids: batch }
-                },
-                { timeout: 15000 }
-            );
+            try {
+                const batchResponse = await axios.post(
+                    `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+                    {
+                        jsonrpc: '2.0',
+                        id: '1',
+                        method: 'getAssetBatch',
+                        params: { ids: batch }
+                    },
+                    { timeout: 15000 }
+                );
 
-            const assets = batchResponse.data?.result || [];
-            for (const asset of assets) {
-                if (asset && (asset.interface === 'FungibleToken' || asset.interface === 'FungibleAsset')) {
-                    const metadata = asset.content?.metadata || {};
-                    const files = asset.content?.files || [];
-                    const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
+                const assets = batchResponse.data?.result || [];
+                for (const asset of assets) {
+                    if (asset && asset.id && (asset.interface === 'FungibleToken' || asset.interface === 'FungibleAsset')) {
+                        const metadata = asset.content?.metadata || {};
+                        const files = asset.content?.files || [];
+                        const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
 
+                        const tokenData = {
+                            mint: asset.id,
+                            name: metadata.name || 'Unknown',
+                            ticker: metadata.symbol || 'UNKNOWN',
+                            description: metadata.description || '',
+                            image: imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null,
+                            metadataUri: asset.content?.json_uri || null,
+                            twitter: asset.content?.links?.twitter || '',
+                            website: asset.content?.links?.external_url || '',
+                            creator: asset.creators?.[0]?.address || null,
+                            marketCap: 0,
+                            volume24h: 0,
+                            priceUsd: 0,
+                        };
+
+                        // Fetch market data from DexScreener
+                        if (fetchMarketData) {
+                            const dexData = await fetchDexScreenerData(asset.id);
+                            if (dexData) {
+                                tokenData.marketCap = dexData.marketCap;
+                                tokenData.volume24h = dexData.volume24h;
+                                tokenData.priceUsd = dexData.priceUsd;
+                                // Use DexScreener data as fallback for missing metadata
+                                if (tokenData.name === 'Unknown' && dexData.dexName) {
+                                    tokenData.name = dexData.dexName;
+                                }
+                                if (tokenData.ticker === 'UNKNOWN' && dexData.dexTicker) {
+                                    tokenData.ticker = dexData.dexTicker;
+                                }
+                                if (!tokenData.image && dexData.dexImage) {
+                                    tokenData.image = dexData.dexImage;
+                                }
+                            }
+                            await new Promise(r => setTimeout(r, 150));
+                        }
+
+                        validTokens.push(tokenData);
+                        processedMints.add(asset.id);
+                    }
+                }
+
+                await new Promise(r => setTimeout(r, 200));
+
+            } catch (e) {
+                logger.warn(`[MintExtractor] Helius batch validation error`, { error: e.message });
+            }
+        }
+    }
+
+    // Phase 2: For mints not found in Helius, try DexScreener as primary source
+    // This catches old tokens, dead tokens, or tokens not yet indexed by Helius
+    const missingMints = mintArray.filter(m => !processedMints.has(m));
+
+    if (missingMints.length > 0) {
+        logger.debug(`[MintExtractor] ${missingMints.length} mints not in Helius, trying DexScreener...`);
+
+        for (const mint of missingMints) {
+            try {
+                const dexData = await fetchDexScreenerData(mint);
+                if (dexData && (dexData.dexName || dexData.dexTicker)) {
+                    // DexScreener has this token - it's valid
                     const tokenData = {
-                        mint: asset.id,
-                        name: metadata.name || 'Unknown',
-                        ticker: metadata.symbol || 'UNKNOWN',
-                        description: metadata.description || '',
-                        image: imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null,
-                        metadataUri: asset.content?.json_uri || null,
-                        twitter: asset.content?.links?.twitter || '',
-                        website: asset.content?.links?.external_url || '',
-                        creator: asset.creators?.[0]?.address || null,
-                        // Market data defaults (will be populated below)
-                        marketCap: 0,
-                        volume24h: 0,
-                        priceUsd: 0,
+                        mint,
+                        name: dexData.dexName || 'Unknown',
+                        ticker: dexData.dexTicker || 'UNKNOWN',
+                        description: '',
+                        image: dexData.dexImage || null,
+                        metadataUri: null,
+                        twitter: '',
+                        website: '',
+                        creator: null,
+                        marketCap: dexData.marketCap || 0,
+                        volume24h: dexData.volume24h || 0,
+                        priceUsd: dexData.priceUsd || 0,
                     };
 
-                    // Fetch market data from DexScreener
-                    if (fetchMarketData) {
-                        const dexData = await fetchDexScreenerData(asset.id);
-                        if (dexData) {
-                            tokenData.marketCap = dexData.marketCap;
-                            tokenData.volume24h = dexData.volume24h;
-                            tokenData.priceUsd = dexData.priceUsd;
-                            // Use DexScreener data as fallback for missing metadata
-                            if (tokenData.name === 'Unknown' && dexData.dexName) {
-                                tokenData.name = dexData.dexName;
-                            }
-                            if (tokenData.ticker === 'UNKNOWN' && dexData.dexTicker) {
-                                tokenData.ticker = dexData.dexTicker;
-                            }
-                            if (!tokenData.image && dexData.dexImage) {
-                                tokenData.image = dexData.dexImage;
-                            }
-                        }
-                        // Small delay between DexScreener calls to avoid rate limiting
-                        await new Promise(r => setTimeout(r, 150));
-                    }
-
                     validTokens.push(tokenData);
+                    processedMints.add(mint);
+                    logger.debug(`[MintExtractor] Found ${tokenData.ticker} via DexScreener (not in Helius)`);
                 }
+
+                await new Promise(r => setTimeout(r, 150));
+            } catch (e) {
+                // Silent fail - mint is likely dead/invalid
             }
+        }
+    }
 
-            // Rate limit between batches
-            await new Promise(r => setTimeout(r, 200));
+    // Phase 3: For any remaining mints (not in Helius or DexScreener),
+    // still add them with minimal data so they're tracked
+    const stillMissing = mintArray.filter(m => !processedMints.has(m));
+    if (stillMissing.length > 0) {
+        logger.debug(`[MintExtractor] ${stillMissing.length} mints not found in any source, adding with minimal data`);
 
-        } catch (e) {
-            logger.warn(`[MintExtractor] Batch validation error`, { error: e.message });
+        for (const mint of stillMissing) {
+            // Only add if it looks like a valid Pump.fun token (ends in "pump")
+            if (mint.toLowerCase().endsWith('pump')) {
+                validTokens.push({
+                    mint,
+                    name: 'Unknown Token',
+                    ticker: 'UNKNOWN',
+                    description: '',
+                    image: null,
+                    metadataUri: null,
+                    twitter: '',
+                    website: '',
+                    creator: null,
+                    marketCap: 0,
+                    volume24h: 0,
+                    priceUsd: 0,
+                });
+            }
         }
     }
 

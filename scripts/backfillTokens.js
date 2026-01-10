@@ -18,10 +18,11 @@
  *
  * Requires HELIUS_API_KEY environment variable.
  *
- * Usage: node scripts/backfillTokens.js [--dry-run] [--reset] [--wipe]
+ * Usage: node scripts/backfillTokens.js [--dry-run] [--reset] [--wipe] [--update]
  *   --dry-run  Preview changes without modifying the database
  *   --reset    Force full rescan (ignore saved progress)
  *   --wipe     Clear all existing tokens before backfilling (DESTRUCTIVE)
+ *   --update   Update existing tokens with fresh metadata and market data
  */
 require('dotenv').config();
 
@@ -39,6 +40,7 @@ const mintExtractor = require('../src/services/mintExtractor');
 const DRY_RUN = process.argv.includes('--dry-run');
 const RESET_PROGRESS = process.argv.includes('--reset');
 const WIPE_TOKENS = process.argv.includes('--wipe');
+const UPDATE_EXISTING = process.argv.includes('--update');
 
 /**
  * Fetch token metadata from Helius DAS API
@@ -197,12 +199,13 @@ async function scanForRobinhoodTokens(connection, devKeypair) {
 }
 
 /**
- * Insert tokens into the database
+ * Insert or update tokens in the database
  */
 async function backfillTokens(db, tokens, devPubkey) {
     console.log('\n💾 Backfilling tokens into database...');
 
     let insertedCount = 0;
+    let updatedCount = 0;
     let skippedCount = 0;
     let errorCount = 0;
 
@@ -211,10 +214,10 @@ async function backfillTokens(db, tokens, devPubkey) {
             const mintStr = token.mint.toString ? token.mint.toString() : token.mint;
 
             // Check if already exists
-            const existing = await db.get('SELECT id FROM tokens WHERE mint = $1', [mintStr]);
+            const existing = await db.get('SELECT id, "marketCap", volume24h, ticker, name, image FROM tokens WHERE mint = $1', [mintStr]);
 
-            if (existing) {
-                console.log(`   ⏭️  Skipping ${mintStr.slice(0, 8)}... (already exists)`);
+            if (existing && !UPDATE_EXISTING) {
+                console.log(`   ⏭️  Skipping ${mintStr.slice(0, 8)}... (already exists, use --update to refresh)`);
                 skippedCount++;
                 continue;
             }
@@ -224,6 +227,7 @@ async function backfillTokens(db, tokens, devPubkey) {
             const heliusMeta = await fetchHeliusMetadata(mintStr);
             const dexMeta = await fetchDexScreenerMetadata(mintStr);
 
+            // Prioritize DexScreener for market data, Helius for metadata
             const metadata = {
                 name: heliusMeta?.name || dexMeta?.name || 'Unknown Token',
                 ticker: heliusMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
@@ -239,44 +243,73 @@ async function backfillTokens(db, tokens, devPubkey) {
             };
 
             if (DRY_RUN) {
-                console.log(`   [DRY RUN] Would insert: ${metadata.ticker} (${mintStr.slice(0, 8)}...)`);
-                insertedCount++;
+                if (existing) {
+                    console.log(`   [DRY RUN] Would update: ${metadata.ticker} (${mintStr.slice(0, 8)}...) MC: $${metadata.marketCap.toLocaleString()}`);
+                    updatedCount++;
+                } else {
+                    console.log(`   [DRY RUN] Would insert: ${metadata.ticker} (${mintStr.slice(0, 8)}...)`);
+                    insertedCount++;
+                }
                 continue;
             }
 
-            // Insert into database
-            await db.run(`
-                INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp, volume24h, "priceUsd", "marketCap", complete)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                ON CONFLICT (mint) DO UPDATE SET
-                    ticker = EXCLUDED.ticker,
-                    name = EXCLUDED.name,
-                    description = EXCLUDED.description,
-                    image = COALESCE(EXCLUDED.image, tokens.image),
-                    volume24h = EXCLUDED.volume24h,
-                    "priceUsd" = EXCLUDED."priceUsd",
-                    "marketCap" = EXCLUDED."marketCap",
-                    complete = EXCLUDED.complete
-            `, [
-                devPubkey, // userPubkey - dev wallet is the creator
-                mintStr,
-                metadata.ticker,
-                metadata.name,
-                metadata.description,
-                metadata.twitter,
-                metadata.website,
-                metadata.metadataUri,
-                metadata.image,
-                0, // isMayhemMode - default false for backfilled tokens
-                Date.now(),
-                metadata.volume24h,
-                metadata.priceUsd,
-                metadata.marketCap,
-                metadata.complete
-            ]);
+            if (existing) {
+                // Update existing token
+                await db.run(`
+                    UPDATE tokens SET
+                        ticker = COALESCE(NULLIF($1, 'UNKNOWN'), ticker),
+                        name = COALESCE(NULLIF($2, 'Unknown Token'), name),
+                        description = COALESCE(NULLIF($3, ''), description),
+                        twitter = COALESCE(NULLIF($4, ''), twitter),
+                        website = COALESCE(NULLIF($5, ''), website),
+                        "metadataUri" = COALESCE(NULLIF($6, ''), "metadataUri"),
+                        image = COALESCE(NULLIF($7, ''), image),
+                        volume24h = CASE WHEN $8 > 0 THEN $8 ELSE volume24h END,
+                        "priceUsd" = CASE WHEN $9 > 0 THEN $9 ELSE "priceUsd" END,
+                        "marketCap" = CASE WHEN $10 > 0 THEN $10 ELSE "marketCap" END
+                    WHERE mint = $11
+                `, [
+                    metadata.ticker,
+                    metadata.name,
+                    metadata.description,
+                    metadata.twitter,
+                    metadata.website,
+                    metadata.metadataUri,
+                    metadata.image,
+                    metadata.volume24h,
+                    metadata.priceUsd,
+                    metadata.marketCap,
+                    mintStr
+                ]);
 
-            console.log(`   ✅ Inserted: ${metadata.ticker} (${mintStr.slice(0, 8)}...)`);
-            insertedCount++;
+                console.log(`   🔄 Updated: ${metadata.ticker} (${mintStr.slice(0, 8)}...) MC: $${metadata.marketCap.toLocaleString()}`);
+                updatedCount++;
+            } else {
+                // Insert new token
+                await db.run(`
+                    INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp, volume24h, "priceUsd", "marketCap", complete)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                `, [
+                    devPubkey,
+                    mintStr,
+                    metadata.ticker,
+                    metadata.name,
+                    metadata.description,
+                    metadata.twitter,
+                    metadata.website,
+                    metadata.metadataUri,
+                    metadata.image,
+                    0,
+                    Date.now(),
+                    metadata.volume24h,
+                    metadata.priceUsd,
+                    metadata.marketCap,
+                    metadata.complete
+                ]);
+
+                console.log(`   ✅ Inserted: ${metadata.ticker} (${mintStr.slice(0, 8)}...)`);
+                insertedCount++;
+            }
 
             // Rate limit
             await new Promise(r => setTimeout(r, 500));
@@ -287,7 +320,7 @@ async function backfillTokens(db, tokens, devPubkey) {
         }
     }
 
-    return { insertedCount, skippedCount, errorCount };
+    return { insertedCount, updatedCount, skippedCount, errorCount };
 }
 
 /**
@@ -489,6 +522,9 @@ async function main() {
     if (WIPE_TOKENS) {
         console.log('🗑️  WIPE MODE: Will delete all existing tokens before backfilling');
     }
+    if (UPDATE_EXISTING) {
+        console.log('🔄 UPDATE MODE: Will refresh metadata and prices for existing tokens');
+    }
     console.log('');
 
     // Initialize connection
@@ -524,12 +560,30 @@ async function main() {
     // Collect all tokens to backfill
     const allTokens = [];
     const allRobinhoodTokens = [];
+    const existingMints = new Set();
 
     // 1. Scan vault transactions for tokens we earn fees on
     const vaultTokens = await scanVaultTransactionsForTokens(db, devKeypair.publicKey.toString());
-    allTokens.push(...vaultTokens);
+    for (const token of vaultTokens) {
+        allTokens.push(token);
+        existingMints.add(token.mint);
+    }
 
-    // 2. Scan for Robinhood fee-sharing partnerships (uses memcmp filters - efficient)
+    // 2. If UPDATE mode is enabled, also include ALL existing tokens from the database
+    // This ensures we refresh metadata for tokens we already have
+    if (UPDATE_EXISTING) {
+        console.log('\n📥 Fetching all existing tokens for update...');
+        const existingTokens = await db.all('SELECT mint FROM tokens');
+        for (const row of existingTokens) {
+            if (!existingMints.has(row.mint)) {
+                allTokens.push({ mint: row.mint });
+                existingMints.add(row.mint);
+            }
+        }
+        console.log(`   Found ${existingTokens.length} existing tokens to update`);
+    }
+
+    // 3. Scan for Robinhood fee-sharing partnerships (uses memcmp filters - efficient)
     const robinhoodTokens = await scanForRobinhoodTokens(connection, devKeypair);
     allRobinhoodTokens.push(...robinhoodTokens);
 
@@ -549,7 +603,7 @@ async function main() {
     // Backfill tokens
     if (allTokens.length > 0) {
         const result = await backfillTokens(db, allTokens, devKeypair.publicKey.toString());
-        console.log(`\n   Tokens: ${result.insertedCount} inserted, ${result.skippedCount} skipped, ${result.errorCount} errors`);
+        console.log(`\n   Tokens: ${result.insertedCount} inserted, ${result.updatedCount} updated, ${result.skippedCount} skipped, ${result.errorCount} errors`);
     }
 
     // Backfill Robinhood tokens
