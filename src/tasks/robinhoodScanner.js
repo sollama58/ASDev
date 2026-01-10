@@ -5,13 +5,14 @@
  *
  * v12.0 - New feature for fee sharing partnerships
  * v13.0 - Fixed to properly discover mints and scan creator vaults
+ * v14.0 - Added vault transaction scanning for complete token discovery
  */
 const { PublicKey } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
 const axios = require('axios');
 const config = require('../config/env');
 const { PROGRAMS, TOKENS } = require('../config/constants');
-const { logger, pump, mutex } = require('../services');
+const { logger, pump, mutex, mintExtractor } = require('../services');
 
 // RACE CONDITION FIX: Use mutex instead of boolean flag
 const scannerMutex = mutex.getMutex('robinhood_scanner');
@@ -176,30 +177,93 @@ async function fetchDexScreenerMetadata(mint) {
 }
 
 /**
- * Scan for tokens created by our wallet by checking creator vaults
- * This finds tokens we launched directly
+ * Scan for tokens created by our wallet by checking vault transactions
+ * This finds ALL tokens where we receive creator fees (both BC and AMM)
+ *
+ * v14.0 - Now properly scans vault transactions to discover mints
  */
 async function scanForOurCreatedTokens(deps) {
     const { connection, devKeypair, db } = deps;
 
     try {
-        logger.info('[Robinhood] Scanning for tokens created by dev wallet...');
+        logger.info('[Robinhood] Scanning vault transactions for token discovery...');
 
-        // Get our creator vault
-        const { bcVault } = pump.getCreatorFeeVaults(devKeypair.publicKey);
+        // Scan both bonding curve and AMM vaults
+        const { foundMints, bcStats, ammStats } = await mintExtractor.scanCreatorVaultsForMints({
+            creatorPubkey: devKeypair.publicKey,
+            db,
+            getCreatorFeeVaults: pump.getCreatorFeeVaults,
+            saveProgress: true,
+        });
 
-        // Check if we have any pending fees (indicates we have tokens)
-        const bcInfo = await connection.getAccountInfo(bcVault);
-        if (bcInfo && bcInfo.lamports > 0) {
-            logger.info(`[Robinhood] Found pending creator fees: ${bcInfo.lamports / 1e9} SOL`);
+        const totalTx = bcStats.txProcessed + ammStats.txProcessed;
+        logger.info(`[Robinhood] Vault scan complete: ${totalTx} txs, ${foundMints.size} unique mints`);
+        logger.debug(`[Robinhood] BC: ${bcStats.txProcessed} txs, ${bcStats.mintsFound} mints | AMM: ${ammStats.txProcessed} txs, ${ammStats.mintsFound} mints`);
+
+        if (foundMints.size === 0) {
+            return;
         }
 
-        // The issue is we can't directly find mints from the creator vault
-        // We need to scan the Pump program for tokens where we are the creator
-        // This is expensive, so we'll rely on the tokens table being populated during launch
+        // Validate mints and get metadata
+        const validTokens = await mintExtractor.validateMintsBatch(Array.from(foundMints));
+        logger.info(`[Robinhood] Validated ${validTokens.length} tokens from vault transactions`);
+
+        // Insert discovered tokens into database
+        let newTokensInserted = 0;
+        for (const token of validTokens) {
+            try {
+                // Check if already exists in tokens table
+                const existingToken = await db.get('SELECT id FROM tokens WHERE mint = $1', [token.mint]);
+
+                if (!existingToken) {
+                    // Fetch additional metadata from DexScreener for market data
+                    const dexMeta = await fetchDexScreenerMetadata(token.mint);
+
+                    await db.run(`
+                        INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp, volume24h, "priceUsd", "marketCap", complete)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                        ON CONFLICT (mint) DO UPDATE SET
+                            ticker = COALESCE(EXCLUDED.ticker, tokens.ticker),
+                            name = COALESCE(EXCLUDED.name, tokens.name),
+                            image = COALESCE(EXCLUDED.image, tokens.image),
+                            volume24h = EXCLUDED.volume24h,
+                            "marketCap" = EXCLUDED."marketCap"
+                    `, [
+                        devKeypair.publicKey.toString(),
+                        token.mint,
+                        token.ticker,
+                        token.name,
+                        token.description || '',
+                        token.twitter || '',
+                        token.website || '',
+                        token.metadataUri || '',
+                        token.image || '',
+                        0,
+                        Date.now(),
+                        dexMeta?.volume24h || 0,
+                        dexMeta?.priceUsd || 0,
+                        dexMeta?.marketCap || 0,
+                        0
+                    ]);
+
+                    newTokensInserted++;
+                    logger.info(`[Robinhood] Discovered token: ${token.ticker} (${token.mint.slice(0, 8)}...)`);
+                }
+
+                // Small delay to avoid rate limits
+                await new Promise(r => setTimeout(r, 100));
+
+            } catch (e) {
+                logger.debug(`[Robinhood] Failed to insert token ${token.mint}`, { error: e.message });
+            }
+        }
+
+        if (newTokensInserted > 0) {
+            logger.info(`[Robinhood] Inserted ${newTokensInserted} new tokens from vault scan`);
+        }
 
     } catch (e) {
-        logger.error('[Robinhood] Error scanning for created tokens', { error: e.message });
+        logger.error('[Robinhood] Error scanning vault transactions', { error: e.message });
     }
 }
 
@@ -514,7 +578,11 @@ async function getRobinhoodPendingFees(deps) {
  */
 async function updateRobinhoodState(deps) {
     try {
-        // Scan for new fee sharing configs
+        // v14.0: Scan vault transactions for token discovery
+        // This finds ALL tokens where we receive fees (from both BC and AMM)
+        await scanForOurCreatedTokens(deps);
+
+        // Scan for new fee sharing configs (Robinhood partnerships)
         await scanForFeeSharingConfigs(deps);
 
         // Update holders for existing Robinhood tokens

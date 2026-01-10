@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 /**
- * Token Backfill Script (v3.0 - Vault Transaction Analysis)
+ * Token Backfill Script (v4.0 - Unified Vault Transaction Analysis)
  *
  * Efficiently discovers tokens where we receive fees by analyzing
- * transactions to our creator fee vault. This method:
- * 1. Analyzes all transactions to our creator vault to find token mints
- * 2. Tracks progress via last processed signature (survives restarts)
- * 3. Only processes each transaction once
+ * transactions to BOTH creator fee vaults:
+ * 1. Bonding Curve vault - fees from pre-graduation trades
+ * 2. AMM vault - fees from post-graduation pool trades
+ *
+ * Features:
+ * - Scans both BC and AMM vaults for complete coverage
+ * - Uses shared mintExtractor module for consistency with main app
+ * - Tracks progress via database (survives restarts)
+ * - Deduplicates transactions across vaults
+ * - Batched mint validation for efficiency
  *
  * Also scans for fee-sharing partnerships (Robinhood tokens) via memcmp filters.
  *
@@ -24,6 +30,7 @@ const config = require('../src/config/env');
 const { PROGRAMS } = require('../src/config/constants');
 const database = require('../src/services/postgres');
 const pump = require('../src/services/pump');
+const mintExtractor = require('../src/services/mintExtractor');
 
 // Parse command line args
 const DRY_RUN = process.argv.includes('--dry-run');
@@ -357,305 +364,59 @@ async function backfillRobinhoodTokens(db, tokens) {
 }
 
 /**
- * Stats key for tracking scan progress
- */
-const VAULT_SCAN_PROGRESS_KEY = 'vaultScanLastSignature';
-
-/**
- * Get the last processed signature from the database
- */
-async function getLastProcessedSignature(db) {
-    const row = await db.get('SELECT value FROM stats WHERE key = $1', [VAULT_SCAN_PROGRESS_KEY]);
-    // value is stored as TEXT in our case, but stats table uses REAL - we'll store signature as text in a comment field
-    // Actually, let's use a different approach - check if we have a text-based storage
-    return null; // Start fresh for now, we'll implement proper persistence below
-}
-
-/**
- * Save the last processed signature to the database
- */
-async function saveLastProcessedSignature(db, signature) {
-    await db.run(
-        'INSERT INTO stats (key, value) VALUES ($1, 0) ON CONFLICT (key) DO UPDATE SET value = 0',
-        [VAULT_SCAN_PROGRESS_KEY]
-    );
-    // Store signature in logs table for persistence (stats.value is REAL, can't store strings)
-    await db.run(
-        `INSERT INTO logs (type, data, timestamp) VALUES ($1, $2, $3)
-         ON CONFLICT DO NOTHING`,
-        ['vault_scan_progress', signature, new Date().toISOString()]
-    );
-}
-
-/**
- * Get last saved signature from logs
- */
-async function getLastSignatureFromLogs(db) {
-    const row = await db.get(
-        'SELECT data FROM logs WHERE type = $1 ORDER BY id DESC LIMIT 1',
-        ['vault_scan_progress']
-    );
-    return row?.data || null;
-}
-
-/**
- * Known program IDs to skip when looking for mints
- */
-const KNOWN_PROGRAMS = new Set([
-    '11111111111111111111111111111111', // System Program
-    'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', // Token Program
-    'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb', // Token-2022
-    'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL', // Associated Token
-    'ComputeBudget111111111111111111111111111111', // Compute Budget
-    'SysvarRent111111111111111111111111111111111', // Rent Sysvar
-    'SysvarC1ock11111111111111111111111111111111', // Clock Sysvar
-    PROGRAMS.PUMP.toString(),
-    PROGRAMS.PUMP_AMM.toString(),
-    PROGRAMS.FEE.toString(),
-    PROGRAMS.METADATA.toString(),
-]);
-
-/**
- * Extract mint address from a Pump.fun buy/sell transaction.
+ * Discover tokens by analyzing transactions to BOTH creator fee vaults.
+ * Uses the shared mintExtractor module for consistency with the main application.
  *
- * In Pump buy/sell instructions, the account layout is:
- * - Index 0: global
- * - Index 1: fee_recipient
- * - Index 2: mint  <-- THIS IS WHAT WE WANT
- * - Index 3: bonding_curve
- * - Index 4: associated_bonding_curve
- * - ...
+ * This finds all tokens where we earn creator fees from:
+ * 1. Bonding curve trades (bcVault) - before token graduates
+ * 2. AMM/Pool trades (ammVault) - after token graduates to Raydium
  *
- * We identify Pump instructions by:
- * 1. The program ID is the Pump program
- * 2. The instruction has the buy (66,6,61,18,1,218,235,234) or sell (51,230,133,164,1,127,131,173) discriminator
- *
- * @param {Object} tx - Transaction object from Helius
- * @param {string} pumpProgramId - Pump program ID string
- * @returns {string|null} - Mint address or null if not found
- */
-function extractMintFromPumpTransaction(tx, pumpProgramId) {
-    const message = tx.transaction?.message;
-    if (!message) return null;
-
-    const accountKeys = message.accountKeys || [];
-    const instructions = message.instructions || [];
-
-    // Buy discriminator: [102, 6, 61, 18, 1, 218, 235, 234]
-    // Sell discriminator: [51, 230, 133, 164, 1, 127, 131, 173]
-    const BUY_DISC = [102, 6, 61, 18, 1, 218, 235, 234];
-    const SELL_DISC = [51, 230, 133, 164, 1, 127, 131, 173];
-
-    for (const ix of instructions) {
-        // Get program ID for this instruction
-        const programIdIndex = ix.programIdIndex;
-        const programId = accountKeys[programIdIndex];
-        const programIdStr = typeof programId === 'string' ? programId : programId?.pubkey;
-
-        if (programIdStr !== pumpProgramId) continue;
-
-        // Decode instruction data
-        let data;
-        try {
-            data = Buffer.from(ix.data, 'base64');
-        } catch {
-            continue;
-        }
-
-        // Check if this is a buy or sell instruction
-        const isBuy = data.length >= 8 && BUY_DISC.every((b, i) => data[i] === b);
-        const isSell = data.length >= 8 && SELL_DISC.every((b, i) => data[i] === b);
-
-        if (!isBuy && !isSell) continue;
-
-        // The mint is at index 2 in the instruction's accounts
-        const ixAccounts = ix.accounts || [];
-        if (ixAccounts.length < 3) continue;
-
-        const mintIndex = ixAccounts[2];
-        const mintAccount = accountKeys[mintIndex];
-        const mint = typeof mintAccount === 'string' ? mintAccount : mintAccount?.pubkey;
-
-        if (mint && !KNOWN_PROGRAMS.has(mint)) {
-            return mint;
-        }
-    }
-
-    return null;
-}
-
-/**
- * Discover tokens by analyzing transactions to our creator fee vault.
- * This finds all tokens where we earn creator fees by looking at
- * Pump.fun buy/sell transactions that deposited fees to our vault.
- *
- * The approach:
- * 1. Fetch transactions involving our creator vault
- * 2. Parse each transaction to find Pump buy/sell instructions
- * 3. Extract the mint address from the instruction's account list (index 2)
- * 4. Validate discovered mints via Helius getAsset
- *
- * Progress is tracked via the last processed signature to enable incremental scans.
+ * @param {Object} db - Database instance
+ * @param {string} devPubkey - Developer wallet public key
+ * @returns {Array} - Array of validated token objects
  */
 async function scanVaultTransactionsForTokens(db, devPubkey) {
-    console.log('\n📡 Scanning creator vault transactions for token discovery...');
+    console.log('\n📡 Scanning creator fee vaults for token discovery...');
+    console.log('   (Using shared mintExtractor - scans both BC and AMM vaults)');
 
     if (!config.HELIUS_API_KEY) {
         console.log('   ⚠️  HELIUS_API_KEY not configured - skipping vault scan');
         return [];
     }
 
-    // Get our creator vault address
-    const { bcVault } = pump.getCreatorFeeVaults(new PublicKey(devPubkey));
-    const pumpProgramId = PROGRAMS.PUMP.toString();
-    console.log(`   Vault address: ${bcVault.toString()}`);
+    // Use the shared mintExtractor module
+    const { foundMints, bcStats, ammStats } = await mintExtractor.scanCreatorVaultsForMints({
+        creatorPubkey: new PublicKey(devPubkey),
+        db,
+        getCreatorFeeVaults: pump.getCreatorFeeVaults,
+        saveProgress: !DRY_RUN,
+    });
 
-    // Get last processed signature for incremental scanning
-    const lastSignature = await getLastSignatureFromLogs(db);
-    if (lastSignature) {
-        console.log(`   Resuming from signature: ${lastSignature.slice(0, 20)}...`);
-    } else {
-        console.log('   Starting fresh scan (no previous progress found)');
+    // Summary
+    const totalTx = bcStats.txProcessed + ammStats.txProcessed;
+    console.log(`\n   Total: ${totalTx} transactions processed, ${foundMints.size} unique mints found`);
+    console.log(`   - BC: ${bcStats.txProcessed} txs, ${bcStats.mintsFound} mints`);
+    console.log(`   - AMM: ${ammStats.txProcessed} txs, ${ammStats.mintsFound} mints`);
+
+    if (foundMints.size === 0) {
+        console.log('   No new mints to validate');
+        return [];
     }
 
-    const foundMints = new Set();
-    let paginationToken = null;
-    let totalTxProcessed = 0;
-    let newestSignature = null;
-
-    try {
-        // Use Helius getTransactionsForAddress for efficient scanning
-        do {
-            const params = {
-                limit: 100,
-                sortOrder: 'desc', // Newest first
-                transactionDetails: 'full', // Need full tx to parse instructions
-            };
-
-            if (paginationToken) {
-                params.paginationToken = paginationToken;
-            }
-
-            const response = await axios.post(
-                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
-                {
-                    jsonrpc: '2.0',
-                    id: '1',
-                    method: 'getTransactionsForAddress',
-                    params: [bcVault.toString(), params]
-                },
-                { timeout: 30000 }
-            );
-
-            const result = response.data?.result;
-            if (!result || !result.data || result.data.length === 0) {
-                break;
-            }
-
-            for (const tx of result.data) {
-                // Save the newest signature for progress tracking
-                if (!newestSignature && tx.signature) {
-                    newestSignature = tx.signature;
-                }
-
-                // Stop if we've reached the last processed signature
-                if (lastSignature && tx.signature === lastSignature) {
-                    console.log(`   Reached previously processed signature, stopping`);
-                    paginationToken = null; // Exit the loop
-                    break;
-                }
-
-                totalTxProcessed++;
-
-                // Extract mint from Pump buy/sell instruction
-                const mint = extractMintFromPumpTransaction(tx, pumpProgramId);
-                if (mint) {
-                    foundMints.add(mint);
-                }
-            }
-
-            paginationToken = result.paginationToken;
-
-            // Progress update
-            if (totalTxProcessed % 500 === 0) {
-                console.log(`   Processed ${totalTxProcessed} transactions, found ${foundMints.size} unique mints...`);
-            }
-
-            // Rate limit protection
-            await new Promise(r => setTimeout(r, 100));
-
-        } while (paginationToken);
-
-        // Save progress
-        if (newestSignature && !DRY_RUN) {
-            await saveLastProcessedSignature(db, newestSignature);
-            console.log(`   Saved progress: ${newestSignature.slice(0, 20)}...`);
-        }
-
-        console.log(`   Processed ${totalTxProcessed} transactions, found ${foundMints.size} unique token mints`);
-
-    } catch (e) {
-        console.log(`   ⚠️  Vault scan error: ${e.message}`);
-        if (e.response?.data) {
-            console.log(`   Response: ${JSON.stringify(e.response.data).slice(0, 200)}`);
-        }
-    }
-
-    // Validate mints in batches using getAssetBatch for efficiency
+    // Validate mints using the shared module
     console.log('\n   Validating discovered mints...');
-    const validTokens = [];
-    const mintArray = Array.from(foundMints);
+    const validTokens = await mintExtractor.validateMintsBatch(Array.from(foundMints));
 
-    // Process in batches of 100 for getAssetBatch
-    for (let i = 0; i < mintArray.length; i += 100) {
-        const batch = mintArray.slice(i, i + 100);
+    // Add additional fields expected by the backfill script
+    const enrichedTokens = validTokens.map(token => ({
+        ...token,
+        marketCap: 0,
+        complete: false,
+        discoveredFrom: 'vault_scan'
+    }));
 
-        try {
-            const batchResponse = await axios.post(
-                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
-                {
-                    jsonrpc: '2.0',
-                    id: '1',
-                    method: 'getAssetBatch',
-                    params: { ids: batch }
-                },
-                { timeout: 15000 }
-            );
-
-            const assets = batchResponse.data?.result || [];
-            for (const asset of assets) {
-                if (asset && (asset.interface === 'FungibleToken' || asset.interface === 'FungibleAsset')) {
-                    const metadata = asset.content?.metadata || {};
-                    const files = asset.content?.files || [];
-                    const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
-
-                    validTokens.push({
-                        mint: asset.id,
-                        name: metadata.name || 'Unknown',
-                        ticker: metadata.symbol || 'UNKNOWN',
-                        description: metadata.description || '',
-                        image: imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null,
-                        metadataUri: asset.content?.json_uri || null,
-                        twitter: asset.content?.links?.twitter || '',
-                        website: asset.content?.links?.external_url || '',
-                        marketCap: 0,
-                        complete: false,
-                        discoveredFrom: 'vault_scan'
-                    });
-                    console.log(`   ✓ Valid token: ${metadata.symbol || 'UNKNOWN'} (${asset.id.slice(0, 8)}...)`);
-                }
-            }
-
-            // Rate limit between batches
-            await new Promise(r => setTimeout(r, 200));
-
-        } catch (e) {
-            console.log(`   ⚠️  Batch validation error: ${e.message}`);
-        }
-    }
-
-    console.log(`   Found ${validTokens.length} valid tokens from vault transactions`);
-    return validTokens;
+    console.log(`   ✓ Validated ${enrichedTokens.length} tokens from ${foundMints.size} discovered mints`);
+    return enrichedTokens;
 }
 
 /**
