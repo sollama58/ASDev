@@ -4,6 +4,7 @@
  * v13.0 - Updated for PostgreSQL
  */
 const express = require('express');
+const axios = require('axios');
 const { isValidPubkey } = require('./solana');
 const { redis } = require('../services');
 
@@ -159,6 +160,22 @@ function init(deps) {
             res.json(token || {});
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
+        }
+    });
+
+    // Proxy for pump.fun API (avoids CORS issues on frontend)
+    router.get('/pump-proxy/:mint', async (req, res) => {
+        try {
+            const { mint } = req.params;
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({ error: "Invalid mint address" });
+            }
+            const response = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, {
+                timeout: 5000
+            });
+            res.json(response.data);
+        } catch (e) {
+            res.status(500).json({ error: "Failed to fetch from pump.fun" });
         }
     });
 

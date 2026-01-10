@@ -740,7 +740,7 @@
 
     const updatePumpPrice = async () => {
         try {
-            const res = await fetch(`https://frontend-api.pump.fun/coins/${PUMP_CONTRACT}`);
+            const res = await fetch(`${BACKEND_URL}/api/pump-proxy/${PUMP_CONTRACT}`);
             const data = await res.json();
             if (data && data.virtual_sol_reserves && data.virtual_token_reserves) {
                 pumpPriceCache = data.virtual_sol_reserves / data.virtual_token_reserves;
