@@ -233,6 +233,177 @@ function init(deps) {
         }
     });
 
+    // v13.0: Import token by mint address (admin only)
+    // Fetches metadata from Pump.fun/DexScreener and adds to tokens table
+    router.post('/admin/import-token', adminAuth, async (req, res) => {
+        const axios = require('axios');
+        const { PublicKey } = require('@solana/web3.js');
+
+        try {
+            const { mint, isRobinhood } = req.body;
+
+            if (!mint) {
+                return res.status(400).json({ error: 'Missing mint address' });
+            }
+
+            // Validate mint is a valid pubkey
+            try {
+                new PublicKey(mint);
+            } catch (e) {
+                return res.status(400).json({ error: 'Invalid mint address' });
+            }
+
+            // Fetch metadata from Pump.fun
+            let pumpMeta = null;
+            try {
+                const pumpRes = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, { timeout: 5000 });
+                if (pumpRes.data) {
+                    pumpMeta = {
+                        name: pumpRes.data.name || 'Unknown',
+                        ticker: pumpRes.data.symbol || 'UNKNOWN',
+                        image: pumpRes.data.image_uri || null,
+                        description: pumpRes.data.description || '',
+                        twitter: pumpRes.data.twitter || null,
+                        website: pumpRes.data.website || null,
+                        creator: pumpRes.data.creator || null,
+                        marketCap: pumpRes.data.usd_market_cap || 0,
+                        complete: pumpRes.data.complete || false
+                    };
+                }
+            } catch (e) {
+                logger.debug('Pump.fun metadata fetch failed', { error: e.message });
+            }
+
+            // Fetch from DexScreener for additional data
+            let dexMeta = null;
+            try {
+                const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 5000 });
+                const pairs = dexRes.data?.pairs || [];
+                if (pairs.length > 0) {
+                    const pair = pairs[0];
+                    dexMeta = {
+                        name: pair.baseToken?.name,
+                        ticker: pair.baseToken?.symbol,
+                        image: pair.info?.imageUrl,
+                        marketCap: pair.fdv || pair.marketCap || 0,
+                        volume24h: pair.volume?.h24 || 0
+                    };
+                }
+            } catch (e) {
+                logger.debug('DexScreener metadata fetch failed', { error: e.message });
+            }
+
+            if (!pumpMeta && !dexMeta) {
+                return res.status(404).json({ error: 'Token not found on Pump.fun or DexScreener' });
+            }
+
+            const metadata = {
+                name: pumpMeta?.name || dexMeta?.name || 'Unknown Token',
+                ticker: pumpMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
+                image: pumpMeta?.image || dexMeta?.image || null,
+                description: pumpMeta?.description || '',
+                twitter: pumpMeta?.twitter || null,
+                website: pumpMeta?.website || null,
+                creator: pumpMeta?.creator || null,
+                marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || 0,
+                volume24h: dexMeta?.volume24h || 0,
+                complete: pumpMeta?.complete || false
+            };
+
+            // Determine which table to insert into
+            if (isRobinhood) {
+                // Insert into robinhood_tokens
+                await db.run(`
+                    INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive", "isGraduated")
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10)
+                    ON CONFLICT (mint) DO UPDATE SET
+                        ticker = EXCLUDED.ticker,
+                        name = EXCLUDED.name,
+                        image = COALESCE(EXCLUDED.image, robinhood_tokens.image),
+                        "marketCap" = EXCLUDED."marketCap",
+                        volume24h = EXCLUDED.volume24h
+                `, [mint, metadata.ticker, metadata.name, metadata.image, metadata.creator || devKeypair.publicKey.toString(), 10000, Date.now(), metadata.marketCap, metadata.volume24h, metadata.complete ? 1 : 0]);
+
+                logger.info(`[Admin] Imported Robinhood token: ${metadata.ticker} (${mint})`);
+            } else {
+                // Insert into tokens table
+                await db.run(`
+                    INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, image, "marketCap", volume24h, timestamp, complete)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    ON CONFLICT (mint) DO UPDATE SET
+                        ticker = EXCLUDED.ticker,
+                        name = EXCLUDED.name,
+                        image = COALESCE(EXCLUDED.image, tokens.image),
+                        "marketCap" = EXCLUDED."marketCap",
+                        volume24h = EXCLUDED.volume24h
+                `, [metadata.creator || devKeypair.publicKey.toString(), mint, metadata.ticker, metadata.name, metadata.description, metadata.twitter, metadata.website, metadata.image, metadata.marketCap, metadata.volume24h, Date.now(), metadata.complete ? 1 : 0]);
+
+                logger.info(`[Admin] Imported launched token: ${metadata.ticker} (${mint})`);
+            }
+
+            res.json({
+                success: true,
+                token: {
+                    mint,
+                    ticker: metadata.ticker,
+                    name: metadata.name,
+                    marketCap: metadata.marketCap,
+                    isRobinhood: !!isRobinhood
+                }
+            });
+
+        } catch (e) {
+            logger.error('[Admin] Token import error', { error: e.message });
+            res.status(500).json({ error: 'Import failed: ' + e.message });
+        }
+    });
+
+    // v13.0: Bulk import tokens (admin only)
+    router.post('/admin/import-tokens-bulk', adminAuth, async (req, res) => {
+        try {
+            const { mints, isRobinhood } = req.body;
+
+            if (!mints || !Array.isArray(mints) || mints.length === 0) {
+                return res.status(400).json({ error: 'Missing or invalid mints array' });
+            }
+
+            if (mints.length > 50) {
+                return res.status(400).json({ error: 'Maximum 50 tokens per request' });
+            }
+
+            const results = { success: [], failed: [] };
+
+            for (const mint of mints) {
+                try {
+                    // Make internal request to single import
+                    const axios = require('axios');
+                    const internalRes = await axios.post(
+                        `http://localhost:${config.PORT}/api/admin/import-token`,
+                        { mint, isRobinhood },
+                        { headers: { 'x-admin-key': req.headers['x-admin-key'] }, timeout: 10000 }
+                    );
+                    results.success.push({ mint, ticker: internalRes.data.token?.ticker });
+                } catch (e) {
+                    results.failed.push({ mint, error: e.response?.data?.error || e.message });
+                }
+
+                // Rate limit
+                await new Promise(r => setTimeout(r, 500));
+            }
+
+            res.json({
+                success: true,
+                imported: results.success.length,
+                failed: results.failed.length,
+                results
+            });
+
+        } catch (e) {
+            logger.error('[Admin] Bulk import error', { error: e.message });
+            res.status(500).json({ error: 'Bulk import failed: ' + e.message });
+        }
+    });
+
     return router;
 }
 

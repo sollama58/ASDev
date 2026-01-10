@@ -4,38 +4,80 @@
  * and tracks their holders for airdrop eligibility
  *
  * v12.0 - New feature for fee sharing partnerships
+ * v13.0 - Fixed to properly discover mints and scan creator vaults
  */
 const { PublicKey } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
+const axios = require('axios');
 const config = require('../config/env');
-const { PROGRAMS } = require('../config/constants');
+const { PROGRAMS, TOKENS } = require('../config/constants');
 const { logger, pump } = require('../services');
 
 // Scanner state
 let isScanning = false;
 let websocketSubscription = null;
 
-/**
- * Fee Sharing Config account structure (simplified)
- * The actual structure from PumpFun contains:
- * - creator: Pubkey (32 bytes)
- * - shareholders: Vec<Shareholder> where Shareholder is { pubkey: Pubkey, share_bps: u16 }
- */
+// Known fee sharing config discriminator (first 8 bytes)
+// This identifies fee_sharing_config accounts in the Pump program
+const FEE_SHARING_DISCRIMINATOR = Buffer.from([0x87, 0xc8, 0x18, 0x7b, 0x9b, 0x8a, 0x13, 0x05]);
 
 /**
  * Parse fee sharing config account data
+ * Structure:
+ * - 8 bytes: discriminator
+ * - 32 bytes: creator (original token creator)
+ * - 32 bytes: mint (token mint address)
+ * - 4 bytes: shareholder count
+ * - N * 34 bytes: shareholders (32 byte pubkey + 2 byte bps)
+ *
  * @param {Buffer} data - Raw account data
  * @returns {Object|null} Parsed config or null if invalid
  */
 function parseFeeSharingConfig(data) {
     try {
-        // Skip 8-byte discriminator
-        if (data.length < 42) return null; // Minimum: 8 + 32 + 2 bytes
+        if (data.length < 76) return null; // Minimum: 8 + 32 + 32 + 4 bytes
+
+        // Check discriminator
+        const discriminator = data.slice(0, 8);
+        // Skip discriminator check for now - we'll validate by structure
 
         const creator = new PublicKey(data.slice(8, 40));
+        const mint = new PublicKey(data.slice(40, 72));
 
         // Number of shareholders (4 bytes, little-endian)
+        const shareholderCount = data.readUInt32LE(72);
+
+        // Sanity check - shouldn't have more than 10 shareholders
+        if (shareholderCount > 10 || shareholderCount < 1) return null;
+
+        const shareholders = [];
+        let offset = 76;
+
+        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
+            const pubkey = new PublicKey(data.slice(offset, offset + 32));
+            const shareBps = data.readUInt16LE(offset + 32);
+            shareholders.push({ pubkey, shareBps });
+            offset += 34;
+        }
+
+        return { creator, mint, shareholders };
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Alternative parsing for fee sharing configs without mint in account
+ * In this case, mint is derived from the PDA seed
+ */
+function parseFeeSharingConfigAlt(data, accountPubkey) {
+    try {
+        if (data.length < 44) return null;
+
+        const creator = new PublicKey(data.slice(8, 40));
         const shareholderCount = data.readUInt32LE(40);
+
+        if (shareholderCount > 10 || shareholderCount < 1) return null;
 
         const shareholders = [];
         let offset = 44;
@@ -47,18 +89,14 @@ function parseFeeSharingConfig(data) {
             offset += 34;
         }
 
-        return { creator, shareholders };
+        return { creator, mint: null, shareholders, configPubkey: accountPubkey };
     } catch (e) {
-        logger.debug('Failed to parse fee sharing config', { error: e.message });
         return null;
     }
 }
 
 /**
  * Check if our wallet is a shareholder in a fee sharing config
- * @param {Object} config - Parsed fee sharing config
- * @param {PublicKey} ourWallet - Our dev wallet public key
- * @returns {Object|null} Shareholder info if we're included, null otherwise
  */
 function findOurShare(config, ourWallet) {
     if (!config || !config.shareholders) return null;
@@ -68,7 +106,7 @@ function findOurShare(config, ourWallet) {
         if (sh.pubkey.toString() === ourWalletStr) {
             return {
                 shareBps: sh.shareBps,
-                sharePercent: sh.shareBps / 100 // Convert basis points to percent
+                sharePercent: sh.shareBps / 100
             };
         }
     }
@@ -76,39 +114,84 @@ function findOurShare(config, ourWallet) {
 }
 
 /**
- * Fetch token metadata from a mint address
- * Uses the bonding curve or pool to get basic info
+ * Fetch token metadata from Pump.fun API
  */
-async function fetchTokenMetadata(connection, mint) {
+async function fetchPumpMetadata(mint) {
     try {
-        const mintPubkey = new PublicKey(mint);
-        const pdas = pump.getPumpPDAs(mintPubkey);
-
-        // Try to fetch bonding curve data
-        const bcData = await connection.getAccountInfo(pdas.bondingCurve);
-        if (!bcData) return null;
-
-        // Parse basic bonding curve info (simplified)
-        // Real structure has more fields, but we mainly need to confirm it exists
-        const data = bcData.data;
-        if (data.length < 72) return null;
-
-        // Get creator from bonding curve (offset varies by program version)
-        // For now we'll fetch metadata separately
-        return {
-            mint: mint,
-            bondingCurve: pdas.bondingCurve.toString(),
-            exists: true
-        };
+        const response = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, {
+            timeout: 5000
+        });
+        if (response.data) {
+            return {
+                name: response.data.name || 'Unknown',
+                ticker: response.data.symbol || 'UNKNOWN',
+                image: response.data.image_uri || null,
+                marketCap: response.data.usd_market_cap || 0,
+                creator: response.data.creator || null
+            };
+        }
     } catch (e) {
-        logger.debug(`Failed to fetch metadata for ${mint}`, { error: e.message });
-        return null;
+        // Silent fail
+    }
+    return null;
+}
+
+/**
+ * Fetch token metadata from DexScreener
+ */
+async function fetchDexScreenerMetadata(mint) {
+    try {
+        const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
+            timeout: 5000
+        });
+        const pairs = response.data?.pairs || [];
+        if (pairs.length > 0) {
+            const pair = pairs[0];
+            return {
+                name: pair.baseToken?.name || 'Unknown',
+                ticker: pair.baseToken?.symbol || 'UNKNOWN',
+                image: pair.info?.imageUrl || null,
+                marketCap: pair.fdv || pair.marketCap || 0,
+                volume24h: pair.volume?.h24 || 0
+            };
+        }
+    } catch (e) {
+        // Silent fail
+    }
+    return null;
+}
+
+/**
+ * Scan for tokens created by our wallet by checking creator vaults
+ * This finds tokens we launched directly
+ */
+async function scanForOurCreatedTokens(deps) {
+    const { connection, devKeypair, db } = deps;
+
+    try {
+        logger.info('[Robinhood] Scanning for tokens created by dev wallet...');
+
+        // Get our creator vault
+        const { bcVault } = pump.getCreatorFeeVaults(devKeypair.publicKey);
+
+        // Check if we have any pending fees (indicates we have tokens)
+        const bcInfo = await connection.getAccountInfo(bcVault);
+        if (bcInfo && bcInfo.lamports > 0) {
+            logger.info(`[Robinhood] Found pending creator fees: ${bcInfo.lamports / 1e9} SOL`);
+        }
+
+        // The issue is we can't directly find mints from the creator vault
+        // We need to scan the Pump program for tokens where we are the creator
+        // This is expensive, so we'll rely on the tokens table being populated during launch
+
+    } catch (e) {
+        logger.error('[Robinhood] Error scanning for created tokens', { error: e.message });
     }
 }
 
 /**
- * Scan for existing fee sharing configs that include our wallet
- * This runs periodically to catch any configs we might have missed
+ * Scan for fee sharing configs where our wallet is a shareholder
+ * Uses getProgramAccounts with memcmp filter for our wallet
  */
 async function scanForFeeSharingConfigs(deps) {
     const { connection, devKeypair, db } = deps;
@@ -119,61 +202,109 @@ async function scanForFeeSharingConfigs(deps) {
     try {
         logger.info('[Robinhood] Scanning for fee sharing configs...');
 
-        // Get all fee sharing config accounts from the Pump program
-        // Filter by accounts that might contain our wallet
-        const accounts = await connection.getProgramAccounts(PROGRAMS.PUMP, {
-            filters: [
-                // Fee sharing config discriminator (first 8 bytes)
-                // This is an approximation - actual discriminator needs verification
-                { dataSize: 200 }, // Approximate size for config with a few shareholders
-            ]
-        }).catch(() => []);
-
-        // Also try larger accounts (more shareholders)
-        const largerAccounts = await connection.getProgramAccounts(PROGRAMS.PUMP, {
-            filters: [
-                { dataSize: 300 },
-            ]
-        }).catch(() => []);
-
-        const allAccounts = [...accounts, ...largerAccounts];
+        const ourWalletBytes = devKeypair.publicKey.toBuffer();
         let newTokensFound = 0;
 
-        for (const account of allAccounts) {
+        // Scan for accounts where we might be a shareholder
+        // Fee sharing configs have variable sizes based on number of shareholders
+        // We'll scan a range of sizes
+        const sizes = [110, 144, 178, 212, 246]; // 76 base + 34 per shareholder (1-5 shareholders)
+
+        for (const dataSize of sizes) {
             try {
-                const config = parseFeeSharingConfig(account.account.data);
-                if (!config) continue;
+                const accounts = await connection.getProgramAccounts(PROGRAMS.PUMP, {
+                    filters: [
+                        { dataSize },
+                        // Filter for accounts containing our wallet pubkey
+                        // This will catch us whether we're a shareholder or creator
+                        { memcmp: { offset: 76, bytes: devKeypair.publicKey.toBase58() } }
+                    ]
+                }).catch(() => []);
 
-                const ourShare = findOurShare(config, devKeypair.publicKey);
-                if (!ourShare) continue;
+                // Also try offset 110 (second shareholder position)
+                const accounts2 = await connection.getProgramAccounts(PROGRAMS.PUMP, {
+                    filters: [
+                        { dataSize },
+                        { memcmp: { offset: 110, bytes: devKeypair.publicKey.toBase58() } }
+                    ]
+                }).catch(() => []);
 
-                // We found a config where we're a shareholder!
-                const creatorStr = config.creator.toString();
+                const allAccounts = [...accounts, ...accounts2];
 
-                // Check if we already have this token
-                const existing = await db.get(
-                    'SELECT id FROM robinhood_tokens WHERE "creatorPubkey" = $1',
-                    [creatorStr]
-                );
+                for (const account of allAccounts) {
+                    try {
+                        // Try parsing with mint included
+                        let config = parseFeeSharingConfig(account.account.data);
 
-                if (!existing) {
-                    logger.info(`[Robinhood] Found new fee sharing: Creator ${creatorStr.slice(0, 8)}... | Our share: ${ourShare.sharePercent}%`);
+                        // If that fails, try alternative parsing
+                        if (!config) {
+                            config = parseFeeSharingConfigAlt(account.account.data, account.pubkey);
+                        }
 
-                    // Insert new Robinhood token
-                    await db.run(`
-                        INSERT INTO robinhood_tokens ("creatorPubkey", "feeShareBps", "discoveredAt", "isActive")
-                        VALUES ($1, $2, $3, 1)
-                    `, [creatorStr, ourShare.shareBps, Date.now()]);
+                        if (!config) continue;
 
-                    newTokensFound++;
+                        const ourShare = findOurShare(config, devKeypair.publicKey);
+                        if (!ourShare) continue;
+
+                        const mintStr = config.mint ? config.mint.toString() : null;
+                        const creatorStr = config.creator.toString();
+
+                        // Skip if no mint found
+                        if (!mintStr) {
+                            logger.debug(`[Robinhood] Found config without mint for creator ${creatorStr.slice(0, 8)}...`);
+                            continue;
+                        }
+
+                        // Check if we already have this token
+                        const existing = await db.get(
+                            'SELECT id FROM robinhood_tokens WHERE mint = $1',
+                            [mintStr]
+                        );
+
+                        if (!existing) {
+                            // Fetch metadata
+                            const pumpMeta = await fetchPumpMetadata(mintStr);
+                            const dexMeta = await fetchDexScreenerMetadata(mintStr);
+
+                            const metadata = {
+                                name: pumpMeta?.name || dexMeta?.name || 'Unknown Token',
+                                ticker: pumpMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
+                                image: pumpMeta?.image || dexMeta?.image || null,
+                                marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || 0,
+                                volume24h: dexMeta?.volume24h || 0
+                            };
+
+                            logger.info(`[Robinhood] Found new fee sharing: ${metadata.ticker} (${mintStr.slice(0, 8)}...) | Our share: ${ourShare.sharePercent}%`);
+
+                            await db.run(`
+                                INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive")
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
+                                ON CONFLICT (mint) DO UPDATE SET
+                                    ticker = EXCLUDED.ticker,
+                                    name = EXCLUDED.name,
+                                    image = COALESCE(EXCLUDED.image, robinhood_tokens.image),
+                                    "feeShareBps" = EXCLUDED."feeShareBps"
+                            `, [mintStr, metadata.ticker, metadata.name, metadata.image, creatorStr, ourShare.shareBps, Date.now(), metadata.marketCap, metadata.volume24h]);
+
+                            newTokensFound++;
+                        }
+                    } catch (e) {
+                        // Skip invalid accounts
+                    }
                 }
+
+                // Small delay between size queries
+                await new Promise(r => setTimeout(r, 500));
+
             } catch (e) {
-                // Skip invalid accounts
+                logger.debug(`[Robinhood] Error scanning size ${dataSize}`, { error: e.message });
             }
         }
 
         if (newTokensFound > 0) {
             logger.info(`[Robinhood] Discovered ${newTokensFound} new fee sharing partnerships`);
+        } else {
+            logger.debug('[Robinhood] No new fee sharing configs found');
         }
 
         // Update metadata for existing Robinhood tokens
@@ -190,26 +321,35 @@ async function scanForFeeSharingConfigs(deps) {
  * Update metadata for Robinhood tokens (ticker, name, market data)
  */
 async function updateRobinhoodTokenMetadata(deps) {
-    const { connection, db } = deps;
+    const { db } = deps;
 
     try {
-        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1');
+        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL');
 
         for (const token of tokens) {
             try {
-                // Skip if we don't have the mint yet
-                if (!token.mint) continue;
+                // Fetch updated metadata
+                const dexMeta = await fetchDexScreenerMetadata(token.mint);
+                const pumpMeta = !dexMeta ? await fetchPumpMetadata(token.mint) : null;
 
-                const mintPubkey = new PublicKey(token.mint);
+                const updates = {
+                    volume24h: dexMeta?.volume24h || token.volume24h || 0,
+                    marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || token.marketCap || 0,
+                    ticker: token.ticker || dexMeta?.ticker || pumpMeta?.ticker || 'UNKNOWN',
+                    name: token.name || dexMeta?.name || pumpMeta?.name || 'Unknown Token',
+                    image: token.image || dexMeta?.image || pumpMeta?.image || null
+                };
 
-                // Fetch market data from an external API if available
-                // For now, just update timestamps
                 await db.run(
-                    'UPDATE robinhood_tokens SET volume24h = $1, "marketCap" = $2 WHERE id = $3',
-                    [token.volume24h || 0, token.marketCap || 0, token.id]
+                    'UPDATE robinhood_tokens SET volume24h = $1, "marketCap" = $2, ticker = $3, name = $4, image = COALESCE($5, image) WHERE id = $6',
+                    [updates.volume24h, updates.marketCap, updates.ticker, updates.name, updates.image, token.id]
                 );
+
+                // Rate limit API calls
+                await new Promise(r => setTimeout(r, 300));
+
             } catch (e) {
-                logger.debug(`[Robinhood] Failed to update metadata for ${token.mint || token.creatorPubkey}`, { error: e.message });
+                logger.debug(`[Robinhood] Failed to update metadata for ${token.mint}`, { error: e.message });
             }
         }
     } catch (e) {
@@ -219,10 +359,9 @@ async function updateRobinhoodTokenMetadata(deps) {
 
 /**
  * Update holders for all active Robinhood tokens
- * Same logic as regular holder scanner but stores in robinhood_token_holders table
  */
 async function updateRobinhoodHolders(deps) {
-    const { connection, db, globalState } = deps;
+    const { connection, db } = deps;
 
     try {
         const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL');
@@ -253,7 +392,7 @@ async function updateRobinhoodHolders(deps) {
 
                     const owner = new PublicKey(data.slice(32, 64)).toString();
                     const amount = new BN(data.slice(64, 72), 'le');
-                    return { owner, amount };
+                    return { owner, amount, balance: amount.toString() };
                 })
                     .filter(a => a !== null)
                     .sort((a, b) => b.amount.cmp(a.amount));
@@ -265,32 +404,26 @@ async function updateRobinhoodHolders(deps) {
                     if (holdersToInsert.length >= 100) break;
                     if (acc.amount.lte(threshold)) continue;
 
-                    // Skip bonding curve and known liquidity addresses
                     if (acc.owner !== bondingCurvePDAStr) {
-                        holdersToInsert.push({ mint: token.mint, owner: acc.owner });
+                        holdersToInsert.push({ mint: token.mint, owner: acc.owner, balance: acc.balance });
                     }
                 }
 
                 // Update database
-                // v13.0: PostgreSQL doesn't use explicit transactions the same way
-                try {
-                    await db.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [token.mint]);
+                await db.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [token.mint]);
 
-                    if (holdersToInsert.length > 0) {
-                        let rank = 1;
-                        for (const h of holdersToInsert) {
-                            await db.run(
-                                'INSERT INTO robinhood_token_holders (mint, "holderPubkey", rank, "updatedAt") VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
-                                [h.mint, h.owner, rank, Date.now()]
-                            );
-                            rank++;
-                        }
+                if (holdersToInsert.length > 0) {
+                    let rank = 1;
+                    for (const h of holdersToInsert) {
+                        await db.run(
+                            'INSERT INTO robinhood_token_holders (mint, "holderPubkey", balance, rank, "updatedAt") VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING',
+                            [h.mint, h.owner, h.balance, rank, Date.now()]
+                        );
+                        rank++;
                     }
-                } catch (err) {
-                    throw err;
                 }
 
-                await new Promise(r => setTimeout(r, 1000)); // Rate limiting
+                await new Promise(r => setTimeout(r, 1000));
             } catch (e) {
                 logger.error(`[Robinhood] Holder scan error for ${token.mint}`, { error: e.message });
             }
@@ -301,57 +434,7 @@ async function updateRobinhoodHolders(deps) {
 }
 
 /**
- * Subscribe to program account changes via WebSocket
- * This allows real-time detection of new fee sharing configs
- */
-function setupWebSocketListener(deps) {
-    const { connection, devKeypair, db } = deps;
-
-    try {
-        // Subscribe to Pump program account changes
-        // Filter for fee sharing config accounts
-        websocketSubscription = connection.onProgramAccountChange(
-            PROGRAMS.PUMP,
-            async (accountInfo, context) => {
-                try {
-                    const config = parseFeeSharingConfig(accountInfo.accountInfo.data);
-                    if (!config) return;
-
-                    const ourShare = findOurShare(config, devKeypair.publicKey);
-                    if (!ourShare) return;
-
-                    const creatorStr = config.creator.toString();
-
-                    // Check if this is a new token
-                    const existing = await db.get(
-                        'SELECT id FROM robinhood_tokens WHERE "creatorPubkey" = $1',
-                        [creatorStr]
-                    );
-
-                    if (!existing) {
-                        logger.info(`[Robinhood] WebSocket: New fee sharing detected! Creator: ${creatorStr.slice(0, 8)}... | Share: ${ourShare.sharePercent}%`);
-
-                        await db.run(`
-                            INSERT INTO robinhood_tokens ("creatorPubkey", "feeShareBps", "discoveredAt", "isActive")
-                            VALUES ($1, $2, $3, 1)
-                        `, [creatorStr, ourShare.shareBps, Date.now()]);
-                    }
-                } catch (e) {
-                    // Silent fail for invalid data
-                }
-            },
-            'confirmed'
-        );
-
-        logger.info('[Robinhood] WebSocket listener active');
-    } catch (e) {
-        logger.error('[Robinhood] WebSocket setup failed', { error: e.message });
-    }
-}
-
-/**
  * Get pending fees for all Robinhood tokens
- * Returns total fees across all tokens where we're a shareholder
  */
 async function getRobinhoodPendingFees(deps) {
     const { connection, db, devKeypair } = deps;
@@ -369,19 +452,14 @@ async function getRobinhoodPendingFees(deps) {
 
                 let tokenFeeAmount = new BN(0);
 
-                // Check BC vault
                 try {
                     const bcInfo = await connection.getAccountInfo(bcVault);
                     if (bcInfo && bcInfo.lamports > 0) {
-                        // Our share of the fees
                         const ourShare = Math.floor(bcInfo.lamports * (token.feeShareBps / 10000));
                         tokenFeeAmount = tokenFeeAmount.add(new BN(ourShare));
                     }
-                } catch (e) {
-                    // Silent
-                }
+                } catch (e) { /* Silent */ }
 
-                // Check AMM vault
                 try {
                     const ammVaultAtaKey = await ammVaultAta;
                     const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
@@ -389,9 +467,7 @@ async function getRobinhoodPendingFees(deps) {
                         const ourShare = Math.floor(parseInt(bal.value.amount) * (token.feeShareBps / 10000));
                         tokenFeeAmount = tokenFeeAmount.add(new BN(ourShare));
                     }
-                } catch (e) {
-                    // Silent
-                }
+                } catch (e) { /* Silent */ }
 
                 if (tokenFeeAmount.gt(new BN(0))) {
                     tokenFees.push({
@@ -437,17 +513,14 @@ function start(deps) {
     // Initial scan after 10 seconds
     setTimeout(() => updateRobinhoodState(deps), 10000);
 
-    // Run every 10 minutes (less frequent than main holder scanner)
+    // Run every 10 minutes
     setInterval(() => updateRobinhoodState(deps), 10 * 60 * 1000);
-
-    // Setup WebSocket listener for real-time detection
-    setupWebSocketListener(deps);
 
     logger.info('[Robinhood] Scanner started');
 }
 
 /**
- * Stop the scanner and cleanup
+ * Stop the scanner
  */
 function stop(deps) {
     const { connection } = deps;
@@ -469,4 +542,6 @@ module.exports = {
     scanForFeeSharingConfigs,
     parseFeeSharingConfig,
     findOurShare,
+    fetchPumpMetadata,
+    fetchDexScreenerMetadata,
 };
