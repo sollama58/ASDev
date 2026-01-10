@@ -203,8 +203,8 @@ function initHolderScannerWorker(deps) {
         logger.info('[Worker] Starting holder scanner job...');
 
         try {
-            // 1. Fetch Top 10 tokens by volume
-            const topTokens = await db.all('SELECT mint, userPubkey FROM tokens ORDER BY volume24h DESC LIMIT 10');
+            // 1. Fetch Top 10 tokens by volume (v13.0: PostgreSQL syntax)
+            const topTokens = await db.all('SELECT mint, "userPubkey" FROM tokens ORDER BY volume24h DESC LIMIT 10');
             const top10Mints = topTokens.map(t => t.mint);
 
             // 2. Cache dev wallet PUMP holdings
@@ -225,8 +225,8 @@ function initHolderScannerWorker(deps) {
             const kothPot = totalDistributable * 0.10;
             const communityPot = totalDistributable * 0.90;
 
-            // 4. Identify KOTH Creator
-            const kothToken = await db.get('SELECT userPubkey FROM tokens ORDER BY marketCap DESC LIMIT 1');
+            // 4. Identify KOTH Creator (v13.0: PostgreSQL syntax)
+            const kothToken = await db.get('SELECT "userPubkey" FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
             const kothCreator = kothToken ? kothToken.userPubkey : null;
 
             // 5. Update holders for each top token
