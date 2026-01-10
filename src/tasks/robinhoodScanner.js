@@ -181,6 +181,7 @@ async function fetchDexScreenerMetadata(mint) {
  * This finds ALL tokens where we receive creator fees (both BC and AMM)
  *
  * v14.0 - Now properly scans vault transactions to discover mints
+ * v14.1 - Uses market data from validateMintsBatch, updates existing tokens
  */
 async function scanForOurCreatedTokens(deps) {
     const { connection, devKeypair, db } = deps;
@@ -204,30 +205,23 @@ async function scanForOurCreatedTokens(deps) {
             return;
         }
 
-        // Validate mints and get metadata
-        const validTokens = await mintExtractor.validateMintsBatch(Array.from(foundMints));
+        // Validate mints and get metadata + market data (DexScreener included)
+        const validTokens = await mintExtractor.validateMintsBatch(Array.from(foundMints), { fetchMarketData: true });
         logger.info(`[Robinhood] Validated ${validTokens.length} tokens from vault transactions`);
 
-        // Insert discovered tokens into database
+        // Insert/update discovered tokens in database
         let newTokensInserted = 0;
+        let tokensUpdated = 0;
         for (const token of validTokens) {
             try {
                 // Check if already exists in tokens table
-                const existingToken = await db.get('SELECT id FROM tokens WHERE mint = $1', [token.mint]);
+                const existingToken = await db.get('SELECT id, "marketCap", volume24h FROM tokens WHERE mint = $1', [token.mint]);
 
                 if (!existingToken) {
-                    // Fetch additional metadata from DexScreener for market data
-                    const dexMeta = await fetchDexScreenerMetadata(token.mint);
-
+                    // Insert new token with all metadata including market data
                     await db.run(`
                         INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp, volume24h, "priceUsd", "marketCap", complete)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                        ON CONFLICT (mint) DO UPDATE SET
-                            ticker = COALESCE(EXCLUDED.ticker, tokens.ticker),
-                            name = COALESCE(EXCLUDED.name, tokens.name),
-                            image = COALESCE(EXCLUDED.image, tokens.image),
-                            volume24h = EXCLUDED.volume24h,
-                            "marketCap" = EXCLUDED."marketCap"
                     `, [
                         devKeypair.publicKey.toString(),
                         token.mint,
@@ -240,26 +234,52 @@ async function scanForOurCreatedTokens(deps) {
                         token.image || '',
                         0,
                         Date.now(),
-                        dexMeta?.volume24h || 0,
-                        dexMeta?.priceUsd || 0,
-                        dexMeta?.marketCap || 0,
+                        token.volume24h || 0,
+                        token.priceUsd || 0,
+                        token.marketCap || 0,
                         0
                     ]);
 
                     newTokensInserted++;
-                    logger.info(`[Robinhood] Discovered token: ${token.ticker} (${token.mint.slice(0, 8)}...)`);
+                    logger.info(`[Robinhood] Discovered token: ${token.ticker} (${token.mint.slice(0, 8)}...) | MC: $${(token.marketCap || 0).toLocaleString()}`);
+                } else {
+                    // Update existing token with fresh market data if we have better data
+                    const hasNewMarketData = (token.marketCap > 0 || token.volume24h > 0);
+                    const existingHasNoData = (!existingToken.marketCap || existingToken.marketCap === 0) && (!existingToken.volume24h || existingToken.volume24h === 0);
+
+                    if (hasNewMarketData || existingHasNoData) {
+                        await db.run(`
+                            UPDATE tokens SET
+                                ticker = COALESCE(NULLIF($1, 'UNKNOWN'), ticker),
+                                name = COALESCE(NULLIF($2, 'Unknown'), name),
+                                image = COALESCE(NULLIF($3, ''), image),
+                                volume24h = CASE WHEN $4 > 0 THEN $4 ELSE volume24h END,
+                                "priceUsd" = CASE WHEN $5 > 0 THEN $5 ELSE "priceUsd" END,
+                                "marketCap" = CASE WHEN $6 > 0 THEN $6 ELSE "marketCap" END
+                            WHERE mint = $7
+                        `, [
+                            token.ticker,
+                            token.name,
+                            token.image || '',
+                            token.volume24h || 0,
+                            token.priceUsd || 0,
+                            token.marketCap || 0,
+                            token.mint
+                        ]);
+                        tokensUpdated++;
+                    }
                 }
 
-                // Small delay to avoid rate limits
-                await new Promise(r => setTimeout(r, 100));
-
             } catch (e) {
-                logger.debug(`[Robinhood] Failed to insert token ${token.mint}`, { error: e.message });
+                logger.debug(`[Robinhood] Failed to process token ${token.mint}`, { error: e.message });
             }
         }
 
         if (newTokensInserted > 0) {
             logger.info(`[Robinhood] Inserted ${newTokensInserted} new tokens from vault scan`);
+        }
+        if (tokensUpdated > 0) {
+            logger.info(`[Robinhood] Updated market data for ${tokensUpdated} existing tokens`);
         }
 
     } catch (e) {

@@ -338,6 +338,34 @@ async function scanVaultForMints(options) {
 }
 
 /**
+ * Reset vault scan progress for a creator (forces full rescan)
+ *
+ * @param {Object} options - Reset options
+ * @param {PublicKey|string} options.creatorPubkey - Creator wallet public key
+ * @param {Object} options.db - Database instance
+ * @returns {boolean} - Whether reset was successful
+ */
+async function resetVaultScanProgress(options) {
+    const { creatorPubkey, db } = options;
+
+    if (!db) return false;
+
+    const pubkeyStr = typeof creatorPubkey === 'string' ? creatorPubkey : creatorPubkey.toString();
+    const bcProgressKey = `vault_scan_bc_${pubkeyStr.slice(0, 8)}`;
+    const ammProgressKey = `vault_scan_amm_${pubkeyStr.slice(0, 8)}`;
+
+    try {
+        await db.run('DELETE FROM logs WHERE type = $1', [bcProgressKey]);
+        await db.run('DELETE FROM logs WHERE type = $1', [ammProgressKey]);
+        logger.info(`[MintExtractor] Reset vault scan progress for ${pubkeyStr.slice(0, 8)}...`);
+        return true;
+    } catch (e) {
+        logger.warn('[MintExtractor] Failed to reset progress', { error: e.message });
+        return false;
+    }
+}
+
+/**
  * Scan both bonding curve and AMM vaults for a creator
  *
  * @param {Object} options - Scan options
@@ -345,6 +373,7 @@ async function scanVaultForMints(options) {
  * @param {Object} options.db - Database instance for progress tracking
  * @param {Function} options.getCreatorFeeVaults - Function to get vault addresses
  * @param {boolean} options.saveProgress - Whether to save progress to database
+ * @param {boolean} options.resetProgress - Force full rescan by ignoring saved progress
  * @returns {Object} - { foundMints: Set, bcStats, ammStats }
  */
 async function scanCreatorVaultsForMints(options) {
@@ -353,6 +382,7 @@ async function scanCreatorVaultsForMints(options) {
         db,
         getCreatorFeeVaults,
         saveProgress = true,
+        resetProgress = false,
     } = options;
 
     const { bcVault, ammVaultAuth } = getCreatorFeeVaults(creatorPubkey);
@@ -360,14 +390,14 @@ async function scanCreatorVaultsForMints(options) {
     const foundMints = new Set();
     const processedSignatures = new Set();
 
-    // Get progress from database
+    // Get progress from database (unless resetProgress is true)
     const bcProgressKey = `vault_scan_bc_${creatorPubkey.toString().slice(0, 8)}`;
     const ammProgressKey = `vault_scan_amm_${creatorPubkey.toString().slice(0, 8)}`;
 
     let bcLastSig = null;
     let ammLastSig = null;
 
-    if (db) {
+    if (db && !resetProgress) {
         try {
             const bcRow = await db.get('SELECT data FROM logs WHERE type = $1 ORDER BY id DESC LIMIT 1', [bcProgressKey]);
             bcLastSig = bcRow?.data || null;
@@ -377,6 +407,10 @@ async function scanCreatorVaultsForMints(options) {
         } catch (e) {
             // Progress fetch failed, start fresh
         }
+    }
+
+    if (resetProgress) {
+        logger.info('[MintExtractor] Reset requested - performing full vault scan');
     }
 
     // Scan bonding curve vault
@@ -427,12 +461,45 @@ async function scanCreatorVaultsForMints(options) {
 }
 
 /**
- * Validate mints in batches using Helius getAssetBatch
+ * Fetch token market data from DexScreener
+ * @param {string} mint - Token mint address
+ * @returns {Object|null} - Market data or null
+ */
+async function fetchDexScreenerData(mint) {
+    try {
+        const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
+            timeout: 5000
+        });
+        const pairs = response.data?.pairs || [];
+        if (pairs.length > 0) {
+            const pair = pairs[0];
+            return {
+                marketCap: pair.fdv || pair.marketCap || 0,
+                volume24h: pair.volume?.h24 || 0,
+                priceUsd: parseFloat(pair.priceUsd) || 0,
+                // Also get name/ticker from DexScreener as backup
+                dexName: pair.baseToken?.name || null,
+                dexTicker: pair.baseToken?.symbol || null,
+                dexImage: pair.info?.imageUrl || null,
+            };
+        }
+    } catch (e) {
+        // Silent fail - market data is optional
+    }
+    return null;
+}
+
+/**
+ * Validate mints in batches using Helius getAssetBatch + DexScreener for market data
  *
  * @param {Array<string>} mints - Array of mint addresses to validate
+ * @param {Object} options - Options
+ * @param {boolean} options.fetchMarketData - Whether to fetch market data from DexScreener (default: true)
  * @returns {Array<Object>} - Array of validated token metadata objects
  */
-async function validateMintsBatch(mints) {
+async function validateMintsBatch(mints, options = {}) {
+    const { fetchMarketData = true } = options;
+
     if (!config.HELIUS_API_KEY) {
         logger.warn('[MintExtractor] HELIUS_API_KEY not configured - skipping validation');
         return [];
@@ -464,7 +531,7 @@ async function validateMintsBatch(mints) {
                     const files = asset.content?.files || [];
                     const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
 
-                    validTokens.push({
+                    const tokenData = {
                         mint: asset.id,
                         name: metadata.name || 'Unknown',
                         ticker: metadata.symbol || 'UNKNOWN',
@@ -474,7 +541,35 @@ async function validateMintsBatch(mints) {
                         twitter: asset.content?.links?.twitter || '',
                         website: asset.content?.links?.external_url || '',
                         creator: asset.creators?.[0]?.address || null,
-                    });
+                        // Market data defaults (will be populated below)
+                        marketCap: 0,
+                        volume24h: 0,
+                        priceUsd: 0,
+                    };
+
+                    // Fetch market data from DexScreener
+                    if (fetchMarketData) {
+                        const dexData = await fetchDexScreenerData(asset.id);
+                        if (dexData) {
+                            tokenData.marketCap = dexData.marketCap;
+                            tokenData.volume24h = dexData.volume24h;
+                            tokenData.priceUsd = dexData.priceUsd;
+                            // Use DexScreener data as fallback for missing metadata
+                            if (tokenData.name === 'Unknown' && dexData.dexName) {
+                                tokenData.name = dexData.dexName;
+                            }
+                            if (tokenData.ticker === 'UNKNOWN' && dexData.dexTicker) {
+                                tokenData.ticker = dexData.dexTicker;
+                            }
+                            if (!tokenData.image && dexData.dexImage) {
+                                tokenData.image = dexData.dexImage;
+                            }
+                        }
+                        // Small delay between DexScreener calls to avoid rate limiting
+                        await new Promise(r => setTimeout(r, 150));
+                    }
+
+                    validTokens.push(tokenData);
                 }
             }
 
@@ -499,9 +594,11 @@ module.exports = {
     // Vault scanning
     scanVaultForMints,
     scanCreatorVaultsForMints,
+    resetVaultScanProgress,
 
-    // Validation
+    // Validation & Market Data
     validateMintsBatch,
+    fetchDexScreenerData,
 
     // Constants (for external use if needed)
     DISCRIMINATORS,

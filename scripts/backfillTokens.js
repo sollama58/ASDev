@@ -18,7 +18,9 @@
  *
  * Requires HELIUS_API_KEY environment variable.
  *
- * Usage: node scripts/backfillTokens.js [--dry-run]
+ * Usage: node scripts/backfillTokens.js [--dry-run] [--reset]
+ *   --dry-run  Preview changes without modifying the database
+ *   --reset    Force full rescan (ignore saved progress)
  */
 require('dotenv').config();
 
@@ -34,6 +36,7 @@ const mintExtractor = require('../src/services/mintExtractor');
 
 // Parse command line args
 const DRY_RUN = process.argv.includes('--dry-run');
+const RESET_PROGRESS = process.argv.includes('--reset');
 
 /**
  * Fetch token metadata from Helius DAS API
@@ -390,6 +393,7 @@ async function scanVaultTransactionsForTokens(db, devPubkey) {
         db,
         getCreatorFeeVaults: pump.getCreatorFeeVaults,
         saveProgress: !DRY_RUN,
+        resetProgress: RESET_PROGRESS,
     });
 
     // Summary
@@ -427,6 +431,9 @@ async function main() {
     console.log('                     TOKEN BACKFILL SCRIPT                      ');
     console.log('═══════════════════════════════════════════════════════════════');
     console.log(`Mode: ${DRY_RUN ? '🔍 DRY RUN (no changes will be made)' : '⚡ LIVE (will insert tokens)'}`);
+    if (RESET_PROGRESS) {
+        console.log('🔄 RESET MODE: Will perform full vault scan (ignoring saved progress)');
+    }
     console.log('');
 
     // Initialize connection
