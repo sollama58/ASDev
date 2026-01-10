@@ -117,7 +117,15 @@ function init(deps) {
                 pumpHoldings: cachedHealth.pumpHoldings,
                 totalPoints: globalState.totalPoints,
                 totalLaunches: cachedHealth.launches,
-                recentLogs: cachedHealth.logs.map(l => ({ ...JSON.parse(l.data), type: l.type, timestamp: l.timestamp })),
+                recentLogs: cachedHealth.logs.map(l => {
+                    try {
+                        const parsed = typeof l.data === 'string' ? JSON.parse(l.data) : (l.data || {});
+                        return { ...parsed, type: l.type, timestamp: l.timestamp };
+                    } catch (e) {
+                        // Log data is not valid JSON - return raw
+                        return { raw: l.data, type: l.type, timestamp: l.timestamp };
+                    }
+                }),
                 headerImageUrl: config.HEADER_IMAGE_URL,
                 currentFeeBalance: (cachedHealth.totalPendingFees / LAMPORTS_PER_SOL).toFixed(4),
                 lastClaimTime: cachedHealth.stats.lastClaimTimestamp || 0,
