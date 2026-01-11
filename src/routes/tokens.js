@@ -45,6 +45,7 @@ function init(deps) {
     // v18.0: Added eligibility status based on volume threshold
     // Cached for 15 seconds per page
     // v22.0: Added input validation for pagination parameters
+    // v25.0: Combined tokens + robinhood_tokens to show all tokens in database
     router.get('/all-launches', async (req, res) => {
         try {
             // Validate and sanitize pagination params (prevent negative values and enforce limits)
@@ -54,11 +55,27 @@ function init(deps) {
             const offset = Math.max(0, rawOffset); // Min 0 (no negative offsets)
 
             // Cache per page (limit + offset combo)
-            const cacheKey = `all_launches_${limit}_${offset}`;
+            const cacheKey = `all_launches_v25_${limit}_${offset}`;
             const { rows, total } = await redis.smartCache(cacheKey, 15, async () => {
-                const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT $1 OFFSET $2', [limit, offset]);
-                const total = await db.get('SELECT COUNT(*) as count FROM tokens');
-                return { rows, total: parseInt(total?.count) || 0 };
+                // v25.0: UNION query to get both platform tokens and robinhood tokens
+                const combinedQuery = `
+                    SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'platform' as source
+                    FROM tokens
+                    UNION ALL
+                    SELECT mint, "creatorPubkey" as "userPubkey", name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source
+                    FROM robinhood_tokens
+                    WHERE "isActive" = 1
+                    ORDER BY volume24h DESC
+                    LIMIT $1 OFFSET $2
+                `;
+                const rows = await db.all(combinedQuery, [limit, offset]);
+
+                // Get total count from both tables
+                const platformCount = await db.get('SELECT COUNT(*) as count FROM tokens');
+                const robinhoodCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
+                const total = parseInt(platformCount?.count || 0) + parseInt(robinhoodCount?.count || 0);
+
+                return { rows, total };
             });
 
             const allLaunches = rows.map(r => ({
@@ -72,7 +89,9 @@ function init(deps) {
                 volume: r.volume24h,
                 complete: !!r.complete,
                 // v18.0: Eligibility based on volume threshold
-                isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD
+                isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD,
+                // v25.0: Include source to differentiate token types
+                source: r.source || 'platform'
             }));
             res.json({
                 tokens: allLaunches,
@@ -81,6 +100,7 @@ function init(deps) {
                 eligibilityThreshold: MIN_VOLUME_USD // v18.0: Include threshold for frontend
             });
         } catch (e) {
+            logger.error('[All Launches] Error fetching combined tokens', { error: e.message });
             res.status(500).json({ tokens: [], lastUpdate: Date.now() });
         }
     });

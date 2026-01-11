@@ -1413,7 +1413,8 @@
     </div>
 </div>
 
-<div id="all-launches-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAllLaunchesModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">ALL PLATFORM LAUNCHES</h3><div id="modal-all-launches-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
+<!-- v25.0: Updated title to reflect all tokens (platform + robinhood) -->
+<div id="all-launches-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAllLaunchesModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">ALL TOKENS</h3><div id="modal-all-launches-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
 <div id="all-eligible-users-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAllEligibleUsersModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">ELIGIBLE AIRDROP USERS & POINTS</h3><div id="modal-all-eligible-users-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
@@ -2271,6 +2272,7 @@
     const closeSuccessModal = () => { ui.successModal.style.display = 'none'; };
     window.closeSuccessModal = closeSuccessModal;
     
+    // v25.0: Updated to show all tokens (platform + robinhood)
     const toggleAllLaunchesModal = async () => {
         ui.allLaunchesModal.style.display = 'block';
         ui.modalAllLaunchesContent.innerHTML = '<div class="text-center text-orange-400 p-4">Fetching all token data...</div>';
@@ -2280,18 +2282,19 @@
                 const data = await res.json();
                 const tokens = data.tokens || [];
                 if (tokens.length === 0) {
-                    ui.modalAllLaunchesContent.innerHTML = '<div class="text-center text-gray-500 p-4">No tokens have been launched yet.</div>';
+                    ui.modalAllLaunchesContent.innerHTML = '<div class="text-center text-gray-500 p-4">No tokens in the database yet.</div>';
                     return;
                 }
                 // v18.0: Show eligibility threshold info
+                // v25.0: Updated message to clarify all tokens are shown
                 const thresholdInfo = data.eligibilityThreshold
-                    ? `<p class="text-orange-400/70 text-xs mb-3">Tokens need >${data.eligibilityThreshold} USD 24hr volume to be eligible for airdrops</p>`
+                    ? `<p class="text-orange-400/70 text-xs mb-3">Showing all tokens in database. Tokens need >${data.eligibilityThreshold} USD 24hr volume to be eligible for airdrops.</p>`
                     : '';
                 const tableHTML = `
                     ${thresholdInfo}
                     <table class="w-full text-left font-mono text-xs leader-table">
                         <thead class="text-orange-400 border-b border-orange-800">
-                            <tr><th class="p-2">#</th><th class="p-2">Token</th><th class="p-2 no-break">Creator</th><th class="p-2 text-right no-break">MCAP</th><th class="p-2 text-right no-break">Vol&nbsp;(24H)</th><th class="p-2 text-right no-break">Eligible</th><th class="p-2 text-right no-break">Status</th></tr>
+                            <tr><th class="p-2">#</th><th class="p-2">Token</th><th class="p-2 no-break">Source</th><th class="p-2 text-right no-break">MCAP</th><th class="p-2 text-right no-break">Vol\u00A0(24H)</th><th class="p-2 text-right no-break">Eligible</th><th class="p-2 text-right no-break">Status</th></tr>
                         </thead>
                         <tbody class="text-orange-200">
                             ${await Promise.all(tokens.map(async (item, index) => {
@@ -2306,6 +2309,11 @@
                                     ? '<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded no-break">YES</span>'
                                     : '<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded no-break">NO</span>';
 
+                                // v25.0: Source badge (platform vs robinhood)
+                                const sourceBadge = item.source === 'robinhood'
+                                    ? '<span class="badge-robinhood text-[9px]">ROBINHOOD</span>'
+                                    : '<span class="text-[9px] bg-orange-900/50 text-orange-400 px-1 py-0.5 rounded no-break">PLATFORM</span>';
+
                                 return `
                                 <tr class="border-b border-orange-800/30 hover:bg-orange-900/20">
                                     <td class="p-2">${index + 1}</td>
@@ -2313,7 +2321,7 @@
                                         <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
                                         <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="font-bold underline text-white ticker-symbol">${escapeHtml(item.ticker)}</a> <span class="token-name">(${escapeHtml(item.name)})</span>
                                     </td>
-                                    <td class="p-2 text-orange-400 no-break">${escapeHtml(item.userPubkey?.slice(0, 5) || '?????')}...</td>
+                                    <td class="p-2">${sourceBadge}</td>
                                     <td class="p-2 text-right font-bold text-green-400 mcap-amount">${formatMcap(item.marketCap)}</td>
                                     <td class="p-2 text-right font-bold volume-amount">$${(parseFloat(item.volume) || 0).toLocaleString()}</td>
                                     <td class="p-2 text-right">${eligibilityBadge}</td>
