@@ -262,13 +262,14 @@ function init(deps) {
     // v14.0: Updated for proportional point system (Top 250 holders)
     // v18.0: Changed from top 10 to all tokens with >$100 volume
     // v22.0: SCALABILITY FIX - Refactored N+1 queries to use JOINs (2 queries instead of 2000+)
+    // v23.0: Removed creator bonus
     router.get('/check-holder', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
             return res.json({
                 isHolder: false, isAsdfTop50: false, points: 0,
-                multiplier: 1, heldPositionsCount: 0, createdPositionsCount: 0,
-                basePoints: 0, creatorBonus: 0, robinhoodPoints: 0,
+                multiplier: 1, heldPositionsCount: 0,
+                basePoints: 0, robinhoodPoints: 0,
                 expectedAirdrop: 0, expectedAirdropCurrency: 'SOL'
             });
         }
@@ -287,7 +288,6 @@ function init(deps) {
                         th."holderPubkey",
                         th.mint,
                         th.balance,
-                        t."userPubkey" as creator,
                         totals.total_balance
                     FROM token_holders th
                     INNER JOIN tokens t ON t.mint = th.mint AND t.volume24h >= $1
@@ -299,19 +299,11 @@ function init(deps) {
                     WHERE th."holderPubkey" = $2
                 `, [MIN_VOLUME_USD, userPubkey]);
 
-                // Also get created tokens count (user is creator but may not be holder)
-                const createdTokens = await db.all(
-                    'SELECT mint FROM tokens WHERE "userPubkey" = $1 AND volume24h >= $2',
-                    [userPubkey, MIN_VOLUME_USD]
-                );
-
-                return { holdings, createdTokens };
+                return { holdings };
             });
 
             let heldPositionsCount = 0;
-            let createdPositionsCount = 0;
             let basePoints = 0;
-            let creatorBonus = 0;
 
             const heldMints = new Set();
 
@@ -328,16 +320,6 @@ function init(deps) {
                 // Calculate proportional points
                 const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
                 basePoints += proportionalPts;
-
-                // Check if user is creator (2x bonus)
-                if (holding.creator === userPubkey) {
-                    creatorBonus += proportionalPts;
-                }
-            }
-
-            // Count created tokens (including those user doesn't hold)
-            for (const token of userTokenHoldings.createdTokens) {
-                createdPositionsCount++;
             }
 
             // v22.0: Single query for Robinhood holdings with pre-computed totals
@@ -379,7 +361,7 @@ function init(deps) {
             // v13.0: Fetch from Redis for cross-process consistency
             const isAsdfTop50 = await redis.isAsdfTop100Holder(userPubkey);
             const multiplier = isAsdfTop50 ? 2 : 1;
-            const totalBasePoints = basePoints + creatorBonus + robinhoodPoints;
+            const totalBasePoints = basePoints + robinhoodPoints;
             const points = totalBasePoints * multiplier;
             const expectedAirdrop = await redis.getUserExpectedAirdrop(userPubkey);
 
@@ -389,9 +371,7 @@ function init(deps) {
                 points: Math.round(points * 100) / 100, // Round to 2 decimal places
                 multiplier,
                 heldPositionsCount,
-                createdPositionsCount,
                 basePoints: Math.round(basePoints * 100) / 100,
-                creatorBonus: Math.round(creatorBonus * 100) / 100,
                 robinhoodPoints: Math.round(robinhoodPoints * 100) / 100,
                 expectedAirdrop,
                 expectedAirdropCurrency: 'SOL' // v11.0: Now in SOL
@@ -447,8 +427,6 @@ function init(deps) {
 
                 // Check if user is creator
                 const isCreator = token.creator === userPubkey;
-                const creatorBonus = isCreator ? proportionalPts : 0;
-
                 // Check eligibility based on volume threshold
                 const isEligible = (token.volume24h || 0) >= MIN_VOLUME_USD;
 
@@ -461,10 +439,8 @@ function init(deps) {
                     marketCap: token.marketCap || 0,
                     rank: userHolding.rank,
                     isEligible,
-                    isCreator,
                     basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
-                    creatorBonus: isEligible ? Math.round(creatorBonus * 100) / 100 : 0,
-                    totalPoints: isEligible ? Math.round((proportionalPts + creatorBonus) * 100) / 100 : 0,
+                    totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
                     source: 'launched'
                 });
             }
@@ -509,10 +485,8 @@ function init(deps) {
                     marketCap: rhToken.marketCap || 0,
                     rank: userHolding.rank,
                     isEligible,
-                    isCreator: false,
                     feeSharePercent: (feeShareBps / 100),
                     basePoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
-                    creatorBonus: 0,
                     totalPoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
                     source: 'robinhood'
                 });
@@ -576,42 +550,15 @@ function init(deps) {
                     const user = userPointsMap.get(row.holderPubkey) || {
                         pubkey: row.holderPubkey,
                         basePoints: 0,
-                        creatorBonus: 0,
                         robinhoodPoints: 0,
-                        positions: 0,
-                        created: 0
+                        positions: 0
                     };
 
                     user.basePoints += proportionalPts;
                     user.positions++;
-
-                    // Check if creator (2x bonus)
-                    if (row.holderPubkey === row.creator) {
-                        user.creatorBonus += proportionalPts;
-                        user.created++;
-                    }
-
                     userPointsMap.set(row.holderPubkey, user);
                 }
 
-                // Get creators who may not hold their tokens
-                const creators = await db.all(
-                    'SELECT "userPubkey" FROM tokens WHERE volume24h >= $1 AND "userPubkey" IS NOT NULL',
-                    [MIN_VOLUME_USD]
-                );
-
-                for (const c of creators) {
-                    if (!userPointsMap.has(c.userPubkey)) {
-                        userPointsMap.set(c.userPubkey, {
-                            pubkey: c.userPubkey,
-                            basePoints: 0,
-                            creatorBonus: 0,
-                            robinhoodPoints: 0,
-                            positions: 0,
-                            created: 1
-                        });
-                    }
-                }
 
                 // v22.0: Single aggregated query for Robinhood holdings
                 const robinhoodHoldingsData = await db.all(`
@@ -644,10 +591,8 @@ function init(deps) {
                     const user = userPointsMap.get(row.holderPubkey) || {
                         pubkey: row.holderPubkey,
                         basePoints: 0,
-                        creatorBonus: 0,
                         robinhoodPoints: 0,
-                        positions: 0,
-                        created: 0
+                        positions: 0
                     };
 
                     user.robinhoodPoints += scaledPts;
@@ -671,7 +616,7 @@ function init(deps) {
 
                 const isAsdfTop50 = asdfTop100Holders.has(user.pubkey);
                 const multiplier = isAsdfTop50 ? 2 : 1;
-                const totalBasePoints = user.basePoints + user.creatorBonus + user.robinhoodPoints;
+                const totalBasePoints = user.basePoints + user.robinhoodPoints;
                 const points = totalBasePoints * multiplier;
                 const expectedAirdrop = allUserExpectedAirdrops.get(user.pubkey) || 0;
 
@@ -680,7 +625,6 @@ function init(deps) {
                         pubkey: user.pubkey,
                         points: Math.round(points * 100) / 100,
                         positions: user.positions,
-                        created: user.created,
                         isAsdfTop50,
                         expectedAirdrop,
                         expectedAirdropCurrency: 'SOL'
@@ -2385,6 +2329,379 @@ function init(deps) {
                 success: false,
                 error: e.message,
                 response: e.response?.data
+            });
+        }
+    });
+
+    // ========== FEE SHARE MANAGEMENT ENDPOINTS (v23.0) ==========
+
+    /**
+     * POST /refresh-fee-share/:mint
+     * Refresh the fee share BPS for a Robinhood token from on-chain data
+     * This allows users to update their token's reward distribution if it changed on Pump.fun
+     */
+    router.post('/refresh-fee-share/:mint', async (req, res) => {
+        try {
+            const { mint } = req.params;
+
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid mint address'
+                });
+            }
+
+            // Check if token exists in robinhood_tokens
+            const robinhoodToken = await db.get(
+                'SELECT * FROM robinhood_tokens WHERE mint = $1',
+                [mint]
+            );
+
+            if (!robinhoodToken) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Token not found in Robinhood tokens. Use /register-token to register it first.',
+                    mint
+                });
+            }
+
+            // Get our platform wallet address
+            const platformWallet = devKeypair.publicKey.toString();
+
+            // Verify current on-chain fee share
+            logger.info(`[FeeShareRefresh] Refreshing fee share for ${mint.slice(0, 8)}...`);
+
+            const verification = await mintExtractor.verifyFeeRecipient(
+                mint,
+                platformWallet,
+                connection
+            );
+
+            if (!verification.isRecipient) {
+                // We're no longer a fee recipient - deactivate the token
+                await db.run(
+                    'UPDATE robinhood_tokens SET "isActive" = 0 WHERE mint = $1',
+                    [mint]
+                );
+
+                logger.warn(`[FeeShareRefresh] ${mint.slice(0, 8)}... - No longer a fee recipient, deactivated`);
+
+                return res.json({
+                    success: true,
+                    changed: true,
+                    deactivated: true,
+                    message: 'Token is no longer sharing fees with our platform. Token has been deactivated.',
+                    previousBps: robinhoodToken.feeShareBps,
+                    currentBps: 0
+                });
+            }
+
+            const previousBps = robinhoodToken.feeShareBps;
+            const currentBps = verification.feeShareBps;
+            const changed = previousBps !== currentBps;
+
+            if (changed) {
+                // Update the fee share BPS in the database
+                await db.run(
+                    'UPDATE robinhood_tokens SET "feeShareBps" = $1 WHERE mint = $2',
+                    [currentBps, mint]
+                );
+
+                logger.info(`[FeeShareRefresh] ${robinhoodToken.ticker} (${mint.slice(0, 8)}...) - Fee share updated: ${previousBps} -> ${currentBps} bps`);
+            }
+
+            res.json({
+                success: true,
+                changed,
+                deactivated: false,
+                message: changed
+                    ? `Fee share updated from ${previousBps / 100}% to ${currentBps / 100}%`
+                    : 'Fee share is already up to date',
+                previousBps,
+                currentBps,
+                previousPercent: previousBps / 100,
+                currentPercent: currentBps / 100,
+                source: verification.source
+            });
+
+        } catch (e) {
+            logger.error('[FeeShareRefresh] Error', { error: e.message, stack: e.stack });
+            res.status(500).json({
+                success: false,
+                error: 'Failed to refresh fee share'
+            });
+        }
+    });
+
+    /**
+     * POST /reregister-token
+     * Re-register a token that was previously registered but had its fee share changed
+     * This allows the token to be updated with the new fee share percentage
+     *
+     * Required:
+     * - mint: Token mint address
+     *
+     * This endpoint will:
+     * 1. Verify the token is currently registered
+     * 2. Re-verify on-chain fee share configuration
+     * 3. Update the fee share BPS if changed
+     * 4. Reactivate if previously deactivated
+     */
+    router.post('/reregister-token', async (req, res) => {
+        try {
+            const { mint } = req.body;
+
+            if (!mint) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing required field: mint'
+                });
+            }
+
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid mint address'
+                });
+            }
+
+            // Check both tables for existing registration
+            const existingToken = await db.get('SELECT * FROM tokens WHERE mint = $1', [mint]);
+            const existingRobinhoodToken = await db.get('SELECT * FROM robinhood_tokens WHERE mint = $1', [mint]);
+
+            if (!existingToken && !existingRobinhoodToken) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Token not registered. Use /register-token to register it first.',
+                    mint
+                });
+            }
+
+            // Get our platform wallet address
+            const platformWallet = devKeypair.publicKey.toString();
+
+            // Re-verify on-chain fee share
+            logger.info(`[TokenReregister] Re-verifying fee share for ${mint.slice(0, 8)}...`);
+
+            const verification = await mintExtractor.verifyFeeRecipient(
+                mint,
+                platformWallet,
+                connection
+            );
+
+            if (!verification.isRecipient) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Verification failed: This token does not share fees with the IGNITION platform. The token creator must add our wallet as a fee recipient on Pump.fun.',
+                    mint,
+                    platformWallet
+                });
+            }
+
+            const isDirectCreator = verification.source === 'bonding_curve' || verification.source === 'amm_pool';
+
+            // Determine what changed and update accordingly
+            if (existingRobinhoodToken) {
+                const previousBps = existingRobinhoodToken.feeShareBps;
+                const currentBps = verification.feeShareBps;
+                const wasInactive = !existingRobinhoodToken.isActive;
+
+                // Update the robinhood token with new fee share and reactivate if needed
+                await db.run(`
+                    UPDATE robinhood_tokens
+                    SET "feeShareBps" = $1, "isActive" = 1
+                    WHERE mint = $2
+                `, [currentBps, mint]);
+
+                logger.info(`[TokenReregister] ${existingRobinhoodToken.ticker} (${mint.slice(0, 8)}...) - Re-registered with ${currentBps} bps (was ${previousBps} bps)`);
+
+                res.json({
+                    success: true,
+                    message: 'Token re-registered successfully',
+                    token: {
+                        mint,
+                        ticker: existingRobinhoodToken.ticker,
+                        name: existingRobinhoodToken.name,
+                        previousFeeShareBps: previousBps,
+                        currentFeeShareBps: currentBps,
+                        previousFeeSharePercent: previousBps / 100,
+                        currentFeeSharePercent: currentBps / 100,
+                        wasReactivated: wasInactive,
+                        source: verification.source
+                    }
+                });
+
+            } else if (existingToken) {
+                // Token was registered as direct creator
+                // If now a fee shareholder (not direct creator), migrate to robinhood_tokens
+                if (!isDirectCreator) {
+                    // Fetch fresh metadata
+                    const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
+                    const token = validTokens.length > 0 ? validTokens[0] : null;
+
+                    // Insert into robinhood_tokens
+                    await db.run(`
+                        INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive")
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
+                        ON CONFLICT (mint) DO UPDATE SET
+                            "feeShareBps" = EXCLUDED."feeShareBps",
+                            "isActive" = 1
+                    `, [
+                        mint,
+                        token?.ticker || existingToken.ticker || 'UNKNOWN',
+                        token?.name || existingToken.name || 'Unknown Token',
+                        token?.image || existingToken.image || '',
+                        verification.originalCreator || existingToken.userPubkey || 'unknown_creator',
+                        verification.feeShareBps,
+                        Date.now(),
+                        token?.marketCap || existingToken.marketCap || 0,
+                        token?.volume24h || existingToken.volume24h || 0
+                    ]);
+
+                    // Remove from tokens table
+                    await db.run('DELETE FROM tokens WHERE mint = $1', [mint]);
+
+                    logger.info(`[TokenReregister] ${existingToken.ticker} (${mint.slice(0, 8)}...) - Migrated from direct creator to fee shareholder (${verification.feeShareBps} bps)`);
+
+                    res.json({
+                        success: true,
+                        message: 'Token re-registered as fee shareholder (migrated from direct creator)',
+                        token: {
+                            mint,
+                            ticker: existingToken.ticker,
+                            name: existingToken.name,
+                            currentFeeShareBps: verification.feeShareBps,
+                            currentFeeSharePercent: verification.feeSharePercent,
+                            migrated: true,
+                            source: verification.source
+                        }
+                    });
+                } else {
+                    // Still a direct creator, just confirm
+                    res.json({
+                        success: true,
+                        message: 'Token is still registered as direct creator (100% fee share)',
+                        token: {
+                            mint,
+                            ticker: existingToken.ticker,
+                            name: existingToken.name,
+                            currentFeeShareBps: 10000,
+                            currentFeeSharePercent: 100,
+                            source: verification.source
+                        }
+                    });
+                }
+            }
+
+        } catch (e) {
+            logger.error('[TokenReregister] Error', { error: e.message, stack: e.stack });
+            res.status(500).json({
+                success: false,
+                error: 'Internal server error during re-registration'
+            });
+        }
+    });
+
+    /**
+     * POST /refresh-all-fee-shares
+     * Admin endpoint to refresh fee shares for all active Robinhood tokens
+     * Useful for syncing after Pump.fun allows users to change reward distributions
+     */
+    router.post('/refresh-all-fee-shares', async (req, res) => {
+        try {
+            // Get all active robinhood tokens
+            const tokens = await db.all(
+                'SELECT * FROM robinhood_tokens WHERE "isActive" = 1'
+            );
+
+            if (tokens.length === 0) {
+                return res.json({
+                    success: true,
+                    message: 'No active Robinhood tokens to refresh',
+                    updated: 0,
+                    deactivated: 0
+                });
+            }
+
+            logger.info(`[BulkFeeShareRefresh] Refreshing fee shares for ${tokens.length} tokens...`);
+
+            const platformWallet = devKeypair.publicKey.toString();
+            let updated = 0;
+            let deactivated = 0;
+            let unchanged = 0;
+            const results = [];
+
+            for (const token of tokens) {
+                try {
+                    const verification = await mintExtractor.verifyFeeRecipient(
+                        token.mint,
+                        platformWallet,
+                        connection
+                    );
+
+                    if (!verification.isRecipient) {
+                        // No longer a fee recipient - deactivate
+                        await db.run(
+                            'UPDATE robinhood_tokens SET "isActive" = 0 WHERE mint = $1',
+                            [token.mint]
+                        );
+                        deactivated++;
+                        results.push({
+                            mint: token.mint,
+                            ticker: token.ticker,
+                            action: 'deactivated',
+                            previousBps: token.feeShareBps,
+                            currentBps: 0
+                        });
+                    } else if (verification.feeShareBps !== token.feeShareBps) {
+                        // Fee share changed - update
+                        await db.run(
+                            'UPDATE robinhood_tokens SET "feeShareBps" = $1 WHERE mint = $2',
+                            [verification.feeShareBps, token.mint]
+                        );
+                        updated++;
+                        results.push({
+                            mint: token.mint,
+                            ticker: token.ticker,
+                            action: 'updated',
+                            previousBps: token.feeShareBps,
+                            currentBps: verification.feeShareBps
+                        });
+                    } else {
+                        unchanged++;
+                    }
+
+                    // Rate limit
+                    await new Promise(r => setTimeout(r, 100));
+
+                } catch (e) {
+                    logger.debug(`[BulkFeeShareRefresh] Error for ${token.mint}`, { error: e.message });
+                    results.push({
+                        mint: token.mint,
+                        ticker: token.ticker,
+                        action: 'error',
+                        error: e.message
+                    });
+                }
+            }
+
+            logger.info(`[BulkFeeShareRefresh] Complete: ${updated} updated, ${deactivated} deactivated, ${unchanged} unchanged`);
+
+            res.json({
+                success: true,
+                message: 'Fee share refresh complete',
+                total: tokens.length,
+                updated,
+                deactivated,
+                unchanged,
+                results: results.filter(r => r.action !== 'unchanged') // Only show changed/errored tokens
+            });
+
+        } catch (e) {
+            logger.error('[BulkFeeShareRefresh] Error', { error: e.message, stack: e.stack });
+            res.status(500).json({
+                success: false,
+                error: 'Failed to refresh fee shares'
             });
         }
     });

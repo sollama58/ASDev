@@ -6,6 +6,7 @@
  * v13.0 - KOTH bonus now distributed to all holders of king token (not just creator)
  * v14.0 - Updated to work with proportional point system (Top 250 holders)
  * v17.0 - Separated fee collection (1 min, >0.05 SOL) from airdrop (15 min, >1 SOL)
+ * v23.0 - Refresh fee share BPS before airdrop to handle dynamic reward distribution changes
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -16,7 +17,7 @@ const {
 } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, pump, solana, jupiter, redis, mutex } = require('../services');
+const { logger, pump, solana, jupiter, redis, mutex, mintExtractor } = require('../services');
 
 // RACE CONDITION FIX: Use mutex for atomic lock/unlock instead of boolean flags
 const buybackMutex = mutex.getMutex('flywheel_buyback');
@@ -235,10 +236,78 @@ async function claimRobinhoodFees(deps) {
 }
 
 /**
+ * Refresh fee share BPS for all active Robinhood tokens
+ * v23.0 - Called before airdrop to ensure points reflect current on-chain reward percentages
+ * This is important because Pump.fun allows creators to change reward distribution dynamically
+ *
+ * @param {Object} deps - Dependencies including connection, devKeypair, db
+ * @returns {Object} - Summary of refresh results
+ */
+async function refreshAllFeeShares(deps) {
+    const { connection, devKeypair, db } = deps;
+
+    try {
+        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1');
+
+        if (tokens.length === 0) {
+            return { total: 0, updated: 0, deactivated: 0 };
+        }
+
+        const platformWallet = devKeypair.publicKey.toString();
+        let updated = 0;
+        let deactivated = 0;
+
+        for (const token of tokens) {
+            try {
+                const verification = await mintExtractor.verifyFeeRecipient(
+                    token.mint,
+                    platformWallet,
+                    connection
+                );
+
+                if (!verification.isRecipient) {
+                    // No longer a fee recipient - deactivate
+                    await db.run(
+                        'UPDATE robinhood_tokens SET "isActive" = 0 WHERE mint = $1',
+                        [token.mint]
+                    );
+                    deactivated++;
+                    logger.warn(`[FeeShareRefresh] ${token.ticker} (${token.mint.slice(0, 8)}...) - No longer a fee recipient, deactivated`);
+                } else if (verification.feeShareBps !== token.feeShareBps) {
+                    // Fee share changed - update
+                    await db.run(
+                        'UPDATE robinhood_tokens SET "feeShareBps" = $1 WHERE mint = $2',
+                        [verification.feeShareBps, token.mint]
+                    );
+                    updated++;
+                    logger.info(`[FeeShareRefresh] ${token.ticker} - Fee share updated: ${token.feeShareBps} -> ${verification.feeShareBps} bps`);
+                }
+
+                // Rate limit
+                await new Promise(r => setTimeout(r, 50));
+
+            } catch (e) {
+                logger.debug(`[FeeShareRefresh] Error for ${token.mint}`, { error: e.message });
+            }
+        }
+
+        if (updated > 0 || deactivated > 0) {
+            logger.info(`[FeeShareRefresh] Complete: ${updated} updated, ${deactivated} deactivated out of ${tokens.length} tokens`);
+        }
+
+        return { total: tokens.length, updated, deactivated };
+    } catch (e) {
+        logger.error('[FeeShareRefresh] Error', { error: e.message });
+        return { total: 0, updated: 0, deactivated: 0, error: e.message };
+    }
+}
+
+/**
  * Process SOL airdrop distribution
  * Updated with "King of the Hill" (KOTH) Logic
  *
  * v11.0 - Now distributes SOL directly instead of PUMP tokens
+ * v23.0 - Refreshes fee share BPS before calculating points
  * This uses the same distribution rules (points, percentages) but sends SOL
  * Benefits: No ATA creation needed, lower transaction costs, simpler logic
  */
@@ -270,6 +339,11 @@ async function processAirdrop(deps) {
         }
 
         logger.info(`SOL AIRDROP TRIGGERED: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available for distribution`);
+
+        // v23.0: Refresh fee share BPS for all Robinhood tokens before calculating points
+        // This ensures points reflect current on-chain reward percentages
+        logger.info('[Airdrop] Refreshing fee share percentages before distribution...');
+        await refreshAllFeeShares(deps);
 
         // Total Amount to be distributed (99% of available pool)
         const totalDistributable = Math.floor(availableForAirdrop * 0.99);
@@ -751,4 +825,4 @@ function start(deps) {
     setTimeout(() => processAirdrop(deps), 10000);
 }
 
-module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, start };
+module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, refreshAllFeeShares, start };

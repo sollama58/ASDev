@@ -1,9 +1,10 @@
 /**
  * Health & Status Routes
  * Server health, stats, and debugging endpoints
+ * v23.0 - Added Robinhood pending fees to health endpoint
  */
 const express = require('express');
-const { LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS } = require('../config/constants');
@@ -146,10 +147,60 @@ function init(deps) {
                 const robinhoodTokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
                 const robinhoodTotalFees = await db.get('SELECT SUM("totalFeesCollected") as total FROM robinhood_tokens');
 
+                // v23.0: Calculate pending fees from Robinhood tokens
+                let robinhoodPendingFees = 0;
+                const robinhoodPendingDetails = [];
+                try {
+                    const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1');
+                    for (const token of robinhoodTokens) {
+                        try {
+                            const creatorPubkey = new PublicKey(token.creatorPubkey);
+                            const { bcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkey);
+
+                            let tokenPendingFees = 0;
+
+                            // Check BC vault
+                            try {
+                                const bcInfo = await connection.getAccountInfo(bcVault);
+                                if (bcInfo && bcInfo.lamports > 5000) {
+                                    const ourShare = Math.floor((bcInfo.lamports - 5000) * (token.feeShareBps / 10000));
+                                    tokenPendingFees += ourShare;
+                                }
+                            } catch (e) { /* Silent */ }
+
+                            // Check AMM vault
+                            try {
+                                const ammVaultAtaKey = await ammVaultAta;
+                                const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
+                                if (bal.value.amount && parseInt(bal.value.amount) > 0) {
+                                    const ourShare = Math.floor(parseInt(bal.value.amount) * (token.feeShareBps / 10000));
+                                    tokenPendingFees += ourShare;
+                                }
+                            } catch (e) { /* Silent */ }
+
+                            if (tokenPendingFees > 0) {
+                                robinhoodPendingFees += tokenPendingFees;
+                                robinhoodPendingDetails.push({
+                                    mint: token.mint,
+                                    ticker: token.ticker,
+                                    pendingLamports: tokenPendingFees,
+                                    feeShareBps: token.feeShareBps
+                                });
+                            }
+                        } catch (e) {
+                            logger.debug(`[Health] Robinhood pending fee check error for ${token.mint}`, { error: e.message });
+                        }
+                    }
+                } catch (e) {
+                    logger.debug('[Health] Robinhood pending fees error', { error: e.message });
+                }
+
                 return {
                     stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped, totalSolAirdropped,
                     robinhoodTokenCount: robinhoodTokenCount?.count || 0,
-                    robinhoodTotalFees: robinhoodTotalFees?.total || 0
+                    robinhoodTotalFees: robinhoodTotalFees?.total || 0,
+                    robinhoodPendingFees,
+                    robinhoodPendingDetails
                 };
             });
 
@@ -175,7 +226,11 @@ function init(deps) {
                     }
                 }),
                 headerImageUrl: config.HEADER_IMAGE_URL,
-                currentFeeBalance: (cachedHealth.totalPendingFees / LAMPORTS_PER_SOL).toFixed(4),
+                // v23.0: Combined pending fees from both platform tokens and Robinhood tokens
+                currentFeeBalance: ((cachedHealth.totalPendingFees + (cachedHealth.robinhoodPendingFees || 0)) / LAMPORTS_PER_SOL).toFixed(4),
+                // v23.0: Separate pending fee breakdown
+                platformPendingFees: (cachedHealth.totalPendingFees / LAMPORTS_PER_SOL).toFixed(4),
+                robinhoodPendingFees: ((cachedHealth.robinhoodPendingFees || 0) / LAMPORTS_PER_SOL).toFixed(4),
                 lastClaimTime: cachedHealth.stats.lastClaimTimestamp || 0,
                 lastClaimAmount: (cachedHealth.stats.lastClaimAmountLamports / LAMPORTS_PER_SOL).toFixed(4),
                 nextCheckTime: cachedHealth.stats.nextCheckTimestamp || (Date.now() + 5*60*1000),
@@ -192,11 +247,14 @@ function init(deps) {
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
                 // Pass dynamic conservation status to frontend
                 conservationStatus: globalState.conservationStatus || null,
-                // v12.0: Robinhood Bot stats
+                // v12.0: Robinhood Bot stats (v23.0: Added pending fees)
                 robinhood: {
                     activeTokens: cachedHealth.robinhoodTokenCount || 0,
                     totalFeesCollectedSol: cachedHealth.robinhoodTotalFees || 0,
-                    lifetimeFeesLamports: cachedHealth.stats.lifetimeRobinhoodFeesLamports || 0
+                    lifetimeFeesLamports: cachedHealth.stats.lifetimeRobinhoodFeesLamports || 0,
+                    pendingFeesLamports: cachedHealth.robinhoodPendingFees || 0,
+                    pendingFeesSol: ((cachedHealth.robinhoodPendingFees || 0) / LAMPORTS_PER_SOL).toFixed(4),
+                    pendingDetails: cachedHealth.robinhoodPendingDetails || []
                 }
             });
         } catch (e) {

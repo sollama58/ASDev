@@ -523,6 +523,391 @@
         .bg-orange-950 { background-color: var(--bg-card) !important; }
         .bg-orange-900 { background-color: var(--bg-hover) !important; }
         .bg-black\\/30 { background-color: var(--bg-primary) !important; }
+
+        /* ========== MOBILE RESPONSIVE STYLES ========== */
+
+        /* Base mobile adjustments */
+        @media (max-width: 768px) {
+            body {
+                padding: 8px;
+            }
+
+            #app-container {
+                border-radius: 12px;
+            }
+
+            .p-10 {
+                padding: 16px !important;
+            }
+
+            /* Header mobile layout */
+            .flex.justify-between.items-start.mb-6 {
+                flex-direction: column;
+                gap: 16px;
+            }
+
+            .flex.items-center.gap-6 {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .flex.flex-col.items-end {
+                width: 100%;
+                align-items: center !important;
+            }
+
+            /* Logo and title */
+            #logo-wrapper {
+                width: 48px;
+                height: 48px;
+                min-width: 48px;
+            }
+
+            h1.text-4xl, h1.text-5xl {
+                font-size: 1.75rem !important;
+            }
+
+            /* Tab navigation mobile */
+            .tab-container {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                -ms-overflow-style: none;
+                gap: 4px;
+                padding: 4px;
+            }
+
+            .tab-container::-webkit-scrollbar {
+                display: none;
+            }
+
+            .tab-btn {
+                padding: 10px 14px;
+                font-size: 12px;
+                white-space: nowrap;
+                flex: 0 0 auto;
+            }
+
+            .tab-btn i {
+                display: none;
+            }
+
+            /* Panel mobile */
+            .panel {
+                padding: 16px;
+                margin-bottom: 16px;
+                border-radius: 10px;
+            }
+
+            /* Airdrop panel mobile */
+            .flex.flex-col.md\\:flex-row.items-stretch {
+                flex-direction: column !important;
+            }
+
+            .text-center.w-full.md\\:w-1\\/4 {
+                width: 100% !important;
+                border-right: none !important;
+                border-bottom: 1px solid rgba(168, 85, 247, 0.3);
+                padding: 12px 0 !important;
+            }
+
+            .text-center.w-full.md\\:w-1\\/4:last-child {
+                border-bottom: none;
+            }
+
+            /* Points display mobile */
+            .text-5xl {
+                font-size: 2.5rem !important;
+            }
+
+            .text-3xl, .text-4xl {
+                font-size: 1.5rem !important;
+            }
+
+            /* Grid layouts mobile */
+            .grid.grid-cols-1.md\\:grid-cols-4,
+            .grid.grid-cols-1.lg\\:grid-cols-2 {
+                grid-template-columns: 1fr !important;
+            }
+
+            .grid.grid-cols-3 {
+                grid-template-columns: 1fr !important;
+                gap: 8px;
+            }
+
+            .grid.grid-cols-2.md\\:grid-cols-4 {
+                grid-template-columns: repeat(2, 1fr) !important;
+            }
+
+            /* Metric cards mobile */
+            .metric-card {
+                padding: 14px;
+            }
+
+            .metric-value {
+                font-size: 18px;
+            }
+
+            /* Leaderboard table mobile */
+            .leader-table {
+                font-size: 11px;
+            }
+
+            .leader-table th,
+            .leader-table td {
+                padding: 10px 6px;
+            }
+
+            .token-img-sm {
+                width: 28px;
+                height: 28px;
+                margin-right: 6px;
+            }
+
+            /* Hide some columns on mobile */
+            .leader-table th:nth-child(3),
+            .leader-table td:nth-child(3) {
+                display: none;
+            }
+
+            /* Wallet UI mobile */
+            #wallet-ui {
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 8px;
+                padding: 10px;
+            }
+
+            #wallet-addr {
+                font-size: 11px;
+                max-width: 100px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            #connect-btn {
+                width: 100%;
+                padding: 12px 16px;
+            }
+
+            /* KOTH panel mobile */
+            #koth-panel .flex.flex-col.md\\:flex-row {
+                flex-direction: column !important;
+                text-align: center;
+            }
+
+            #koth-panel .flex.items-center.gap-6 {
+                flex-direction: column;
+            }
+
+            /* Launcher grid mobile */
+            .grid.grid-cols-1.lg\\:grid-cols-3 {
+                grid-template-columns: 1fr !important;
+            }
+
+            .col-span-2 {
+                grid-column: span 1 !important;
+            }
+
+            /* Input fields mobile */
+            .input-field, .register-input {
+                padding: 12px 14px;
+                font-size: 14px;
+            }
+
+            /* Buttons mobile */
+            .btn-action, .btn-register {
+                padding: 14px 20px;
+                font-size: 14px;
+            }
+
+            /* Image preview mobile */
+            #image-preview {
+                width: 140px;
+                height: 140px;
+            }
+
+            /* Fee tracker grid mobile */
+            .grid.grid-cols-1.md\\:grid-cols-4 > div {
+                padding: 12px;
+            }
+
+            /* Airdrop links row mobile */
+            .flex.items-center.gap-4 {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+
+            /* Footer mobile */
+            .flex.justify-between.items-center.mt-10 {
+                flex-direction: column;
+                gap: 8px;
+                text-align: center;
+            }
+        }
+
+        /* Small mobile (< 480px) */
+        @media (max-width: 480px) {
+            body {
+                padding: 4px;
+            }
+
+            .p-10 {
+                padding: 12px !important;
+            }
+
+            h1.text-4xl, h1.text-5xl {
+                font-size: 1.5rem !important;
+            }
+
+            .text-5xl {
+                font-size: 2rem !important;
+            }
+
+            .text-3xl, .text-4xl {
+                font-size: 1.25rem !important;
+            }
+
+            .tab-btn {
+                padding: 8px 10px;
+                font-size: 11px;
+            }
+
+            .panel {
+                padding: 12px;
+            }
+
+            .metric-card {
+                padding: 10px;
+            }
+
+            .metric-value {
+                font-size: 16px;
+            }
+
+            .metric-label {
+                font-size: 9px;
+            }
+
+            /* Two column grid for fee tracker on very small screens */
+            .grid.grid-cols-2.md\\:grid-cols-4 {
+                grid-template-columns: repeat(2, 1fr) !important;
+            }
+
+            #image-preview {
+                width: 120px;
+                height: 120px;
+            }
+
+            /* Simplify airdrop panel header */
+            .flex.justify-between.items-center.border-b.border-purple-800\\/50 {
+                flex-direction: column;
+                gap: 8px;
+            }
+        }
+
+        /* Modal responsive styles */
+        @media (max-width: 768px) {
+            .modal-content {
+                margin: 2% auto;
+                padding: 16px;
+                width: 95%;
+                max-width: none !important;
+                border-radius: 12px;
+            }
+
+            .modal-content h3 {
+                font-size: 14px;
+            }
+
+            .max-h-\\[60vh\\], .max-h-\\[65vh\\], .max-h-\\[70vh\\] {
+                max-height: 70vh !important;
+            }
+
+            /* User holdings modal table */
+            #user-holdings-content table {
+                font-size: 11px;
+            }
+
+            #user-holdings-content th,
+            #user-holdings-content td {
+                padding: 8px 4px;
+            }
+        }
+
+        /* Touch-friendly improvements */
+        @media (pointer: coarse) {
+            .btn-wallet,
+            .btn-action,
+            .btn-register,
+            .tab-btn,
+            button {
+                min-height: 44px;
+            }
+
+            .close-btn {
+                font-size: 32px;
+                padding: 8px;
+            }
+
+            a, button {
+                -webkit-tap-highlight-color: rgba(245, 158, 11, 0.2);
+            }
+        }
+
+        /* Smooth scrolling for modals */
+        .modal-content {
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* Hide scrollbar on mobile but keep functionality */
+        .overflow-x-auto::-webkit-scrollbar,
+        .overflow-y-auto::-webkit-scrollbar {
+            height: 4px;
+            width: 4px;
+        }
+
+        .overflow-x-auto::-webkit-scrollbar-thumb,
+        .overflow-y-auto::-webkit-scrollbar-thumb {
+            background: var(--border-primary);
+            border-radius: 4px;
+        }
+
+        /* Landscape mobile fixes */
+        @media (max-height: 500px) and (orientation: landscape) {
+            .modal-content {
+                margin: 1% auto;
+                max-height: 95vh;
+            }
+
+            .max-h-\\[60vh\\], .max-h-\\[65vh\\], .max-h-\\[70vh\\] {
+                max-height: 60vh !important;
+            }
+        }
+
+        /* Prevent horizontal scroll */
+        html, body {
+            overflow-x: hidden;
+            max-width: 100vw;
+        }
+
+        /* Improved focus states for accessibility */
+        button:focus-visible,
+        input:focus-visible,
+        a:focus-visible {
+            outline: 2px solid var(--accent-orange);
+            outline-offset: 2px;
+        }
+
+        /* Animation performance optimization */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -530,17 +915,29 @@
 <div id="app-container">
     <div class="ticker-wrap"><div class="ticker" id="ticker-content"><span class="ticker-item text-orange-600">CONNECTING TO LAUNCH FEED...</span></div></div>
 
-    <div class="p-10">
-        <div class="flex justify-between items-start mb-6 border-b-4 border-orange-900 pb-8">
-            <div class="flex items-center gap-6">
+    <div class="p-4 md:p-10">
+        <!-- Header - Mobile Responsive -->
+        <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b-4 border-orange-900 pb-6 md:pb-8 gap-4">
+            <div class="flex items-center gap-4 md:gap-6">
                 <div id="logo-wrapper">
                     <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
                 </div>
-                <div><h1 class="text-4xl md:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1><p class="text-orange-400 text-sm font-mono uppercase tracking-widest mt-2">Pumpfun Airdrop Platform</p></div>
+                <div class="text-center md:text-left">
+                    <h1 class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1>
+                    <p class="text-orange-400 text-xs md:text-sm font-mono uppercase tracking-widest mt-1 md:mt-2">Pumpfun Airdrop Platform</p>
+                </div>
             </div>
-            <div class="flex flex-col items-end gap-3">
-                <div id="wallet-ui" class="hidden flex items-center gap-3 bg-orange-950 border border-orange-800 p-3 rounded-lg shadow-xl"><span class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span><span id="wallet-addr" class="font-mono text-sm text-orange-200"></span><span id="wallet-bal" class="font-mono text-sm text-white font-bold ml-2 bg-orange-900/50 px-3 py-1 rounded">0.00 SOL</span><button id="refresh-btn" class="ml-2 text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded"><i data-lucide="refresh-cw" width="16"></i></button><button id="disconnect-btn" class="ml-1 text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded"><i data-lucide="log-out" width="16"></i></button></div>
-                <button id="connect-btn" onclick="openWalletModal()" class="bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-8 py-3 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg hover:shadow-orange-900/40">Connect Wallet</button>
+            <div class="flex flex-col items-center md:items-end gap-3 w-full md:w-auto">
+                <div id="wallet-ui" class="hidden items-center gap-2 md:gap-3 bg-orange-950 border border-orange-800 p-2 md:p-3 rounded-lg shadow-xl flex-wrap justify-center">
+                    <span class="w-2 h-2 md:w-3 md:h-3 rounded-full bg-green-500 animate-pulse"></span>
+                    <span id="wallet-addr" class="font-mono text-xs md:text-sm text-orange-200 truncate max-w-[80px] md:max-w-[120px]"></span>
+                    <span id="wallet-bal" class="font-mono text-xs md:text-sm text-white font-bold bg-orange-900/50 px-2 md:px-3 py-1 rounded">0.00 SOL</span>
+                    <div class="flex gap-1">
+                        <button id="refresh-btn" class="text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded" aria-label="Refresh"><i data-lucide="refresh-cw" width="16"></i></button>
+                        <button id="disconnect-btn" class="text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded" aria-label="Disconnect"><i data-lucide="log-out" width="16"></i></button>
+                    </div>
+                </div>
+                <button id="connect-btn" onclick="openWalletModal()" class="w-full md:w-auto bg-orange-900/50 border-2 border-orange-700 text-orange-500 px-6 md:px-8 py-3 rounded-lg font-mono text-sm hover:bg-orange-900/80 transition uppercase tracking-wider font-bold shadow-lg hover:shadow-orange-900/40">Connect Wallet</button>
             </div>
         </div>
 
@@ -561,144 +958,165 @@
         <div id="tab-dashboard" class="tab-content active">
 
         <!-- Airdrop Panel - NOW PROMINENT AT TOP -->
-        <div class="panel bg-purple-950/30 border border-purple-800 mb-8">
-            <div class="flex justify-between items-center border-b border-purple-800/50 pb-2 mb-4">
-                <h3 class="text-purple-400 font-mono text-sm uppercase tracking-widest">🪂 AIRDROP STATUS & POINTS</h3>
-                <div class="flex items-center gap-4">
-                    <button onclick="toggleUserHoldingsModal()" class="text-yellow-400 hover:text-white transition font-mono text-xs underline p-1" title="View your token holdings and points breakdown">MY HOLDINGS</button>
-                    <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">ELIGIBLE USERS</button>
-                    <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">HISTORY</button>
+        <div class="panel bg-purple-950/30 border border-purple-800 mb-6 md:mb-8">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-purple-800/50 pb-3 mb-4 gap-2">
+                <h3 class="text-purple-400 font-mono text-xs sm:text-sm uppercase tracking-widest">🪂 AIRDROP STATUS & POINTS</h3>
+                <div class="flex items-center gap-2 sm:gap-4 flex-wrap">
+                    <button onclick="toggleUserHoldingsModal()" class="text-yellow-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1" title="View your token holdings and points breakdown">MY HOLDINGS</button>
+                    <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1">ELIGIBLE</button>
+                    <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1">HISTORY</button>
                 </div>
             </div>
-            <div class="flex flex-col md:flex-row items-stretch justify-between gap-6 px-4">
-                <div class="text-center w-full md:w-1/4 border-r border-purple-800/30 pr-4">
-                    <div class="text-xs text-purple-300 uppercase mb-2 tracking-widest">SOL Airdrop Pool</div>
-                    <div class="text-3xl md:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" id="airdrop-balance">0.00 <span class="text-lg align-top text-purple-400">SOL</span></div>
-                    <div class="text-xs text-gray-500 mt-1">Wallet: <span id="wallet-balance" class="text-gray-400">0.00</span> SOL</div>
+            <!-- Mobile: 2x2 grid, Desktop: 4 columns -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 px-0 md:px-4">
+                <!-- SOL Airdrop Pool -->
+                <div class="text-center p-3 md:p-4 bg-purple-900/10 rounded-lg md:bg-transparent md:border-r md:border-purple-800/30 md:rounded-none">
+                    <div class="text-[10px] md:text-xs text-purple-300 uppercase mb-1 md:mb-2 tracking-widest">SOL Airdrop Pool</div>
+                    <div class="text-xl sm:text-2xl md:text-3xl lg:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" id="airdrop-balance">0.00 <span class="text-xs md:text-lg align-top text-purple-400">SOL</span></div>
+                    <div class="text-[10px] text-gray-500 mt-1">Wallet: <span id="wallet-balance" class="text-gray-400">0.00</span> SOL</div>
                 </div>
 
-                <div class="text-center w-full md:w-1/4 flex flex-col justify-center gap-3 border-r border-purple-800/30 pr-4">
-                    <div class="flex justify-between items-center px-4">
-                        <span class="text-[10px] text-purple-300 uppercase tracking-widest">Holder Pts</span>
-                        <span class="text-lg text-yellow-400 font-bold font-mono" id="user-top-positions">0.00</span>
+                <!-- Points Breakdown -->
+                <div class="text-center p-3 md:p-4 bg-purple-900/10 rounded-lg md:bg-transparent md:border-r md:border-purple-800/30 md:rounded-none flex flex-col justify-center gap-2">
+                    <div class="flex justify-between items-center px-1 md:px-4">
+                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest">Holder</span>
+                        <span class="text-sm md:text-lg text-yellow-400 font-bold font-mono" id="user-top-positions">0.00</span>
                     </div>
-                    <div class="flex justify-between items-center px-4">
-                        <span class="text-[10px] text-blue-300 uppercase tracking-widest">Creator Bonus</span>
-                        <span class="text-lg text-blue-400 font-bold font-mono" id="user-created-positions">0.00</span>
+                    <div class="flex justify-between items-center px-1 md:px-4">
+                        <span class="text-[9px] md:text-[10px] text-green-300 uppercase tracking-widest">Robinhood</span>
+                        <span class="text-sm md:text-lg text-green-400 font-bold font-mono" id="user-robinhood-points">0.00</span>
                     </div>
-                    <div class="flex justify-between items-center px-4">
-                        <span class="text-[10px] text-purple-300 uppercase tracking-widest">ASDF Top 100</span>
-                        <span id="asdf-status" class="text-sm font-bold font-mono text-gray-500">CHECKING...</span>
+                    <div class="flex justify-between items-center px-1 md:px-4">
+                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest">ASDF 100</span>
+                        <span id="asdf-status" class="text-[10px] md:text-sm font-bold font-mono text-gray-500">CHECKING...</span>
                     </div>
                 </div>
 
-                <div class="text-center w-full md:w-1/4 flex flex-col justify-center items-center border-r border-purple-800/30 pr-4">
-                    <div class="flex justify-center items-center gap-2 mb-1">
-                        <div class="text-xs text-purple-300 uppercase tracking-widest">Total Points</div>
+                <!-- Total Points -->
+                <div class="text-center p-3 md:p-4 bg-purple-900/10 rounded-lg md:bg-transparent md:border-r md:border-purple-800/30 md:rounded-none flex flex-col justify-center items-center">
+                    <div class="flex justify-center items-center gap-1 md:gap-2 mb-1">
+                        <div class="text-[10px] md:text-xs text-purple-300 uppercase tracking-widest">Total Points</div>
                         <button onclick="toggleAirdropInfoModal()" class="p-0 text-purple-400 hover:text-white transition" title="View Update Information">
-                            <i data-lucide="info" width="14" height="14"></i>
+                            <i data-lucide="info" width="12" height="12"></i>
                         </button>
                     </div>
-                    <div class="text-5xl text-white font-bold font-mono drop-shadow-[0_0_15px_rgba(234,179,8,0.6)]" id="user-total-points">0</div>
-                    <div id="points-multiplier-badge" class="hidden mt-1 px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[10px] text-green-400 font-bold tracking-wider">2X MULTIPLIER ACTIVE</div>
+                    <div class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl text-white font-bold font-mono drop-shadow-[0_0_15px_rgba(234,179,8,0.6)]" id="user-total-points">0</div>
+                    <div id="points-multiplier-badge" class="hidden mt-1 px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[8px] md:text-[10px] text-green-400 font-bold tracking-wider">2X MULTIPLIER</div>
                 </div>
 
-                <div class="text-center w-full md:w-1/4 flex flex-col justify-center items-center bg-purple-900/20 rounded-lg py-2">
-                    <div class="text-[10px] text-purple-300 uppercase mb-1 tracking-widest">Expected Airdrop</div>
-                    <div class="text-2xl text-green-400 font-bold font-mono" id="expected-airdrop">0.0000</div>
-                    <div class="text-[10px] text-purple-400 font-mono mt-1">SOL (Est)</div>
+                <!-- Expected Airdrop -->
+                <div class="text-center p-3 md:p-4 bg-purple-900/20 rounded-lg flex flex-col justify-center items-center">
+                    <div class="text-[9px] md:text-[10px] text-purple-300 uppercase mb-1 tracking-widest">Expected Airdrop</div>
+                    <div class="text-lg sm:text-xl md:text-2xl text-green-400 font-bold font-mono" id="expected-airdrop">0.0000</div>
+                    <div class="text-[9px] md:text-[10px] text-purple-400 font-mono mt-1">SOL (Est)</div>
                 </div>
             </div>
         </div>
 
         <!-- KING OF THE PILL PANEL -->
-        <div id="koth-panel" class="panel koth-panel koth-glow mb-8 hidden">
-            <div class="flex flex-col md:flex-row items-center justify-between gap-6">
-                <div class="flex items-center gap-4">
-                    <div class="text-4xl">💊</div>
-                    <div>
-                        <h3 class="text-fuchsia-400 font-mono font-bold text-lg uppercase tracking-widest koth-title">KING OF THE PILL</h3>
-                        <p class="text-fuchsia-200/80 text-xs font-mono">HIGHEST MARKET CAP LAUNCH</p>
+        <div id="koth-panel" class="panel koth-panel koth-glow mb-6 md:mb-8 hidden">
+            <div class="flex flex-col md:flex-row items-center justify-between gap-4 md:gap-6">
+                <!-- Title -->
+                <div class="flex items-center gap-3 md:gap-4 w-full md:w-auto justify-center md:justify-start">
+                    <div class="text-2xl md:text-4xl">💊</div>
+                    <div class="text-center md:text-left">
+                        <h3 class="text-fuchsia-400 font-mono font-bold text-sm md:text-lg uppercase tracking-widest koth-title">KING OF THE PILL</h3>
+                        <p class="text-fuchsia-200/80 text-[10px] md:text-xs font-mono">HIGHEST MARKET CAP LAUNCH</p>
                     </div>
                 </div>
 
-                <div class="flex items-center gap-6 bg-black/40 p-3 rounded-lg border border-fuchsia-600/30 flex-1 justify-center">
-                    <img id="koth-img" src="" class="w-12 h-12 rounded border border-fuchsia-500 object-cover hidden">
+                <!-- Token Info -->
+                <div class="flex items-center gap-4 md:gap-6 bg-black/40 p-3 rounded-lg border border-fuchsia-600/30 w-full md:flex-1 justify-center">
+                    <img id="koth-img" src="" class="w-10 h-10 md:w-12 md:h-12 rounded border border-fuchsia-500 object-cover hidden">
                     <div class="text-center">
-                        <div id="koth-ticker" class="text-2xl font-bold text-white font-mono">$????</div>
-                        <div id="koth-name" class="text-xs text-fuchsia-500 font-mono uppercase">LOADING...</div>
-                        <div id="koth-holders" class="text-[10px] text-green-400 font-mono mt-1">HOLDERS GET 10% BONUS!</div>
+                        <div id="koth-ticker" class="text-xl md:text-2xl font-bold text-white font-mono">$????</div>
+                        <div id="koth-name" class="text-[10px] md:text-xs text-fuchsia-500 font-mono uppercase">LOADING...</div>
+                        <div id="koth-holders" class="text-[9px] md:text-[10px] text-green-400 font-mono mt-1">HOLDERS GET 10% BONUS!</div>
                     </div>
                 </div>
 
-                <div class="text-center">
-                    <div class="text-xs text-fuchsia-500 uppercase font-mono mb-1">MARKET CAP</div>
-                    <div id="koth-mcap" class="text-2xl font-bold text-white font-mono">$0</div>
-                </div>
-
-                <div class="text-right">
-                    <div class="text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">HOLDER BONUS</div>
-                    <div class="text-xl font-bold text-green-400 font-mono">10%</div>
-                    <div class="text-[10px] text-fuchsia-500 font-mono">TO ALL HOLDERS</div>
+                <!-- Stats Row (Mobile: inline, Desktop: separate) -->
+                <div class="flex justify-center gap-6 md:gap-4 w-full md:w-auto">
+                    <div class="text-center">
+                        <div class="text-[10px] md:text-xs text-fuchsia-500 uppercase font-mono mb-1">MARKET CAP</div>
+                        <div id="koth-mcap" class="text-lg md:text-2xl font-bold text-white font-mono">$0</div>
+                    </div>
+                    <div class="text-center md:text-right">
+                        <div class="text-[9px] md:text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">HOLDER BONUS</div>
+                        <div class="text-lg md:text-xl font-bold text-green-400 font-mono">10%</div>
+                        <div class="text-[9px] md:text-[10px] text-fuchsia-500 font-mono">TO ALL HOLDERS</div>
+                    </div>
                 </div>
             </div>
         </div>
 
         <!-- LEADERBOARD - v18.0: Now shows all tokens, eligibility based on $100 volume -->
-        <div class="panel bg-black/30 border border-orange-900 mb-8">
-            <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
-                <div class="flex items-center gap-4">
-                    <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">🔥 TOP 10 TOKENS (BY 24H VOL)</h3>
-                    <span id="leaderboard-last-updated" class="text-orange-600 text-xs font-mono">Syncing...</span>
+        <div class="panel bg-black/30 border border-orange-900 mb-6 md:mb-8">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-orange-900/50 pb-2 mb-4 gap-2">
+                <div class="flex flex-col sm:flex-row items-start sm:items-center gap-1 sm:gap-4">
+                    <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest">🔥 TOP TOKENS (24H VOL)</h3>
+                    <span id="leaderboard-last-updated" class="text-orange-600 text-[10px] sm:text-xs font-mono">Syncing...</span>
                 </div>
                 <div class="flex items-center gap-2">
-                    <button onclick="toggleAllLaunchesModal()" class="text-orange-400 hover:text-white transition p-1 rounded hover:bg-orange-800" title="Expand to All Launches">
+                    <button onclick="toggleAllLaunchesModal()" class="text-orange-400 hover:text-white transition p-1.5 rounded hover:bg-orange-800" title="Expand to All Launches" aria-label="View all launches">
                         <i data-lucide="maximize-2" width="16"></i>
                     </button>
-                    <button onclick="updateLeaderboard()" class="text-orange-400 hover:text-white transition p-1 rounded hover:bg-orange-800" title="Refresh Leaderboard">
+                    <button onclick="updateLeaderboard()" class="text-orange-400 hover:text-white transition p-1.5 rounded hover:bg-orange-800" title="Refresh Leaderboard" aria-label="Refresh">
                         <i data-lucide="refresh-cw" width="16"></i>
                     </button>
                 </div>
             </div>
-            <div class="overflow-x-auto">
-                <table class="leader-table">
-                    <thead><tr><th style="width: 50px;">#</th><th>Token</th><th class="text-right">MCAP</th><th class="text-right">Vol (24H)</th><th class="text-right">Action</th></tr></thead>
+            <div class="overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0">
+                <table class="leader-table min-w-[400px] md:min-w-0">
+                    <thead>
+                        <tr>
+                            <th class="w-8 md:w-12">#</th>
+                            <th>Token</th>
+                            <th class="text-right hidden sm:table-cell">MCAP</th>
+                            <th class="text-right">Vol (24H)</th>
+                            <th class="text-right w-16 md:w-auto">Action</th>
+                        </tr>
+                    </thead>
                     <tbody id="leaderboard-body"><tr><td colspan="5" class="text-center text-orange-400 py-4">Scanning Chain Data...</td></tr></tbody>
                 </table>
             </div>
         </div>
 
         <!-- Fee Tracker -->
-        <div class="panel bg-orange-950/30 border border-orange-900 mb-8">
-            <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
-                <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">BUYBACK & FEE TRACKER</h3>
-                <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-xs underline p-1">VIEW LOGS</button>
+        <div class="panel bg-orange-950/30 border border-orange-900 mb-6 md:mb-8">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-orange-900/50 pb-2 mb-4 gap-2">
+                <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest">BUYBACK & FEE TRACKER</h3>
+                <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1">VIEW LOGS</button>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
-                <div class="bg-black/30 p-4 rounded border border-orange-900/50">
-                    <div class="text-xs text-orange-400 uppercase">Current Fee Balance</div>
-                    <div class="text-xl text-white font-bold font-mono mt-1"><span id="track-balance">0.0000</span> SOL</div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 text-center">
+                <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Pending Fees</div>
+                    <div class="text-base md:text-xl text-white font-bold font-mono mt-1"><span id="track-balance">0.0000</span> SOL</div>
+                    <div class="text-[9px] md:text-[10px] text-gray-500 mt-1 hidden sm:block">
+                        <span class="text-orange-400">P:</span> <span id="track-platform-fees">0.0000</span> |
+                        <span class="text-green-400">R:</span> <span id="track-robinhood-fees">0.0000</span>
+                    </div>
                 </div>
-                <div class="bg-black/30 p-4 rounded border border-orange-900/50">
-                    <div class="text-xs text-orange-400 uppercase">Last Claim Amount</div>
-                    <div class="text-xl text-green-400 font-bold font-mono mt-1"><span id="track-last-amt">0.0000</span> SOL</div>
+                <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Last Claim</div>
+                    <div class="text-base md:text-xl text-green-400 font-bold font-mono mt-1"><span id="track-last-amt">0.0000</span> SOL</div>
                 </div>
-                <div class="bg-black/30 p-4 rounded border border-orange-900/50">
-                    <div class="text-xs text-orange-400 uppercase">Last Claim Time</div>
-                    <div class="text-sm text-white font-mono mt-2" id="track-last-time">Never</div>
+                <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Claim Time</div>
+                    <div class="text-xs md:text-sm text-white font-mono mt-2" id="track-last-time">Never</div>
                 </div>
-                <div class="bg-black/30 p-4 rounded border border-orange-900/50">
-                    <div class="text-xs text-orange-400 uppercase">Next Check In</div>
-                    <div class="text-xl text-yellow-400 font-bold font-mono mt-1" id="track-next-check">--:--</div>
+                <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Next Check</div>
+                    <div class="text-base md:text-xl text-yellow-400 font-bold font-mono mt-1" id="track-next-check">--:--</div>
                 </div>
 
                 <!-- Dynamic Conservation Notice -->
-                <div id="conservation-notice" class="conservation-notice col-span-1 md:col-span-4">
+                <div id="conservation-notice" class="conservation-notice col-span-2 md:col-span-4">
                     <div class="flex items-center justify-center gap-2 mb-1">
-                        <i data-lucide="shield-alert" class="text-blue-400" width="16"></i>
-                        <span class="text-blue-300 font-bold uppercase">Conserving SOL for Airdrop</span>
+                        <i data-lucide="shield-alert" class="text-blue-400" width="14"></i>
+                        <span class="text-blue-300 font-bold uppercase text-[10px] md:text-xs">Conserving SOL for Airdrop</span>
                     </div>
-                    <div class="text-blue-200 text-xs">
+                    <div class="text-blue-200 text-[10px] md:text-xs text-center">
                         Targeting <span id="cons-users" class="font-bold text-white">0</span> users.
                         Need <span id="cons-need" class="font-bold text-white">0.0000</span> SOL (Have <span id="cons-have" class="text-gray-400">0.0000</span>).
                         <span id="cons-missing" class="text-yellow-400 ml-1"></span>
@@ -708,43 +1126,47 @@
         </div>
 
         <!-- Platform Metrics & Robinhood -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-8">
             <!-- Platform Metrics -->
             <div class="panel bg-orange-900/10">
-                <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-6">PLATFORM METRICS</h3>
-                <div class="grid grid-cols-3 gap-4">
+                <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-4 md:mb-6">PLATFORM METRICS</h3>
+                <div class="grid grid-cols-3 gap-2 md:gap-4">
                     <div class="metric-card"><div class="metric-label">Launches</div><div id="metric-launches" class="metric-value">0</div></div>
-                    <div class="metric-card"><div class="metric-label">SOL Airdropped</div><div id="metric-pump" class="metric-value">0.00</div></div>
-                    <div class="metric-card"><div class="metric-label">Daily Volume</div><div id="metric-fees" class="metric-value">$0.00</div></div>
+                    <div class="metric-card"><div class="metric-label">Airdropped</div><div id="metric-pump" class="metric-value">0.00</div></div>
+                    <div class="metric-card"><div class="metric-label">Daily Vol</div><div id="metric-fees" class="metric-value">$0.00</div></div>
                 </div>
                 <div class="text-center mt-4">
-                    <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-xs border border-orange-700 hover:bg-orange-800 px-4 py-2 rounded transition">ℹ️ FEE MECHANICS</button>
+                    <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-[10px] md:text-xs border border-orange-700 hover:bg-orange-800 px-3 md:px-4 py-2 rounded transition">FEE MECHANICS</button>
                 </div>
             </div>
 
             <!-- Robinhood Section -->
             <div class="panel bg-green-900/10" id="robinhood-section">
-                <h3 class="text-green-400 font-mono text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-6 flex items-center gap-2">
-                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
-                    ROBINHOOD PARTNERSHIPS
+                <h3 class="text-green-400 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-4 md:mb-6 flex items-center gap-2">
+                    <svg class="w-3 h-3 md:w-4 md:h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                    ROBINHOOD PARTNERS
                 </h3>
-                <div class="grid grid-cols-3 gap-4">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
                     <div class="metric-card" style="border-color: #22c55e;">
                         <div class="metric-label" style="color: #86efac;">Partners</div>
                         <div id="robinhood-token-count" class="metric-value" style="color: #4ade80;">0</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Fees</div>
-                        <div id="robinhood-fees" class="metric-value" style="color: #4ade80;">0.00</div>
+                        <div class="metric-label" style="color: #86efac;">Pending</div>
+                        <div id="robinhood-pending-fees" class="metric-value text-sm md:text-lg" style="color: #4ade80;">0.00</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Your Holdings</div>
+                        <div class="metric-label" style="color: #86efac;">Collected</div>
+                        <div id="robinhood-fees" class="metric-value text-sm md:text-lg" style="color: #4ade80;">0.00</div>
+                    </div>
+                    <div class="metric-card" style="border-color: #22c55e;">
+                        <div class="metric-label" style="color: #86efac;">Holdings</div>
                         <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80;">-</div>
                     </div>
                 </div>
-                <div class="text-center mt-4 flex justify-center gap-2">
-                    <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-xs border border-green-700 hover:bg-green-800 px-3 py-2 rounded transition">🤝 PARTNERS</button>
-                    <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-xs border border-green-700 hover:bg-green-800 px-3 py-2 rounded transition">ℹ️ INFO</button>
+                <div class="text-center mt-4 flex justify-center gap-2 flex-wrap">
+                    <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">PARTNERS</button>
+                    <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">INFO</button>
                 </div>
             </div>
         </div>
@@ -754,10 +1176,10 @@
         <!-- TAB: LAUNCHER -->
         <div id="tab-launcher" class="tab-content">
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
-            <div class="panel col-span-1 flex flex-col items-center justify-start h-full">
-                <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest w-full text-center border-b-2 border-orange-900/50 pb-3">Token Preview</h3>
-                <div class="text-center mb-4 min-h-[60px]"><h2 id="preview-name" class="text-2xl font-bold text-white break-words">Token Name</h2><p id="preview-ticker" class="text-orange-400 font-mono text-lg uppercase">$TICKER</p></div>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-10">
+            <div class="panel col-span-1 flex flex-col items-center justify-start h-full order-first lg:order-none">
+                <h3 class="text-orange-500 font-mono text-xs sm:text-sm mb-4 md:mb-6 uppercase tracking-widest w-full text-center border-b-2 border-orange-900/50 pb-3">Token Preview</h3>
+                <div class="text-center mb-4 min-h-[40px] md:min-h-[60px]"><h2 id="preview-name" class="text-xl md:text-2xl font-bold text-white break-words">Token Name</h2><p id="preview-ticker" class="text-orange-400 font-mono text-base md:text-lg uppercase">$TICKER</p></div>
                 
                 <!-- DRAG AND DROP ZONE -->
                 <div id="image-preview" class="mb-6 shadow-2xl shadow-orange-900/30 transition-all duration-300" onclick="document.getElementById('image-file').click()">
@@ -905,9 +1327,9 @@
 
         </div><!-- END TAB: REGISTER -->
 
-        <div class="flex justify-between items-center mt-10 text-xs font-mono border-t border-orange-900 pt-6 opacity-70">
-            <div><span class="text-orange-600">RPC UPLINK: MAINNET PUBLIC</span></div>
-            <div class="flex gap-4"><span>SYSTEM STATUS: <span id="sys-status" class="sys-status" onclick="toggleStatusModal()">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
+        <div class="flex flex-col sm:flex-row justify-between items-center mt-6 md:mt-10 text-[10px] md:text-xs font-mono border-t border-orange-900 pt-4 md:pt-6 opacity-70 gap-2">
+            <div><span class="text-orange-600">RPC: MAINNET PUBLIC</span></div>
+            <div class="flex gap-2 md:gap-4 flex-wrap justify-center"><span>STATUS: <span id="sys-status" class="sys-status" onclick="toggleStatusModal()">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
         </div>
     </div>
 </div>
@@ -994,13 +1416,12 @@
             <ul class="list-disc list-inside ml-4 space-y-2 text-purple-300">
                 <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400 font-bold">250 holders</span> of tokens with <span class="text-green-400 font-bold">>$100 24hr volume</span> earn points.</li>
                 <li><span class="text-white">Base Points:</span> Each eligible token distributes <span class="text-yellow-400">1000 points</span> proportionally based on your balance vs total holdings.</li>
-                <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">2x Points</span> on tokens you created (if you're also a top holder).</li>
                 <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400 font-bold">+Points</span> for holding partner tokens (scaled by fee share %).</li>
                 <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you're a Top 100 $ASDF holder.</li>
             </ul>
             <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mt-4">
                 <p class="text-yellow-400 font-bold text-xs uppercase mb-1">📊 EXAMPLE</p>
-                <p class="text-xs text-gray-300">If you hold 10% of a token's top 250 supply, you get 100 points from that token. If you created it, that's 200 points!</p>
+                <p class="text-xs text-gray-300">If you hold 10% of a token's top 250 supply, you get 100 points from that token. With the ASDF multiplier, that becomes 200 points!</p>
             </div>
             <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
                 <p class="text-fuchsia-400 font-bold text-xs uppercase mb-1">💊 KING OF THE PILL (KOTH)</p>
@@ -1036,7 +1457,7 @@
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
                     <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400 font-bold">250 holders</span> of tokens with <span class="text-green-400 font-bold">>$100 24hr volume</span>.</li>
                     <li><span class="text-white">Base Points:</span> Each eligible token distributes <span class="text-yellow-400">1000 points</span> proportionally to holdings.</li>
-                    <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">2x Points</span> on tokens you created.</li>
+                    <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400 font-bold">+Points</span> for holding partner tokens (scaled by fee share %).</li>
                     <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 100 Holder of **$ASDF**.</li>
                 </ul>
                 <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
@@ -1229,8 +1650,8 @@
         trackBalance: document.getElementById('track-balance'), trackLastAmt: document.getElementById('track-last-amt'), trackLastTime: document.getElementById('track-last-time'), trackNextCheck: document.getElementById('track-next-check'),
         leaderboardLastUpdated: document.getElementById('leaderboard-last-updated'),
         airdropBalance: document.getElementById('airdrop-balance'),
-        userTopPositions: document.getElementById('user-top-positions'), 
-        userCreatedPositions: document.getElementById('user-created-positions'),
+        userTopPositions: document.getElementById('user-top-positions'),
+        userRobinhoodPoints: document.getElementById('user-robinhood-points'),
         asdfStatus: document.getElementById('asdf-status'),
         userTotalPoints: document.getElementById('user-total-points'), pointsMultiplierBadge: document.getElementById('points-multiplier-badge'),
         expectedAirdrop: document.getElementById('expected-airdrop'),
@@ -1460,7 +1881,7 @@
             ui.asdfStatus.innerText = "NOT CONNECTED";
             ui.asdfStatus.className = "text-sm font-bold font-mono text-gray-500";
             ui.userTopPositions.innerText = "0.00";
-            ui.userCreatedPositions.innerText = "0.00";
+            ui.userRobinhoodPoints.innerText = "0.00";
             ui.userTotalPoints.innerText = "0.00";
             ui.pointsMultiplierBadge.classList.add('hidden');
             currentUserPoints = 0;
@@ -1474,9 +1895,8 @@
             const data = await res.json();
 
             // v14.0: Display proportional points (basePoints + robinhoodPoints)
-            const holderPts = (data.basePoints || 0) + (data.robinhoodPoints || 0);
-            ui.userTopPositions.innerText = holderPts.toFixed(2);
-            ui.userCreatedPositions.innerText = (data.creatorBonus || 0).toFixed(2);
+            ui.userTopPositions.innerText = (data.basePoints || 0).toFixed(2);
+            ui.userRobinhoodPoints.innerText = (data.robinhoodPoints || 0).toFixed(2);
 
             if (data.isAsdfTop50) {
                 ui.asdfStatus.innerText = "YES (QUALIFIED)";
@@ -1587,8 +2007,15 @@
                 } else if (data.totalPumpTokensBought) {
                     ui.metricPump.innerText = data.totalPumpTokensBought;
                 }
-                allLogs = data.recentLogs; 
+                allLogs = data.recentLogs;
+                // v23.0: Display combined pending fees with breakdown
                 if (data.currentFeeBalance) ui.trackBalance.innerText = data.currentFeeBalance;
+                if (data.platformPendingFees) {
+                    document.getElementById('track-platform-fees').innerText = data.platformPendingFees;
+                }
+                if (data.robinhoodPendingFees) {
+                    document.getElementById('track-robinhood-fees').innerText = data.robinhoodPendingFees;
+                }
                 if (data.lastClaimAmount) ui.trackLastAmt.innerText = data.lastClaimAmount;
                 if (data.lastClaimTime && data.lastClaimTime > 0) {
                     ui.trackLastTime.innerText = new Date(data.lastClaimTime).toLocaleString();
@@ -1628,10 +2055,11 @@
                     ui.consNotice.classList.remove('conservation-active');
                 }
 
-                // v12.0: Update Robinhood stats from health response
+                // v12.0: Update Robinhood stats from health response (v23.0: Added pending fees)
                 if (data.robinhood) {
                     document.getElementById('robinhood-token-count').textContent = data.robinhood.activeTokens || 0;
                     document.getElementById('robinhood-fees').textContent = `${(data.robinhood.totalFeesCollectedSol || 0).toFixed(2)} SOL`;
+                    document.getElementById('robinhood-pending-fees').textContent = `${data.robinhood.pendingFeesSol || '0.00'} SOL`;
                 }
             } else { 
                 status = 'OFFLINE';
@@ -2016,7 +2444,7 @@
                     : '';
 
                 const pointsDisplay = h.isEligible
-                    ? `<span class="text-yellow-400 font-bold">${h.basePoints.toFixed(2)}</span>${h.creatorBonus > 0 ? `<span class="text-blue-400 text-[10px] ml-1">+${h.creatorBonus.toFixed(2)}</span>` : ''}`
+                    ? `<span class="text-yellow-400 font-bold">${h.basePoints.toFixed(2)}</span>`
                     : '<span class="text-gray-500">0</span>';
 
                 html += `

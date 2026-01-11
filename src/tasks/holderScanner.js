@@ -16,7 +16,6 @@ const { logger } = require('../services');
 
 // Constants for point calculation
 const TOP_HOLDERS_LIMIT = 250; // Track top 250 holders per eligible token
-const CREATOR_BONUS_MULTIPLIER = 2; // Creators get 2x points on their created tokens
 const SAFETY_RESERVE_SOL = 0.5; // Reserve 0.5 SOL for operations
 const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // v18.0: Minimum 24hr volume for eligibility
 
@@ -27,12 +26,13 @@ const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // v18.0: Minimum 2
  * - Track top 250 holders of each eligible token
  * - Points are proportional to holdings (balance / total supply held by top 250)
  * - Each token contributes 1000 base points distributed proportionally among holders
- * - Creator bonus: 2x points for tokens they created
  * - ASDF multiplier: 2x total points if top 100 ASDF holder
  * - KOTH: 10% of airdrop reserved for king token holders (unchanged)
  *
  * v18.0 - Eligibility now based on volume threshold:
  * - All tokens with >$100 24hr volume are eligible (no limit)
+ *
+ * v23.0 - Removed creator bonus (no longer 2x for creators)
  * - Includes both tokens table and robinhood_tokens table
  */
 async function updateGlobalState(deps) {
@@ -158,8 +158,9 @@ async function updateGlobalState(deps) {
 
         // v14.0: Calculate global points with proportional holdings
         // Each token distributes 1000 base points proportionally among its top 250 holders
+        // v23.0: Removed creator bonus - all holders earn same points proportionally
         const POINTS_PER_TOKEN = 1000;
-        let rawPointsMap = new Map(); // pubkey -> { basePoints, creatorBonus, robinhoodPoints }
+        let rawPointsMap = new Map(); // pubkey -> { basePoints, robinhoodPoints }
         let tempTotalPoints = 0;
 
         if (eligibleMints.length > 0) {
@@ -192,20 +193,12 @@ async function updateGlobalState(deps) {
                     // points = (holderBalance / totalBalance) * POINTS_PER_TOKEN
                     const proportionalPoints = Number((holderBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
 
-                    // Check if this holder is the creator (gets 2x bonus)
-                    const isCreator = holder.holderPubkey === token.userPubkey;
-                    const pointsWithBonus = isCreator ? proportionalPoints * CREATOR_BONUS_MULTIPLIER : proportionalPoints;
-
                     // Accumulate points
                     const entry = rawPointsMap.get(holder.holderPubkey) || {
                         basePoints: 0,
-                        creatorBonus: 0,
                         robinhoodPoints: 0
                     };
 
-                    if (isCreator) {
-                        entry.creatorBonus += pointsWithBonus - proportionalPoints; // Track the bonus separately
-                    }
                     entry.basePoints += proportionalPoints;
                     rawPointsMap.set(holder.holderPubkey, entry);
                 }
@@ -263,7 +256,6 @@ async function updateGlobalState(deps) {
 
                         const entry = rawPointsMap.get(holder.holderPubkey) || {
                             basePoints: 0,
-                            creatorBonus: 0,
                             robinhoodPoints: 0
                         };
                         entry.robinhoodPoints += scaledPoints;
@@ -284,8 +276,8 @@ async function updateGlobalState(deps) {
             // CHECK ASDF MULTIPLIER (Top 100)
             const isAsdfTop100 = globalState.asdfTop50Holders.has(pubkey);
 
-            // Total base points from all sources
-            const basePoints = data.basePoints + data.creatorBonus + data.robinhoodPoints;
+            // Total base points from all sources (v23.0: removed creatorBonus)
+            const basePoints = data.basePoints + data.robinhoodPoints;
             const totalPoints = basePoints * (isAsdfTop100 ? 2 : 1);
 
             if (totalPoints > 0) {
@@ -331,7 +323,7 @@ async function updateGlobalState(deps) {
             if (pubkey === devKeypair.publicKey.toString()) continue;
 
             const isAsdfTop100 = globalState.asdfTop50Holders.has(pubkey);
-            const basePoints = data.basePoints + data.creatorBonus + data.robinhoodPoints;
+            const basePoints = data.basePoints + data.robinhoodPoints;
             const points = basePoints * (isAsdfTop100 ? 2 : 1);
 
             if (points > 0) {
