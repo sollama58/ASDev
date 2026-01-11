@@ -162,6 +162,77 @@ async function fetchDexScreenerMetadata(mint) {
 }
 
 /**
+ * Fetch token metadata from GeckoTerminal API
+ * Free API with 30 requests/minute rate limit
+ * Good for images when DexScreener doesn't have them
+ */
+async function fetchGeckoTerminalMetadata(mint) {
+    try {
+        // GeckoTerminal uses "solana" as the network identifier
+        const response = await axios.get(
+            `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}`,
+            {
+                timeout: 5000,
+                headers: {
+                    'Accept': 'application/json'
+                }
+            }
+        );
+
+        const tokenData = response.data?.data?.attributes;
+        if (tokenData) {
+            return {
+                name: tokenData.name || null,
+                ticker: tokenData.symbol || null,
+                image: tokenData.image_url || null,
+                marketCap: parseFloat(tokenData.fdv_usd) || 0,
+                volume24h: parseFloat(tokenData.volume_usd?.h24) || 0,
+                priceUsd: parseFloat(tokenData.price_usd) || 0
+            };
+        }
+    } catch (e) {
+        // Silent fail - GeckoTerminal may not have all tokens
+        logger.debug(`[GeckoTerminal] Failed to fetch ${mint?.slice(0, 8)}...`, { error: e.message });
+    }
+    return null;
+}
+
+/**
+ * Fetch token info (including image) from GeckoTerminal's /info endpoint
+ * This endpoint specifically returns token metadata like images, descriptions, and socials
+ */
+async function fetchGeckoTerminalTokenInfo(mint) {
+    try {
+        const response = await axios.get(
+            `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/info`,
+            {
+                timeout: 5000,
+                headers: {
+                    'Accept': 'application/json'
+                }
+            }
+        );
+
+        const tokenData = response.data?.data?.attributes;
+        if (tokenData) {
+            return {
+                name: tokenData.name || null,
+                ticker: tokenData.symbol || null,
+                image: tokenData.image_url || null,
+                description: tokenData.description || null,
+                websites: tokenData.websites || [],
+                twitter: tokenData.twitter_handle || null,
+                telegram: tokenData.telegram_handle || null,
+                discord: tokenData.discord_url || null
+            };
+        }
+    } catch (e) {
+        // Silent fail
+    }
+    return null;
+}
+
+/**
  * Re-verify fee share status for all active Robinhood tokens
  * This catches cases where fee sharing config has been updated on-chain
  */
@@ -247,7 +318,8 @@ async function fetchPumpFunMetadata(mint) {
 
 /**
  * Update metadata for Robinhood tokens (ticker, name, market data)
- * Fetches from multiple sources: DexScreener -> Helius -> Pump.fun API
+ * Fetches from multiple sources with fallback chain:
+ * DexScreener -> GeckoTerminal -> Helius -> Pump.fun API
  */
 async function updateRobinhoodTokenMetadata(deps) {
     const { db } = deps;
@@ -258,16 +330,33 @@ async function updateRobinhoodTokenMetadata(deps) {
         for (const token of tokens) {
             try {
                 // Fetch updated metadata from multiple sources
-                // Priority: DexScreener (market data) > Helius (on-chain) > Pump.fun API
+                // Priority: DexScreener (market data) > GeckoTerminal > Helius (on-chain) > Pump.fun API
                 const dexMeta = await fetchDexScreenerMetadata(token.mint);
 
                 // If token is missing metadata (image/name/ticker), try other sources
                 // Note: Check for both null/undefined AND empty string for image
                 const needsMetadata = !token.image || token.image === '' || token.ticker === 'UNKNOWN' || token.name === 'Unknown Token';
+                const needsImage = !token.image || token.image === '' || !dexMeta?.image;
+
+                let geckoMeta = null;
                 let heliusMeta = null;
                 let pumpMeta = null;
 
-                if (needsMetadata) {
+                // Try GeckoTerminal if we need an image or DexScreener failed
+                if (needsImage) {
+                    geckoMeta = await fetchGeckoTerminalMetadata(token.mint);
+                    // If GeckoTerminal doesn't have the image, try the /info endpoint
+                    if (!geckoMeta?.image) {
+                        const geckoInfo = await fetchGeckoTerminalTokenInfo(token.mint);
+                        if (geckoInfo?.image) {
+                            geckoMeta = geckoMeta || {};
+                            geckoMeta.image = geckoInfo.image;
+                        }
+                    }
+                }
+
+                // Try Helius and Pump.fun if we still need metadata
+                if (needsMetadata && !geckoMeta?.image) {
                     heliusMeta = await fetchHeliusMetadata(token.mint);
                     if (!heliusMeta?.image) {
                         pumpMeta = await fetchPumpFunMetadata(token.mint);
@@ -278,11 +367,11 @@ async function updateRobinhoodTokenMetadata(deps) {
                 // For market data: prefer DexScreener (most accurate for trading)
                 // For metadata (name/ticker/image): use first non-null source
                 const updates = {
-                    volume24h: dexMeta?.volume24h || token.volume24h || 0,
-                    marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || heliusMeta?.marketCap || token.marketCap || 0,
-                    ticker: dexMeta?.ticker || heliusMeta?.ticker || pumpMeta?.ticker || token.ticker || 'UNKNOWN',
-                    name: dexMeta?.name || heliusMeta?.name || pumpMeta?.name || token.name || 'Unknown Token',
-                    image: dexMeta?.image || heliusMeta?.image || pumpMeta?.image || token.image || null
+                    volume24h: dexMeta?.volume24h || geckoMeta?.volume24h || token.volume24h || 0,
+                    marketCap: dexMeta?.marketCap || geckoMeta?.marketCap || pumpMeta?.marketCap || heliusMeta?.marketCap || token.marketCap || 0,
+                    ticker: dexMeta?.ticker || geckoMeta?.ticker || heliusMeta?.ticker || pumpMeta?.ticker || token.ticker || 'UNKNOWN',
+                    name: dexMeta?.name || geckoMeta?.name || heliusMeta?.name || pumpMeta?.name || token.name || 'Unknown Token',
+                    image: dexMeta?.image || geckoMeta?.image || heliusMeta?.image || pumpMeta?.image || token.image || null
                 };
 
                 // Only update if we have meaningful changes
@@ -301,12 +390,16 @@ async function updateRobinhoodTokenMetadata(deps) {
                     );
 
                     if (updates.image && !token.image) {
-                        logger.info(`[Robinhood] Updated image for ${token.ticker || token.mint.slice(0, 8)} from ${pumpMeta ? 'pump.fun' : (heliusMeta ? 'Helius' : 'DexScreener')}`);
+                        const source = dexMeta?.image ? 'DexScreener' :
+                                      geckoMeta?.image ? 'GeckoTerminal' :
+                                      heliusMeta?.image ? 'Helius' :
+                                      pumpMeta?.image ? 'Pump.fun' : 'unknown';
+                        logger.info(`[Robinhood] Updated image for ${token.ticker || token.mint.slice(0, 8)} from ${source}`);
                     }
                 }
 
-                // Rate limit API calls
-                await new Promise(r => setTimeout(r, 300));
+                // Rate limit API calls (slightly increased due to more API calls)
+                await new Promise(r => setTimeout(r, 350));
 
             } catch (e) {
                 logger.debug(`[Robinhood] Failed to update metadata for ${token.mint}`, { error: e.message });
@@ -570,5 +663,7 @@ module.exports = {
     findOurShare,
     fetchHeliusMetadata,
     fetchDexScreenerMetadata,
+    fetchGeckoTerminalMetadata,
+    fetchGeckoTerminalTokenInfo,
     fetchPumpFunMetadata,
 };

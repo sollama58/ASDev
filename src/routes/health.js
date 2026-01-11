@@ -435,6 +435,157 @@ function init(deps) {
         }
     });
 
+    // ===== ADMIN ACTION ENDPOINTS =====
+    // These endpoints allow triggering background tasks manually from the admin panel
+
+    /**
+     * POST /admin/trigger-metadata-update
+     * Force an immediate metadata update cycle for all tokens
+     */
+    router.post('/admin/trigger-metadata-update', adminAuth, async (req, res) => {
+        try {
+            const metadataUpdater = require('../tasks/metadataUpdater');
+
+            logger.info('[Admin] Triggering manual metadata update...');
+
+            // Run the update (async, don't wait for completion)
+            metadataUpdater.updateMetadata(deps).then(() => {
+                logger.info('[Admin] Manual metadata update completed');
+            }).catch(e => {
+                logger.error('[Admin] Manual metadata update failed', { error: e.message });
+            });
+
+            res.json({
+                success: true,
+                message: 'Metadata update triggered. Check logs for progress.'
+            });
+        } catch (e) {
+            logger.error('[Admin] Trigger metadata update error', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    /**
+     * POST /admin/trigger-holder-scan
+     * Force an immediate holder scan and points recalculation
+     */
+    router.post('/admin/trigger-holder-scan', adminAuth, async (req, res) => {
+        try {
+            const holderScanner = require('../tasks/holderScanner');
+
+            logger.info('[Admin] Triggering manual holder scan...');
+
+            // Run the update (async, don't wait for completion)
+            holderScanner.updateGlobalState(deps).then(() => {
+                logger.info('[Admin] Manual holder scan completed');
+            }).catch(e => {
+                logger.error('[Admin] Manual holder scan failed', { error: e.message });
+            });
+
+            res.json({
+                success: true,
+                message: 'Holder scan triggered. Check logs for progress.'
+            });
+        } catch (e) {
+            logger.error('[Admin] Trigger holder scan error', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    /**
+     * POST /admin/trigger-fee-claim
+     * Force an immediate fee collection from creator vaults and Robinhood tokens
+     */
+    router.post('/admin/trigger-fee-claim', adminAuth, async (req, res) => {
+        try {
+            const flywheel = require('../tasks/flywheel');
+
+            logger.info('[Admin] Triggering manual fee claim...');
+
+            // Run the fee collection (async, don't wait for completion)
+            flywheel.runFeeCollection(deps).then(() => {
+                logger.info('[Admin] Manual fee claim completed');
+            }).catch(e => {
+                logger.error('[Admin] Manual fee claim failed', { error: e.message });
+            });
+
+            res.json({
+                success: true,
+                message: 'Fee claim triggered. Check logs for progress.'
+            });
+        } catch (e) {
+            logger.error('[Admin] Trigger fee claim error', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    /**
+     * POST /admin/trigger-airdrop
+     * Force an immediate SOL airdrop distribution (if balance threshold is met)
+     */
+    router.post('/admin/trigger-airdrop', adminAuth, async (req, res) => {
+        try {
+            const flywheel = require('../tasks/flywheel');
+
+            // Check current balance first
+            const currentBalance = await connection.getBalance(devKeypair.publicKey);
+            const SAFETY_RESERVE = 0.5 * LAMPORTS_PER_SOL;
+            const MIN_AIRDROP_POOL = (config.AIRDROP_THRESHOLD_SOL || 1.0) * LAMPORTS_PER_SOL;
+            const availableForAirdrop = currentBalance - SAFETY_RESERVE;
+
+            if (availableForAirdrop < MIN_AIRDROP_POOL) {
+                return res.json({
+                    success: false,
+                    message: `Insufficient balance for airdrop. Available: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL, Required: ${config.AIRDROP_THRESHOLD_SOL || 1.0} SOL`
+                });
+            }
+
+            logger.info('[Admin] Triggering manual airdrop...');
+
+            // Run the airdrop (async, don't wait for completion)
+            flywheel.processAirdrop(deps).then(() => {
+                logger.info('[Admin] Manual airdrop completed');
+            }).catch(e => {
+                logger.error('[Admin] Manual airdrop failed', { error: e.message });
+            });
+
+            res.json({
+                success: true,
+                message: `Airdrop triggered with ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available. Check logs for progress.`
+            });
+        } catch (e) {
+            logger.error('[Admin] Trigger airdrop error', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    /**
+     * POST /admin/trigger-robinhood-scan
+     * Force an immediate Robinhood token scan and verification
+     */
+    router.post('/admin/trigger-robinhood-scan', adminAuth, async (req, res) => {
+        try {
+            const robinhoodScanner = require('../tasks/robinhoodScanner');
+
+            logger.info('[Admin] Triggering manual Robinhood scan...');
+
+            // Run the scan (async, don't wait for completion)
+            robinhoodScanner.reverifyRobinhoodTokens(deps).then(() => {
+                logger.info('[Admin] Manual Robinhood scan completed');
+            }).catch(e => {
+                logger.error('[Admin] Manual Robinhood scan failed', { error: e.message });
+            });
+
+            res.json({
+                success: true,
+                message: 'Robinhood scan triggered. Check logs for progress.'
+            });
+        } catch (e) {
+            logger.error('[Admin] Trigger Robinhood scan error', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // Admin panel password verification
     // Uses ADMIN_API_KEY environment variable as the password
     router.post('/admin/verify', (req, res) => {

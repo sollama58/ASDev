@@ -1031,11 +1031,11 @@
             log(`Refreshing metadata for ${shortenPubkey(mint)}...`);
 
             try {
-                const response = await fetch(`https://asdev-1kvy.onrender.com/api/refresh-metadata/${mint}`, {
+                const response = await fetch(`${backendUrl}/api/refresh-metadata/${mint}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'x-admin-key': adminPassword
+                        'x-admin-key': adminToken
                     }
                 });
 
@@ -1065,11 +1065,11 @@
             log('Starting batch metadata refresh...');
 
             try {
-                const response = await fetch(`https://asdev-1kvy.onrender.com/api/refresh-all-metadata`, {
+                const response = await fetch(`${backendUrl}/api/refresh-all-metadata`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'x-admin-key': adminPassword
+                        'x-admin-key': adminToken
                     }
                 });
 
@@ -1269,27 +1269,32 @@
                 document.getElementById('airdrop-calc-result').textContent = formatJson(data);
                 log('Fetched airdrop calculation', 'success');
             } catch (e) {
+                document.getElementById('airdrop-calc-result').textContent = `Error: ${e.message}`;
                 log(`Airdrop calc fetch failed: ${e.message}`, 'error');
             }
         }
 
         async function fetchUserHoldings() {
             const user = document.getElementById('holdings-user').value.trim();
-            if (!user) return;
+            if (!user) {
+                log('Please enter a user pubkey', 'warning');
+                return;
+            }
 
             try {
                 const data = await apiCall(`/api/tokens/check-holder?userPubkey=${user}`);
                 document.getElementById('holdings-result').textContent = formatJson(data);
                 log(`Fetched holdings for ${shortenPubkey(user)}`, 'success');
             } catch (e) {
+                document.getElementById('holdings-result').textContent = `Error: ${e.message}`;
                 log(`Holdings fetch failed: ${e.message}`, 'error');
             }
         }
 
         async function fetchTopAirdrops() {
+            const tbody = document.getElementById('airdrops-table-body');
             try {
                 const data = await apiCall('/api/all-eligible-users');
-                const tbody = document.getElementById('airdrops-table-body');
 
                 if (data.users && data.users.length > 0) {
                     tbody.innerHTML = data.users.slice(0, 20).map((u, i) => `
@@ -1301,8 +1306,11 @@
                         </tr>
                     `).join('');
                     log(`Loaded ${data.users.length} eligible users`, 'success');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-gray-500">No eligible users found</td></tr>';
                 }
             } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="4" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
                 log(`Top airdrops fetch failed: ${e.message}`, 'error');
             }
         }
@@ -1400,25 +1408,122 @@
             log('Query feature requires backend implementation', 'warning');
         }
 
-        // Quick action placeholders
+        // Quick actions - connected to backend endpoints
         async function triggerMetadataUpdate() {
-            log('Metadata update trigger not implemented - requires backend endpoint', 'warning');
-            document.getElementById('action-result').textContent = 'This action requires a dedicated admin endpoint on the backend.';
+            const resultEl = document.getElementById('action-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Triggering metadata update...</span>';
+            log('Triggering metadata update...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/trigger-metadata-update`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ ${data.message}</span>`;
+                    log('Metadata update triggered successfully', 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error || data.message}</span>`;
+                    log(`Metadata update failed: ${data.error || data.message}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Metadata update error: ${e.message}`, 'error');
+            }
         }
 
         async function triggerHolderScan() {
-            log('Holder scan trigger not implemented - requires backend endpoint', 'warning');
-            document.getElementById('action-result').textContent = 'This action requires a dedicated admin endpoint on the backend.';
+            const resultEl = document.getElementById('action-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Triggering holder scan...</span>';
+            log('Triggering holder scan...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/trigger-holder-scan`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ ${data.message}</span>`;
+                    log('Holder scan triggered successfully', 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error || data.message}</span>`;
+                    log(`Holder scan failed: ${data.error || data.message}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Holder scan error: ${e.message}`, 'error');
+            }
         }
 
         async function triggerFeeClaim() {
-            log('Fee claim trigger not implemented - requires backend endpoint', 'warning');
-            document.getElementById('action-result').textContent = 'This action requires a dedicated admin endpoint on the backend.';
+            const resultEl = document.getElementById('action-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Triggering fee claim...</span>';
+            log('Triggering fee claim...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/trigger-fee-claim`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ ${data.message}</span>`;
+                    log('Fee claim triggered successfully', 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error || data.message}</span>`;
+                    log(`Fee claim failed: ${data.error || data.message}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Fee claim error: ${e.message}`, 'error');
+            }
         }
 
         async function triggerAirdrop() {
-            log('Airdrop trigger not implemented - requires backend endpoint', 'warning');
-            document.getElementById('action-result').textContent = 'This action requires a dedicated admin endpoint on the backend.';
+            const resultEl = document.getElementById('action-result');
+
+            if (!confirm('This will trigger a SOL airdrop distribution if the balance threshold is met. Continue?')) {
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Triggering airdrop...</span>';
+            log('Triggering airdrop...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/trigger-airdrop`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ ${data.message}</span>`;
+                    log('Airdrop triggered successfully', 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-yellow-400">⚠ ${data.message}</span>`;
+                    log(`Airdrop: ${data.message}`, 'warning');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Airdrop error: ${e.message}`, 'error');
+            }
         }
 
         // ===== AUTHENTICATION =====

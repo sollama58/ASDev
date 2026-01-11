@@ -1,9 +1,10 @@
 /**
  * Metadata Updater Task
- * Updates token metadata (market data) from DexScreener
+ * Updates token metadata (market data) from multiple sources
  * NO IPFS SCRAPING - Prevents Rate Limits
  *
  * v19.0 - Enhanced debugging and improved DexScreener integration
+ * v20.0 - Added GeckoTerminal as fallback for images
  */
 const axios = require('axios');
 const config = require('../config/env');
@@ -80,6 +81,74 @@ function chunkArray(array, size) {
         result.push(array.slice(i, i + size));
     }
     return result;
+}
+
+/**
+ * Fetch token metadata from GeckoTerminal API
+ * Free API with 30 requests/minute rate limit
+ * Good for images when DexScreener doesn't have them
+ * @param {string} mint - Token mint address
+ * @returns {Object|null} Token metadata or null
+ */
+async function fetchGeckoTerminalMetadata(mint) {
+    try {
+        const response = await axios.get(
+            `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}`,
+            {
+                timeout: 5000,
+                headers: { 'Accept': 'application/json' }
+            }
+        );
+
+        const tokenData = response.data?.data?.attributes;
+        if (tokenData) {
+            return {
+                name: tokenData.name || null,
+                ticker: tokenData.symbol || null,
+                image: tokenData.image_url || null,
+                marketCap: parseFloat(tokenData.fdv_usd) || 0,
+                volume24h: parseFloat(tokenData.volume_usd?.h24) || 0,
+                priceUsd: parseFloat(tokenData.price_usd) || 0
+            };
+        }
+    } catch (e) {
+        // Silent fail - GeckoTerminal may not have all tokens
+    }
+    return null;
+}
+
+/**
+ * Batch fetch GeckoTerminal data for tokens missing images
+ * Note: GeckoTerminal doesn't support batch API, so we do individual calls with rate limiting
+ * @param {string[]} mints - Array of mint addresses
+ * @returns {Map<string, Object>} Map of mint -> metadata
+ */
+async function fetchGeckoTerminalBatch(mints) {
+    const results = new Map();
+    if (mints.length === 0) return results;
+
+    if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] GeckoTerminal: Fetching ${mints.length} tokens...`);
+
+    // GeckoTerminal has 30 req/min limit, so we limit to 25 per batch with delay
+    const limitedMints = mints.slice(0, 25);
+    let foundImages = 0;
+
+    for (const mint of limitedMints) {
+        try {
+            const data = await fetchGeckoTerminalMetadata(mint);
+            if (data && (data.image || data.marketCap > 0)) {
+                results.set(mint, data);
+                if (data.image) foundImages++;
+            }
+            // Rate limit: ~2 requests per second to stay under 30/min
+            await delay(500);
+        } catch (e) {
+            // Continue on individual failures
+        }
+    }
+
+    if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] GeckoTerminal: Found ${results.size} tokens with data, ${foundImages} with images`);
+    return results;
 }
 
 async function updateMetadata(deps) {
@@ -179,6 +248,7 @@ async function updateMetadata(deps) {
             }
 
             // Batch fetch Helius data for all DexScreener misses (1 call instead of N)
+            const stillMissingImages = [];
             if (misses.length > 0) {
                 if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] ${misses.length} tokens missed DexScreener, trying Helius...`);
 
@@ -198,6 +268,11 @@ async function updateMetadata(deps) {
                                 `UPDATE tokens SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
                                 [data.marketCap, Date.now(), mint]
                             );
+                            // Track tokens that got market cap but no image
+                            const token = chunk.find(t => t.mint === mint);
+                            if (token && (!token.image || token.image === '')) {
+                                stillMissingImages.push(mint);
+                            }
                         } else if (data.image) {
                             await db.run(
                                 `UPDATE tokens SET image = $1, "lastUpdated" = $2 WHERE mint = $3`,
@@ -206,9 +281,33 @@ async function updateMetadata(deps) {
                             imagesUpdated++;
                         }
                         totalUpdated++;
+                    } else {
+                        // No data from Helius either - add to GeckoTerminal fallback list
+                        const token = chunk.find(t => t.mint === mint);
+                        if (token && (!token.image || token.image === '')) {
+                            stillMissingImages.push(mint);
+                        }
                     }
                 }
             }
+
+            // v20.0: Try GeckoTerminal for tokens still missing images
+            if (stillMissingImages.length > 0) {
+                if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] ${stillMissingImages.length} tokens still missing images, trying GeckoTerminal...`);
+
+                const geckoData = await fetchGeckoTerminalBatch(stillMissingImages);
+                for (const [mint, data] of geckoData.entries()) {
+                    if (data.image) {
+                        await db.run(
+                            `UPDATE tokens SET image = COALESCE(NULLIF($1, ''), image), "lastUpdated" = $2 WHERE mint = $3`,
+                            [data.image, Date.now(), mint]
+                        );
+                        imagesUpdated++;
+                        if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] GeckoTerminal found image for ${mint.slice(0, 8)}...`);
+                    }
+                }
+            }
+
             await delay(1500);
 
         } catch (e) {
@@ -234,4 +333,10 @@ function start(deps) {
     logger.info("Metadata updater started (No IPFS)");
 }
 
-module.exports = { updateMetadata, start };
+module.exports = {
+    updateMetadata,
+    start,
+    fetchGeckoTerminalMetadata,
+    fetchGeckoTerminalBatch,
+    fetchHeliusMarketDataBatch
+};
