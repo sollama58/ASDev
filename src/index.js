@@ -17,6 +17,7 @@ const path = require('path');
 
 // Internal imports
 const config = require('./config/env');
+const { WALLETS } = require('./config/constants');
 const { logger, database, redis, twitter, solana } = require('./services');
 const routes = require('./routes');
 const tasks = require('./tasks');
@@ -93,8 +94,17 @@ async function main() {
     const devKeypair = Keypair.fromSecretKey(bs58.decode(config.DEV_WALLET_PRIVATE_KEY));
     const wallet = new Wallet(devKeypair);
 
+    // Validate wallet matches expected platform dev wallet
+    const actualWallet = devKeypair.publicKey.toString();
+    const expectedWallet = WALLETS.PLATFORM_DEV.toString();
+    if (actualWallet !== expectedWallet) {
+        logger.error(`CRITICAL: Wallet mismatch! Expected: ${expectedWallet}, Got: ${actualWallet}`);
+        logger.error('Check DEV_WALLET_PRIVATE_KEY environment variable. Server will continue but functionality may be impaired.');
+    } else {
+        logger.info(`Wallet verified: ${actualWallet}`);
+    }
+
     logger.info(`Network: ${config.SOLANA_NETWORK.toUpperCase()} | RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : (config.HELIUS_API_KEY ? 'Helius' : 'Public Mainnet')}`);
-    logger.info(`Wallet: ${devKeypair.publicKey.toString()}`);
 
     // Create Express app
     const app = express();

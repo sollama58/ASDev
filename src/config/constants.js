@@ -25,6 +25,8 @@ const TOKENS = {
 
 // Wallets
 const WALLETS = {
+    // Platform dev wallet (expected public key - used for validation)
+    PLATFORM_DEV: safePublicKey("FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB", "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB", "PLATFORM_DEV_WALLET"),
     FEE_95: safePublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z", "11111111111111111111111111111111", "WALLET_9_5"),
     FEE_05: safePublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g", "11111111111111111111111111111111", "WALLET_0_5"),
     PUMP_LIQUIDITY: "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa",

@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IGNITION Admin Control Panel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a0a0a 50%, #0a0a0a 100%);
+            min-height: 100vh;
+        }
+
+        .panel {
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(234, 88, 12, 0.3);
+            border-radius: 8px;
+            padding: 16px;
+        }
+
+        .panel-header {
+            border-bottom: 1px solid rgba(234, 88, 12, 0.3);
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: rgba(234, 88, 12, 0.8);
+            border: 1px solid #ea580c;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #ea580c;
+        }
+
+        .btn-secondary {
+            background: rgba(59, 130, 246, 0.3);
+            border: 1px solid rgba(59, 130, 246, 0.5);
+            color: #93c5fd;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(59, 130, 246, 0.5);
+        }
+
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.3);
+            border: 1px solid rgba(239, 68, 68, 0.5);
+            color: #fca5a5;
+        }
+
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.5);
+        }
+
+        .btn-success {
+            background: rgba(34, 197, 94, 0.3);
+            border: 1px solid rgba(34, 197, 94, 0.5);
+            color: #86efac;
+        }
+
+        .btn-success:hover {
+            background: rgba(34, 197, 94, 0.5);
+        }
+
+        .input-field {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(234, 88, 12, 0.3);
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: white;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        .input-field:focus {
+            outline: none;
+            border-color: #ea580c;
+        }
+
+        .result-box {
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(234, 88, 12, 0.2);
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 11px;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+        }
+
+        .status-online { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+        .status-offline { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+        .status-warning { background: #eab308; box-shadow: 0 0 8px #eab308; }
+
+        .tab-btn {
+            padding: 8px 16px;
+            border-radius: 6px 6px 0 0;
+            font-size: 12px;
+            cursor: pointer;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(234, 88, 12, 0.2);
+            border-bottom: none;
+            color: #9ca3af;
+        }
+
+        .tab-btn.active {
+            background: rgba(234, 88, 12, 0.2);
+            border-color: rgba(234, 88, 12, 0.5);
+            color: #ea580c;
+        }
+
+        .stat-card {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(234, 88, 12, 0.2);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .log-entry {
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+
+        .log-info { background: rgba(59, 130, 246, 0.1); border-left: 3px solid #3b82f6; }
+        .log-success { background: rgba(34, 197, 94, 0.1); border-left: 3px solid #22c55e; }
+        .log-warning { background: rgba(234, 179, 8, 0.1); border-left: 3px solid #eab308; }
+        .log-error { background: rgba(239, 68, 68, 0.1); border-left: 3px solid #ef4444; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+        }
+
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid rgba(234, 88, 12, 0.1);
+        }
+
+        th {
+            color: #ea580c;
+            font-weight: 600;
+        }
+
+        tr:hover {
+            background: rgba(234, 88, 12, 0.05);
+        }
+
+        .spinner {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-content {
+            background: #1a1a1a;
+            border: 1px solid rgba(234, 88, 12, 0.5);
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            width: 90%;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(234, 88, 12, 0.5);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(234, 88, 12, 0.7);
+        }
+    </style>
+</head>
+<body class="text-gray-200">
+    <!-- Password Gate -->
+    <div id="auth-gate" class="fixed inset-0 bg-black z-50 flex items-center justify-center">
+        <div class="panel w-96">
+            <div class="panel-header">
+                <h2 class="text-lg font-bold text-orange-500">IGNITION ADMIN</h2>
+                <p class="text-xs text-gray-400 mt-1">Enter password to access the control panel</p>
+            </div>
+            <div class="space-y-4">
+                <input type="password" id="admin-password" class="input-field w-full" placeholder="Admin Password" onkeydown="if(event.key==='Enter')authenticate()">
+                <button onclick="authenticate()" class="btn btn-primary w-full">Authenticate</button>
+                <div id="auth-error" class="text-red-400 text-xs text-center hidden">Invalid password</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App (hidden until authenticated) -->
+    <div id="admin-app" class="hidden">
+    <!-- Header -->
+    <header class="bg-black/50 border-b border-orange-900/50 px-6 py-4">
+        <div class="flex items-center justify-between max-w-7xl mx-auto">
+            <div class="flex items-center gap-4">
+                <h1 class="text-xl font-bold text-orange-500">IGNITION ADMIN PANEL</h1>
+                <span class="text-xs text-orange-600 bg-orange-900/30 px-2 py-1 rounded">v19.0</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <div id="connection-status" class="flex items-center text-xs">
+                    <span class="status-indicator status-offline"></span>
+                    <span>Disconnected</span>
+                </div>
+                <input type="text" id="backend-url" class="input-field w-64" value="http://localhost:3000" placeholder="Backend URL">
+                <button onclick="connectBackend()" class="btn btn-primary">Connect</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto p-6">
+        <!-- Quick Stats Row -->
+        <div id="quick-stats" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 mb-6">
+            <div class="stat-card">
+                <div class="text-xs text-gray-400">SOL Balance</div>
+                <div id="stat-sol-balance" class="text-lg font-bold text-green-400">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="text-xs text-gray-400">Airdrop Pool</div>
+                <div id="stat-airdrop-pool" class="text-lg font-bold text-orange-400">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="text-xs text-gray-400">Pending Fees</div>
+                <div id="stat-pending-fees" class="text-lg font-bold text-yellow-400">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="text-xs text-gray-400">Total Points</div>
+                <div id="stat-total-points" class="text-lg font-bold text-blue-400">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="text-xs text-gray-400">Tokens</div>
+                <div id="stat-token-count" class="text-lg font-bold text-purple-400">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="text-xs text-gray-400">Robinhood</div>
+                <div id="stat-robinhood-count" class="text-lg font-bold text-pink-400">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="text-xs text-gray-400">Holders</div>
+                <div id="stat-holder-count" class="text-lg font-bold text-cyan-400">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="text-xs text-gray-400">Last Update</div>
+                <div id="stat-last-update" class="text-xs font-bold text-gray-400">--</div>
+            </div>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="flex gap-2 mb-0">
+            <button class="tab-btn active" onclick="switchTab('health')">System Health</button>
+            <button class="tab-btn" onclick="switchTab('tokens')">Token Management</button>
+            <button class="tab-btn" onclick="switchTab('registration')">Registration Debug</button>
+            <button class="tab-btn" onclick="switchTab('airdrop')">Airdrop Debug</button>
+            <button class="tab-btn" onclick="switchTab('database')">Database</button>
+            <button class="tab-btn" onclick="switchTab('logs')">Live Logs</button>
+            <button class="tab-btn" onclick="switchTab('tools')">Tools</button>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="panel rounded-tl-none">
+            <!-- Health Tab -->
+            <div id="tab-health" class="tab-content">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- System Status -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">System Status</h3>
+                        </div>
+                        <div id="system-status" class="space-y-2">
+                            <div class="text-gray-400 text-sm">Click "Connect" to fetch status...</div>
+                        </div>
+                        <button onclick="fetchHealth()" class="btn btn-secondary mt-4">Refresh Status</button>
+                    </div>
+
+                    <!-- Worker Status -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Worker Status</h3>
+                        </div>
+                        <div id="worker-status" class="space-y-2">
+                            <div class="text-gray-400 text-sm">Waiting for data...</div>
+                        </div>
+                    </div>
+
+                    <!-- Fee Tracker -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Fee Tracker</h3>
+                        </div>
+                        <div id="fee-tracker" class="space-y-2">
+                            <div class="text-gray-400 text-sm">Waiting for data...</div>
+                        </div>
+                    </div>
+
+                    <!-- Raw Health Response -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Raw Health Data</h3>
+                        </div>
+                        <div id="raw-health" class="result-box text-green-400">
+                            // Health data will appear here
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Token Management Tab -->
+            <div id="tab-tokens" class="tab-content hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Token List -->
+                    <div class="panel">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">Token List</h3>
+                            <button onclick="fetchTokens()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="token-list" class="max-h-96 overflow-y-auto">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Ticker</th>
+                                        <th>Volume 24h</th>
+                                        <th>MCAP</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="token-table-body">
+                                    <tr><td colspan="5" class="text-center text-gray-500">No data</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Token Lookup -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Token Lookup</h3>
+                        </div>
+                        <div class="flex gap-2 mb-4">
+                            <input type="text" id="token-lookup-mint" class="input-field flex-1" placeholder="Enter mint address...">
+                            <button onclick="lookupToken()" class="btn btn-primary">Lookup</button>
+                        </div>
+                        <div id="token-lookup-result" class="result-box text-cyan-400">
+                            // Token details will appear here
+                        </div>
+                    </div>
+
+                    <!-- Metadata Status -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">Metadata Status (Missing Data)</h3>
+                            <button onclick="fetchMetadataStatus()" class="btn btn-secondary text-xs">Check</button>
+                        </div>
+                        <div id="metadata-status" class="result-box">
+                            // Metadata status will appear here
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Registration Debug Tab -->
+            <div id="tab-registration" class="tab-content hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Fee Sharing Verification -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Fee Sharing Verification Debug</h3>
+                        </div>
+                        <p class="text-xs text-gray-400 mb-4">
+                            Use this to debug why a token registration might be failing. It checks bonding curve, AMM pool, and fee sharing configs.
+                        </p>
+                        <div class="flex gap-2 mb-4">
+                            <input type="text" id="verify-mint" class="input-field flex-1" placeholder="Enter token mint address...">
+                            <button onclick="verifyFeeSharing()" class="btn btn-primary">Verify Fee Sharing</button>
+                        </div>
+                        <div id="verify-result" class="result-box text-yellow-400" style="max-height: 500px;">
+                            // Verification results will appear here
+                        </div>
+                    </div>
+
+                    <!-- Pre-Registration Check -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Pre-Registration Check</h3>
+                        </div>
+                        <div class="flex gap-2 mb-4">
+                            <input type="text" id="precheck-mint" class="input-field flex-1" placeholder="Enter token mint address...">
+                            <button onclick="precheckToken()" class="btn btn-secondary">Check Eligibility</button>
+                        </div>
+                        <div id="precheck-result" class="result-box">
+                            // Pre-check results will appear here
+                        </div>
+                    </div>
+
+                    <!-- Manual Registration -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Manual Token Registration</h3>
+                        </div>
+                        <div class="space-y-3">
+                            <input type="text" id="register-mint" class="input-field w-full" placeholder="Token mint address">
+                            <input type="text" id="register-submitter" class="input-field w-full" placeholder="Submitter pubkey (optional)">
+                            <button onclick="registerToken()" class="btn btn-success w-full">Register Token</button>
+                        </div>
+                        <div id="register-result" class="result-box mt-4">
+                            // Registration result will appear here
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Airdrop Debug Tab -->
+            <div id="tab-airdrop" class="tab-content hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Airdrop Calculation -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Airdrop Calculation Debug</h3>
+                        </div>
+                        <div class="flex gap-2 mb-4">
+                            <input type="text" id="airdrop-user" class="input-field flex-1" placeholder="User pubkey (optional)">
+                            <button onclick="fetchAirdropCalc()" class="btn btn-primary">Calculate</button>
+                        </div>
+                        <div id="airdrop-calc-result" class="result-box text-green-400">
+                            // Airdrop calculation will appear here
+                        </div>
+                    </div>
+
+                    <!-- User Holdings -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">User Holdings Check</h3>
+                        </div>
+                        <div class="flex gap-2 mb-4">
+                            <input type="text" id="holdings-user" class="input-field flex-1" placeholder="User pubkey">
+                            <button onclick="fetchUserHoldings()" class="btn btn-secondary">Check Holdings</button>
+                        </div>
+                        <div id="holdings-result" class="result-box">
+                            // User holdings will appear here
+                        </div>
+                    </div>
+
+                    <!-- Top Airdrop Recipients -->
+                    <div class="panel">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">Top Expected Airdrops</h3>
+                            <button onclick="fetchTopAirdrops()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="top-airdrops" class="max-h-80 overflow-y-auto">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Wallet</th>
+                                        <th>Points</th>
+                                        <th>Expected SOL</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="airdrops-table-body">
+                                    <tr><td colspan="4" class="text-center text-gray-500">No data</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Airdrop Pool Diagram -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Pool Distribution</h3>
+                        </div>
+                        <div id="pool-diagram" class="space-y-4">
+                            <div class="space-y-2">
+                                <div class="flex justify-between text-xs">
+                                    <span class="text-gray-400">Total SOL Balance</span>
+                                    <span id="pool-total" class="text-white">-- SOL</span>
+                                </div>
+                                <div class="w-full bg-gray-800 rounded-full h-4">
+                                    <div id="pool-bar-total" class="bg-blue-500 h-4 rounded-full" style="width: 100%"></div>
+                                </div>
+                            </div>
+                            <div class="space-y-2">
+                                <div class="flex justify-between text-xs">
+                                    <span class="text-gray-400">Safety Reserve (0.5 SOL)</span>
+                                    <span id="pool-reserve" class="text-yellow-400">0.5 SOL</span>
+                                </div>
+                                <div class="flex justify-between text-xs">
+                                    <span class="text-gray-400">Available for Airdrop</span>
+                                    <span id="pool-available" class="text-green-400">-- SOL</span>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2 mt-4">
+                                <div class="bg-orange-900/30 border border-orange-700/50 rounded p-3 text-center">
+                                    <div class="text-xs text-orange-400">Community (90%)</div>
+                                    <div id="pool-community" class="text-lg font-bold text-orange-300">-- SOL</div>
+                                </div>
+                                <div class="bg-purple-900/30 border border-purple-700/50 rounded p-3 text-center">
+                                    <div class="text-xs text-purple-400">KOTH (10%)</div>
+                                    <div id="pool-koth" class="text-lg font-bold text-purple-300">-- SOL</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Database Tab -->
+            <div id="tab-database" class="tab-content hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Database Status -->
+                    <div class="panel">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">Database Status</h3>
+                            <button onclick="fetchDbStatus()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="db-status" class="result-box">
+                            // Database status will appear here
+                        </div>
+                    </div>
+
+                    <!-- Recent Tokens -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Recent Tokens</h3>
+                        </div>
+                        <div id="recent-tokens" class="max-h-80 overflow-y-auto">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Ticker</th>
+                                        <th>Name</th>
+                                        <th>Created</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="recent-tokens-body">
+                                    <tr><td colspan="3" class="text-center text-gray-500">No data</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- SQL Query (Read-Only) -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Custom Query (Read-Only)</h3>
+                        </div>
+                        <p class="text-xs text-yellow-400 mb-2">Warning: Only SELECT queries are allowed for safety.</p>
+                        <textarea id="sql-query" class="input-field w-full h-24 mb-2" placeholder="SELECT * FROM tokens LIMIT 10"></textarea>
+                        <button onclick="runQuery()" class="btn btn-danger">Execute Query</button>
+                        <div id="query-result" class="result-box mt-4" style="max-height: 300px;">
+                            // Query results will appear here
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Logs Tab -->
+            <div id="tab-logs" class="tab-content hidden">
+                <div class="panel">
+                    <div class="panel-header flex justify-between items-center">
+                        <h3 class="text-orange-500 font-bold">Activity Log</h3>
+                        <div class="flex gap-2">
+                            <button onclick="clearLogs()" class="btn btn-danger text-xs">Clear</button>
+                            <label class="flex items-center gap-2 text-xs">
+                                <input type="checkbox" id="auto-scroll" checked class="rounded">
+                                Auto-scroll
+                            </label>
+                        </div>
+                    </div>
+                    <div id="log-container" class="result-box" style="max-height: 600px; min-height: 400px;">
+                        <div class="log-entry log-info">[System] Admin panel initialized</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tools Tab -->
+            <div id="tab-tools" class="tab-content hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- DexScreener Test -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">DexScreener Test</h3>
+                        </div>
+                        <div class="flex gap-2 mb-4">
+                            <input type="text" id="dex-test-mint" class="input-field flex-1" placeholder="Token mint">
+                            <button onclick="testDexScreener()" class="btn btn-secondary">Test</button>
+                        </div>
+                        <div id="dex-test-result" class="result-box text-cyan-400">
+                            // DexScreener response will appear here
+                        </div>
+                    </div>
+
+                    <!-- Holder Lookup -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Token Holders</h3>
+                        </div>
+                        <div class="flex gap-2 mb-4">
+                            <input type="text" id="holder-lookup-mint" class="input-field flex-1" placeholder="Token mint">
+                            <button onclick="lookupHolders()" class="btn btn-secondary">Lookup</button>
+                        </div>
+                        <div id="holder-lookup-result" class="result-box">
+                            // Holders will appear here
+                        </div>
+                    </div>
+
+                    <!-- Quick Actions -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Quick Actions</h3>
+                        </div>
+                        <div class="space-y-2">
+                            <button onclick="triggerMetadataUpdate()" class="btn btn-secondary w-full">Force Metadata Update</button>
+                            <button onclick="triggerHolderScan()" class="btn btn-secondary w-full">Force Holder Scan</button>
+                            <button onclick="triggerFeeClaim()" class="btn btn-success w-full">Trigger Fee Claim</button>
+                            <button onclick="triggerAirdrop()" class="btn btn-primary w-full">Trigger Airdrop</button>
+                        </div>
+                        <div id="action-result" class="result-box mt-4 text-green-400">
+                            // Action results will appear here
+                        </div>
+                    </div>
+
+                    <!-- Pubkey Validator -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Pubkey Validator</h3>
+                        </div>
+                        <div class="flex gap-2 mb-4">
+                            <input type="text" id="validate-pubkey" class="input-field flex-1" placeholder="Enter pubkey">
+                            <button onclick="validatePubkey()" class="btn btn-secondary">Validate</button>
+                        </div>
+                        <div id="validate-result" class="text-sm">
+                            // Validation result will appear here
+                        </div>
+                    </div>
+
+                    <!-- Base58 Decoder -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Base58 Tools</h3>
+                        </div>
+                        <div class="space-y-2">
+                            <input type="text" id="base58-input" class="input-field w-full" placeholder="Base58 string">
+                            <div class="flex gap-2">
+                                <button onclick="decodeBase58()" class="btn btn-secondary flex-1">Decode</button>
+                                <button onclick="encodeBase58()" class="btn btn-secondary flex-1">Encode</button>
+                            </div>
+                        </div>
+                        <div id="base58-result" class="result-box mt-4 text-xs">
+                            // Result will appear here
+                        </div>
+                    </div>
+
+                    <!-- API Tester -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">API Endpoint Tester</h3>
+                        </div>
+                        <div class="space-y-2">
+                            <select id="api-method" class="input-field w-full">
+                                <option value="GET">GET</option>
+                                <option value="POST">POST</option>
+                            </select>
+                            <input type="text" id="api-endpoint" class="input-field w-full" placeholder="/api/health">
+                            <textarea id="api-body" class="input-field w-full h-20" placeholder='{"key": "value"}'></textarea>
+                            <button onclick="testApiEndpoint()" class="btn btn-primary w-full">Send Request</button>
+                        </div>
+                        <div id="api-result" class="result-box mt-4">
+                            // API response will appear here
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="text-center py-4 text-xs text-gray-500">
+        IGNITION Admin Panel | For authorized personnel only | <span id="current-time"></span>
+    </footer>
+    </div> <!-- End admin-app wrapper -->
+
+    <script>
+        // ===== STATE =====
+        let backendUrl = 'http://localhost:3000';
+        let isConnected = false;
+        let refreshInterval = null;
+
+        // ===== UTILITIES =====
+        function log(message, type = 'info') {
+            const container = document.getElementById('log-container');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            container.appendChild(entry);
+
+            if (document.getElementById('auto-scroll').checked) {
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+
+        function clearLogs() {
+            document.getElementById('log-container').innerHTML = '<div class="log-entry log-info">[System] Logs cleared</div>';
+        }
+
+        function formatJson(obj) {
+            return JSON.stringify(obj, null, 2);
+        }
+
+        function shortenPubkey(pubkey, chars = 6) {
+            if (!pubkey) return '???';
+            return `${pubkey.slice(0, chars)}...${pubkey.slice(-chars)}`;
+        }
+
+        function formatNumber(num) {
+            if (num === null || num === undefined) return '--';
+            if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(2) + 'K';
+            return num.toFixed(2);
+        }
+
+        async function apiCall(endpoint, method = 'GET', body = null) {
+            try {
+                const options = {
+                    method,
+                    headers: { 'Content-Type': 'application/json' }
+                };
+                if (body && method !== 'GET') {
+                    options.body = JSON.stringify(body);
+                }
+                const response = await fetch(`${backendUrl}${endpoint}`, options);
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    throw new Error(`Expected JSON but got ${contentType || 'unknown'}. Status: ${response.status}. Response: ${text.substring(0, 200)}`);
+                }
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+                return await response.json();
+            } catch (e) {
+                log(`API Error: ${e.message}`, 'error');
+                throw e;
+            }
+        }
+
+        // ===== TAB SWITCHING =====
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+            event.target.classList.add('active');
+            log(`Switched to ${tabName} tab`);
+        }
+
+        // ===== CONNECTION =====
+        async function connectBackend() {
+            backendUrl = document.getElementById('backend-url').value.replace(/\/$/, '');
+            log(`Connecting to ${backendUrl}...`);
+
+            try {
+                const health = await apiCall('/api/health');
+                isConnected = true;
+                updateConnectionStatus(true);
+                log('Connected successfully!', 'success');
+
+                // Start auto-refresh
+                if (refreshInterval) clearInterval(refreshInterval);
+                refreshInterval = setInterval(refreshData, 30000);
+
+                // Initial data load
+                refreshData();
+            } catch (e) {
+                isConnected = false;
+                updateConnectionStatus(false);
+                log(`Connection failed: ${e.message}`, 'error');
+            }
+        }
+
+        function updateConnectionStatus(connected) {
+            const status = document.getElementById('connection-status');
+            if (connected) {
+                status.innerHTML = '<span class="status-indicator status-online"></span><span class="text-green-400">Connected</span>';
+            } else {
+                status.innerHTML = '<span class="status-indicator status-offline"></span><span class="text-red-400">Disconnected</span>';
+            }
+        }
+
+        // ===== DATA FETCHING =====
+        async function refreshData() {
+            if (!isConnected) return;
+            await Promise.all([
+                fetchHealth(),
+                fetchDbStatus()
+            ]);
+        }
+
+        async function fetchHealth() {
+            try {
+                const data = await apiCall('/api/health');
+                log('Fetched health data', 'success');
+
+                // Update quick stats
+                document.getElementById('stat-sol-balance').textContent = (parseFloat(data.airdropPoolSol) + 0.5).toFixed(4);
+                document.getElementById('stat-airdrop-pool').textContent = data.airdropPoolSol + ' SOL';
+                document.getElementById('stat-pending-fees').textContent = data.currentFeeBalance + ' SOL';
+                document.getElementById('stat-total-points').textContent = formatNumber(data.totalPoints || 0);
+
+                // Update system status
+                const systemStatus = document.getElementById('system-status');
+                systemStatus.innerHTML = `
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Platform Wallet:</span><span class="text-orange-300">${shortenPubkey(data.wallet)}</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">SOL Balance:</span><span class="text-green-400">${(parseFloat(data.airdropPoolSol) + 0.5).toFixed(4)} SOL</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Airdrop Pool:</span><span class="text-orange-400">${data.airdropPoolSol} SOL</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Pending Fees:</span><span class="text-yellow-400">${data.currentFeeBalance} SOL</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Total Airdropped:</span><span class="text-blue-400">${data.totalSolAirdropped || 0} SOL</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Conservation:</span><span class="${data.conservationStatus ? 'text-yellow-400' : 'text-green-400'}">${data.conservationStatus || 'Normal'}</span></div>
+                `;
+
+                // Update fee tracker
+                const feeTracker = document.getElementById('fee-tracker');
+                feeTracker.innerHTML = `
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Last Claim:</span><span class="text-white">${data.lastClaimTime ? new Date(data.lastClaimTime).toLocaleString() : 'Never'}</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Last Amount:</span><span class="text-green-400">${data.lastClaimAmount} SOL</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Lifetime Fees:</span><span class="text-blue-400">${data.lifetimeFeesSOL || 0} SOL</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Robinhood Tokens:</span><span class="text-pink-400">${data.robinhood?.activeTokens || 0}</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Robinhood Fees:</span><span class="text-pink-400">${data.robinhood?.totalFeesCollectedSol || 0} SOL</span></div>
+                `;
+
+                // Update pool diagram
+                const totalSol = parseFloat(data.airdropPoolSol) + 0.5;
+                const available = parseFloat(data.airdropPoolSol);
+                const distributable = available * 0.99;
+                document.getElementById('pool-total').textContent = totalSol.toFixed(4) + ' SOL';
+                document.getElementById('pool-available').textContent = available.toFixed(4) + ' SOL';
+                document.getElementById('pool-community').textContent = (distributable * 0.9).toFixed(4) + ' SOL';
+                document.getElementById('pool-koth').textContent = (distributable * 0.1).toFixed(4) + ' SOL';
+
+                // Raw health data
+                document.getElementById('raw-health').textContent = formatJson(data);
+
+            } catch (e) {
+                log(`Health fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchDbStatus() {
+            try {
+                const data = await apiCall('/api/debug/db-status');
+
+                document.getElementById('stat-token-count').textContent = data.tables?.tokens || 0;
+                document.getElementById('stat-robinhood-count').textContent = data.tables?.robinhood_tokens || 0;
+                document.getElementById('stat-holder-count').textContent = data.tables?.token_holders || 0;
+                document.getElementById('stat-last-update').textContent = data.lastBackendUpdate ? new Date(data.lastBackendUpdate).toLocaleTimeString() : '--';
+
+                document.getElementById('db-status').textContent = formatJson(data);
+
+                // Update recent tokens table
+                const tbody = document.getElementById('recent-tokens-body');
+                if (data.recentTokens && data.recentTokens.length > 0) {
+                    tbody.innerHTML = data.recentTokens.map(t => `
+                        <tr>
+                            <td class="text-orange-300">${t.ticker || '???'}</td>
+                            <td class="text-gray-300">${t.name || 'Unknown'}</td>
+                            <td class="text-gray-500">${t.createdAt ? new Date(t.createdAt).toLocaleString() : '--'}</td>
+                        </tr>
+                    `).join('');
+                }
+
+            } catch (e) {
+                log(`DB status fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchTokens() {
+            try {
+                const data = await apiCall('/api/leaderboard');
+                const tbody = document.getElementById('token-table-body');
+
+                if (data.tokens && data.tokens.length > 0) {
+                    tbody.innerHTML = data.tokens.slice(0, 50).map((t, i) => `
+                        <tr onclick="document.getElementById('token-lookup-mint').value='${t.mint}'; lookupToken();" style="cursor: pointer;">
+                            <td class="text-orange-500">${i + 1}</td>
+                            <td class="text-white font-bold">${t.ticker || '???'}</td>
+                            <td class="text-green-400">$${formatNumber(t.volume || 0)}</td>
+                            <td class="text-blue-400">$${formatNumber(t.marketCap || 0)}</td>
+                            <td>
+                                <span class="${t.isEligible ? 'text-green-400' : 'text-red-400'}">${t.isEligible ? 'Eligible' : 'Not Eligible'}</span>
+                                ${t.isRobinhood ? '<span class="text-pink-400 ml-1">RH</span>' : ''}
+                            </td>
+                        </tr>
+                    `).join('');
+                    log(`Loaded ${data.tokens.length} tokens`, 'success');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500">No tokens found</td></tr>';
+                }
+            } catch (e) {
+                log(`Token fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function lookupToken() {
+            const mint = document.getElementById('token-lookup-mint').value.trim();
+            if (!mint) return;
+
+            try {
+                const data = await apiCall(`/api/tokens/check-registration/${mint}`);
+                document.getElementById('token-lookup-result').textContent = formatJson(data);
+                log(`Looked up token ${shortenPubkey(mint)}`, 'success');
+            } catch (e) {
+                document.getElementById('token-lookup-result').textContent = `Error: ${e.message}`;
+            }
+        }
+
+        async function fetchMetadataStatus() {
+            try {
+                const data = await apiCall('/api/debug/metadata-status');
+                document.getElementById('metadata-status').textContent = formatJson(data);
+                log('Fetched metadata status', 'success');
+            } catch (e) {
+                log(`Metadata status fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        // ===== REGISTRATION DEBUG =====
+        async function verifyFeeSharing() {
+            const mint = document.getElementById('verify-mint').value.trim();
+            if (!mint) {
+                log('Please enter a mint address', 'warning');
+                return;
+            }
+
+            document.getElementById('verify-result').textContent = 'Verifying... This may take a moment...';
+            log(`Verifying fee sharing for ${shortenPubkey(mint)}...`);
+
+            try {
+                const data = await apiCall(`/api/debug/verify-fee-sharing/${mint}`);
+                document.getElementById('verify-result').textContent = formatJson(data);
+
+                if (data.verificationResult?.isRecipient) {
+                    log(`Verification SUCCESS: We ARE a fee recipient via ${data.verificationResult.source}`, 'success');
+                } else {
+                    log('Verification FAILED: We are NOT a fee recipient', 'error');
+                }
+            } catch (e) {
+                document.getElementById('verify-result').textContent = `Error: ${e.message}`;
+                log(`Verification error: ${e.message}`, 'error');
+            }
+        }
+
+        async function precheckToken() {
+            const mint = document.getElementById('precheck-mint').value.trim();
+            if (!mint) return;
+
+            try {
+                const data = await apiCall('/api/tokens/verify-token', 'POST', { mint });
+                document.getElementById('precheck-result').textContent = formatJson(data);
+                log(`Pre-check completed for ${shortenPubkey(mint)}`, data.isEligible ? 'success' : 'warning');
+            } catch (e) {
+                document.getElementById('precheck-result').textContent = `Error: ${e.message}`;
+            }
+        }
+
+        async function registerToken() {
+            const mint = document.getElementById('register-mint').value.trim();
+            const submitter = document.getElementById('register-submitter').value.trim();
+
+            if (!mint) {
+                log('Please enter a mint address', 'warning');
+                return;
+            }
+
+            try {
+                const body = { mint };
+                if (submitter) body.submitterPubkey = submitter;
+
+                const data = await apiCall('/api/tokens/register-token', 'POST', body);
+                document.getElementById('register-result').textContent = formatJson(data);
+                log(`Registration ${data.success ? 'successful' : 'failed'}: ${data.message || data.error}`, data.success ? 'success' : 'error');
+            } catch (e) {
+                document.getElementById('register-result').textContent = `Error: ${e.message}`;
+                log(`Registration error: ${e.message}`, 'error');
+            }
+        }
+
+        // ===== AIRDROP DEBUG =====
+        async function fetchAirdropCalc() {
+            const user = document.getElementById('airdrop-user').value.trim();
+            try {
+                const endpoint = user ? `/api/debug/airdrop-calculation?userPubkey=${user}` : '/api/debug/airdrop-calculation';
+                const data = await apiCall(endpoint);
+                document.getElementById('airdrop-calc-result').textContent = formatJson(data);
+                log('Fetched airdrop calculation', 'success');
+            } catch (e) {
+                log(`Airdrop calc fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchUserHoldings() {
+            const user = document.getElementById('holdings-user').value.trim();
+            if (!user) return;
+
+            try {
+                const data = await apiCall(`/api/tokens/check-holder?userPubkey=${user}`);
+                document.getElementById('holdings-result').textContent = formatJson(data);
+                log(`Fetched holdings for ${shortenPubkey(user)}`, 'success');
+            } catch (e) {
+                log(`Holdings fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchTopAirdrops() {
+            try {
+                const data = await apiCall('/api/all-eligible-users');
+                const tbody = document.getElementById('airdrops-table-body');
+
+                if (data.users && data.users.length > 0) {
+                    tbody.innerHTML = data.users.slice(0, 20).map((u, i) => `
+                        <tr>
+                            <td class="text-orange-500">${i + 1}</td>
+                            <td class="text-white">${shortenPubkey(u.pubkey)}</td>
+                            <td class="text-blue-400">${formatNumber(u.points)}</td>
+                            <td class="text-green-400">${u.expectedAirdrop?.toFixed(6) || 0} SOL</td>
+                        </tr>
+                    `).join('');
+                    log(`Loaded ${data.users.length} eligible users`, 'success');
+                }
+            } catch (e) {
+                log(`Top airdrops fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        // ===== TOOLS =====
+        async function testDexScreener() {
+            const mint = document.getElementById('dex-test-mint').value.trim();
+            if (!mint) return;
+
+            try {
+                const data = await apiCall(`/api/debug/test-dexscreener/${mint}`);
+                document.getElementById('dex-test-result').textContent = formatJson(data);
+                log('DexScreener test completed', 'success');
+            } catch (e) {
+                document.getElementById('dex-test-result').textContent = `Error: ${e.message}`;
+            }
+        }
+
+        async function lookupHolders() {
+            const mint = document.getElementById('holder-lookup-mint').value.trim();
+            if (!mint) return;
+
+            try {
+                const data = await apiCall(`/api/tokens/holders/${mint}`);
+                document.getElementById('holder-lookup-result').textContent = formatJson(data);
+                log(`Found ${data.holders?.length || 0} holders`, 'success');
+            } catch (e) {
+                document.getElementById('holder-lookup-result').textContent = `Error: ${e.message}`;
+            }
+        }
+
+        function validatePubkey() {
+            const pubkey = document.getElementById('validate-pubkey').value.trim();
+            const result = document.getElementById('validate-result');
+
+            try {
+                // Basic base58 check
+                const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+                if (base58Regex.test(pubkey) && pubkey.length >= 32 && pubkey.length <= 44) {
+                    result.innerHTML = '<span class="text-green-400">Valid Solana pubkey format</span>';
+                } else {
+                    result.innerHTML = '<span class="text-red-400">Invalid pubkey format</span>';
+                }
+            } catch (e) {
+                result.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+            }
+        }
+
+        function decodeBase58() {
+            const input = document.getElementById('base58-input').value.trim();
+            try {
+                // Simple base58 decode visualization
+                document.getElementById('base58-result').textContent = `Input: ${input}\nLength: ${input.length} characters\n\nNote: Full decode requires crypto library`;
+            } catch (e) {
+                document.getElementById('base58-result').textContent = `Error: ${e.message}`;
+            }
+        }
+
+        function encodeBase58() {
+            document.getElementById('base58-result').textContent = 'Encoding requires input data. This is a placeholder.';
+        }
+
+        async function testApiEndpoint() {
+            const method = document.getElementById('api-method').value;
+            const endpoint = document.getElementById('api-endpoint').value.trim();
+            let body = null;
+
+            if (method === 'POST') {
+                try {
+                    body = JSON.parse(document.getElementById('api-body').value || '{}');
+                } catch (e) {
+                    document.getElementById('api-result').textContent = 'Invalid JSON body';
+                    return;
+                }
+            }
+
+            try {
+                const data = await apiCall(endpoint, method, body);
+                document.getElementById('api-result').textContent = formatJson(data);
+                log(`API ${method} ${endpoint} completed`, 'success');
+            } catch (e) {
+                document.getElementById('api-result').textContent = `Error: ${e.message}`;
+            }
+        }
+
+        async function runQuery() {
+            const query = document.getElementById('sql-query').value.trim();
+            if (!query.toLowerCase().startsWith('select')) {
+                document.getElementById('query-result').textContent = 'Only SELECT queries are allowed for safety.';
+                log('Query blocked: Only SELECT allowed', 'warning');
+                return;
+            }
+
+            document.getElementById('query-result').textContent = 'Query execution not implemented in backend.\nThis would require a dedicated admin endpoint.';
+            log('Query feature requires backend implementation', 'warning');
+        }
+
+        // Quick action placeholders
+        async function triggerMetadataUpdate() {
+            log('Metadata update trigger not implemented - requires backend endpoint', 'warning');
+            document.getElementById('action-result').textContent = 'This action requires a dedicated admin endpoint on the backend.';
+        }
+
+        async function triggerHolderScan() {
+            log('Holder scan trigger not implemented - requires backend endpoint', 'warning');
+            document.getElementById('action-result').textContent = 'This action requires a dedicated admin endpoint on the backend.';
+        }
+
+        async function triggerFeeClaim() {
+            log('Fee claim trigger not implemented - requires backend endpoint', 'warning');
+            document.getElementById('action-result').textContent = 'This action requires a dedicated admin endpoint on the backend.';
+        }
+
+        async function triggerAirdrop() {
+            log('Airdrop trigger not implemented - requires backend endpoint', 'warning');
+            document.getElementById('action-result').textContent = 'This action requires a dedicated admin endpoint on the backend.';
+        }
+
+        // ===== AUTHENTICATION =====
+        let adminToken = null;
+
+        async function authenticate() {
+            const password = document.getElementById('admin-password').value;
+            const errorEl = document.getElementById('auth-error');
+
+            if (!password) {
+                errorEl.textContent = 'Please enter a password';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+
+            // Get backend URL from input or use default
+            const backendUrlInput = document.getElementById('backend-url').value.replace(/\/$/, '') || 'http://localhost:3000';
+
+            try {
+                const response = await fetch(`${backendUrlInput}/api/admin/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.valid) {
+                        adminToken = password;
+                        sessionStorage.setItem('adminToken', password);
+                        document.getElementById('auth-gate').classList.add('hidden');
+                        document.getElementById('admin-app').classList.remove('hidden');
+                        document.getElementById('backend-url').value = backendUrlInput;
+                        log('Authentication successful', 'success');
+                        connectBackend();
+                    } else {
+                        errorEl.textContent = 'Invalid password';
+                        errorEl.classList.remove('hidden');
+                    }
+                } else {
+                    errorEl.textContent = 'Authentication failed';
+                    errorEl.classList.remove('hidden');
+                }
+            } catch (e) {
+                errorEl.textContent = `Connection error: ${e.message}`;
+                errorEl.classList.remove('hidden');
+            }
+        }
+
+        function checkStoredAuth() {
+            const storedToken = sessionStorage.getItem('adminToken');
+            if (storedToken) {
+                adminToken = storedToken;
+                document.getElementById('admin-password').value = storedToken;
+                authenticate();
+            }
+        }
+
+        // ===== INITIALIZATION =====
+        function updateTime() {
+            document.getElementById('current-time').textContent = new Date().toLocaleString();
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            updateTime();
+            setInterval(updateTime, 1000);
+            lucide.createIcons();
+
+            // Check for stored authentication
+            checkStoredAuth();
+        });
+    </script>
+</body>
+</html>

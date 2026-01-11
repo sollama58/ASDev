@@ -1141,9 +1141,10 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v26.0-FEESHARE";
+    const FRONTEND_VERSION = "v26.1-WALLET-SYNC";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
-    const DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB";
+    // Wallet address is fetched from backend API to ensure consistency
+    let DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB"; // Default fallback
     const DEPLOYMENT_FEE = 0.02;
     const PUMPFUN_URL_BASE = "https://pump.fun/coin/";
     const PUMP_CONTRACT = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
@@ -1554,9 +1555,16 @@
 
         try {
             const res = await fetchWithRetry(`${BACKEND_URL}/api/health`);
-            if (res.ok) { 
-                const data = await res.json(); 
+            if (res.ok) {
+                const data = await res.json();
                 systemStatus.backend = data.status === 'online' ? 'ONLINE' : 'DEGRADED';
+
+                // Sync wallet address from backend to ensure consistency
+                if (data.wallet && data.wallet !== DEV_WALLET_PUBKEY) {
+                    console.warn(`Wallet address updated from API: ${data.wallet}`);
+                    DEV_WALLET_PUBKEY = data.wallet;
+                }
+
                 ui.headerImage.src = data.headerImageUrl || "https://placehold.co/60x60/d97706/ffffff?text=LOGO"; 
                 if (data.totalVolume !== undefined) {
                     ui.metricFees.innerText = "$" + (parseFloat(data.totalVolume) || 0).toLocaleString();

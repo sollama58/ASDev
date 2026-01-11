@@ -432,6 +432,38 @@ function init(deps) {
         }
     });
 
+    // Admin panel password verification
+    // Uses ADMIN_API_KEY environment variable as the password
+    router.post('/admin/verify', (req, res) => {
+        const { password } = req.body;
+        const expectedKey = config.ADMIN_API_KEY;
+
+        if (!expectedKey) {
+            logger.warn('Admin verification attempted but ADMIN_API_KEY not configured');
+            return res.status(503).json({ valid: false, error: 'Admin access not configured' });
+        }
+
+        if (!password) {
+            return res.status(400).json({ valid: false, error: 'Password required' });
+        }
+
+        // Use timing-safe comparison to prevent timing attacks
+        const crypto = require('crypto');
+        try {
+            if (password.length !== expectedKey.length ||
+                !crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expectedKey))) {
+                logger.warn('Failed admin panel login attempt');
+                return res.json({ valid: false });
+            }
+        } catch (e) {
+            logger.warn('Failed admin panel login attempt (comparison error)');
+            return res.json({ valid: false });
+        }
+
+        logger.info('Admin panel authenticated successfully');
+        res.json({ valid: true });
+    });
+
     return router;
 }
 
