@@ -12,7 +12,7 @@ const { BN } = require('@coral-xyz/anchor');
 const axios = require('axios');
 const config = require('../config/env');
 const { PROGRAMS } = require('../config/constants');
-const { logger, pump, mutex, mintExtractor } = require('../services');
+const { logger, pump, mutex, mintExtractor, imageUtils } = require('../services');
 
 // RACE CONDITION FIX: Use mutex instead of boolean flag
 const scannerMutex = mutex.getMutex('robinhood_scanner');
@@ -120,12 +120,10 @@ async function fetchHeliusMetadata(mint) {
         const asset = response.data?.result;
         if (asset) {
             const metadata = asset.content?.metadata || {};
-            const files = asset.content?.files || [];
-            const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
             return {
                 name: metadata.name || 'Unknown',
                 ticker: metadata.symbol || 'UNKNOWN',
-                image: imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null,
+                image: imageUtils.extractHeliusImage(asset),
                 marketCap: 0, // Will be fetched from DexScreener
                 creator: asset.creators?.[0]?.address || null
             };

@@ -7,7 +7,7 @@ const { LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS } = require('../config/constants');
-const { pump, logger } = require('../services');
+const { pump, logger, imageUtils } = require('../services');
 
 const router = express.Router();
 
@@ -286,12 +286,10 @@ function init(deps) {
                     const asset = heliusRes.data?.result;
                     if (asset) {
                         const metadata = asset.content?.metadata || {};
-                        const files = asset.content?.files || [];
-                        const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
                         heliusMeta = {
                             name: metadata.name || 'Unknown',
                             ticker: metadata.symbol || 'UNKNOWN',
-                            image: imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null,
+                            image: imageUtils.extractHeliusImage(asset),
                             description: metadata.description || '',
                             twitter: asset.content?.links?.twitter || null,
                             website: asset.content?.links?.external_url || null,

@@ -9,7 +9,7 @@ const { getAssociatedTokenAddress, createCloseAccountInstruction, ASSOCIATED_TOK
 const axios = require('axios');
 const config = require('../config/env');
 const { PROGRAMS, WALLETS, TOKENS } = require('../config/constants');
-const { logger, redis, pump, vanity, solana, twitter } = require('../services');
+const { logger, redis, pump, vanity, solana, twitter, imageUtils } = require('../services');
 
 /**
  * Initialize deploy worker
@@ -568,9 +568,8 @@ function initMetadataUpdaterWorker(deps) {
                             for (const asset of assets) {
                                 if (asset?.id) {
                                     const marketCap = asset?.token_info?.price_info?.total_price || 0;
-                                    const image = asset?.content?.links?.image ||
-                                                  asset?.content?.files?.[0]?.cdn_uri ||
-                                                  asset?.content?.files?.[0]?.uri || null;
+                                    // v21.0: Clean CDN-wrapped URLs
+                                    const image = imageUtils.extractHeliusBatchImage(asset);
 
                                     // Update with both marketCap and image if available
                                     if (image && marketCap > 0) {

@@ -16,6 +16,7 @@ const moderation = require('./moderation');
 const jupiter = require('./jupiter');
 const mutex = require('./mutex');
 const mintExtractor = require('./mintExtractor');
+const imageUtils = require('./imageUtils');
 
 // v13.0: Use PostgreSQL as the database layer
 const database = postgres;
@@ -34,4 +35,5 @@ module.exports = {
     jupiter,
     mutex,
     mintExtractor,
+    imageUtils,
 };

@@ -13,6 +13,7 @@ const { PublicKey } = require('@solana/web3.js');
 const { PROGRAMS } = require('../config/constants');
 const config = require('../config/env');
 const logger = require('./logger');
+const imageUtils = require('./imageUtils');
 
 /**
  * Known program IDs and tokens to skip when looking for mints
@@ -735,13 +736,11 @@ async function validateMintsBatch(mints, options = {}) {
                     if (asset && asset.id && (isFungible || hasMetadata)) {
                         logger.info(`[MintExtractor] Processing asset ${asset.id.slice(0, 8)}... interface=${asset.interface}, hasMetadata=${hasMetadata}`);
                         const metadata = asset.content?.metadata || {};
-                        const files = asset.content?.files || [];
-                        const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
 
-                        // Try multiple image sources
-                        const heliusImage = imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null;
+                        // Try multiple image sources (v21.0: Clean CDN-wrapped URLs)
+                        const heliusImage = imageUtils.extractHeliusImage(asset);
 
-                        logger.info(`[MintExtractor] Helius asset ${asset.id.slice(0, 8)}...: name=${metadata.name}, symbol=${metadata.symbol}, image=${heliusImage ? 'YES' : 'NO'}, files=${files.length}`);
+                        logger.info(`[MintExtractor] Helius asset ${asset.id.slice(0, 8)}...: name=${metadata.name}, symbol=${metadata.symbol}, image=${heliusImage ? 'YES' : 'NO'}`);
 
                         const tokenData = {
                             mint: asset.id,

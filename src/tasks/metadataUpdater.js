@@ -8,7 +8,7 @@
  */
 const axios = require('axios');
 const config = require('../config/env');
-const { logger } = require('../services');
+const { logger, imageUtils } = require('../services');
 
 // Debug mode - set to true for verbose logging
 const DEBUG_METADATA = true;
@@ -49,10 +49,8 @@ async function fetchHeliusMarketDataBatch(mints) {
             if (asset?.id) {
                 const data = {
                     marketCap: asset?.token_info?.price_info?.total_price || 0,
-                    // v19.0: Also extract image from Helius
-                    image: asset?.content?.links?.image ||
-                           asset?.content?.files?.[0]?.cdn_uri ||
-                           asset?.content?.files?.[0]?.uri || null,
+                    // v19.0: Also extract image from Helius (v21.0: Clean CDN-wrapped URLs)
+                    image: imageUtils.extractHeliusBatchImage(asset),
                     name: asset?.content?.metadata?.name || null,
                     ticker: asset?.content?.metadata?.symbol || null
                 };
