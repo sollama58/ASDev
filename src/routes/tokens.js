@@ -1791,7 +1791,113 @@ function init(deps) {
             // Run the actual verification
             const verification = await mintExtractor.verifyFeeRecipient(mint, platformWallet, connection);
 
-            // Build a step-by-step trace for debugging
+            // Build a step-by-step trace for debugging - using the CORRECT approach
+            const coinCreatorAddr = bcData?.creator || ammData?.creator || null;
+            let step3Result = null;
+
+            if (coinCreatorAddr) {
+                // Step 3: Look up fee_sharing_config PDA derived from the coin_creator
+                const coinCreatorPubkey = new PublicKey(coinCreatorAddr);
+                const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
+                    [Buffer.from("fee_sharing_config"), coinCreatorPubkey.toBuffer()],
+                    PUMP
+                );
+
+                const configAccountInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+
+                if (configAccountInfo && configAccountInfo.owner.equals(PUMP)) {
+                    // Parse the fee_sharing_config to find shareholders
+                    const parsed = parseFeeSharingConfigDebug(configAccountInfo.data, feeSharingConfigPDA.toString());
+
+                    step3Result = {
+                        feeSharingConfigPDA: feeSharingConfigPDA.toString(),
+                        derivedFrom: coinCreatorAddr,
+                        exists: true,
+                        owner: configAccountInfo.owner.toString(),
+                        dataLength: configAccountInfo.data.length,
+                        parsed,
+                        shareholderCount: parsed?.shareholderCount || 0,
+                        shareholders: parsed?.shareholders?.map(s => ({
+                            pubkey: s.pubkey,
+                            bps: s.shareBps,
+                            percent: s.sharePercent,
+                            isUs: s.isUs
+                        })) || [],
+                        weAreShareHolder: parsed?.weAreShareHolder || false,
+                        ourShareBps: parsed?.shareholders?.find(s => s.isUs)?.shareBps || 0
+                    };
+                } else {
+                    // fee_sharing_config doesn't exist for this coin_creator
+                    // The coin_creator might be a creator_vault PDA, not the original creator
+                    // Let's check if coin_creator is owned by FEE program
+                    const coinCreatorAccountInfo = await connection.getAccountInfo(coinCreatorPubkey);
+                    const FEE_PROGRAM = new PublicKey('pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ');
+
+                    step3Result = {
+                        feeSharingConfigPDA: feeSharingConfigPDA.toString(),
+                        derivedFrom: coinCreatorAddr,
+                        exists: false,
+                        coinCreatorAccountExists: !!coinCreatorAccountInfo,
+                        coinCreatorOwner: coinCreatorAccountInfo?.owner.toString() || null,
+                        coinCreatorIsCreatorVault: coinCreatorAccountInfo?.owner.equals(FEE_PROGRAM) || false,
+                        coinCreatorDataLength: coinCreatorAccountInfo?.data?.length || 0,
+                        note: 'fee_sharing_config PDA does not exist'
+                    };
+
+                    // If coin_creator is a creator_vault (owned by FEE), we need to find the original creator
+                    // The original creator can be found by scanning for pubkeys in the coin_creator data
+                    // and checking which one's fee_sharing_config PDA exists
+                    if (coinCreatorAccountInfo?.owner.equals(FEE_PROGRAM)) {
+                        step3Result.searchingForOriginalCreator = true;
+                        const dataLen = coinCreatorAccountInfo.data.length;
+
+                        // Try various offsets to find pubkeys that might be the original creator
+                        const offsetsToTry = [8, 11, 43, 75, 107, 139, 171];
+                        for (const offset of offsetsToTry) {
+                            if (offset + 32 <= dataLen) {
+                                try {
+                                    const potentialOriginalCreator = new PublicKey(coinCreatorAccountInfo.data.slice(offset, offset + 32));
+                                    const [potentialFeeSharingPDA] = PublicKey.findProgramAddressSync(
+                                        [Buffer.from("fee_sharing_config"), potentialOriginalCreator.toBuffer()],
+                                        PUMP
+                                    );
+
+                                    const potentialConfigInfo = await connection.getAccountInfo(potentialFeeSharingPDA);
+
+                                    if (potentialConfigInfo && potentialConfigInfo.owner.equals(PUMP)) {
+                                        // Found it! Parse and return the shareholders
+                                        const parsed = parseFeeSharingConfigDebug(potentialConfigInfo.data, potentialFeeSharingPDA.toString());
+
+                                        step3Result = {
+                                            foundOriginalCreator: true,
+                                            originalCreator: potentialOriginalCreator.toString(),
+                                            foundAtOffset: offset,
+                                            feeSharingConfigPDA: potentialFeeSharingPDA.toString(),
+                                            exists: true,
+                                            owner: potentialConfigInfo.owner.toString(),
+                                            dataLength: potentialConfigInfo.data.length,
+                                            parsed,
+                                            shareholderCount: parsed?.shareholderCount || 0,
+                                            shareholders: parsed?.shareholders?.map(s => ({
+                                                pubkey: s.pubkey,
+                                                bps: s.shareBps,
+                                                percent: s.sharePercent,
+                                                isUs: s.isUs
+                                            })) || [],
+                                            weAreShareHolder: parsed?.weAreShareHolder || false,
+                                            ourShareBps: parsed?.shareholders?.find(s => s.isUs)?.shareBps || 0
+                                        };
+                                        break;
+                                    }
+                                } catch (e) {
+                                    // Invalid pubkey at this offset
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             const debugTrace = {
                 step1_getCoinCreator: {
                     bcAddress: bondingCurve.toString(),
@@ -1800,27 +1906,15 @@ function init(deps) {
                     ammAddress: pool.toString(),
                     ammExists: !!ammData?.exists,
                     ammCreator: ammData?.creator || null,
-                    coinCreatorFound: bcData?.creator || ammData?.creator || null,
+                    coinCreatorFound: coinCreatorAddr,
                     source: bcData?.exists ? 'bonding_curve' : (ammData?.exists ? 'amm_pool' : 'none')
                 },
                 step2_directCreatorCheck: {
-                    coinCreator: bcData?.creator || ammData?.creator || null,
+                    coinCreator: coinCreatorAddr,
                     platformWallet: platformWallet,
                     isDirectCreator: (bcData?.creator === platformWallet) || (ammData?.creator === platformWallet)
                 },
-                step3_feeSharingConfigCheck: directConfigLookup ? {
-                    coinCreatorIsConfig: directConfigLookup.method === 'coin_creator_is_config',
-                    configOwner: directConfigLookup.owner,
-                    isOwnedByPump: directConfigLookup.isOwnedByPump,
-                    shareholderCount: directConfigLookup.shareholderCount,
-                    weAreShareHolder: directConfigLookup.weAreShareHolder,
-                    shareholders: directConfigLookup.shareholders?.map(s => ({
-                        pubkey: s.pubkey,
-                        bps: s.shareBps,
-                        percent: s.sharePercent,
-                        isUs: s.isUs
-                    })) || []
-                } : { error: 'coin_creator is not a fee_sharing_config' }
+                step3_feeSharingConfigCheck: step3Result || { error: 'No coin_creator found' }
             };
 
             res.json({

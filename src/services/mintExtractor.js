@@ -1180,315 +1180,47 @@ async function getCoinCreator(mintPubkey, connection) {
 }
 
 /**
- * Parse FEE program account to find shareholders directly embedded in the data.
+ * Check if coin_creator has a fee_sharing_config and if wallet is a shareholder
  *
- * Based on analysis of real FEE program accounts, the structure appears to be:
- * - 8 bytes: discriminator
- * - 3 bytes: bump + flags
- * - 32 bytes: mint (at offset 11)
- * - 32 bytes: original creator (at offset 43)
- * - 2 bytes: fee share bps for creator (at offset 75) - little-endian u16
- * - Variable: additional shareholders may follow (32 bytes pubkey + 2 bytes bps each)
+ * When fee sharing is enabled on Pump.fun:
+ * - The original creator sets up fee sharing via create_fee_sharing_config
+ * - This creates a fee_sharing_config PDA derived from the original creator
+ * - The fee_sharing_config contains the list of shareholders and their bps
  *
- * Alternative structure (larger accounts):
- * - 8 bytes: discriminator
- * - 3 bytes: bump + flags
- * - 32 bytes: something (at offset 11)
- * - 32 bytes: something (at offset 43)
- * - ... more pubkeys embedded at 34-byte intervals (32 pubkey + 2 bps)
- *
- * We'll scan the account data for our wallet pubkey and extract the fee share.
- *
- * @param {Buffer} data - FEE program account data
- * @param {PublicKey} walletKey - Wallet to search for
- * @param {string} mint - Mint address (for logging)
- * @returns {Object|null} Fee recipient info if found, null otherwise
- */
-function parseFeeProgramAccount(data, walletKey, mint) {
-    const walletStr = walletKey.toString();
-    const walletBytes = walletKey.toBuffer();
-    const dataLen = data.length;
-
-    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Parsing FEE account (${dataLen} bytes) for wallet ${walletStr.slice(0, 8)}...`);
-    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Wallet bytes: ${walletBytes.toString('hex').slice(0, 32)}...`);
-
-    // Use Buffer.indexOf for efficient searching of our wallet pubkey in the account data
-    let offset = 0;
-    while (offset <= dataLen - 34) {
-        // Find next occurrence of our wallet bytes
-        const foundOffset = data.indexOf(walletBytes, offset);
-
-        if (foundOffset === -1 || foundOffset > dataLen - 34) {
-            // No more occurrences found
-            break;
-        }
-
-        offset = foundOffset;
-
-        // Verify it's an exact 32-byte match (indexOf should guarantee this, but let's be safe)
-        const matches = data.slice(offset, offset + 32).equals(walletBytes);
-
-        if (matches) {
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found our wallet bytes at offset ${offset}`);
-
-            // Found our wallet! Try to read the fee share bps at offset+32
-            if (offset + 34 <= dataLen) {
-                const shareBps = data.readUInt16LE(offset + 32);
-                const nextBytes = data.slice(offset + 32, Math.min(offset + 38, dataLen)).toString('hex');
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Bytes after wallet: ${nextBytes}, parsed bps: ${shareBps}`);
-
-                // Validate the bps value (should be 1-10000, 0 means no share)
-                if (shareBps > 0 && shareBps <= 10000) {
-                    const sharePercent = shareBps / 100;
-                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - SUCCESS: Found fee share ${shareBps} bps (${sharePercent}%)`);
-
-                    return {
-                        isRecipient: true,
-                        source: 'fee_program_account',
-                        feeShareBps: shareBps,
-                        feeSharePercent: sharePercent,
-                        originalCreator: null // We don't need this for verification
-                    };
-                } else if (shareBps === 0) {
-                    // bps is 0, might need to try a different interpretation
-                    // Try reading as big-endian
-                    const shareBpsBE = data.readUInt16BE(offset + 32);
-                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - LE bps was 0, trying BE: ${shareBpsBE}`);
-
-                    if (shareBpsBE > 0 && shareBpsBE <= 10000) {
-                        const sharePercent = shareBpsBE / 100;
-                        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - SUCCESS (BE): Found fee share ${shareBpsBE} bps (${sharePercent}%)`);
-
-                        return {
-                            isRecipient: true,
-                            source: 'fee_program_account',
-                            feeShareBps: shareBpsBE,
-                            feeSharePercent: sharePercent,
-                            originalCreator: null
-                        };
-                    }
-
-                    // Try checking bytes BEFORE the wallet for bps (different structure)
-                    if (offset >= 2) {
-                        const preBps = data.readUInt16LE(offset - 2);
-                        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Trying bps BEFORE wallet: ${preBps}`);
-
-                        if (preBps > 0 && preBps <= 10000) {
-                            const sharePercent = preBps / 100;
-                            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - SUCCESS (pre-wallet): Found fee share ${preBps} bps (${sharePercent}%)`);
-
-                            return {
-                                isRecipient: true,
-                                source: 'fee_program_account',
-                                feeShareBps: preBps,
-                                feeSharePercent: sharePercent,
-                                originalCreator: null
-                            };
-                        }
-                    }
-
-                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found wallet but could not determine valid bps`);
-                } else {
-                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found wallet at offset ${offset} but bps value ${shareBps} is out of range`);
-                }
-            } else {
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found wallet at offset ${offset} but not enough bytes for bps`);
-            }
-
-            // Even if we couldn't parse bps, the fact that our wallet is in the account
-            // suggests we might be a fee recipient. Return with a default share.
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Wallet found in FEE account, assuming fee recipient with unknown share`);
-            return {
-                isRecipient: true,
-                source: 'fee_program_account',
-                feeShareBps: 0, // Unknown share
-                feeSharePercent: 0,
-                originalCreator: null
-            };
-        }
-
-        // Move past this match to continue searching
-        offset++;
-    }
-
-    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Our wallet not found in FEE account data`);
-    return null;
-}
-
-/**
- * Check if coin_creator is a fee_sharing_config and if wallet is a shareholder
- *
- * Understanding the Pump.fun fee sharing flow:
- *
- * Pre-graduation (Bonding Curve):
- *   - bondingCurve.creator = original creator wallet (when NO fee sharing)
- *   - bondingCurve.creator = creator_vault PDA (when fee sharing IS enabled)
- *   - creator_vault PDA derived: ["creator-vault", original_creator] with PUMP program
- *   - fee_sharing_config PDA derived: ["fee_sharing_config", original_creator] with PUMP program
- *
- * Post-graduation (AMM Pool):
- *   - pool.coinCreator = original creator wallet (when NO fee sharing)
- *   - pool.coinCreator = creator_vault PDA (when fee sharing IS enabled)
- *   - creator_vault PDA derived: ["creator_vault", original_creator] with PUMP_AMM program
- *
- * @param {PublicKey} coinCreator - The coin_creator from BC/AMM
- * @param {PublicKey} walletKey - Wallet to check for
+ * @param {PublicKey} coinCreator - The coin_creator from BC/AMM (this is the original creator wallet)
+ * @param {PublicKey} walletKey - Wallet to check for in shareholders
  * @param {string} mint - Mint address (for logging)
  * @param {Object} connection - Solana connection
  * @returns {Promise<Object|null>} Fee recipient info or null
  */
 async function checkFeeSharingConfig(coinCreator, walletKey, mint, connection) {
     try {
-        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Checking coin_creator ${coinCreator.toString().slice(0, 8)}...`);
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Checking fee_sharing_config for creator ${coinCreator.toString().slice(0, 8)}...`);
 
-        const accountInfo = await connection.getAccountInfo(coinCreator);
+        // Derive the fee_sharing_config PDA from the coin_creator (original creator)
+        const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("fee_sharing_config"), coinCreator.toBuffer()],
+            PROGRAMS.PUMP
+        );
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Derived fee_sharing_config PDA: ${feeSharingConfigPDA.toString()}`);
 
-        if (!accountInfo) {
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator account doesn't exist on-chain`);
+        // Fetch the fee_sharing_config account
+        const configAccountInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+
+        if (!configAccountInfo) {
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - No fee_sharing_config exists for this creator (fee sharing not enabled)`);
             return null;
         }
 
-        const owner = accountInfo.owner.toString();
-        const dataLen = accountInfo.data.length;
-        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator account: owner=${owner}, dataLen=${dataLen}`);
-
-        // Case 1: coin_creator is owned by PUMP program - it's likely a fee_sharing_config PDA
-        if (accountInfo.owner.equals(PROGRAMS.PUMP)) {
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is owned by PUMP, checking if it's a fee_sharing_config...`);
-            return await parseAndCheckFeeSharingConfig(accountInfo.data, walletKey, mint, null);
-        }
-
-        // Case 2: coin_creator is owned by FEE program (pfee...) - it's a creator_vault account
-        // The FEE program account may contain shareholders directly embedded in its data.
-        // Structure observed (based on debug analysis):
-        // - 8 bytes: discriminator
-        // - 3 bytes: bump + flags
-        // - 32 bytes: mint (at offset 11)
-        // - 32 bytes: first shareholder wallet (at offset 43)
-        // - 2 bytes: possibly fee share bps (at offset 75)
-        // - More shareholders may follow
-        if (accountInfo.owner.equals(PROGRAMS.FEE)) {
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is a FEE program account (${dataLen} bytes), parsing directly...`);
-
-            // First, try to parse shareholders directly from the FEE account
-            // This is the new approach - the FEE program account may embed shareholders
-            const feeAccountResult = await parseFeeProgramAccount(accountInfo.data, walletKey, mint);
-            if (feeAccountResult) {
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found fee share via FEE program account parsing`);
-                return feeAccountResult;
-            }
-
-            // Fallback: Try the original approach of finding original creator and looking up fee_sharing_config
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - FEE account parsing didn't find us, trying original creator lookup...`);
-
-            let originalCreator = null;
-
-            // Method 1: Try to get from token metadata (most reliable if it exists)
-            const mintPubkey = new PublicKey(mint);
-            originalCreator = await getOriginalCreatorFromMetadata(mintPubkey, connection);
-
-            if (originalCreator) {
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found original creator from metadata: ${originalCreator.toString()}`);
-            } else {
-                // Method 2: The FEE program creator_vault account stores the original creator
-                // Try multiple offsets since the exact structure may vary
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - No metadata, parsing creator_vault account data...`);
-
-                // Log raw data for debugging
-                const rawHex = accountInfo.data.slice(0, Math.min(100, dataLen)).toString('hex');
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - creator_vault raw data (first 100 bytes): ${rawHex}`);
-
-                // Try to find a valid pubkey in the data
-                const offsetsToTry = [43, 8, 9, 10, 11, 12, 44, 45, 75, 76, 77];
-
-                for (const offset of offsetsToTry) {
-                    if (dataLen >= offset + 32) {
-                        try {
-                            const potentialCreator = new PublicKey(accountInfo.data.slice(offset, offset + 32));
-
-                            // Verify this is a valid creator by deriving the creator_vault PDA
-                            // Pre-graduation: ["creator-vault", creator] with PUMP
-                            const [expectedCreatorVaultBC] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("creator-vault"), potentialCreator.toBuffer()],
-                                PROGRAMS.PUMP
-                            );
-
-                            // Post-graduation: ["creator_vault", creator] with PUMP_AMM
-                            const [expectedCreatorVaultAMM] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("creator_vault"), potentialCreator.toBuffer()],
-                                PROGRAMS.PUMP_AMM
-                            );
-
-                            // Check if deriving from this creator gives us the coinCreator we started with
-                            if (expectedCreatorVaultBC.equals(coinCreator)) {
-                                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found original creator at offset ${offset} (BC vault match): ${potentialCreator.toString()}`);
-                                originalCreator = potentialCreator;
-                                break;
-                            }
-
-                            if (expectedCreatorVaultAMM.equals(coinCreator)) {
-                                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found original creator at offset ${offset} (AMM vault match): ${potentialCreator.toString()}`);
-                                originalCreator = potentialCreator;
-                                break;
-                            }
-
-                            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Offset ${offset}: ${potentialCreator.toString().slice(0, 8)}... - no match`);
-                        } catch (e) {
-                            // Invalid pubkey at this offset
-                        }
-                    }
-                }
-
-                // If we still don't have the creator, try assuming the pubkey at offset 8 is correct
-                // even if the PDA derivation doesn't match (different program version)
-                if (!originalCreator && dataLen >= 40) {
-                    try {
-                        originalCreator = new PublicKey(accountInfo.data.slice(8, 40));
-                        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Using pubkey at offset 8 as fallback: ${originalCreator.toString()}`);
-                    } catch (e) {
-                        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Failed to parse pubkey at offset 8`);
-                    }
-                }
-            }
-
-            if (!originalCreator) {
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Could not find original creator from any source`);
-                return null;
-            }
-
-            // Derive the fee_sharing_config PDA from the original creator
-            const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
-                [Buffer.from("fee_sharing_config"), originalCreator.toBuffer()],
-                PROGRAMS.PUMP
-            );
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Derived fee_sharing_config PDA: ${feeSharingConfigPDA.toString()}`);
-
-            // Fetch the fee_sharing_config
-            const configAccountInfo = await connection.getAccountInfo(feeSharingConfigPDA);
-
-            if (!configAccountInfo) {
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config PDA does not exist for this creator`);
-                return null;
-            }
-
-            if (!configAccountInfo.owner.equals(PROGRAMS.PUMP)) {
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config not owned by PUMP: ${configAccountInfo.owner.toString()}`);
-                return null;
-            }
-
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found fee_sharing_config (${configAccountInfo.data.length} bytes), parsing...`);
-            return await parseAndCheckFeeSharingConfig(configAccountInfo.data, walletKey, mint, originalCreator.toString());
-        }
-
-        // Case 3: coin_creator is owned by System Program - it's the original creator wallet (no fee sharing enabled)
-        if (owner === '11111111111111111111111111111111') {
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is a regular wallet (System Program), no fee sharing configured`);
+        if (!configAccountInfo.owner.equals(PROGRAMS.PUMP)) {
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config not owned by PUMP program: ${configAccountInfo.owner.toString()}`);
             return null;
         }
 
-        // Case 4: coin_creator is owned by something else
-        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator owned by unknown program: ${owner}`);
-        return null;
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found fee_sharing_config (${configAccountInfo.data.length} bytes), parsing shareholders...`);
+
+        // Parse the fee_sharing_config to find shareholders
+        return await parseAndCheckFeeSharingConfig(configAccountInfo.data, walletKey, mint, coinCreator.toString());
 
     } catch (e) {
         logger.error(`[MintExtractor] checkFeeSharingConfig error: ${e.message}`, { stack: e.stack });
