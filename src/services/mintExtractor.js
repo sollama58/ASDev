@@ -988,6 +988,96 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
 }
 
 /**
+ * Get the original token creator from Metaplex metadata
+ *
+ * For Pump.fun tokens, the first verified creator in the metadata is the original creator.
+ * This is set when the token is created and doesn't change when fee sharing is enabled.
+ *
+ * @param {PublicKey} mintPubkey - Token mint public key
+ * @param {Object} connection - Solana connection
+ * @returns {Promise<PublicKey|null>} Original creator pubkey or null
+ */
+async function getOriginalCreatorFromMetadata(mintPubkey, connection) {
+    try {
+        // Derive the Metaplex metadata PDA
+        const [metadataPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("metadata"), PROGRAMS.METADATA.toBuffer(), mintPubkey.toBuffer()],
+            PROGRAMS.METADATA
+        );
+
+        logger.info(`[MintExtractor] Fetching metadata PDA: ${metadataPDA.toString()}`);
+
+        const metadataAccount = await connection.getAccountInfo(metadataPDA);
+        if (!metadataAccount) {
+            logger.info(`[MintExtractor] Metadata account not found`);
+            return null;
+        }
+
+        // Parse Metaplex metadata to find the first creator
+        // Metadata structure (simplified):
+        // - 1 byte: key
+        // - 32 bytes: update authority
+        // - 32 bytes: mint
+        // - 4 bytes + variable: name (string with length prefix)
+        // - 4 bytes + variable: symbol (string with length prefix)
+        // - 4 bytes + variable: uri (string with length prefix)
+        // - 2 bytes: seller fee basis points
+        // - 1 byte: has creators (bool)
+        // - if has creators: 4 bytes count + N * (32 bytes address + 1 byte verified + 1 byte share)
+
+        const data = metadataAccount.data;
+        let offset = 1 + 32 + 32; // Skip key, update authority, mint
+
+        // Skip name (4 byte length + chars)
+        const nameLen = data.readUInt32LE(offset);
+        offset += 4 + nameLen;
+
+        // Skip symbol (4 byte length + chars)
+        const symbolLen = data.readUInt32LE(offset);
+        offset += 4 + symbolLen;
+
+        // Skip uri (4 byte length + chars)
+        const uriLen = data.readUInt32LE(offset);
+        offset += 4 + uriLen;
+
+        // Skip seller fee basis points
+        offset += 2;
+
+        // Check if has creators
+        const hasCreators = data[offset] === 1;
+        offset += 1;
+
+        if (!hasCreators) {
+            logger.info(`[MintExtractor] Metadata has no creators`);
+            return null;
+        }
+
+        // Read creator count
+        const creatorCount = data.readUInt32LE(offset);
+        offset += 4;
+
+        logger.info(`[MintExtractor] Found ${creatorCount} creator(s) in metadata`);
+
+        if (creatorCount === 0) {
+            return null;
+        }
+
+        // Read first creator (32 bytes address + 1 byte verified + 1 byte share)
+        const creatorAddress = new PublicKey(data.slice(offset, offset + 32));
+        const verified = data[offset + 32] === 1;
+        const share = data[offset + 33];
+
+        logger.info(`[MintExtractor] First creator: ${creatorAddress.toString()}, verified: ${verified}, share: ${share}`);
+
+        return creatorAddress;
+
+    } catch (e) {
+        logger.error(`[MintExtractor] Error getting creator from metadata: ${e.message}`);
+        return null;
+    }
+}
+
+/**
  * Get coin_creator from bonding curve or AMM pool
  *
  * @param {PublicKey} mintPubkey - Token mint public key
@@ -1094,44 +1184,44 @@ async function checkFeeSharingConfig(coinCreator, walletKey, mint, connection) {
         }
 
         // Case 2: coin_creator is owned by FEE program (pfee...) - it's a creator_vault account
-        // We need to extract the original creator and derive the fee_sharing_config PDA from it
+        // The creator_vault means fee sharing is enabled. We need to find the original token creator
+        // from the token's metadata, not from parsing the FEE account data.
         if (accountInfo.owner.equals(PROGRAMS.FEE)) {
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is owned by FEE program, extracting original creator...`);
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is owned by FEE program, getting original creator from token metadata...`);
 
-            // FEE program account structure (creator_vault):
-            // - 8 bytes: discriminator
-            // - 1 byte: bump
-            // - 2 bytes: flags or padding
-            // - 32 bytes: original creator pubkey (at offset 11)
-            if (dataLen >= 43) {
-                const originalCreator = new PublicKey(accountInfo.data.slice(11, 43));
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Original creator from FEE account: ${originalCreator.toString()}`);
+            // Get the original creator from the token's Metaplex metadata
+            const mintPubkey = new PublicKey(mint);
+            const originalCreator = await getOriginalCreatorFromMetadata(mintPubkey, connection);
 
-                // Derive the fee_sharing_config PDA from the original creator
-                const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
-                    [Buffer.from("fee_sharing_config"), originalCreator.toBuffer()],
-                    PROGRAMS.PUMP
-                );
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Derived fee_sharing_config PDA: ${feeSharingConfigPDA.toString()}`);
-
-                // Fetch the fee_sharing_config
-                const configAccountInfo = await connection.getAccountInfo(feeSharingConfigPDA);
-
-                if (!configAccountInfo) {
-                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config PDA does not exist`);
-                    return null;
-                }
-
-                if (!configAccountInfo.owner.equals(PROGRAMS.PUMP)) {
-                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config PDA not owned by PUMP: ${configAccountInfo.owner.toString()}`);
-                    return null;
-                }
-
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found fee_sharing_config, parsing...`);
-                return await parseAndCheckFeeSharingConfig(configAccountInfo.data, walletKey, mint, originalCreator.toString());
-            } else {
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - FEE account data too short: ${dataLen} < 43`);
+            if (!originalCreator) {
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Could not find original creator from token metadata`);
+                return null;
             }
+
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Original creator from metadata: ${originalCreator.toString()}`);
+
+            // Derive the fee_sharing_config PDA from the original creator
+            const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
+                [Buffer.from("fee_sharing_config"), originalCreator.toBuffer()],
+                PROGRAMS.PUMP
+            );
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Derived fee_sharing_config PDA: ${feeSharingConfigPDA.toString()}`);
+
+            // Fetch the fee_sharing_config
+            const configAccountInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+
+            if (!configAccountInfo) {
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config PDA does not exist`);
+                return null;
+            }
+
+            if (!configAccountInfo.owner.equals(PROGRAMS.PUMP)) {
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config PDA not owned by PUMP: ${configAccountInfo.owner.toString()}`);
+                return null;
+            }
+
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found fee_sharing_config, parsing...`);
+            return await parseAndCheckFeeSharingConfig(configAccountInfo.data, walletKey, mint, originalCreator.toString());
         }
 
         // Case 3: coin_creator is owned by something else (e.g., System Program = regular wallet)
@@ -1252,6 +1342,7 @@ module.exports = {
     filterMintsWeAreRecipientFor,
     getCoinCreator,
     checkFeeSharingConfig,
+    getOriginalCreatorFromMetadata,
 
     // Fee sharing config parsing
     parseFeeSharingConfig,
