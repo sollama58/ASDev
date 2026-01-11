@@ -834,64 +834,47 @@ async function validateMintsBatch(mints, options = {}) {
     }
 
     // Phase 3: For any remaining mints (not in Helius or DexScreener),
-    // try to fetch metadata directly from on-chain metadata JSON
+    // try to fetch metadata directly from Pump.fun API
     const stillMissing = mintArray.filter(m => !processedMints.has(m));
     if (stillMissing.length > 0) {
-        logger.info(`[MintExtractor] ${stillMissing.length} mints not found in Helius/DexScreener, trying on-chain metadata...`);
+        logger.info(`[MintExtractor] ${stillMissing.length} mints not found in Helius/DexScreener, trying pump.fun API...`);
 
         for (const mint of stillMissing) {
-            // Only process if it looks like a valid Pump.fun token (ends in "pump")
-            if (mint.toLowerCase().endsWith('pump')) {
+            try {
+                const pumpMetaUrl = `https://frontend-api.pump.fun/coins/${mint}`;
+
+                // Try pump.fun API (reliable for all Pump.fun tokens, new and old)
                 try {
-                    // Try to fetch metadata from pump.fun's CDN or ipfs
-                    const metadataUrl = `https://pump.mypinata.cloud/ipfs/${mint}`;
-                    const pumpMetaUrl = `https://frontend-api.pump.fun/coins/${mint}`;
-
-                    // Try pump.fun API first (faster and more reliable for new tokens)
-                    try {
-                        const pumpResponse = await axios.get(pumpMetaUrl, { timeout: 5000 });
-                        if (pumpResponse.data) {
-                            const pumpData = pumpResponse.data;
-                            logger.info(`[MintExtractor] Found ${mint.slice(0, 8)}... via pump.fun API: ${pumpData.symbol}`);
-                            validTokens.push({
-                                mint,
-                                name: pumpData.name || 'Unknown Token',
-                                ticker: pumpData.symbol || 'UNKNOWN',
-                                description: pumpData.description || '',
-                                image: pumpData.image_uri || pumpData.image || null,
-                                metadataUri: pumpData.metadata_uri || null,
-                                twitter: pumpData.twitter || '',
-                                website: pumpData.website || '',
-                                creator: pumpData.creator || null,
-                                marketCap: pumpData.usd_market_cap || 0,
-                                volume24h: 0,
-                                priceUsd: 0,
-                            });
-                            processedMints.add(mint);
-                            continue;
-                        }
-                    } catch (e) {
-                        // pump.fun API failed, continue to fallback
+                    const pumpResponse = await axios.get(pumpMetaUrl, { timeout: 5000 });
+                    if (pumpResponse.data) {
+                        const pumpData = pumpResponse.data;
+                        logger.info(`[MintExtractor] Found ${mint.slice(0, 8)}... via pump.fun API: name=${pumpData.name}, symbol=${pumpData.symbol}, image=${pumpData.image_uri ? 'YES' : 'NO'}`);
+                        validTokens.push({
+                            mint,
+                            name: pumpData.name || 'Unknown Token',
+                            ticker: pumpData.symbol || 'UNKNOWN',
+                            description: pumpData.description || '',
+                            image: pumpData.image_uri || pumpData.image || null,
+                            metadataUri: pumpData.metadata_uri || null,
+                            twitter: pumpData.twitter || '',
+                            website: pumpData.website || '',
+                            creator: pumpData.creator || null,
+                            marketCap: pumpData.usd_market_cap || 0,
+                            volume24h: 0,
+                            priceUsd: 0,
+                        });
+                        processedMints.add(mint);
+                        continue;
                     }
-
-                    // Fallback: add with minimal data
-                    validTokens.push({
-                        mint,
-                        name: 'Unknown Token',
-                        ticker: 'UNKNOWN',
-                        description: '',
-                        image: null,
-                        metadataUri: null,
-                        twitter: '',
-                        website: '',
-                        creator: null,
-                        marketCap: 0,
-                        volume24h: 0,
-                        priceUsd: 0,
-                    });
                 } catch (e) {
-                    logger.debug(`[MintExtractor] Failed to fetch metadata for ${mint}`, { error: e.message });
+                    logger.debug(`[MintExtractor] pump.fun API failed for ${mint.slice(0, 8)}...: ${e.message}`);
                 }
+
+                // Don't add minimal fallback data - if we can't find metadata, skip the token
+                // This prevents blank tokens from being added
+                logger.warn(`[MintExtractor] Could not find metadata for ${mint.slice(0, 8)}... - token skipped`);
+            } catch (e) {
+                logger.debug(`[MintExtractor] Failed to fetch metadata for ${mint}`, { error: e.message });
             }
         }
     }

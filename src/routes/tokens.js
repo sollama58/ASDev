@@ -1006,6 +1006,215 @@ function init(deps) {
     });
 
     /**
+     * POST /refresh-metadata/:mint
+     * Force refresh metadata for a registered token
+     * Fetches fresh data from DexScreener, Helius, and Pump.fun API
+     */
+    router.post('/refresh-metadata/:mint', async (req, res) => {
+        try {
+            const { mint } = req.params;
+
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid mint address'
+                });
+            }
+
+            // Check both tables for the token
+            const regularToken = await db.get('SELECT * FROM tokens WHERE mint = $1', [mint]);
+            const robinhoodToken = await db.get('SELECT * FROM robinhood_tokens WHERE mint = $1', [mint]);
+
+            if (!regularToken && !robinhoodToken) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Token not found. Please register the token first.'
+                });
+            }
+
+            // Fetch fresh metadata from all sources
+            logger.info(`[MetadataRefresh] Refreshing metadata for ${mint}`);
+
+            const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
+
+            if (validTokens.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Could not fetch metadata from any source'
+                });
+            }
+
+            const freshData = validTokens[0];
+            logger.info(`[MetadataRefresh] Got fresh data: ticker=${freshData.ticker}, name=${freshData.name}, image=${freshData.image ? 'YES' : 'NO'}`);
+
+            // Update the appropriate table
+            if (robinhoodToken) {
+                await db.run(`
+                    UPDATE robinhood_tokens
+                    SET ticker = $1, name = $2, image = COALESCE($3, image),
+                        "marketCap" = $4, volume24h = $5
+                    WHERE mint = $6
+                `, [
+                    freshData.ticker || robinhoodToken.ticker,
+                    freshData.name || robinhoodToken.name,
+                    freshData.image,
+                    freshData.marketCap || 0,
+                    freshData.volume24h || 0,
+                    mint
+                ]);
+            } else if (regularToken) {
+                await db.run(`
+                    UPDATE tokens
+                    SET ticker = $1, name = $2, image = COALESCE($3, image),
+                        "marketCap" = $4, volume24h = $5, description = $6
+                    WHERE mint = $7
+                `, [
+                    freshData.ticker || regularToken.ticker,
+                    freshData.name || regularToken.name,
+                    freshData.image,
+                    freshData.marketCap || 0,
+                    freshData.volume24h || 0,
+                    freshData.description || regularToken.description || '',
+                    mint
+                ]);
+            }
+
+            res.json({
+                success: true,
+                message: 'Metadata refreshed successfully',
+                token: {
+                    mint,
+                    ticker: freshData.ticker,
+                    name: freshData.name,
+                    image: freshData.image,
+                    marketCap: freshData.marketCap,
+                    volume24h: freshData.volume24h
+                }
+            });
+
+        } catch (e) {
+            logger.error('[MetadataRefresh] Error', { error: e.message, stack: e.stack });
+            res.status(500).json({
+                success: false,
+                error: 'Failed to refresh metadata'
+            });
+        }
+    });
+
+    /**
+     * POST /refresh-all-metadata
+     * Batch refresh metadata for all tokens with missing images or Unknown tickers
+     * Admin endpoint for fixing tokens that were registered without metadata
+     */
+    router.post('/refresh-all-metadata', async (req, res) => {
+        try {
+            // Find all robinhood tokens with missing metadata
+            const robinhoodTokens = await db.all(`
+                SELECT * FROM robinhood_tokens
+                WHERE "isActive" = 1
+                AND (image IS NULL OR image = '' OR ticker = 'UNKNOWN' OR name = 'Unknown Token')
+            `);
+
+            // Find all regular tokens with missing metadata
+            const regularTokens = await db.all(`
+                SELECT * FROM tokens
+                WHERE image IS NULL OR image = '' OR ticker = 'UNKNOWN' OR name = 'Unknown'
+            `);
+
+            const totalTokens = robinhoodTokens.length + regularTokens.length;
+            logger.info(`[BatchMetadataRefresh] Found ${totalTokens} tokens with missing metadata (${robinhoodTokens.length} robinhood, ${regularTokens.length} regular)`);
+
+            if (totalTokens === 0) {
+                return res.json({
+                    success: true,
+                    message: 'All tokens already have metadata',
+                    updated: 0
+                });
+            }
+
+            let updated = 0;
+            let failed = 0;
+
+            // Process robinhood tokens
+            for (const token of robinhoodTokens) {
+                try {
+                    const validTokens = await mintExtractor.validateMintsBatch([token.mint], { fetchMarketData: true });
+                    if (validTokens.length > 0) {
+                        const freshData = validTokens[0];
+                        if (freshData.image || freshData.ticker !== 'UNKNOWN') {
+                            await db.run(`
+                                UPDATE robinhood_tokens
+                                SET ticker = $1, name = $2, image = COALESCE($3, image),
+                                    "marketCap" = $4, volume24h = $5
+                                WHERE mint = $6
+                            `, [
+                                freshData.ticker || token.ticker,
+                                freshData.name || token.name,
+                                freshData.image,
+                                freshData.marketCap || 0,
+                                freshData.volume24h || 0,
+                                token.mint
+                            ]);
+                            updated++;
+                            logger.info(`[BatchMetadataRefresh] Updated ${token.mint.slice(0, 8)}...: ${freshData.ticker}, image=${freshData.image ? 'YES' : 'NO'}`);
+                        }
+                    }
+                    await new Promise(r => setTimeout(r, 200)); // Rate limit
+                } catch (e) {
+                    failed++;
+                    logger.debug(`[BatchMetadataRefresh] Failed for ${token.mint}`, { error: e.message });
+                }
+            }
+
+            // Process regular tokens
+            for (const token of regularTokens) {
+                try {
+                    const validTokens = await mintExtractor.validateMintsBatch([token.mint], { fetchMarketData: true });
+                    if (validTokens.length > 0) {
+                        const freshData = validTokens[0];
+                        if (freshData.image || freshData.ticker !== 'UNKNOWN') {
+                            await db.run(`
+                                UPDATE tokens
+                                SET ticker = $1, name = $2, image = COALESCE($3, image),
+                                    "marketCap" = $4, volume24h = $5
+                                WHERE mint = $6
+                            `, [
+                                freshData.ticker || token.ticker,
+                                freshData.name || token.name,
+                                freshData.image,
+                                freshData.marketCap || 0,
+                                freshData.volume24h || 0,
+                                token.mint
+                            ]);
+                            updated++;
+                            logger.info(`[BatchMetadataRefresh] Updated ${token.mint.slice(0, 8)}...: ${freshData.ticker}, image=${freshData.image ? 'YES' : 'NO'}`);
+                        }
+                    }
+                    await new Promise(r => setTimeout(r, 200)); // Rate limit
+                } catch (e) {
+                    failed++;
+                    logger.debug(`[BatchMetadataRefresh] Failed for ${token.mint}`, { error: e.message });
+                }
+            }
+
+            res.json({
+                success: true,
+                message: `Metadata refresh complete`,
+                total: totalTokens,
+                updated,
+                failed
+            });
+
+        } catch (e) {
+            logger.error('[BatchMetadataRefresh] Error', { error: e.message, stack: e.stack });
+            res.status(500).json({
+                success: false,
+                error: 'Failed to refresh metadata'
+            });
+        }
+    });
+
+    /**
      * POST /verify-token
      * Pre-check if our platform wallet is a fee recipient for a token (without registering)
      * Useful for frontend validation before attempting registration

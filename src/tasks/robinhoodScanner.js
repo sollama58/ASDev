@@ -222,7 +222,32 @@ async function reverifyRobinhoodTokens(deps) {
 }
 
 /**
+ * Fetch token metadata from Pump.fun API
+ */
+async function fetchPumpFunMetadata(mint) {
+    try {
+        const response = await axios.get(`https://frontend-api.pump.fun/coins/${mint}`, {
+            timeout: 5000
+        });
+        if (response.data) {
+            const data = response.data;
+            return {
+                name: data.name || null,
+                ticker: data.symbol || null,
+                image: data.image_uri || data.image || null,
+                marketCap: data.usd_market_cap || 0,
+                creator: data.creator || null
+            };
+        }
+    } catch (e) {
+        // Silent fail
+    }
+    return null;
+}
+
+/**
  * Update metadata for Robinhood tokens (ticker, name, market data)
+ * Fetches from multiple sources: DexScreener -> Helius -> Pump.fun API
  */
 async function updateRobinhoodTokenMetadata(deps) {
     const { db } = deps;
@@ -232,22 +257,50 @@ async function updateRobinhoodTokenMetadata(deps) {
 
         for (const token of tokens) {
             try {
-                // Fetch updated metadata
+                // Fetch updated metadata from multiple sources
+                // Priority: DexScreener (market data) > Helius (on-chain) > Pump.fun API
                 const dexMeta = await fetchDexScreenerMetadata(token.mint);
-                const pumpMeta = !dexMeta ? await fetchHeliusMetadata(token.mint) : null;
 
+                // If token is missing metadata (image/name/ticker), try other sources
+                const needsMetadata = !token.image || token.ticker === 'UNKNOWN' || token.name === 'Unknown Token';
+                let heliusMeta = null;
+                let pumpMeta = null;
+
+                if (needsMetadata) {
+                    heliusMeta = await fetchHeliusMetadata(token.mint);
+                    if (!heliusMeta?.image) {
+                        pumpMeta = await fetchPumpFunMetadata(token.mint);
+                    }
+                }
+
+                // Build updates with best available data
+                // For market data: prefer DexScreener (most accurate for trading)
+                // For metadata (name/ticker/image): use first non-null source
                 const updates = {
                     volume24h: dexMeta?.volume24h || token.volume24h || 0,
-                    marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || token.marketCap || 0,
-                    ticker: token.ticker || dexMeta?.ticker || pumpMeta?.ticker || 'UNKNOWN',
-                    name: token.name || dexMeta?.name || pumpMeta?.name || 'Unknown Token',
-                    image: token.image || dexMeta?.image || pumpMeta?.image || null
+                    marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || heliusMeta?.marketCap || token.marketCap || 0,
+                    ticker: dexMeta?.ticker || heliusMeta?.ticker || pumpMeta?.ticker || token.ticker || 'UNKNOWN',
+                    name: dexMeta?.name || heliusMeta?.name || pumpMeta?.name || token.name || 'Unknown Token',
+                    image: dexMeta?.image || heliusMeta?.image || pumpMeta?.image || token.image || null
                 };
 
-                await db.run(
-                    'UPDATE robinhood_tokens SET volume24h = $1, "marketCap" = $2, ticker = $3, name = $4, image = COALESCE($5, image) WHERE id = $6',
-                    [updates.volume24h, updates.marketCap, updates.ticker, updates.name, updates.image, token.id]
-                );
+                // Only update if we have meaningful changes
+                const hasChanges = updates.volume24h !== token.volume24h ||
+                                   updates.marketCap !== token.marketCap ||
+                                   updates.ticker !== token.ticker ||
+                                   updates.name !== token.name ||
+                                   (updates.image && updates.image !== token.image);
+
+                if (hasChanges) {
+                    await db.run(
+                        'UPDATE robinhood_tokens SET volume24h = $1, "marketCap" = $2, ticker = $3, name = $4, image = COALESCE($5, image) WHERE id = $6',
+                        [updates.volume24h, updates.marketCap, updates.ticker, updates.name, updates.image, token.id]
+                    );
+
+                    if (updates.image && !token.image) {
+                        logger.info(`[Robinhood] Updated image for ${token.ticker || token.mint.slice(0, 8)} from ${pumpMeta ? 'pump.fun' : (heliusMeta ? 'Helius' : 'DexScreener')}`);
+                    }
+                }
 
                 // Rate limit API calls
                 await new Promise(r => setTimeout(r, 300));
@@ -514,4 +567,5 @@ module.exports = {
     findOurShare,
     fetchHeliusMetadata,
     fetchDexScreenerMetadata,
+    fetchPumpFunMetadata,
 };
