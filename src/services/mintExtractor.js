@@ -848,18 +848,63 @@ async function validateMintsBatch(mints, options = {}) {
 }
 
 /**
+ * Parse fee sharing config account data
+ * Structure:
+ * - 8 bytes: discriminator
+ * - 32 bytes: creator (original token creator)
+ * - 32 bytes: mint (token mint address)
+ * - 4 bytes: shareholder count
+ * - N * 34 bytes: shareholders (32 byte pubkey + 2 byte bps)
+ *
+ * @param {Buffer} data - Raw account data
+ * @returns {Object|null} Parsed config or null if invalid
+ */
+function parseFeeSharingConfig(data) {
+    try {
+        if (data.length < 76) return null; // Minimum: 8 + 32 + 32 + 4 bytes
+
+        const creator = new PublicKey(data.slice(8, 40));
+        const mint = new PublicKey(data.slice(40, 72));
+
+        // Number of shareholders (4 bytes, little-endian)
+        const shareholderCount = data.readUInt32LE(72);
+
+        // Sanity check - shouldn't have more than 10 shareholders
+        if (shareholderCount > 10 || shareholderCount < 1) return null;
+
+        const shareholders = [];
+        let offset = 76;
+
+        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
+            const pubkey = new PublicKey(data.slice(offset, offset + 32));
+            const shareBps = data.readUInt16LE(offset + 32);
+            shareholders.push({ pubkey, shareBps });
+            offset += 34;
+        }
+
+        return { creator, mint, shareholders };
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
  * Verify that a wallet is a fee recipient for a given token mint
- * Checks both bonding curve (pre-graduation) and AMM pool (post-graduation)
+ * Checks:
+ * 1. Direct creator check on bonding curve (pre-graduation)
+ * 2. Direct creator check on AMM pool (post-graduation)
+ * 3. Fee sharing config check (if token creator shares fees with us)
  *
  * @param {string} mint - Token mint address
- * @param {string} creatorPubkey - Creator wallet public key to verify
+ * @param {string} walletToVerify - Wallet public key to verify as fee recipient
  * @param {Object} connection - Solana connection object
- * @returns {Promise<{isRecipient: boolean, source: string|null}>}
+ * @returns {Promise<{isRecipient: boolean, source: string|null, feeShareBps: number, feeSharePercent: number}>}
  */
-async function verifyFeeRecipient(mint, creatorPubkey, connection) {
+async function verifyFeeRecipient(mint, walletToVerify, connection) {
     try {
         const mintPubkey = new PublicKey(mint);
-        const creatorKey = new PublicKey(creatorPubkey);
+        const walletKey = new PublicKey(walletToVerify);
+        let tokenCreator = null;
 
         // Derive bonding curve address for this mint
         const [bondingCurve] = PublicKey.findProgramAddressSync(
@@ -883,8 +928,12 @@ async function verifyFeeRecipient(mint, creatorPubkey, connection) {
                 const creatorOffset = 49;
                 if (bcAccountInfo.data.length >= creatorOffset + 32) {
                     const storedCreator = new PublicKey(bcAccountInfo.data.slice(creatorOffset, creatorOffset + 32));
-                    if (storedCreator.equals(creatorKey)) {
-                        return { isRecipient: true, source: 'bonding_curve' };
+                    tokenCreator = storedCreator;
+
+                    // Check if we're the direct creator
+                    if (storedCreator.equals(walletKey)) {
+                        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Direct creator via bonding_curve (100% fee share)`);
+                        return { isRecipient: true, source: 'bonding_curve', feeShareBps: 10000, feeSharePercent: 100 };
                     }
                 }
             }
@@ -922,8 +971,12 @@ async function verifyFeeRecipient(mint, creatorPubkey, connection) {
                 const creatorOffset = 11;
                 if (poolAccountInfo.data.length >= creatorOffset + 32) {
                     const storedCreator = new PublicKey(poolAccountInfo.data.slice(creatorOffset, creatorOffset + 32));
-                    if (storedCreator.equals(creatorKey)) {
-                        return { isRecipient: true, source: 'amm_pool' };
+                    tokenCreator = tokenCreator || storedCreator;
+
+                    // Check if we're the direct creator
+                    if (storedCreator.equals(walletKey)) {
+                        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Direct creator via amm_pool (100% fee share)`);
+                        return { isRecipient: true, source: 'amm_pool', feeShareBps: 10000, feeSharePercent: 100 };
                     }
                 }
             }
@@ -931,12 +984,50 @@ async function verifyFeeRecipient(mint, creatorPubkey, connection) {
             logger.debug(`[MintExtractor] AMM check failed for ${mint.slice(0, 8)}...: ${e.message}`);
         }
 
-        // Neither BC nor AMM has us as creator
-        return { isRecipient: false, source: null };
+        // Not direct creator - check if there's a fee sharing config where we're a shareholder
+        // We need to find the token creator's fee sharing config
+        if (tokenCreator) {
+            try {
+                // Derive fee sharing config PDA for the token creator
+                const [feeSharingConfig] = PublicKey.findProgramAddressSync(
+                    [Buffer.from("fee_sharing_config"), tokenCreator.toBuffer()],
+                    PROGRAMS.PUMP
+                );
+
+                const configAccountInfo = await connection.getAccountInfo(feeSharingConfig);
+                if (configAccountInfo && configAccountInfo.data.length >= 76) {
+                    const config = parseFeeSharingConfig(configAccountInfo.data);
+
+                    if (config && config.shareholders) {
+                        // Check if our wallet is in the shareholders list
+                        const walletStr = walletKey.toString();
+                        for (const shareholder of config.shareholders) {
+                            if (shareholder.pubkey.toString() === walletStr) {
+                                const sharePercent = shareholder.shareBps / 100; // BPS to percent (1000 bps = 10%)
+                                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via fee_sharing_config (${sharePercent}% fee share, ${shareholder.shareBps} bps)`);
+                                return {
+                                    isRecipient: true,
+                                    source: 'fee_sharing_config',
+                                    feeShareBps: shareholder.shareBps,
+                                    feeSharePercent: sharePercent
+                                };
+                            }
+                        }
+                        logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Fee sharing config exists but wallet not in shareholders`);
+                    }
+                }
+            } catch (e) {
+                logger.debug(`[MintExtractor] Fee sharing config check failed for ${mint.slice(0, 8)}...: ${e.message}`);
+            }
+        }
+
+        // Neither direct creator nor fee shareholder
+        logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Not a fee recipient (checked BC, AMM, and fee sharing config)`);
+        return { isRecipient: false, source: null, feeShareBps: 0, feeSharePercent: 0 };
 
     } catch (e) {
         logger.warn(`[MintExtractor] Fee recipient verification failed for ${mint}`, { error: e.message });
-        return { isRecipient: false, source: null };
+        return { isRecipient: false, source: null, feeShareBps: 0, feeSharePercent: 0 };
     }
 }
 

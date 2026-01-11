@@ -4,6 +4,7 @@
  *
  * v11.0 - Changed from PUMP token airdrops to direct SOL airdrops
  * v13.0 - KOTH bonus now distributed to all holders of king token (not just creator)
+ * v14.0 - Updated to work with proportional point system (Top 250 holders)
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');

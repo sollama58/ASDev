@@ -2,6 +2,7 @@
  * Token Routes
  * Token listing, leaderboard, and holder endpoints
  * v13.0 - Updated for PostgreSQL
+ * v14.0 - Updated for proportional point system (Top 250 holders)
  * v15.0 - Added developer token registration endpoint
  */
 const express = require('express');
@@ -198,11 +199,12 @@ function init(deps) {
     });
 
     // Token holders
+    // v14.0: Now returns top 250 holders with balance info
     router.get('/token-holders/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
             const holders = await db.all(
-                'SELECT rank, "holderPubkey" FROM token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 50',
+                'SELECT rank, "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 250',
                 [mint]
             );
             res.json(holders);
@@ -213,12 +215,14 @@ function init(deps) {
 
     // Check holder status
     // v11.0: Now returns expected SOL airdrop amount instead of PUMP
+    // v14.0: Updated for proportional point system (Top 250 holders)
     router.get('/check-holder', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
             return res.json({
                 isHolder: false, isAsdfTop50: false, points: 0,
                 multiplier: 1, heldPositionsCount: 0, createdPositionsCount: 0,
+                basePoints: 0, creatorBonus: 0, robinhoodPoints: 0,
                 expectedAirdrop: 0, expectedAirdropCurrency: 'SOL'
             });
         }
@@ -227,38 +231,102 @@ function init(deps) {
         }
 
         try {
-            const top10 = await db.all('SELECT mint FROM tokens ORDER BY volume24h DESC LIMIT 10');
+            const top10 = await db.all('SELECT mint, "userPubkey" FROM tokens ORDER BY volume24h DESC LIMIT 10');
             const top10Mints = top10.map(t => t.mint);
 
             let heldPositionsCount = 0;
             let createdPositionsCount = 0;
+            let basePoints = 0;
+            let creatorBonus = 0;
+            let robinhoodPoints = 0;
+
+            const POINTS_PER_TOKEN = 1000;
 
             if (top10Mints.length > 0) {
-                const placeholders = top10Mints.map((_, i) => `$${i + 2}`).join(',');
+                // v14.0: Calculate proportional points based on holdings
+                for (const token of top10) {
+                    if (!token.mint) continue;
 
-                const query = `SELECT COUNT(*) as count FROM token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`;
-                const result = await db.get(query, [userPubkey, ...top10Mints]);
-                heldPositionsCount = parseInt(result?.count) || 0;
+                    // Check if user holds this token
+                    const userHolding = await db.get(
+                        'SELECT balance FROM token_holders WHERE mint = $1 AND "holderPubkey" = $2',
+                        [token.mint, userPubkey]
+                    );
 
-                const creatorQuery = `SELECT COUNT(*) as count FROM tokens WHERE "userPubkey" = $1 AND mint IN (${placeholders})`;
-                const creatorRes = await db.get(creatorQuery, [userPubkey, ...top10Mints]);
-                createdPositionsCount = parseInt(creatorRes?.count) || 0;
+                    if (userHolding && userHolding.balance) {
+                        heldPositionsCount++;
+
+                        // Get total balance of all top 250 holders for this token
+                        const totalResult = await db.get(
+                            'SELECT SUM(CAST(balance AS BIGINT)) as total FROM token_holders WHERE mint = $1',
+                            [token.mint]
+                        );
+                        const totalBalance = BigInt(totalResult?.total || '1');
+                        const userBalance = BigInt(userHolding.balance);
+
+                        // Calculate proportional points
+                        const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                        basePoints += proportionalPts;
+
+                        // Check if user is creator (2x bonus)
+                        if (token.userPubkey === userPubkey) {
+                            createdPositionsCount++;
+                            creatorBonus += proportionalPts; // Add bonus (already got base, so this doubles it)
+                        }
+                    } else if (token.userPubkey === userPubkey) {
+                        // Creator but not holder
+                        createdPositionsCount++;
+                    }
+                }
+
+                // v14.0: Include Robinhood token holdings
+                // v16.0: Scale points by fee share percentage
+                const robinhoodTokens = await db.all('SELECT mint, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 10');
+                for (const rhToken of robinhoodTokens) {
+                    if (!rhToken.mint) continue;
+
+                    const userHolding = await db.get(
+                        'SELECT balance FROM robinhood_token_holders WHERE mint = $1 AND "holderPubkey" = $2',
+                        [rhToken.mint, userPubkey]
+                    );
+
+                    if (userHolding && userHolding.balance) {
+                        const totalResult = await db.get(
+                            'SELECT SUM(CAST(balance AS BIGINT)) as total FROM robinhood_token_holders WHERE mint = $1',
+                            [rhToken.mint]
+                        );
+                        const totalBalance = BigInt(totalResult?.total || '1');
+                        const userBalance = BigInt(userHolding.balance);
+
+                        // Calculate base proportional points
+                        const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                        // Scale by fee share percentage (100% = 10000 bps = 1.0 multiplier)
+                        const feeShareBps = rhToken.feeShareBps || 10000;
+                        const feeShareMultiplier = feeShareBps / 10000;
+                        const scaledPts = baseProportionalPts * feeShareMultiplier;
+
+                        robinhoodPoints += scaledPts;
+                    }
+                }
             }
 
             // v13.0: Fetch from Redis for cross-process consistency
             const isAsdfTop50 = await redis.isAsdfTop100Holder(userPubkey);
-            const totalBase = heldPositionsCount + (createdPositionsCount * 2);
             const multiplier = isAsdfTop50 ? 2 : 1;
-            const points = totalBase * multiplier;
+            const totalBasePoints = basePoints + creatorBonus + robinhoodPoints;
+            const points = totalBasePoints * multiplier;
             const expectedAirdrop = await redis.getUserExpectedAirdrop(userPubkey);
 
             res.json({
                 isHolder: heldPositionsCount > 0,
                 isAsdfTop50,
-                points,
+                points: Math.round(points * 100) / 100, // Round to 2 decimal places
                 multiplier,
                 heldPositionsCount,
                 createdPositionsCount,
+                basePoints: Math.round(basePoints * 100) / 100,
+                creatorBonus: Math.round(creatorBonus * 100) / 100,
+                robinhoodPoints: Math.round(robinhoodPoints * 100) / 100,
                 expectedAirdrop,
                 expectedAirdropCurrency: 'SOL' // v11.0: Now in SOL
             });
@@ -269,6 +337,7 @@ function init(deps) {
 
     // Eligible users for airdrop
     // v11.0: Now returns expected SOL airdrop amounts
+    // v14.0: Updated for proportional point system (Top 250 holders)
     router.get('/all-eligible-users', async (req, res) => {
         try {
             const top10 = await db.all('SELECT mint, "userPubkey" FROM tokens ORDER BY volume24h DESC LIMIT 10');
@@ -278,35 +347,120 @@ function init(deps) {
                 return res.json({ users: [], totalPoints: 0, currency: 'SOL' });
             }
 
-            const placeholders = top10Mints.map((_, i) => `$${i + 1}`).join(',');
-            const rows = await db.all(`
-                SELECT "holderPubkey", COUNT(*) as "positionCount"
-                FROM token_holders
-                WHERE mint IN (${placeholders})
-                GROUP BY "holderPubkey"
-            `, top10Mints);
+            const POINTS_PER_TOKEN = 1000;
+            let userPointsMap = new Map(); // pubkey -> { basePoints, creatorBonus, robinhoodPoints, positions, created }
 
-            let userPointsMap = new Map();
+            // v14.0: Calculate proportional points for each token
+            for (const token of top10) {
+                if (!token.mint) continue;
 
-            rows.forEach(row => {
-                userPointsMap.set(row.holderPubkey, {
-                    pubkey: row.holderPubkey,
-                    holderPositions: parseInt(row.positionCount),
-                    createdPositions: 0
-                });
-            });
+                // Get all holders with balances
+                const holders = await db.all(
+                    'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1',
+                    [token.mint]
+                );
 
-            top10.forEach(token => {
-                if (token.userPubkey) {
-                    const user = userPointsMap.get(token.userPubkey) || {
-                        pubkey: token.userPubkey,
-                        holderPositions: 0,
-                        createdPositions: 0
-                    };
-                    user.createdPositions += 1;
-                    userPointsMap.set(token.userPubkey, user);
+                if (holders.length === 0) continue;
+
+                // Calculate total balance
+                let totalBalance = BigInt(0);
+                for (const h of holders) {
+                    totalBalance += BigInt(h.balance || '0');
                 }
-            });
+
+                if (totalBalance === BigInt(0)) continue;
+
+                // Distribute points proportionally
+                for (const holder of holders) {
+                    const holderBalance = BigInt(holder.balance || '0');
+                    if (holderBalance === BigInt(0)) continue;
+
+                    const proportionalPts = Number((holderBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+
+                    const user = userPointsMap.get(holder.holderPubkey) || {
+                        pubkey: holder.holderPubkey,
+                        basePoints: 0,
+                        creatorBonus: 0,
+                        robinhoodPoints: 0,
+                        positions: 0,
+                        created: 0
+                    };
+
+                    user.basePoints += proportionalPts;
+                    user.positions++;
+
+                    // Check if creator
+                    if (holder.holderPubkey === token.userPubkey) {
+                        user.creatorBonus += proportionalPts; // 2x bonus
+                        user.created++;
+                    }
+
+                    userPointsMap.set(holder.holderPubkey, user);
+                }
+
+                // Handle creators who don't hold their own token
+                if (token.userPubkey && !userPointsMap.has(token.userPubkey)) {
+                    userPointsMap.set(token.userPubkey, {
+                        pubkey: token.userPubkey,
+                        basePoints: 0,
+                        creatorBonus: 0,
+                        robinhoodPoints: 0,
+                        positions: 0,
+                        created: 1
+                    });
+                } else if (token.userPubkey) {
+                    const existing = userPointsMap.get(token.userPubkey);
+                    if (existing && !holders.find(h => h.holderPubkey === token.userPubkey)) {
+                        existing.created++;
+                    }
+                }
+            }
+
+            // v14.0: Include Robinhood token holdings
+            // v16.0: Scale points by fee share percentage
+            const robinhoodTokens = await db.all('SELECT mint, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 10');
+            for (const rhToken of robinhoodTokens) {
+                if (!rhToken.mint) continue;
+
+                // Get fee share multiplier (100% = 10000 bps = 1.0 multiplier)
+                const feeShareBps = rhToken.feeShareBps || 10000;
+                const feeShareMultiplier = feeShareBps / 10000;
+
+                const holders = await db.all(
+                    'SELECT "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1',
+                    [rhToken.mint]
+                );
+
+                if (holders.length === 0) continue;
+
+                let totalBalance = BigInt(0);
+                for (const h of holders) {
+                    totalBalance += BigInt(h.balance || '0');
+                }
+
+                if (totalBalance === BigInt(0)) continue;
+
+                for (const holder of holders) {
+                    const holderBalance = BigInt(holder.balance || '0');
+                    if (holderBalance === BigInt(0)) continue;
+
+                    // Calculate base proportional points and scale by fee share
+                    const baseProportionalPts = Number((holderBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                    const scaledPts = baseProportionalPts * feeShareMultiplier;
+
+                    const user = userPointsMap.get(holder.holderPubkey) || {
+                        pubkey: holder.holderPubkey,
+                        basePoints: 0,
+                        creatorBonus: 0,
+                        robinhoodPoints: 0,
+                        positions: 0,
+                        created: 0
+                    };
+
+                    user.robinhoodPoints += scaledPts;
+                    userPointsMap.set(holder.holderPubkey, user);
+                }
+            }
 
             // v13.0: Fetch from Redis for cross-process consistency
             const asdfTop100Holders = await redis.getAsdfTop100Holders();
@@ -320,16 +474,16 @@ function init(deps) {
 
                 const isAsdfTop50 = asdfTop100Holders.has(user.pubkey);
                 const multiplier = isAsdfTop50 ? 2 : 1;
-                const totalBasePoints = user.holderPositions + (user.createdPositions * 2);
+                const totalBasePoints = user.basePoints + user.creatorBonus + user.robinhoodPoints;
                 const points = totalBasePoints * multiplier;
                 const expectedAirdrop = allUserExpectedAirdrops.get(user.pubkey) || 0;
 
                 if (points > 0) {
                     eligibleUsers.push({
                         pubkey: user.pubkey,
-                        points,
-                        positions: user.holderPositions,
-                        created: user.createdPositions,
+                        points: Math.round(points * 100) / 100,
+                        positions: user.positions,
+                        created: user.created,
                         isAsdfTop50,
                         expectedAirdrop,
                         expectedAirdropCurrency: 'SOL' // v11.0: Now in SOL
@@ -338,7 +492,7 @@ function init(deps) {
                 }
             }
 
-            res.json({ users: eligibleUsers, totalPoints: calculatedTotalPoints, currency: 'SOL' });
+            res.json({ users: eligibleUsers, totalPoints: Math.round(calculatedTotalPoints * 100) / 100, currency: 'SOL' });
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
         }
@@ -486,9 +640,11 @@ function init(deps) {
                 });
             }
 
-            // Check if token is already registered
+            // Check if token is already registered in either tokens or robinhood_tokens table
             const existingToken = await db.get('SELECT id, mint FROM tokens WHERE mint = $1', [mint]);
-            if (existingToken) {
+            const existingRobinhoodToken = await db.get('SELECT id, mint FROM robinhood_tokens WHERE mint = $1', [mint]);
+
+            if (existingToken || existingRobinhoodToken) {
                 return res.status(409).json({
                     success: false,
                     error: 'Token already registered',
@@ -500,7 +656,7 @@ function init(deps) {
             const platformWallet = devKeypair.publicKey.toString();
 
             // Verify that our platform wallet is a fee recipient on-chain
-            // This checks both bonding curve (pre-graduation) and AMM pool (post-graduation)
+            // This checks bonding curve, AMM pool, AND fee sharing configs
             logger.info(`[TokenRegistration] Verifying platform wallet is fee recipient for ${mint.slice(0, 8)}...`);
 
             const verification = await mintExtractor.verifyFeeRecipient(
@@ -519,7 +675,8 @@ function init(deps) {
                 });
             }
 
-            logger.info(`[TokenRegistration] Verified: Platform wallet is fee recipient via ${verification.source}`);
+            // Log the fee share details
+            logger.info(`[TokenRegistration] Verified: Platform wallet is fee recipient via ${verification.source} (${verification.feeSharePercent}% share, ${verification.feeShareBps} bps)`);
 
             // Fetch token metadata
             const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
@@ -534,34 +691,62 @@ function init(deps) {
 
             const token = validTokens[0];
 
-            // Insert token into database
-            // Use submitterPubkey if provided, otherwise use 'platform_registered'
-            const registeredBy = submitterPubkey && isValidPubkey(submitterPubkey)
-                ? submitterPubkey
-                : 'platform_registered';
+            // Determine where to insert based on fee share source
+            // If we're a direct creator (100% share), insert into tokens table
+            // If we're a shareholder (< 100% share), insert into robinhood_tokens table
+            const isDirectCreator = verification.source === 'bonding_curve' || verification.source === 'amm_pool';
 
-            await db.run(`
-                INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp, volume24h, "priceUsd", "marketCap", complete)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-            `, [
-                registeredBy,
-                token.mint,
-                token.ticker,
-                token.name,
-                token.description || '',
-                token.twitter || '',
-                token.website || '',
-                token.metadataUri || '',
-                token.image || '',
-                0,
-                Date.now(),
-                token.volume24h || 0,
-                token.priceUsd || 0,
-                token.marketCap || 0,
-                0
-            ]);
+            if (isDirectCreator) {
+                // Direct creator - insert into tokens table
+                const registeredBy = submitterPubkey && isValidPubkey(submitterPubkey)
+                    ? submitterPubkey
+                    : 'platform_registered';
 
-            logger.info(`[TokenRegistration] Registered: ${token.ticker} (${mint.slice(0, 8)}...) - fee sharing verified via ${verification.source}`);
+                await db.run(`
+                    INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp, volume24h, "priceUsd", "marketCap", complete)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                `, [
+                    registeredBy,
+                    token.mint,
+                    token.ticker,
+                    token.name,
+                    token.description || '',
+                    token.twitter || '',
+                    token.website || '',
+                    token.metadataUri || '',
+                    token.image || '',
+                    0,
+                    Date.now(),
+                    token.volume24h || 0,
+                    token.priceUsd || 0,
+                    token.marketCap || 0,
+                    0
+                ]);
+
+                logger.info(`[TokenRegistration] Registered as DIRECT CREATOR: ${token.ticker} (${mint.slice(0, 8)}...) - 100% fee share`);
+            } else {
+                // Fee shareholder - insert into robinhood_tokens table
+                const creatorPubkey = submitterPubkey && isValidPubkey(submitterPubkey)
+                    ? submitterPubkey
+                    : 'unknown_creator';
+
+                await db.run(`
+                    INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive")
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
+                `, [
+                    token.mint,
+                    token.ticker,
+                    token.name,
+                    token.image || '',
+                    creatorPubkey,
+                    verification.feeShareBps,
+                    Date.now(),
+                    token.marketCap || 0,
+                    token.volume24h || 0
+                ]);
+
+                logger.info(`[TokenRegistration] Registered as FEE SHAREHOLDER: ${token.ticker} (${mint.slice(0, 8)}...) - ${verification.feeSharePercent}% fee share (${verification.feeShareBps} bps)`);
+            }
 
             res.json({
                 success: true,
@@ -573,7 +758,10 @@ function init(deps) {
                     image: token.image,
                     marketCap: token.marketCap,
                     volume24h: token.volume24h,
-                    verifiedVia: verification.source
+                    verifiedVia: verification.source,
+                    feeSharePercent: verification.feeSharePercent,
+                    feeShareBps: verification.feeShareBps,
+                    isDirectCreator
                 }
             });
 
@@ -660,14 +848,16 @@ function init(deps) {
             // Get our platform wallet address
             const platformWallet = devKeypair.publicKey.toString();
 
-            // Check if already registered
+            // Check if already registered in either table
             const existingToken = await db.get('SELECT mint, ticker, name FROM tokens WHERE mint = $1', [mint]);
-            if (existingToken) {
+            const existingRobinhoodToken = await db.get('SELECT mint, ticker, name FROM robinhood_tokens WHERE mint = $1', [mint]);
+
+            if (existingToken || existingRobinhoodToken) {
                 return res.json({
                     success: true,
                     isEligible: false,
                     alreadyRegistered: true,
-                    token: existingToken,
+                    token: existingToken || existingRobinhoodToken,
                     mint
                 });
             }
@@ -703,6 +893,9 @@ function init(deps) {
                 isEligible: verification.isRecipient,
                 alreadyRegistered: false,
                 source: verification.source,
+                feeSharePercent: verification.feeSharePercent,
+                feeShareBps: verification.feeShareBps,
+                isDirectCreator: verification.source === 'bonding_curve' || verification.source === 'amm_pool',
                 mint,
                 platformWallet,
                 tokenPreview

@@ -536,7 +536,7 @@
                 <div id="logo-wrapper">
                     <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
                 </div>
-                <div><h1 class="text-4xl md:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1><p class="text-orange-400 text-sm font-mono uppercase tracking-widest mt-2">ASDev Airdrop and Flywheel Pumpfun Launcher</p></div>
+                <div><h1 class="text-4xl md:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1><p class="text-orange-400 text-sm font-mono uppercase tracking-widest mt-2">Pumpfun Airdrop Platform</p></div>
             </div>
             <div class="flex flex-col items-end gap-3">
                 <div id="wallet-ui" class="hidden flex items-center gap-3 bg-orange-950 border border-orange-800 p-3 rounded-lg shadow-xl"><span class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span><span id="wallet-addr" class="font-mono text-sm text-orange-200"></span><span id="wallet-bal" class="font-mono text-sm text-white font-bold ml-2 bg-orange-900/50 px-3 py-1 rounded">0.00 SOL</span><button id="refresh-btn" class="ml-2 text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded"><i data-lucide="refresh-cw" width="16"></i></button><button id="disconnect-btn" class="ml-1 text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded"><i data-lucide="log-out" width="16"></i></button></div>
@@ -577,15 +577,15 @@
 
                 <div class="text-center w-full md:w-1/4 flex flex-col justify-center gap-3 border-r border-purple-800/30 pr-4">
                     <div class="flex justify-between items-center px-4">
-                        <span class="text-[10px] text-purple-300 uppercase tracking-widest">Top Holder Pts</span>
-                        <span class="text-lg text-yellow-400 font-bold font-mono" id="user-top-positions">0</span>
+                        <span class="text-[10px] text-purple-300 uppercase tracking-widest">Holder Pts</span>
+                        <span class="text-lg text-yellow-400 font-bold font-mono" id="user-top-positions">0.00</span>
                     </div>
                     <div class="flex justify-between items-center px-4">
-                        <span class="text-[10px] text-blue-300 uppercase tracking-widest">Top Creator Pts</span>
-                        <span class="text-lg text-blue-400 font-bold font-mono" id="user-created-positions">0</span>
+                        <span class="text-[10px] text-blue-300 uppercase tracking-widest">Creator Bonus</span>
+                        <span class="text-lg text-blue-400 font-bold font-mono" id="user-created-positions">0.00</span>
                     </div>
                     <div class="flex justify-between items-center px-4">
-                        <span class="text-[10px] text-purple-300 uppercase tracking-widest">ASDF Top 50</span>
+                        <span class="text-[10px] text-purple-300 uppercase tracking-widest">ASDF Top 100</span>
                         <span id="asdf-status" class="text-sm font-bold font-mono text-gray-500">CHECKING...</span>
                     </div>
                 </div>
@@ -884,7 +884,7 @@
                     <h4 class="text-purple-400 font-bold text-sm mb-2">Benefits of Registration</h4>
                     <ul class="text-purple-200/80 text-xs space-y-1">
                         <li>- Token appears on IGNITION leaderboard</li>
-                        <li>- Top 50 holders earn airdrop points</li>
+                        <li>- Top 250 holders earn airdrop points (proportional to holdings)</li>
                         <li>- Market data tracked (MCAP, Volume)</li>
                         <li>- Eligible for King of the Pill bonus</li>
                         <li>- Shared fees fund the airdrop pool</li>
@@ -967,20 +967,28 @@
 <div id="airdrop-info-modal" class="modal">
     <div class="modal-content border-purple-600">
         <span class="close-btn" onclick="closeAirdropInfoModal()">&times;</span>
-        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">SOL AIRDROP POINT CALCULATION</h3>
+        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">SOL AIRDROP POINT CALCULATION (v14.0)</h3>
         <div class="font-sans text-sm text-purple-200 space-y-3">
             <div class="bg-green-900/30 p-3 rounded border border-green-700/50 mb-4">
-                <p class="text-green-400 font-bold text-xs uppercase mb-1">💰 DIRECT SOL AIRDROPS</p>
-                <p class="text-xs text-gray-300">Airdrops are now distributed in **SOL** directly to your wallet - no token accounts needed!</p>
+                <p class="text-green-400 font-bold text-xs uppercase mb-1">💰 PROPORTIONAL AIRDROPS</p>
+                <p class="text-xs text-gray-300">Airdrops are distributed in **SOL** proportionally to your holdings. The more you hold, the more you earn!</p>
             </div>
-            <p>The **Total Points** and **Expected Airdrop** metrics shown are subject to the platform's background update cycles.</p>
-            <ul class="list-disc list-inside ml-4 space-y-1 text-purple-300">
-                <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 100 Holder**.</li>
-                <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
-                <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 100 Holder of **$ASDF**.</li>
-                <li class="mt-2"><span class="text-yellow-400">Formula:</span> (Holdings + (Created * 2)) * Multiplier</li>
-                <li class="mt-2 text-fuchsia-300 font-bold">💊 King of the Pill (KOTH): 10% of every airdrop is distributed to ALL HOLDERS of the highest MCAP token, proportional to their holdings!</li>
+            <p>Points are calculated based on your **proportional holdings** in eligible tokens:</p>
+            <ul class="list-disc list-inside ml-4 space-y-2 text-purple-300">
+                <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400 font-bold">250 holders</span> of each Top 10 Leaderboard Token earn points.</li>
+                <li><span class="text-white">Base Points:</span> Each token distributes <span class="text-yellow-400">1000 points</span> proportionally based on your balance vs total holdings.</li>
+                <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">2x Points</span> on tokens you created (if you're also a top holder).</li>
+                <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400 font-bold">+Points</span> for holding partner tokens (proportional to holdings).</li>
+                <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you're a Top 100 $ASDF holder.</li>
             </ul>
+            <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mt-4">
+                <p class="text-yellow-400 font-bold text-xs uppercase mb-1">📊 EXAMPLE</p>
+                <p class="text-xs text-gray-300">If you hold 10% of a token's top 250 supply, you get 100 points from that token. If you created it, that's 200 points!</p>
+            </div>
+            <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
+                <p class="text-fuchsia-400 font-bold text-xs uppercase mb-1">💊 KING OF THE PILL (KOTH)</p>
+                <p class="text-xs text-gray-300"><span class="text-white font-bold">10%</span> of every airdrop goes to holders of the highest MCAP token, proportional to their holdings!</p>
+            </div>
         </div>
     </div>
 </div>
@@ -1006,15 +1014,16 @@
             </div>
             
             <div>
-                <h4 class="text-purple-400 font-bold mb-3 border-b border-purple-800 pb-1">3. POINTS SYSTEM (QUALIFICATION)</h4>
-                <p class="text-purple-200 mb-2">Users earn points by holding top tokens. No signup required.</p>
+                <h4 class="text-purple-400 font-bold mb-3 border-b border-purple-800 pb-1">3. PROPORTIONAL POINTS SYSTEM (v14.0)</h4>
+                <p class="text-purple-200 mb-2">Points are distributed proportionally based on your holdings. No signup required.</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <li><span class="text-white">Base Points:</span> +1 for every Top 10 Leaderboard Token where you are a **Top 50 Holder**.</li>
-                    <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">+2 Points</span> for every Top 10 Leaderboard Token you **Created**.</li>
-                    <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 50 Holder of **$ASDF**.</li>
+                    <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400 font-bold">250 holders</span> of each Top 10 token.</li>
+                    <li><span class="text-white">Base Points:</span> Each token distributes <span class="text-yellow-400">1000 points</span> proportionally to holdings.</li>
+                    <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">2x Points</span> on tokens you created.</li>
+                    <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 100 Holder of **$ASDF**.</li>
                 </ul>
                 <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
-                    <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">💊 KING OF THE PILL (v13.0)</p>
+                    <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">💊 KING OF THE PILL</p>
                     <p class="text-xs text-gray-300"><span class="text-white font-bold">10% of the entire Airdrop pot</span> is distributed to all holders of the highest Market Cap token, proportional to their holdings!</p>
                 </div>
             </div>
@@ -1392,26 +1401,29 @@
         }
     };
     
+    // v14.0: Updated for proportional point system
     const checkAsdfStatus = async () => {
         if (!userPubkey) {
             ui.asdfStatus.innerText = "NOT CONNECTED";
             ui.asdfStatus.className = "text-sm font-bold font-mono text-gray-500";
-            ui.userTopPositions.innerText = "0";
-            ui.userCreatedPositions.innerText = "0";
-            ui.userTotalPoints.innerText = "0";
+            ui.userTopPositions.innerText = "0.00";
+            ui.userCreatedPositions.innerText = "0.00";
+            ui.userTotalPoints.innerText = "0.00";
             ui.pointsMultiplierBadge.classList.add('hidden');
             currentUserPoints = 0;
             updateExpectedAirdropDisplay(0);
             return;
         }
-        
+
         ui.asdfStatus.innerText = "CHECKING...";
         try {
             const res = await fetch(`${BACKEND_URL}/api/check-holder?userPubkey=${userPubkey}`);
             const data = await res.json();
-            
-            ui.userTopPositions.innerText = data.heldPositionsCount || 0;
-            ui.userCreatedPositions.innerText = (data.createdPositionsCount || 0) * 2;
+
+            // v14.0: Display proportional points (basePoints + robinhoodPoints)
+            const holderPts = (data.basePoints || 0) + (data.robinhoodPoints || 0);
+            ui.userTopPositions.innerText = holderPts.toFixed(2);
+            ui.userCreatedPositions.innerText = (data.creatorBonus || 0).toFixed(2);
 
             if (data.isAsdfTop50) {
                 ui.asdfStatus.innerText = "YES (QUALIFIED)";
@@ -1424,7 +1436,7 @@
             }
 
             currentUserPoints = data.points || 0;
-            ui.userTotalPoints.innerText = currentUserPoints;
+            ui.userTotalPoints.innerText = currentUserPoints.toFixed(2);
             updateExpectedAirdropDisplay(data.expectedAirdrop);
 
         } catch (e) {
@@ -1778,6 +1790,7 @@
     const closeAllLaunchesModal = () => { ui.allLaunchesModal.style.display = 'none'; };
     window.closeAllLaunchesModal = closeAllLaunchesModal;
 
+    // v14.0: Updated for proportional point display
     const toggleAllEligibleUsersModal = async () => {
         ui.allEligibleUsersModal.style.display = 'block';
         ui.modalAllEligibleUsersContent.innerHTML = '<div class="text-center text-purple-400 p-4">Calculating all eligible users...</div>';
@@ -1791,25 +1804,26 @@
                     return;
                 }
                 const tableHTML = `
-                    <p class="text-purple-300 font-mono text-sm mb-4">Total Global Points: <span class="text-white font-bold">${data.totalPoints.toLocaleString()}</span> | Total Eligible Users: <span class="text-white font-bold">${users.length}</span></p>
+                    <p class="text-purple-300 font-mono text-sm mb-4">Total Global Points: <span class="text-white font-bold">${data.totalPoints.toLocaleString(undefined, {maximumFractionDigits: 2})}</span> | Total Eligible Users: <span class="text-white font-bold">${users.length}</span></p>
+                    <p class="text-purple-400/60 font-mono text-xs mb-4">Points are proportional to holdings in Top 250 of each eligible token (1000 pts/token distributed)</p>
                     <table class="w-full text-left font-mono text-xs">
                         <thead class="text-purple-400 border-b border-purple-800">
-                            <tr><th class="p-2">#</th><th class="p-2">Wallet (Snippet)</th><th class="p-2 text-right">Holder Pts</th><th class="p-2 text-right">Creator Pts</th><th class="p-2 text-right">Multiplier</th><th class="p-2 text-right">Points</th><th class="p-2 text-right">Est. SOL Airdrop</th></tr>
+                            <tr><th class="p-2">#</th><th class="p-2">Wallet</th><th class="p-2 text-right">Tokens</th><th class="p-2 text-right">Created</th><th class="p-2 text-right">Multiplier</th><th class="p-2 text-right">Points</th><th class="p-2 text-right">Est. SOL</th></tr>
                         </thead>
                         <tbody class="text-purple-200">
                             ${users.sort((a, b) => b.points - a.points).map((user, index) => {
-                                const multiplierBadge = user.isAsdfTop50 
-                                    ? '<span class="px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold">2X (ASDF)</span>' 
+                                const multiplierBadge = user.isAsdfTop50
+                                    ? '<span class="px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold">2X</span>'
                                     : '<span class="px-2 py-0.5 bg-gray-500/20 border border-gray-500 rounded text-[9px] text-gray-400 font-bold">1X</span>';
                                 return `
                                 <tr class="border-b border-purple-800/30 hover:bg-purple-900/20">
                                     <td class="p-2">${index + 1}</td>
                                     <td class="p-2 text-white font-bold">${escapeHtml(user.pubkey?.slice(0, 5) || '?????')}...</td>
                                     <td class="p-2 text-right">${user.positions}</td>
-                                    <td class="p-2 text-right text-blue-400">${(user.created || 0) * 2}</td>
+                                    <td class="p-2 text-right text-blue-400">${user.created || 0}</td>
                                     <td class="p-2 text-right">${multiplierBadge}</td>
-                                    <td class="p-2 text-right text-yellow-400 font-bold">${user.points}</td>
-                                    <td class="p-2 text-right text-green-400 font-bold">${parseFloat(user.expectedAirdrop).toFixed(2)} SOL</td>
+                                    <td class="p-2 text-right text-yellow-400 font-bold">${user.points.toFixed(2)}</td>
+                                    <td class="p-2 text-right text-green-400 font-bold">${parseFloat(user.expectedAirdrop).toFixed(4)}</td>
                                 </tr>
                                 `;
                             }).join('')}
@@ -2406,12 +2420,18 @@
                 return;
             }
 
-            // Successfully verified - show preview
+            // Successfully verified - show preview with fee share percentage
+            const sourceLabel = verifyData.source === 'bonding_curve' ? 'Bonding Curve' :
+                               verifyData.source === 'amm_pool' ? 'AMM Pool' : 'Fee Sharing Config';
+            const isDirectCreator = verifyData.isDirectCreator;
+            const feeSharePercent = verifyData.feeSharePercent || 100;
+
             verificationStatus.innerHTML = `
                 <div class="verification-badge verification-success">
                     <i data-lucide="check-circle" width="16"></i>
-                    Fee Sharing Verified via ${verifyData.source === 'bonding_curve' ? 'Bonding Curve' : 'AMM Pool'}
+                    ${isDirectCreator ? 'Direct Creator' : 'Fee Shareholder'} - ${feeSharePercent}% Fee Share
                 </div>
+                <p class="text-xs text-green-400 mt-2">Verified via ${sourceLabel}${!isDirectCreator ? ` | Points scaled to ${feeSharePercent}%` : ''}</p>
             `;
             verificationStatus.classList.remove('hidden');
 
@@ -2494,8 +2514,11 @@
                 throw new Error(data.error || 'Registration failed');
             }
 
-            // Success!
-            showRegisterStatus(`Token ${data.token.ticker} registered successfully! Fee sharing verified.`, 'success');
+            // Success! Show fee share info
+            const shareInfo = data.token.isDirectCreator
+                ? '(100% fee share - Direct Creator)'
+                : `(${data.token.feeSharePercent}% fee share - Fee Shareholder)`;
+            showRegisterStatus(`Token ${data.token.ticker} registered successfully! ${shareInfo}`, 'success');
 
             // Reset form
             document.getElementById('register-mint').value = '';
