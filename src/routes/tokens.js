@@ -1048,16 +1048,17 @@ function init(deps) {
             logger.info(`[MetadataRefresh] Got fresh data: ticker=${freshData.ticker}, name=${freshData.name}, image=${freshData.image ? 'YES' : 'NO'}`);
 
             // Update the appropriate table
+            // FIX: Use NULLIF to convert empty string to NULL, so COALESCE preserves existing image
             if (robinhoodToken) {
                 await db.run(`
                     UPDATE robinhood_tokens
-                    SET ticker = $1, name = $2, image = COALESCE($3, image),
+                    SET ticker = $1, name = $2, image = COALESCE(NULLIF($3, ''), image),
                         "marketCap" = $4, volume24h = $5
                     WHERE mint = $6
                 `, [
                     freshData.ticker || robinhoodToken.ticker,
                     freshData.name || robinhoodToken.name,
-                    freshData.image,
+                    freshData.image || null,
                     freshData.marketCap || 0,
                     freshData.volume24h || 0,
                     mint
@@ -1065,13 +1066,13 @@ function init(deps) {
             } else if (regularToken) {
                 await db.run(`
                     UPDATE tokens
-                    SET ticker = $1, name = $2, image = COALESCE($3, image),
+                    SET ticker = $1, name = $2, image = COALESCE(NULLIF($3, ''), image),
                         "marketCap" = $4, volume24h = $5, description = $6
                     WHERE mint = $7
                 `, [
                     freshData.ticker || regularToken.ticker,
                     freshData.name || regularToken.name,
-                    freshData.image,
+                    freshData.image || null,
                     freshData.marketCap || 0,
                     freshData.volume24h || 0,
                     freshData.description || regularToken.description || '',
@@ -1142,15 +1143,16 @@ function init(deps) {
                     if (validTokens.length > 0) {
                         const freshData = validTokens[0];
                         if (freshData.image || freshData.ticker !== 'UNKNOWN') {
+                            // FIX: Use NULLIF to convert empty string to NULL, so COALESCE preserves existing image
                             await db.run(`
                                 UPDATE robinhood_tokens
-                                SET ticker = $1, name = $2, image = COALESCE($3, image),
+                                SET ticker = $1, name = $2, image = COALESCE(NULLIF($3, ''), image),
                                     "marketCap" = $4, volume24h = $5
                                 WHERE mint = $6
                             `, [
                                 freshData.ticker || token.ticker,
                                 freshData.name || token.name,
-                                freshData.image,
+                                freshData.image || null,
                                 freshData.marketCap || 0,
                                 freshData.volume24h || 0,
                                 token.mint
@@ -1173,15 +1175,16 @@ function init(deps) {
                     if (validTokens.length > 0) {
                         const freshData = validTokens[0];
                         if (freshData.image || freshData.ticker !== 'UNKNOWN') {
+                            // FIX: Use NULLIF to convert empty string to NULL, so COALESCE preserves existing image
                             await db.run(`
                                 UPDATE tokens
-                                SET ticker = $1, name = $2, image = COALESCE($3, image),
+                                SET ticker = $1, name = $2, image = COALESCE(NULLIF($3, ''), image),
                                     "marketCap" = $4, volume24h = $5
                                 WHERE mint = $6
                             `, [
                                 freshData.ticker || token.ticker,
                                 freshData.name || token.name,
-                                freshData.image,
+                                freshData.image || null,
                                 freshData.marketCap || 0,
                                 freshData.volume24h || 0,
                                 token.mint

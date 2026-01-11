@@ -262,7 +262,8 @@ async function updateRobinhoodTokenMetadata(deps) {
                 const dexMeta = await fetchDexScreenerMetadata(token.mint);
 
                 // If token is missing metadata (image/name/ticker), try other sources
-                const needsMetadata = !token.image || token.ticker === 'UNKNOWN' || token.name === 'Unknown Token';
+                // Note: Check for both null/undefined AND empty string for image
+                const needsMetadata = !token.image || token.image === '' || token.ticker === 'UNKNOWN' || token.name === 'Unknown Token';
                 let heliusMeta = null;
                 let pumpMeta = null;
 
@@ -292,8 +293,10 @@ async function updateRobinhoodTokenMetadata(deps) {
                                    (updates.image && updates.image !== token.image);
 
                 if (hasChanges) {
+                    // FIX: Use NULLIF to convert empty string to NULL, so COALESCE preserves existing image
+                    // This prevents empty strings from APIs overwriting valid images
                     await db.run(
-                        'UPDATE robinhood_tokens SET volume24h = $1, "marketCap" = $2, ticker = $3, name = $4, image = COALESCE($5, image) WHERE id = $6',
+                        'UPDATE robinhood_tokens SET volume24h = $1, "marketCap" = $2, ticker = $3, name = $4, image = COALESCE(NULLIF($5, \'\'), image) WHERE id = $6',
                         [updates.volume24h, updates.marketCap, updates.ticker, updates.name, updates.image, token.id]
                     );
 
@@ -483,7 +486,7 @@ async function updateRegisteredTokensMarketData(deps) {
                     `, [
                         dexMeta.ticker || 'UNKNOWN',
                         dexMeta.name || 'Unknown',
-                        dexMeta.image || '',
+                        dexMeta.image || null,  // FIX: Pass null instead of empty string to let NULLIF work correctly
                         dexMeta.volume24h || 0,
                         dexMeta.marketCap || 0,
                         token.mint

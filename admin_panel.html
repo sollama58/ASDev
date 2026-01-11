@@ -409,6 +409,39 @@
                             // Metadata status will appear here
                         </div>
                     </div>
+
+                    <!-- Metadata Refresh Tools -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Refresh Single Token Metadata</h3>
+                        </div>
+                        <p class="text-xs text-gray-400 mb-3">
+                            Force refresh metadata for a specific token from DexScreener, Helius, and Pump.fun API.
+                        </p>
+                        <div class="flex gap-2 mb-3">
+                            <input type="text" id="refresh-single-mint" class="input-field flex-1" placeholder="Enter mint address...">
+                            <button onclick="refreshSingleMetadata()" class="btn btn-primary">Refresh</button>
+                        </div>
+                        <div id="refresh-single-result" class="result-box text-cyan-400">
+                            // Refresh result will appear here
+                        </div>
+                    </div>
+
+                    <!-- Batch Metadata Refresh -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Batch Metadata Refresh</h3>
+                        </div>
+                        <p class="text-xs text-gray-400 mb-3">
+                            Refresh metadata for ALL tokens with missing images or Unknown tickers. This may take a while.
+                        </p>
+                        <button onclick="refreshAllMetadata()" class="btn btn-danger w-full mb-3">
+                            Refresh All Missing Metadata
+                        </button>
+                        <div id="refresh-all-result" class="result-box text-yellow-400">
+                            // Batch refresh result will appear here
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -983,6 +1016,81 @@
                 log('Fetched metadata status', 'success');
             } catch (e) {
                 log(`Metadata status fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function refreshSingleMetadata() {
+            const mint = document.getElementById('refresh-single-mint').value.trim();
+            if (!mint) {
+                log('Please enter a mint address', 'warning');
+                return;
+            }
+
+            const resultEl = document.getElementById('refresh-single-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Refreshing metadata...</span>';
+            log(`Refreshing metadata for ${shortenPubkey(mint)}...`);
+
+            try {
+                const response = await fetch(`https://asdev-1kvy.onrender.com/api/refresh-metadata/${mint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminPassword
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Metadata refreshed successfully!</span>\n\n` + formatJson(data.token);
+                    log(`Metadata refreshed for ${data.token?.ticker || shortenPubkey(mint)}`, 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Metadata refresh failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Metadata refresh error: ${e.message}`, 'error');
+            }
+        }
+
+        async function refreshAllMetadata() {
+            const resultEl = document.getElementById('refresh-all-result');
+
+            if (!confirm('This will refresh metadata for ALL tokens with missing data. This may take several minutes. Continue?')) {
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Starting batch metadata refresh... This may take a while.</span>';
+            log('Starting batch metadata refresh...');
+
+            try {
+                const response = await fetch(`https://asdev-1kvy.onrender.com/api/refresh-all-metadata`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminPassword
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Batch refresh complete!</span>\n\n` +
+                        `Total tokens processed: ${data.total}\n` +
+                        `Successfully updated: <span class="text-green-400">${data.updated}</span>\n` +
+                        `Failed: <span class="text-red-400">${data.failed}</span>`;
+                    log(`Batch metadata refresh complete: ${data.updated}/${data.total} updated`, 'success');
+
+                    // Refresh the metadata status to show updated results
+                    fetchMetadataStatus();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Batch refresh failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Batch refresh error: ${e.message}`, 'error');
             }
         }
 
