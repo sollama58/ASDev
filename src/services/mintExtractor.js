@@ -1213,21 +1213,42 @@ async function checkFeeSharingConfig(coinCreator, walletKey, mint, connection) {
         }
 
         // Case 2: coin_creator is owned by FEE program (pfee...) - it's a creator_vault account
-        // The creator_vault means fee sharing is enabled. We need to find the original token creator
-        // from the token's metadata, not from parsing the FEE account data.
+        // The creator_vault means fee sharing is enabled. We need to find the original token creator.
+        // Try multiple methods: 1) Token metadata, 2) FEE account data
         if (accountInfo.owner.equals(PROGRAMS.FEE)) {
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is owned by FEE program, getting original creator from token metadata...`);
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is owned by FEE program, finding original creator...`);
 
-            // Get the original creator from the token's Metaplex metadata
+            let originalCreator = null;
+
+            // Method 1: Try to get from token metadata (most reliable if it exists)
             const mintPubkey = new PublicKey(mint);
-            const originalCreator = await getOriginalCreatorFromMetadata(mintPubkey, connection);
+            originalCreator = await getOriginalCreatorFromMetadata(mintPubkey, connection);
 
-            if (!originalCreator) {
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Could not find original creator from token metadata`);
-                return null;
+            if (originalCreator) {
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found original creator from metadata: ${originalCreator.toString()}`);
+            } else {
+                // Method 2: Fallback to extracting from FEE account data
+                // FEE program creator_vault structure:
+                // - 8 bytes: discriminator
+                // - 1 byte: bump
+                // - 2 bytes: flags/padding
+                // - 32 bytes: original creator pubkey (at offset 11)
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Metadata not found, trying FEE account data...`);
+
+                if (dataLen >= 43) {
+                    try {
+                        originalCreator = new PublicKey(accountInfo.data.slice(11, 43));
+                        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Extracted original creator from FEE account: ${originalCreator.toString()}`);
+                    } catch (e) {
+                        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Failed to parse pubkey from FEE account: ${e.message}`);
+                    }
+                }
             }
 
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Original creator from metadata: ${originalCreator.toString()}`);
+            if (!originalCreator) {
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Could not find original creator from any source`);
+                return null;
+            }
 
             // Derive the fee_sharing_config PDA from the original creator
             const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(

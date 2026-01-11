@@ -1540,6 +1540,34 @@ function init(deps) {
                     }
                 } else {
                     metadataCreatorLookup.creatorLookupError = 'getOriginalCreatorFromMetadata returned null';
+
+                    // If metadata doesn't have creator, try extracting from FEE account
+                    if (directConfigLookup && directConfigLookup.rawDataHex && directConfigLookup.dataLength >= 43) {
+                        try {
+                            const feeData = Buffer.from(directConfigLookup.rawDataHex, 'hex');
+                            if (feeData.length >= 43) {
+                                const creatorFromFeeAccount = new PublicKey(feeData.slice(11, 43));
+                                metadataCreatorLookup.creatorFromFeeAccountFallback = creatorFromFeeAccount.toString();
+
+                                // Try deriving fee_sharing_config from this creator
+                                const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
+                                    [Buffer.from("fee_sharing_config"), creatorFromFeeAccount.toBuffer()],
+                                    PUMP
+                                );
+                                metadataCreatorLookup.feeAccountFallback_derivedPDA = feeSharingConfigPDA.toString();
+
+                                const configInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+                                metadataCreatorLookup.feeAccountFallback_configExists = !!configInfo;
+
+                                if (configInfo && configInfo.owner.equals(PUMP)) {
+                                    const parsed = parseFeeSharingConfigDebug(configInfo.data, feeSharingConfigPDA.toString());
+                                    metadataCreatorLookup.feeAccountFallback_parsedConfig = parsed;
+                                }
+                            }
+                        } catch (fallbackError) {
+                            metadataCreatorLookup.feeAccountFallbackError = fallbackError.message;
+                        }
+                    }
                 }
             } catch (e) {
                 metadataCreatorLookup = { error: e.message, stack: e.stack };
