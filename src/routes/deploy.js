@@ -2,14 +2,43 @@
  * Deploy Routes
  * Token deployment and metadata preparation endpoints
  * v24.0 - Added input sanitization for user-provided content
+ * v25.1 - Imgur URL support (user uploads to Imgur, provides URL)
  */
 const express = require('express');
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const config = require('../config/env');
-const { pinata, moderation, vanity, redis, logger, sanitizer } = require('../services');
+const { pinata, vanity, redis, logger, sanitizer } = require('../services');
 const { isValidPubkey } = require('./solana');
 
 const router = express.Router();
+
+// v25.1: Allowed image hosting domains
+const ALLOWED_IMAGE_DOMAINS = [
+    'i.imgur.com',           // Imgur direct image links
+    'imgur.com',             // Imgur
+    'imagedelivery.net',     // Cloudflare Images (legacy support)
+    'cloudflare.com',        // Cloudflare (legacy support)
+];
+
+/**
+ * v25.1: Validate image URL is from an allowed domain
+ */
+function isValidImageUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+
+    try {
+        const parsed = new URL(url);
+
+        // Must be HTTPS
+        if (parsed.protocol !== 'https:') return false;
+
+        // Check against allowed domains
+        const hostname = parsed.hostname.toLowerCase();
+        return ALLOWED_IMAGE_DOMAINS.some(domain => hostname === domain || hostname.endsWith('.' + domain));
+    } catch (e) {
+        return false;
+    }
+}
 
 /**
  * Initialize routes with dependencies
@@ -30,6 +59,7 @@ function init(deps) {
 
     // Prepare metadata
     // v24.0: Added input sanitization for all user-provided content
+    // v25.1: Now accepts imageUrl from Imgur (user uploads there first)
     router.post('/prepare-metadata', async (req, res) => {
         try {
             // v24.0 SECURITY: Sanitize all user inputs
@@ -38,7 +68,10 @@ function init(deps) {
             const description = sanitizer.sanitizeDescription(req.body.description || '');
             const twitter = sanitizer.sanitizeTwitterHandle(req.body.twitter);
             const website = sanitizer.sanitizeUrl(req.body.website);
-            const image = req.body.image; // Image is validated by moderation
+
+            // v25.1: Accept imageUrl from Imgur
+            // User uploads to Imgur themselves - Imgur handles content moderation
+            const imageUrl = req.body.imageUrl;
 
             // Log if suspicious patterns were detected (for monitoring)
             if (sanitizer.hasSuspiciousPatterns(req.body.name) ||
@@ -49,16 +82,22 @@ function init(deps) {
             }
 
             if (description.length > 75) return res.status(400).json({ error: "Description too long." });
-            if (!name || !ticker || !image) return res.status(400).json({ error: "Missing fields." });
+            if (!name || !ticker || !imageUrl) return res.status(400).json({ error: "Missing fields." });
+
+            // v25.1: Validate imageUrl is from allowed domain (Imgur, etc.)
+            if (!isValidImageUrl(imageUrl)) {
+                logger.warn('[Deploy] Invalid image URL rejected', { imageUrl: imageUrl.substring(0, 50) });
+                return res.status(400).json({ error: "Invalid image URL. Please use Imgur (i.imgur.com)." });
+            }
 
             const DESCRIPTION_FOOTER = " Launched via Ignition.";
             const finalDescription = description + DESCRIPTION_FOOTER;
 
-            const isSafe = await moderation.checkContentSafety(image);
-            if (!isSafe) return res.status(400).json({ error: "Upload blocked: Illegal content." });
+            // v25.1: No server-side moderation - Imgur handles it
+            // Just upload metadata with the Imgur image URL
+            const result = await pinata.uploadMetadata(name, ticker, finalDescription, twitter, website, imageUrl);
 
-            // Returns { metadataUri, imageUrl }
-            const result = await pinata.uploadMetadata(name, ticker, finalDescription, twitter, website, image);
+            logger.info('[Deploy] Metadata prepared', { name, ticker, imageUrl: imageUrl.substring(0, 50) });
 
             res.json({ success: true, ...result });
         } catch (err) {
@@ -92,7 +131,7 @@ function init(deps) {
                 description: sanitized.description,
                 twitter: sanitized.twitter,
                 website: sanitized.website,
-                image: sanitized.imageUrl || sanitized.image, // Pass the direct URL, not base64
+                image: sanitized.imageUrl || sanitized.image, // Pass the direct URL
                 userPubkey,
                 isMayhemMode,
                 metadataUri

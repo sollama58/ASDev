@@ -4,6 +4,7 @@
  * v13.0 - PostgreSQL + Redis globalState
  * v14.0 - Added mintExtractor for unified mint discovery
  * v24.0 - Added circuitBreaker for external API resilience
+ * v25.1 - Removed cloudflareImages (using Imgur for user uploads)
  */
 const logger = require('./logger');
 const postgres = require('./postgres');

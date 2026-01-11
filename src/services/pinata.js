@@ -1,6 +1,7 @@
 /**
  * Pinata IPFS Service
  * Upload images and metadata to IPFS via Pinata
+ * v25.0 - Updated to accept image URLs (from Cloudflare) instead of base64
  */
 const axios = require('axios');
 const FormData = require('form-data');
@@ -34,8 +35,9 @@ function getPinataJSONHeaders() {
 }
 
 /**
- * Upload image to Pinata IPFS
+ * Upload image to Pinata IPFS (legacy - for base64 data)
  * Returns the IPFS Hash (CID)
+ * @deprecated Use Cloudflare Images for uploads, this is kept for backwards compatibility
  */
 async function uploadImage(base64Data) {
     try {
@@ -58,24 +60,26 @@ async function uploadImage(base64Data) {
 
 /**
  * Upload token metadata to Pinata IPFS
- * Returns object with metadata URI and the direct Image URI (Gateway)
+ * v25.0: Now accepts imageUrl directly (from Cloudflare) instead of base64
+ *
+ * @param {string} name - Token name
+ * @param {string} symbol - Token symbol/ticker
+ * @param {string} description - Token description
+ * @param {string} twitter - Twitter handle or URL
+ * @param {string} website - Website URL
+ * @param {string} imageUrl - Direct URL to the image (Cloudflare CDN URL)
+ * @returns {Promise<{imageUrl: string, metadataUri: string}>}
  */
-async function uploadMetadata(name, symbol, description, twitter, website, imageBase64) {
-    let imageCid = "";
-    
-    // 1. Upload Image
-    if (imageBase64) {
-        imageCid = await uploadImage(imageBase64);
-    }
+async function uploadMetadata(name, symbol, description, twitter, website, imageUrl) {
+    // v25.0: Use the provided image URL directly (from Cloudflare Images)
+    // No more base64 processing on our server
 
-    // 2. Construct Metadata
-    // CRITICAL FIX: Use ipfs:// scheme for the on-chain metadata.
-    // This allows Pump.fun/Solscan/Wallets to use their own fast gateways.
+    // Construct Metadata with the CDN image URL
     const metadata = {
         name,
         symbol,
         description,
-        image: imageCid ? `ipfs://${imageCid}` : "", 
+        image: imageUrl || "",  // v25.0: Direct URL instead of ipfs://
         showName: true,
         createdOn: "https://pump.fun",
         twitter: twitter || "",
@@ -84,19 +88,70 @@ async function uploadMetadata(name, symbol, description, twitter, website, image
     };
 
     try {
-        // 3. Upload Metadata JSON
+        // Upload Metadata JSON to IPFS
         const response = await axios.post(
             'https://api.pinata.cloud/pinning/pinJSONToIPFS',
             metadata,
             { headers: getPinataJSONHeaders() }
         );
-        
+
+        const metadataHash = response.data.IpfsHash;
+
+        logger.info('[Pinata] Metadata uploaded', {
+            name,
+            symbol,
+            metadataHash,
+            hasImage: !!imageUrl
+        });
+
+        return {
+            // Return the image URL that was provided
+            imageUrl: imageUrl || "",
+            // Return the HTTP URL for the metadata so the Token Program can read it
+            metadataUri: `https://gateway.pinata.cloud/ipfs/${metadataHash}`
+        };
+    } catch (e) {
+        logger.error('[Pinata] Metadata upload failed', { error: e.message });
+        throw new Error(`Metadata upload failed. Please try again.`);
+    }
+}
+
+/**
+ * Upload metadata with legacy base64 image support
+ * @deprecated Use uploadMetadata with imageUrl instead
+ */
+async function uploadMetadataWithBase64(name, symbol, description, twitter, website, imageBase64) {
+    let imageCid = "";
+
+    // Upload Image to IPFS
+    if (imageBase64) {
+        imageCid = await uploadImage(imageBase64);
+    }
+
+    // Construct Metadata with IPFS image reference
+    const metadata = {
+        name,
+        symbol,
+        description,
+        image: imageCid ? `ipfs://${imageCid}` : "",
+        showName: true,
+        createdOn: "https://pump.fun",
+        twitter: twitter || "",
+        telegram: "",
+        website: website || ""
+    };
+
+    try {
+        const response = await axios.post(
+            'https://api.pinata.cloud/pinning/pinJSONToIPFS',
+            metadata,
+            { headers: getPinataJSONHeaders() }
+        );
+
         const metadataHash = response.data.IpfsHash;
 
         return {
-            // Return the gateway URL for the frontend to display immediately
             imageUrl: imageCid ? `https://gateway.pinata.cloud/ipfs/${imageCid}` : "",
-            // Return the HTTP URL for the metadata so the Token Program can read it
             metadataUri: `https://gateway.pinata.cloud/ipfs/${metadataHash}`
         };
     } catch (e) {
@@ -107,4 +162,5 @@ async function uploadMetadata(name, symbol, description, twitter, website, image
 module.exports = {
     uploadImage,
     uploadMetadata,
+    uploadMetadataWithBase64,
 };

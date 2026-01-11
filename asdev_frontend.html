@@ -10,7 +10,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        /* HOLDEX-STYLE DARK THEME v25.1 - Added text/number display improvements */
+        /* HOLDEX-STYLE DARK THEME v25.2 - Responsive text wrapping, non-bold modal headings */
         :root {
             --bg-primary: #0a0a0f;
             --bg-secondary: #12121a;
@@ -263,18 +263,41 @@
             background-color: var(--bg-primary);
         }
 
-        /* Metric Cards */
+        /* Metric Cards - v25.3: Improved alignment and overflow handling */
         .metric-card {
             background: var(--bg-primary);
             border: 1px solid var(--border-primary);
-            padding: 20px;
+            padding: 16px 12px;
             border-radius: 10px;
             text-align: center;
             transition: border-color 0.2s;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 80px;
+            overflow: hidden;
         }
         .metric-card:hover { border-color: #3a3a4a; }
-        .metric-value { font-size: 24px; font-weight: 700; color: var(--text-primary); font-family: 'JetBrains Mono', monospace; margin-top: 6px; }
-        .metric-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; font-weight: 500; }
+        .metric-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            margin-top: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+        }
+        .metric-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
 
         /* Badges */
         .holder-check {
@@ -355,17 +378,14 @@
         .tx-link:hover { text-decoration: underline; }
         .ca-display { word-break: break-all; user-select: all; cursor: copy; }
 
-        /* v25.1: Text and number display utilities - prevent breaking */
+        /* v25.2: Text and number display utilities */
+        /* Only use no-break for essential items - allow natural wrapping elsewhere */
         .no-break { white-space: nowrap; }
         .num-value {
-            white-space: nowrap;
             display: inline-block;
         }
-        .metric-value {
-            white-space: nowrap;
-        }
+        /* Numbers and amounts can wrap between value and unit */
         .sol-amount, .price-amount, .mcap-amount, .volume-amount {
-            white-space: nowrap;
             display: inline-block;
         }
         /* Prevent ticker/token names from breaking mid-word */
@@ -385,6 +405,10 @@
         .badge-bonded, .badge-bonding, .holder-check, .badge-creator, .badge-robinhood, .score-badge, .status-badge {
             white-space: nowrap;
         }
+        /* Data box labels - allow natural wrapping for responsive display */
+        .metric-label {
+            line-height: 1.3;
+        }
 
         /* Log Grid */
         .log-grid { display: grid; grid-template-columns: 100px 1fr; gap: 8px; font-size: 11px; }
@@ -401,6 +425,59 @@
         .status-icon { margin-right: 8px; }
         .text-green { color: var(--accent-green); }
         .text-red { color: var(--accent-red); }
+
+        /* v25.3: Airdrop Countdown Timer Banner */
+        .countdown-banner {
+            background: linear-gradient(90deg, rgba(168, 85, 247, 0.15) 0%, rgba(139, 92, 246, 0.1) 50%, rgba(168, 85, 247, 0.15) 100%);
+            border-bottom: 1px solid rgba(168, 85, 247, 0.3);
+            padding: 10px 16px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .countdown-label {
+            font-size: 11px;
+            color: #a78bfa;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 500;
+        }
+        .countdown-timer {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .countdown-segment {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 40px;
+        }
+        .countdown-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: #e9d5ff;
+            font-family: 'JetBrains Mono', monospace;
+            line-height: 1;
+        }
+        .countdown-unit {
+            font-size: 8px;
+            color: #a78bfa;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .countdown-separator {
+            font-size: 18px;
+            color: #7c3aed;
+            font-weight: 700;
+        }
+        @media (max-width: 640px) {
+            .countdown-banner { padding: 8px 12px; gap: 8px; }
+            .countdown-value { font-size: 16px; }
+            .countdown-segment { min-width: 32px; }
+        }
 
         /* Wallet Modal Buttons */
         .btn-wallet {
@@ -946,6 +1023,28 @@
 <div id="app-container">
     <div class="ticker-wrap"><div class="ticker" id="ticker-content"><span class="ticker-item text-orange-600">CONNECTING TO LAUNCH FEED...</span></div></div>
 
+    <!-- v25.3: Airdrop Countdown Timer Banner -->
+    <div class="countdown-banner" id="airdrop-countdown-banner">
+        <span class="countdown-label">Next Airdrop In</span>
+        <div class="countdown-timer" id="countdown-timer">
+            <div class="countdown-segment">
+                <span class="countdown-value" id="countdown-hours">00</span>
+                <span class="countdown-unit">Hours</span>
+            </div>
+            <span class="countdown-separator">:</span>
+            <div class="countdown-segment">
+                <span class="countdown-value" id="countdown-minutes">00</span>
+                <span class="countdown-unit">Mins</span>
+            </div>
+            <span class="countdown-separator">:</span>
+            <div class="countdown-segment">
+                <span class="countdown-value" id="countdown-seconds">00</span>
+                <span class="countdown-unit">Secs</span>
+            </div>
+        </div>
+        <span class="text-purple-300 text-xs font-mono" id="countdown-pool">Pool: <span id="countdown-pool-amount">0.00</span> SOL</span>
+    </div>
+
     <div class="p-4 md:p-10">
         <!-- Header - Mobile Responsive -->
         <div class="flex flex-col md:flex-row justify-between items-center mb-6 border-b-4 border-orange-900 pb-6 md:pb-8 gap-4">
@@ -998,27 +1097,27 @@
                     <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1">HISTORY</button>
                 </div>
             </div>
-            <!-- Mobile: 2x2 grid, Desktop: 4 columns -->
+            <!-- v25.2: Mobile: 2x2 grid, Desktop: 4 columns - allow text wrapping -->
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 px-0 md:px-4">
                 <!-- SOL Airdrop Pool -->
                 <div class="text-center p-3 md:p-4 bg-purple-900/10 rounded-lg md:bg-transparent md:border-r md:border-purple-800/30 md:rounded-none">
                     <div class="text-[10px] md:text-xs text-purple-300 uppercase mb-1 md:mb-2 tracking-widest">SOL Airdrop Pool</div>
-                    <div class="text-xl sm:text-2xl md:text-3xl lg:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)] sol-amount" id="airdrop-balance">0.00&nbsp;<span class="text-xs md:text-lg align-top text-purple-400">SOL</span></div>
-                    <div class="text-[10px] text-gray-500 mt-1 no-break">Wallet:&nbsp;<span id="wallet-balance" class="text-gray-400">0.00</span>&nbsp;SOL</div>
+                    <div class="text-xl sm:text-2xl md:text-3xl lg:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)] sol-amount" id="airdrop-balance">0.00 <span class="text-xs md:text-lg align-top text-purple-400">SOL</span></div>
+                    <div class="text-[10px] text-gray-500 mt-1">Wallet: <span id="wallet-balance" class="text-gray-400">0.00</span> SOL</div>
                 </div>
 
                 <!-- Points Breakdown -->
                 <div class="text-center p-3 md:p-4 bg-purple-900/10 rounded-lg md:bg-transparent md:border-r md:border-purple-800/30 md:rounded-none flex flex-col justify-center gap-2">
                     <div class="flex justify-between items-center px-1 md:px-4">
-                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest no-break">Holder</span>
+                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest">Holder</span>
                         <span class="text-sm md:text-lg text-yellow-400 font-bold font-mono num-value" id="user-top-positions">0.00</span>
                     </div>
                     <div class="flex justify-between items-center px-1 md:px-4">
-                        <span class="text-[9px] md:text-[10px] text-green-300 uppercase tracking-widest no-break">Robinhood</span>
+                        <span class="text-[9px] md:text-[10px] text-green-300 uppercase tracking-widest">Robinhood</span>
                         <span class="text-sm md:text-lg text-green-400 font-bold font-mono num-value" id="user-robinhood-points">0.00</span>
                     </div>
                     <div class="flex justify-between items-center px-1 md:px-4">
-                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest no-break">ASDF&nbsp;100</span>
+                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest">ASDF 100</span>
                         <span id="asdf-status" class="text-[10px] md:text-sm font-bold font-mono text-gray-500 no-break">CHECKING...</span>
                     </div>
                 </div>
@@ -1026,20 +1125,20 @@
                 <!-- Total Points -->
                 <div class="text-center p-3 md:p-4 bg-purple-900/10 rounded-lg md:bg-transparent md:border-r md:border-purple-800/30 md:rounded-none flex flex-col justify-center items-center">
                     <div class="flex justify-center items-center gap-1 md:gap-2 mb-1">
-                        <div class="text-[10px] md:text-xs text-purple-300 uppercase tracking-widest no-break">Total&nbsp;Points</div>
+                        <div class="text-[10px] md:text-xs text-purple-300 uppercase tracking-widest">Total Points</div>
                         <button onclick="toggleAirdropInfoModal()" class="p-0 text-purple-400 hover:text-white transition" title="View Update Information">
                             <i data-lucide="info" width="12" height="12"></i>
                         </button>
                     </div>
                     <div class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl text-white font-bold font-mono drop-shadow-[0_0_15px_rgba(234,179,8,0.6)] num-value" id="user-total-points">0</div>
-                    <div id="points-multiplier-badge" class="hidden mt-1 px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[8px] md:text-[10px] text-green-400 font-bold tracking-wider no-break">2X&nbsp;MULTIPLIER</div>
+                    <div id="points-multiplier-badge" class="hidden mt-1 px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[8px] md:text-[10px] text-green-400 font-bold tracking-wider no-break">2X MULTIPLIER</div>
                 </div>
 
                 <!-- Expected Airdrop -->
                 <div class="text-center p-3 md:p-4 bg-purple-900/20 rounded-lg flex flex-col justify-center items-center">
-                    <div class="text-[9px] md:text-[10px] text-purple-300 uppercase mb-1 tracking-widest no-break">Expected&nbsp;Airdrop</div>
+                    <div class="text-[9px] md:text-[10px] text-purple-300 uppercase mb-1 tracking-widest">Expected Airdrop</div>
                     <div class="text-lg sm:text-xl md:text-2xl text-green-400 font-bold font-mono num-value" id="expected-airdrop">0.0000</div>
-                    <div class="text-[9px] md:text-[10px] text-purple-400 font-mono mt-1 no-break">SOL&nbsp;(Est)</div>
+                    <div class="text-[9px] md:text-[10px] text-purple-400 font-mono mt-1">SOL (Est)</div>
                 </div>
             </div>
         </div>
@@ -1062,20 +1161,20 @@
                     <div class="text-center">
                         <div id="koth-ticker" class="text-xl md:text-2xl font-bold text-white font-mono ticker-symbol">$????</div>
                         <div id="koth-name" class="text-[10px] md:text-xs text-fuchsia-500 font-mono uppercase token-name">LOADING...</div>
-                        <div id="koth-holders" class="text-[9px] md:text-[10px] text-green-400 font-mono mt-1 no-break">HOLDERS&nbsp;GET&nbsp;10%&nbsp;BONUS!</div>
+                        <div id="koth-holders" class="text-[9px] md:text-[10px] text-green-400 font-mono mt-1">Holders get 10% bonus!</div>
                     </div>
                 </div>
 
                 <!-- Stats Row (Mobile: inline, Desktop: separate) -->
                 <div class="flex justify-center gap-6 md:gap-4 w-full md:w-auto">
                     <div class="text-center">
-                        <div class="text-[10px] md:text-xs text-fuchsia-500 uppercase font-mono mb-1 no-break">MARKET&nbsp;CAP</div>
+                        <div class="text-[10px] md:text-xs text-fuchsia-500 uppercase font-mono mb-1">Market Cap</div>
                         <div id="koth-mcap" class="text-lg md:text-2xl font-bold text-white font-mono mcap-amount">$0</div>
                     </div>
                     <div class="text-center md:text-right">
-                        <div class="text-[9px] md:text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">HOLDER BONUS</div>
+                        <div class="text-[9px] md:text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">Holder Bonus</div>
                         <div class="text-lg md:text-xl font-bold text-green-400 font-mono">10%</div>
-                        <div class="text-[9px] md:text-[10px] text-fuchsia-500 font-mono">TO ALL HOLDERS</div>
+                        <div class="text-[9px] md:text-[10px] text-fuchsia-500 font-mono">to all holders</div>
                     </div>
                 </div>
             </div>
@@ -1119,37 +1218,38 @@
                 <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest">BUYBACK & FEE TRACKER</h3>
                 <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1">VIEW LOGS</button>
             </div>
+            <!-- v25.2: Removed no-break from labels - allow natural text wrapping on data boxes -->
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 text-center">
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase no-break">Pending&nbsp;Fees</div>
-                    <div class="text-base md:text-xl text-white font-bold font-mono mt-1 sol-amount"><span id="track-balance">0.0000</span>&nbsp;SOL</div>
-                    <div class="text-[9px] md:text-[10px] text-gray-500 mt-1 hidden sm:block no-break">
-                        <span class="text-orange-400">P:</span>&nbsp;<span id="track-platform-fees">0.0000</span>&nbsp;|
-                        <span class="text-green-400">R:</span>&nbsp;<span id="track-robinhood-fees">0.0000</span>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Pending Fees</div>
+                    <div class="text-base md:text-xl text-white font-bold font-mono mt-1 sol-amount"><span id="track-balance">0.0000</span> SOL</div>
+                    <div class="text-[9px] md:text-[10px] text-gray-500 mt-1 hidden sm:block">
+                        <span class="text-orange-400">P:</span> <span id="track-platform-fees">0.0000</span> |
+                        <span class="text-green-400">R:</span> <span id="track-robinhood-fees">0.0000</span>
                     </div>
                 </div>
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase no-break">Last&nbsp;Claim</div>
-                    <div class="text-base md:text-xl text-green-400 font-bold font-mono mt-1 sol-amount"><span id="track-last-amt">0.0000</span>&nbsp;SOL</div>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Last Claim</div>
+                    <div class="text-base md:text-xl text-green-400 font-bold font-mono mt-1 sol-amount"><span id="track-last-amt">0.0000</span> SOL</div>
                 </div>
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase no-break">Claim&nbsp;Time</div>
-                    <div class="text-xs md:text-sm text-white font-mono mt-2 no-break" id="track-last-time">Never</div>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Claim Time</div>
+                    <div class="text-xs md:text-sm text-white font-mono mt-2" id="track-last-time">Never</div>
                 </div>
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase no-break">Next&nbsp;Check</div>
-                    <div class="text-base md:text-xl text-yellow-400 font-bold font-mono mt-1 no-break" id="track-next-check">--:--</div>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Next Check</div>
+                    <div class="text-base md:text-xl text-yellow-400 font-bold font-mono mt-1" id="track-next-check">--:--</div>
                 </div>
 
                 <!-- Dynamic Conservation Notice -->
                 <div id="conservation-notice" class="conservation-notice col-span-2 md:col-span-4">
                     <div class="flex items-center justify-center gap-2 mb-1">
                         <i data-lucide="shield-alert" class="text-blue-400" width="14"></i>
-                        <span class="text-blue-300 font-bold uppercase text-[10px] md:text-xs no-break">Conserving&nbsp;SOL&nbsp;for&nbsp;Airdrop</span>
+                        <span class="text-blue-300 uppercase text-[10px] md:text-xs">Conserving SOL for Airdrop</span>
                     </div>
                     <div class="text-blue-200 text-[10px] md:text-xs text-center">
-                        Targeting&nbsp;<span id="cons-users" class="font-bold text-white num-value">0</span>&nbsp;users.
-                        Need&nbsp;<span id="cons-need" class="font-bold text-white num-value">0.0000</span>&nbsp;SOL (Have&nbsp;<span id="cons-have" class="text-gray-400 num-value">0.0000</span>).
+                        Targeting <span id="cons-users" class="font-bold text-white num-value">0</span> users.
+                        Need <span id="cons-need" class="font-bold text-white num-value">0.0000</span> SOL (Have <span id="cons-have" class="text-gray-400 num-value">0.0000</span>).
                         <span id="cons-missing" class="text-yellow-400 ml-1"></span>
                     </div>
                 </div>
@@ -1160,43 +1260,43 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-8">
             <!-- Platform Metrics -->
             <div class="panel bg-orange-900/10">
-                <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-4 md:mb-6 no-break">PLATFORM&nbsp;METRICS</h3>
+                <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-4 md:mb-6">PLATFORM METRICS</h3>
                 <div class="grid grid-cols-3 gap-2 md:gap-4">
-                    <div class="metric-card"><div class="metric-label no-break">Launches</div><div id="metric-launches" class="metric-value">0</div></div>
-                    <div class="metric-card"><div class="metric-label no-break">Airdropped</div><div id="metric-pump" class="metric-value">0.00</div></div>
-                    <div class="metric-card"><div class="metric-label no-break">Daily&nbsp;Vol</div><div id="metric-fees" class="metric-value">$0.00</div></div>
+                    <div class="metric-card"><div class="metric-label">Launches</div><div id="metric-launches" class="metric-value">0</div></div>
+                    <div class="metric-card"><div class="metric-label">Airdropped</div><div id="metric-pump" class="metric-value">0.00</div></div>
+                    <div class="metric-card"><div class="metric-label">Daily Vol</div><div id="metric-fees" class="metric-value">$0.00</div></div>
                 </div>
                 <div class="text-center mt-4">
                     <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-[10px] md:text-xs border border-orange-700 hover:bg-orange-800 px-3 md:px-4 py-2 rounded transition">FEE MECHANICS</button>
                 </div>
             </div>
 
-            <!-- Robinhood Section -->
+            <!-- Robinhood Section - v25.3: Fixed overflow and alignment -->
             <div class="panel bg-green-900/10" id="robinhood-section">
-                <h3 class="text-green-400 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-4 md:mb-6 flex items-center gap-2 no-break">
-                    <svg class="w-3 h-3 md:w-4 md:h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
-                    ROBINHOOD&nbsp;PARTNERS
+                <h3 class="text-green-400 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-4 md:mb-6 flex items-center gap-2">
+                    <svg class="w-3 h-3 md:w-4 md:h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                    <span>ROBINHOOD</span>
                 </h3>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label no-break" style="color: #86efac;">Partners</div>
+                        <div class="metric-label" style="color: #86efac;">Active</div>
                         <div id="robinhood-token-count" class="metric-value" style="color: #4ade80;">0</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label no-break" style="color: #86efac;">Pending</div>
-                        <div id="robinhood-pending-fees" class="metric-value text-sm md:text-lg" style="color: #4ade80;">0.00</div>
+                        <div class="metric-label" style="color: #86efac;">Pending</div>
+                        <div id="robinhood-pending-fees" class="metric-value" style="color: #4ade80; font-size: 16px;">0.00</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label no-break" style="color: #86efac;">Collected</div>
-                        <div id="robinhood-fees" class="metric-value text-sm md:text-lg" style="color: #4ade80;">0.00</div>
+                        <div class="metric-label" style="color: #86efac;">Collected</div>
+                        <div id="robinhood-fees" class="metric-value" style="color: #4ade80; font-size: 16px;">0.00</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label no-break" style="color: #86efac;">Holdings</div>
-                        <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80;">-</div>
+                        <div class="metric-label" style="color: #86efac;">Your Holds</div>
+                        <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80; font-size: 16px;">-</div>
                     </div>
                 </div>
                 <div class="text-center mt-4 flex justify-center gap-2 flex-wrap">
-                    <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">PARTNERS</button>
+                    <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">VIEW ALL</button>
                     <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">INFO</button>
                 </div>
             </div>
@@ -1212,16 +1312,26 @@
                 <h3 class="text-orange-500 font-mono text-xs sm:text-sm mb-4 md:mb-6 uppercase tracking-widest w-full text-center border-b-2 border-orange-900/50 pb-3">Token Preview</h3>
                 <div class="text-center mb-4 min-h-[40px] md:min-h-[60px]"><h2 id="preview-name" class="text-xl md:text-2xl font-bold text-white break-words">Token Name</h2><p id="preview-ticker" class="text-orange-400 font-mono text-base md:text-lg uppercase">$TICKER</p></div>
                 
-                <!-- DRAG AND DROP ZONE -->
-                <div id="image-preview" class="mb-6 shadow-2xl shadow-orange-900/30 transition-all duration-300" onclick="document.getElementById('image-file').click()">
-                    <div class="text-center pointer-events-none">
-                        <div class="text-2xl mb-2">📁</div>
-                        <div class="text-xs font-bold text-orange-400">DRAG & DROP<br>OR CLICK TO UPLOAD</div>
+                <!-- v25.1: IMAGE URL INPUT (User uploads to Imgur) -->
+                <div id="image-preview" class="mb-4 shadow-2xl shadow-orange-900/30 transition-all duration-300">
+                    <div class="text-center pointer-events-none" id="image-placeholder">
+                        <div class="text-4xl mb-2">🖼️</div>
+                        <div class="text-xs font-bold text-orange-400">PASTE IMGUR URL BELOW</div>
                     </div>
                 </div>
-                
-                <input type="file" id="image-file" class="hidden" accept="image/png, image/jpeg, image/gif" onchange="previewImage(event)">
-                <p class="text-xs text-orange-400 font-mono text-center mt-2">Required: PNG, JPG, GIF.<br>Max size 4MB.</p>
+
+                <div class="w-full px-2">
+                    <input type="url" id="image-url" class="input-field text-sm w-full" placeholder="https://i.imgur.com/xxxxx.png" oninput="previewImageFromUrl(this.value)">
+                </div>
+
+                <div class="text-xs text-orange-400 font-mono text-center mt-3 px-2 space-y-1">
+                    <p class="font-bold text-orange-300">How to get your image URL:</p>
+                    <p>1. Go to <a href="https://imgur.com/upload" target="_blank" class="text-orange-500 underline hover:text-orange-300">imgur.com/upload</a></p>
+                    <p>2. Upload your image (PNG, JPG, GIF)</p>
+                    <p>3. Right-click image → "Copy image address"</p>
+                    <p>4. Paste the URL above</p>
+                    <p class="text-orange-600 mt-2">URL must start with https://i.imgur.com/</p>
+                </div>
             </div>
             <div class="panel col-span-2">
                 <h3 class="text-orange-500 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-orange-900/50 pb-3">Token Metadata</h3>
@@ -1369,7 +1479,7 @@
 <div id="wallet-modal" class="modal">
     <div class="modal-content border-orange-600" style="max-width: 450px;">
         <span class="close-btn" onclick="closeWalletModal()">&times;</span>
-        <h3 class="text-orange-500 font-mono text-lg mb-6 uppercase tracking-widest border-b border-orange-900/50 pb-2">SELECT WALLET PROVIDER</h3>
+        <h3 class="text-orange-500 font-mono text-lg mb-6 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Select Wallet Provider</h3>
         <div id="wallet-list" class="flex flex-col gap-2">
             <button onclick="selectWallet('phantom')" class="btn-wallet" id="btn-phantom">
                 <span class="flex items-center gap-3"><i data-lucide="ghost" width="20"></i> Phantom</span>
@@ -1391,7 +1501,7 @@
 <div id="log-modal" class="modal">
     <div class="modal-content">
         <span class="close-btn" onclick="closeLogModal()">&times;</span>
-        <h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FLYWHEEL & BUYBACK LOGS</h3>
+        <h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Flywheel & Buyback Logs</h3>
         <div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2 flex flex-col gap-2"></div>
     </div>
 </div>
@@ -1399,7 +1509,7 @@
 <div id="holders-modal" class="modal">
     <div class="modal-content border-orange-600" style="max-width: 400px;">
         <span class="close-btn" onclick="closeHoldersModal()">&times;</span>
-        <h3 id="holders-modal-title" class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">Top Holders</h3>
+        <h3 id="holders-modal-title" class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Top Holders</h3>
         <div id="holders-list" class="max-h-[60vh] overflow-y-auto pr-2 font-mono text-xs"></div>
     </div>
 </div>
@@ -1407,135 +1517,137 @@
 <div id="status-modal" class="modal">
     <div class="modal-content border-yellow-600" style="max-width: 450px;">
         <span class="close-btn" onclick="closeStatusModal()">&times;</span>
-        <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2">SYSTEM STATUS DIAGNOSTICS</h3>
+        <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2 font-normal">System Status Diagnostics</h3>
         <div id="status-details-list" class="font-mono text-sm space-y-2"></div>
         <p class="text-xs text-yellow-500 mt-4">If services are offline, automatic processes (like airdrops and buybacks) may be delayed or halted.</p>
     </div>
 </div>
 
 <!-- v25.0: Updated title to reflect all tokens (platform + robinhood) -->
-<div id="all-launches-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAllLaunchesModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">ALL TOKENS</h3><div id="modal-all-launches-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
+<div id="all-launches-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAllLaunchesModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">All Tokens</h3><div id="modal-all-launches-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
-<div id="all-eligible-users-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAllEligibleUsersModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">ELIGIBLE AIRDROP USERS & POINTS</h3><div id="modal-all-eligible-users-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
+<div id="all-eligible-users-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAllEligibleUsersModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2 font-normal">Eligible Airdrop Users & Points</h3><div id="modal-all-eligible-users-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
 <!-- v18.0: User Holdings Breakdown Modal -->
 <div id="user-holdings-modal" class="modal">
     <div class="modal-content border-yellow-600" style="max-width: 700px;">
         <span class="close-btn" onclick="closeUserHoldingsModal()">&times;</span>
-        <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2">YOUR TOKEN HOLDINGS & POINTS</h3>
+        <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2 font-normal">Your Token Holdings & Points</h3>
         <div id="user-holdings-content" class="max-h-[65vh] overflow-y-auto pr-2">
             <div class="text-center text-yellow-400 p-4">Connect wallet to view holdings...</div>
         </div>
     </div>
 </div>
 
-<div id="airdrop-log-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAirdropLogModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">AIRDROP DISTRIBUTION HISTORY</h3><div id="modal-airdrop-log-content" class="max-h-[60vh] overflow-y-auto pr-2">Loading...</div></div></div>
+<div id="airdrop-log-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAirdropLogModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2 font-normal">Airdrop Distribution History</h3><div id="modal-airdrop-log-content" class="max-h-[60vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
+<!-- v25.2: Updated airdrop info modal with non-bold headings -->
 <div id="airdrop-info-modal" class="modal">
     <div class="modal-content border-purple-600">
         <span class="close-btn" onclick="closeAirdropInfoModal()">&times;</span>
-        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">SOL AIRDROP SYSTEM (v17.0)</h3>
+        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2 font-normal">SOL Airdrop System</h3>
         <div class="font-sans text-sm text-purple-200 space-y-3">
             <div class="bg-green-900/30 p-3 rounded border border-green-700/50 mb-4">
-                <p class="text-green-400 font-bold text-xs uppercase mb-1">💰 PROPORTIONAL AIRDROPS</p>
-                <p class="text-xs text-gray-300">Airdrops are distributed in **SOL** proportionally to your holdings. The more you hold, the more you earn!</p>
+                <p class="text-green-400 text-xs uppercase mb-1">Proportional Airdrops</p>
+                <p class="text-xs text-gray-300">Airdrops are distributed in SOL proportionally to your holdings. The more you hold, the more you earn.</p>
             </div>
             <div class="bg-orange-900/30 p-3 rounded border border-orange-700/50 mb-4">
-                <p class="text-orange-400 font-bold text-xs uppercase mb-1">⏱️ TIMING</p>
-                <p class="text-xs text-gray-300">Fees collected <span class="text-yellow-400">every 1 minute</span> (>0.05 SOL) | Airdrops distributed <span class="text-yellow-400">every 15 minutes</span> (>1.0 SOL pool)</p>
+                <p class="text-orange-400 text-xs uppercase mb-1">Timing</p>
+                <p class="text-xs text-gray-300">Fees collected every <span class="text-yellow-400">1 minute</span> (>0.05 SOL). Airdrops distributed every <span class="text-yellow-400">15 minutes</span> (>1.0 SOL pool).</p>
             </div>
-            <p>Points are calculated based on your **proportional holdings** in eligible tokens:</p>
+            <p>Points are calculated based on your proportional holdings in eligible tokens:</p>
             <ul class="list-disc list-inside ml-4 space-y-2 text-purple-300">
-                <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400 font-bold">250 holders</span> of tokens with <span class="text-green-400 font-bold">>$100 24hr volume</span> earn points.</li>
+                <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400">250 holders</span> of tokens with <span class="text-green-400">>$100 24hr volume</span> earn points.</li>
                 <li><span class="text-white">Base Points:</span> Each eligible token distributes <span class="text-yellow-400">1000 points</span> proportionally based on your balance vs total holdings.</li>
-                <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400 font-bold">+Points</span> for holding partner tokens (scaled by fee share %).</li>
-                <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you're a Top 100 $ASDF holder.</li>
+                <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+Points</span> for holding partner tokens (scaled by fee share %).</li>
+                <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400">2x Total Points</span> if you're a Top 100 $ASDF holder.</li>
             </ul>
             <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mt-4">
-                <p class="text-yellow-400 font-bold text-xs uppercase mb-1">📊 EXAMPLE</p>
-                <p class="text-xs text-gray-300">If you hold 10% of a token's top 250 supply, you get 100 points from that token. With the ASDF multiplier, that becomes 200 points!</p>
+                <p class="text-yellow-400 text-xs uppercase mb-1">Example</p>
+                <p class="text-xs text-gray-300">If you hold 10% of a token's top 250 supply, you get 100 points from that token. With the ASDF multiplier, that becomes 200 points.</p>
             </div>
             <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
-                <p class="text-fuchsia-400 font-bold text-xs uppercase mb-1">💊 KING OF THE PILL (KOTH)</p>
-                <p class="text-xs text-gray-300"><span class="text-white font-bold">10%</span> of every airdrop goes to holders of the highest MCAP token, proportional to their holdings!</p>
+                <p class="text-fuchsia-400 text-xs uppercase mb-1">King of the Pill (KOTH)</p>
+                <p class="text-xs text-gray-300"><span class="text-white">10%</span> of every airdrop goes to holders of the highest market cap token, proportional to their holdings.</p>
             </div>
         </div>
     </div>
 </div>
 
-<div id="about-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAboutModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2">FEE & BUYBACK MECHANICS</h3>
+<!-- v25.2: Updated about modal with non-bold headings -->
+<div id="about-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAboutModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Fee & Buyback Mechanics</h3>
     <div id="about-content-static">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8 font-sans text-sm">
             <div>
-                <h4 class="text-orange-400 font-bold mb-3 border-b border-orange-800 pb-1">1. REVENUE GENERATION</h4>
+                <h4 class="text-orange-400 mb-3 border-b border-orange-800 pb-1 font-normal">1. Revenue Generation</h4>
                 <p class="text-orange-200 mb-2">The platform generates revenue through two primary streams:</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <li><span class="text-white font-bold">Deployment Fee:</span> 0.02 SOL per token launch.</li>
-                    <li><span class="text-white font-bold">Trading Rewards:</span> 1% of the bonding curve volume (Creator Fee).</li>
+                    <li><span class="text-white">Deployment Fee:</span> 0.02 SOL per token launch.</li>
+                    <li><span class="text-white">Trading Rewards:</span> 1% of the bonding curve volume (Creator Fee).</li>
                 </ul>
 
-                <h4 class="text-orange-400 font-bold mb-3 border-b border-orange-800 pb-1">2. THE FLYWHEEL (FEE COLLECTION)</h4>
-                <p class="text-orange-200 mb-2">Every <span class="text-yellow-400 font-bold">1 minute</span>, if pending fees > 0.05 SOL:</p>
+                <h4 class="text-orange-400 mb-3 border-b border-orange-800 pb-1 font-normal">2. The Flywheel (Fee Collection)</h4>
+                <p class="text-orange-200 mb-2">Every <span class="text-yellow-400">1 minute</span>, if pending fees > 0.05 SOL:</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <li><span class="text-green-400 font-bold">95.0%</span>: Added to **SOL Airdrop Pool** (for direct distribution).</li>
-                    <li><span class="text-red-400 font-bold">4.5%</span>: Sent to $ASDF Burns Wallet.</li>
-                    <li><span class="text-red-400 font-bold">0.5%</span>: Sent to Upkeep and Reserves Wallet.</li>
+                    <li><span class="text-green-400">95.0%</span>: Added to SOL Airdrop Pool (for direct distribution).</li>
+                    <li><span class="text-red-400">4.5%</span>: Sent to $ASDF Burns Wallet.</li>
+                    <li><span class="text-red-400">0.5%</span>: Sent to Upkeep and Reserves Wallet.</li>
                 </ul>
             </div>
-            
+
             <div>
-                <h4 class="text-purple-400 font-bold mb-3 border-b border-purple-800 pb-1">3. PROPORTIONAL POINTS SYSTEM (v18.0)</h4>
+                <h4 class="text-purple-400 mb-3 border-b border-purple-800 pb-1 font-normal">3. Proportional Points System</h4>
                 <p class="text-purple-200 mb-2">Points are distributed proportionally based on your holdings. No signup required.</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400 font-bold">250 holders</span> of tokens with <span class="text-green-400 font-bold">>$100 24hr volume</span>.</li>
+                    <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400">250 holders</span> of tokens with <span class="text-green-400">>$100 24hr volume</span>.</li>
                     <li><span class="text-white">Base Points:</span> Each eligible token distributes <span class="text-yellow-400">1000 points</span> proportionally to holdings.</li>
-                    <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400 font-bold">+Points</span> for holding partner tokens (scaled by fee share %).</li>
-                    <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 100 Holder of **$ASDF**.</li>
+                    <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+Points</span> for holding partner tokens (scaled by fee share %).</li>
+                    <li><span class="text-white">Multiplier:</span> <span class="text-green-400">2x Total Points</span> if you are a Top 100 $ASDF holder.</li>
                 </ul>
                 <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
-                    <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">💊 KING OF THE PILL</p>
-                    <p class="text-xs text-gray-300"><span class="text-white font-bold">10% of the entire Airdrop pot</span> is distributed to all holders of the highest Market Cap token, proportional to their holdings!</p>
+                    <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">King of the Pill</p>
+                    <p class="text-xs text-gray-300"><span class="text-white">10% of the entire airdrop pool</span> is distributed to all holders of the highest market cap token, proportional to their holdings.</p>
                 </div>
             </div>
         </div>
 
         <div class="mt-6">
-            <h4 class="text-green-400 font-bold mb-3 border-b border-green-800 pb-1">4. AUTOMATED AIRDROP ENGINE</h4>
-            <p class="text-gray-300 mb-2">Runs every <span class="text-yellow-400 font-bold">15 minutes</span> automatically.</p>
+            <h4 class="text-green-400 mb-3 border-b border-green-800 pb-1 font-normal">4. Automated Airdrop Engine</h4>
+            <p class="text-gray-300 mb-2">Runs every <span class="text-yellow-400">15 minutes</span> automatically.</p>
             <ul class="list-disc list-inside text-gray-400 space-y-1">
-                <li><span class="text-white font-bold">Trigger:</span> When SOL Airdrop Pool > <span class="text-yellow-400">1.0 SOL</span> (after 0.5 SOL reserve).</li>
-                <li><span class="text-white font-bold">Action:</span> Distributes **99%** of the SOL pool directly to all qualified users.</li>
-                <li><span class="text-white font-bold">Distribution:</span> Proportional based on your share of the Total Global Points (minus 10% KOTH allocation).</li>
+                <li><span class="text-white">Trigger:</span> When SOL Airdrop Pool > <span class="text-yellow-400">1.0 SOL</span> (after 0.5 SOL reserve).</li>
+                <li><span class="text-white">Action:</span> Distributes 99% of the SOL pool directly to all qualified users.</li>
+                <li><span class="text-white">Distribution:</span> Proportional based on your share of the Total Global Points (minus 10% KOTH allocation).</li>
             </ul>
         </div>
     </div>
 </div></div>
 
-<!-- Robinhood Partner Tokens Modal (v12.0) -->
+<!-- v25.2: Robinhood Partner Tokens Modal -->
 <div id="robinhood-modal" class="modal">
     <div class="modal-content border-green-600" style="max-width: 800px;">
         <span class="close-btn text-green-400" onclick="closeRobinhoodModal()">&times;</span>
-        <h3 class="text-green-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-green-800/50 pb-2">ROBINHOOD PARTNER TOKENS</h3>
-        <p class="text-xs text-green-300/70 mb-4 font-mono">External PumpFun tokens that share creator fees with us. Hold these to earn bonus airdrop points!</p>
+        <h3 class="text-green-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-green-800/50 pb-2 font-normal">Robinhood Partner Tokens</h3>
+        <p class="text-xs text-green-300/70 mb-4 font-mono">External PumpFun tokens that share creator fees with us. Hold these to earn bonus airdrop points.</p>
         <div id="robinhood-tokens-list" class="max-h-[60vh] overflow-y-auto pr-2">
             <div class="text-center text-green-400/50 py-8 font-mono text-sm">Loading partner tokens...</div>
         </div>
     </div>
 </div>
 
-<!-- Robinhood Info Modal (v12.0) -->
+<!-- v25.2: Updated Robinhood info modal with non-bold headings -->
 <div id="robinhood-info-modal" class="modal">
     <div class="modal-content border-green-600">
         <span class="close-btn text-green-400" onclick="closeRobinhoodInfoModal()">&times;</span>
-        <h3 class="text-green-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-green-800/50 pb-2">HOW ROBINHOOD BOT WORKS</h3>
+        <h3 class="text-green-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-green-800/50 pb-2 font-normal">How Robinhood Works</h3>
         <div class="font-sans text-sm text-green-200 space-y-4">
             <div class="bg-green-900/30 p-4 rounded border border-green-700/50">
-                <p class="text-green-400 font-bold text-xs uppercase mb-2">NEW PUMPFUN FEATURE: CREATOR REWARDS SHARING</p>
-                <p class="text-xs text-gray-300">PumpFun now allows token creators to share their 1% creator fees with other wallets. When another creator adds our wallet as a fee shareholder, we automatically detect it and include their token in our ecosystem.</p>
+                <p class="text-green-400 text-xs uppercase mb-2">PumpFun Creator Rewards Sharing</p>
+                <p class="text-xs text-gray-300">PumpFun allows token creators to share their 1% creator fees with other wallets. When another creator adds our wallet as a fee shareholder, we automatically detect it and include their token in our ecosystem.</p>
             </div>
 
             <div>
-                <h4 class="text-green-400 font-bold mb-2 border-b border-green-800 pb-1">AUTOMATIC DETECTION</h4>
+                <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">Automatic Detection</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
                     <li>Our bot monitors the Solana blockchain for fee sharing configs</li>
                     <li>When a token shares fees with us, it's automatically added as a "Robinhood Token"</li>
@@ -1544,17 +1656,17 @@
             </div>
 
             <div>
-                <h4 class="text-green-400 font-bold mb-2 border-b border-green-800 pb-1">HOW YOU BENEFIT (v16.0)</h4>
+                <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">How You Benefit</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
-                    <li><span class="text-white font-bold">Proportional Points</span> based on your holdings (Top 250 holders)</li>
-                    <li><span class="text-yellow-400 font-bold">Points scaled by fee share %</span> (e.g., 50% share = 50% points)</li>
+                    <li><span class="text-white">Proportional Points</span> based on your holdings (Top 250 holders)</li>
+                    <li><span class="text-yellow-400">Points scaled by fee share %</span> (e.g., 50% share = 50% points)</li>
                     <li>These points stack with your regular leaderboard holdings</li>
-                    <li>More Robinhood partnerships = more airdrop opportunities!</li>
+                    <li>More Robinhood partnerships = more airdrop opportunities</li>
                 </ul>
             </div>
 
             <div>
-                <h4 class="text-green-400 font-bold mb-2 border-b border-green-800 pb-1">FOR TOKEN CREATORS</h4>
+                <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">For Token Creators</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
                     <li>Share fees with our wallet to join the Robinhood network</li>
                     <li>Your holders gain airdrop eligibility automatically</li>
@@ -1564,8 +1676,8 @@
             </div>
 
             <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 mt-4">
-                <p class="text-purple-400 font-bold text-xs uppercase mb-1">COMBINED POINTS FORMULA (v16.0)</p>
-                <p class="text-xs text-gray-300">(Leaderboard Holdings + (Created * 2) + <span class="text-green-400">Robinhood Holdings * Fee Share %</span>) * ASDF Multiplier</p>
+                <p class="text-purple-400 text-xs uppercase mb-1">Combined Points Formula</p>
+                <p class="text-xs text-gray-300">(Leaderboard Holdings + (Created × 2) + <span class="text-green-400">Robinhood Holdings × Fee Share %</span>) × ASDF Multiplier</p>
             </div>
         </div>
     </div>
@@ -1595,7 +1707,7 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v26.1-WALLET-SYNC";
+    const FRONTEND_VERSION = "v25.2";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     // Wallet address is fetched from backend API to ensure consistency
     let DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB"; // Default fallback
@@ -1714,7 +1826,46 @@
     };
 
     lucide.createIcons();
-    
+
+    // v25.3: Airdrop Countdown Timer
+    const AIRDROP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+    let lastAirdropTime = Date.now();
+    let countdownInterval = null;
+
+    const updateCountdown = () => {
+        const now = Date.now();
+        const nextAirdrop = lastAirdropTime + AIRDROP_INTERVAL_MS;
+        let remaining = Math.max(0, nextAirdrop - now);
+
+        // If countdown reached 0, reset for next cycle
+        if (remaining <= 0) {
+            lastAirdropTime = now;
+            remaining = AIRDROP_INTERVAL_MS;
+        }
+
+        const hours = Math.floor(remaining / (1000 * 60 * 60));
+        const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((remaining % (1000 * 60)) / 1000);
+
+        document.getElementById('countdown-hours').textContent = String(hours).padStart(2, '0');
+        document.getElementById('countdown-minutes').textContent = String(minutes).padStart(2, '0');
+        document.getElementById('countdown-seconds').textContent = String(seconds).padStart(2, '0');
+    };
+
+    const startCountdown = () => {
+        if (countdownInterval) clearInterval(countdownInterval);
+        updateCountdown();
+        countdownInterval = setInterval(updateCountdown, 1000);
+    };
+
+    // Update countdown pool amount when airdrop balance updates
+    const updateCountdownPool = (amount) => {
+        const poolEl = document.getElementById('countdown-pool-amount');
+        if (poolEl) poolEl.textContent = amount;
+    };
+
+    startCountdown();
+
     const copyCA = () => {
         const ca = ui.successModal.querySelector('#modal-mint-addr').textContent;
         const tempInput = document.createElement('textarea');
@@ -2059,9 +2210,11 @@
                 }
                 // v11.0: Display SOL airdrop pool instead of PUMP holdings
                 // v14.0: Also display actual wallet balance
+                // v25.3: Also update countdown banner pool amount
                 if (data.airdropPoolSol !== undefined) {
                     const airdropPoolSol = parseFloat(data.airdropPoolSol);
                     ui.airdropBalance.innerHTML = `${airdropPoolSol.toFixed(2)}&nbsp;<span class="text-lg align-top text-purple-400">SOL</span>`;
+                    updateCountdownPool(airdropPoolSol.toFixed(2));
                 } else if (data.pumpHoldings !== undefined) {
                     // Fallback for backwards compatibility
                     currentPumpHoldings = parseFloat(data.pumpHoldings);
@@ -2225,49 +2378,73 @@
     ui.mayhemToggle.addEventListener('change', updateMayhemLabel); updateMayhemLabel(); 
 
     const updatePreview = () => { ui.previewName.innerText = document.getElementById('name').value || "Token Name"; ui.previewTicker.innerText = document.getElementById('ticker').value ? `$${document.getElementById('ticker').value.toUpperCase()}` : "$TICKER"; };
-    
-    const previewImage = (event) => { 
-        const files = event.target.files || event.dataTransfer?.files;
-        const file = files?.[0]; 
-        if (file) { 
-            const reader = new FileReader(); 
-            reader.onload = (e) => { 
-                ui.imgPreview.innerHTML = `<img src="${e.target.result}" alt="Preview" class="rounded-lg w-full h-full object-cover">`; 
-                ui.imgPreview.style.border = "2px solid #ea580c"; 
-            }; 
-            reader.readAsDataURL(file); 
-        } else { 
+
+    // v25.1: Preview image from Imgur URL
+    let imageUrlValid = false;
+    const previewImageFromUrl = (url) => {
+        const placeholder = document.getElementById('image-placeholder');
+
+        // Reset state
+        imageUrlValid = false;
+
+        if (!url || url.trim() === '') {
+            // Show placeholder
+            ui.imgPreview.innerHTML = `
+                <div class="text-center pointer-events-none" id="image-placeholder">
+                    <div class="text-4xl mb-2">🖼️</div>
+                    <div class="text-xs font-bold text-orange-400">PASTE IMGUR URL BELOW</div>
+                </div>`;
+            ui.imgPreview.style.border = "2px dashed #7c2d12";
+            return;
+        }
+
+        // Validate Imgur URL format
+        const isValidImgurUrl = /^https:\/\/i\.imgur\.com\/[a-zA-Z0-9]+\.(png|jpg|jpeg|gif|webp)$/i.test(url.trim());
+
+        if (!isValidImgurUrl) {
             ui.imgPreview.innerHTML = `
                 <div class="text-center pointer-events-none">
-                    <div class="text-2xl mb-2">📁</div>
-                    <div class="text-xs font-bold text-orange-400">DRAG & DROP<br>OR CLICK TO UPLOAD</div>
+                    <div class="text-3xl mb-2">⚠️</div>
+                    <div class="text-xs font-bold text-red-400">INVALID URL FORMAT</div>
+                    <div class="text-xs text-orange-500 mt-1">Must be: https://i.imgur.com/xxxxx.png</div>
                 </div>`;
-            ui.imgPreview.style.border = "2px dashed #7c2d12"; 
-        } 
-    };
-    window.previewImage = previewImage; window.updatePreview = updatePreview;
-    
-    const dropZone = document.getElementById('image-preview');
-    const fileInput = document.getElementById('image-file');
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => { dropZone.addEventListener(eventName, preventDefaults, false); });
-    function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
-    ['dragenter', 'dragover'].forEach(eventName => { dropZone.addEventListener(eventName, highlight, false); });
-    ['dragleave', 'drop'].forEach(eventName => { dropZone.addEventListener(eventName, unhighlight, false); });
-    function highlight(e) { dropZone.classList.add('drag-over'); }
-    function unhighlight(e) { dropZone.classList.remove('drag-over'); }
-    dropZone.addEventListener('drop', handleDrop, false);
-    function handleDrop(e) {
-        const dt = e.dataTransfer;
-        const files = dt.files;
-        if (files.length > 0 && files[0].type.startsWith('image/')) {
-            const dataTransfer = new DataTransfer();
-            dataTransfer.items.add(files[0]);
-            fileInput.files = dataTransfer.files; 
-            previewImage({ target: fileInput }); 
-        } else {
-             showStatus("Invalid file type dropped. Please use an image.", 'error');
+            ui.imgPreview.style.border = "2px solid #dc2626";
+            return;
         }
-    }
+
+        // Show loading state
+        ui.imgPreview.innerHTML = `
+            <div class="text-center pointer-events-none">
+                <div class="text-3xl mb-2 animate-pulse">⏳</div>
+                <div class="text-xs font-bold text-orange-400">LOADING IMAGE...</div>
+            </div>`;
+        ui.imgPreview.style.border = "2px dashed #ea580c";
+
+        // Create image to test loading
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+
+        img.onload = () => {
+            imageUrlValid = true;
+            ui.imgPreview.innerHTML = `<img src="${url}" alt="Token Preview" class="rounded-lg w-full h-full object-cover">`;
+            ui.imgPreview.style.border = "2px solid #22c55e";
+        };
+
+        img.onerror = () => {
+            imageUrlValid = false;
+            ui.imgPreview.innerHTML = `
+                <div class="text-center pointer-events-none">
+                    <div class="text-3xl mb-2">❌</div>
+                    <div class="text-xs font-bold text-red-400">FAILED TO LOAD IMAGE</div>
+                    <div class="text-xs text-orange-500 mt-1">Check the URL and try again</div>
+                </div>`;
+            ui.imgPreview.style.border = "2px solid #dc2626";
+        };
+
+        img.src = url;
+    };
+    window.previewImageFromUrl = previewImageFromUrl;
+    window.updatePreview = updatePreview;
 
     const closeSuccessModal = () => { ui.successModal.style.display = 'none'; };
     window.closeSuccessModal = closeSuccessModal;
@@ -2818,10 +2995,13 @@
     };
     ui.disconnectBtn.onclick = disconnectWallet;
 
-    const validateInputs = (name, ticker, description, twitter, website, fileInput) => {
-        if (fileInput.files.length === 0) return "Image is required.";
-        const file = fileInput.files[0];
-        if (file.size > 4 * 1024 * 1024) return "Image size must be less than 4MB.";
+    // v25.1: Updated validation for Imgur URL input
+    const validateInputs = (name, ticker, description, twitter, website, imageUrl) => {
+        if (!imageUrl || imageUrl.trim() === '') return "Image URL is required. Upload to Imgur first.";
+        // Validate Imgur URL format
+        const isValidImgurUrl = /^https:\/\/i\.imgur\.com\/[a-zA-Z0-9]+\.(png|jpg|jpeg|gif|webp)$/i.test(imageUrl.trim());
+        if (!isValidImgurUrl) return "Invalid Imgur URL. Must be https://i.imgur.com/xxxxx.png";
+        if (!imageUrlValid) return "Image failed to load. Check the URL and try again.";
         if (!name || name.trim().length === 0) return "Token Name is required.";
         if (name.length > 32) return "Token Name must be 32 characters or less.";
         if (!ticker || ticker.trim().length === 0) return "Ticker Symbol is required.";
@@ -2840,28 +3020,30 @@
         const description = document.getElementById('desc').value;
         const twitter = document.getElementById('twitter').value;
         const website = document.getElementById('website').value;
-        const fileInput = document.getElementById('image-file');
+        const imageUrl = document.getElementById('image-url').value.trim();
         const isMayhemMode = ui.mayhemToggle.checked;
-        const validationError = validateInputs(name, ticker, description, twitter, website, fileInput);
+
+        // v25.1: Validate with imageUrl instead of file
+        const validationError = validateInputs(name, ticker, description, twitter, website, imageUrl);
         if (validationError) return showStatus(validationError.toUpperCase(), 'error');
-        let imageBase64;
-        try { imageBase64 = await toBase64(fileInput.files[0]); } catch(e) { return showStatus("IMAGE PROCESSING FAILED", 'error'); }
+
         isDeploying = true;
-        ui.deployBtn.disabled = true; 
-        ui.deployBtn.innerText = "UPLOADING & VERIFYING METADATA..."; 
-        showStatus("PREPARING METADATA...", 'normal');
+        ui.deployBtn.disabled = true;
+        ui.deployBtn.innerText = "PREPARING METADATA...";
+        showStatus("PREPARING TOKEN METADATA...", 'normal');
+
         try {
+            // v25.1: Send Imgur URL directly - no upload needed, user already uploaded to Imgur
             const prepRes = await fetchWithRetry(`${BACKEND_URL}/api/prepare-metadata`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, ticker, description, twitter, website, image: imageBase64 })
+                body: JSON.stringify({ name, ticker, description, twitter, website, imageUrl })
             }, 2);
             if (!prepRes.ok) {
                 const errData = await prepRes.json();
                 throw new Error(errData.error || "Metadata upload failed");
             }
-            // MODIFIED: Capture Image URL
-            const { metadataUri, imageUrl } = await prepRes.json();
+            const { metadataUri } = await prepRes.json();
             
             ui.deployBtn.innerText = "SIGNING FEE TRANSACTION...";
             showStatus("METADATA READY. PLEASE SIGN WALLET...", 'normal');
@@ -2907,6 +3089,8 @@
             console.error(e);
             showStatus("ERROR: " + (e.message || "Process failed."), 'error');
             isDeploying = false;
+            ui.deployBtn.disabled = false;
+            ui.deployBtn.innerText = "LAUNCH TOKEN";
             refreshWalletBalance();
         }
     };
