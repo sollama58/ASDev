@@ -1007,7 +1007,7 @@
             if (!mint) return;
 
             try {
-                const data = await apiCall('/api/tokens/verify-token', 'POST', { mint });
+                const data = await apiCall('/api/verify-token', 'POST', { mint });
                 document.getElementById('precheck-result').textContent = formatJson(data);
                 log(`Pre-check completed for ${shortenPubkey(mint)}`, data.isEligible ? 'success' : 'warning');
             } catch (e) {

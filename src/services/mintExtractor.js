@@ -1049,10 +1049,44 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
         }
 
         // Not direct creator - check if there's a fee sharing config where we're a shareholder
-        // We need to find the token creator's fee sharing config
+        // IMPORTANT: When fee sharing is enabled, the coin_creator field in BC/AMM is set to the
+        // fee_sharing_config PDA itself, not the original creator. So we need to:
+        // 1. First check if tokenCreator IS a fee_sharing_config account (direct fetch)
+        // 2. If not, derive the fee_sharing_config PDA from tokenCreator
         if (tokenCreator) {
+            // Method 1: Check if tokenCreator IS the fee_sharing_config PDA
+            // (This happens when fee sharing is enabled - coin_creator points to the config)
             try {
-                // Derive fee sharing config PDA for the token creator
+                const configAccountInfo = await connection.getAccountInfo(tokenCreator);
+                if (configAccountInfo && configAccountInfo.data.length >= 44) {
+                    const config = parseFeeSharingConfigAny(configAccountInfo.data);
+
+                    if (config && config.shareholders && config.shareholders.length > 0) {
+                        // This is a fee sharing config! Check if we're in it
+                        const walletStr = walletKey.toString();
+                        for (const shareholder of config.shareholders) {
+                            if (shareholder.pubkey.toString() === walletStr) {
+                                const sharePercent = shareholder.shareBps / 100;
+                                const formatInfo = config.format || 'unknown';
+                                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via direct config lookup (${sharePercent}% fee share, ${shareholder.shareBps} bps, format: ${formatInfo})`);
+                                return {
+                                    isRecipient: true,
+                                    source: 'fee_sharing_config_direct',
+                                    feeShareBps: shareholder.shareBps,
+                                    feeSharePercent: sharePercent
+                                };
+                            }
+                        }
+                        logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Fee sharing config found (direct) but wallet not in shareholders`);
+                    }
+                }
+            } catch (e) {
+                logger.debug(`[MintExtractor] Direct config check failed for ${mint.slice(0, 8)}...: ${e.message}`);
+            }
+
+            // Method 2: Derive fee sharing config PDA from the token creator
+            // (This is for tokens where fee sharing was set up but coin_creator wasn't changed)
+            try {
                 const [feeSharingConfig] = PublicKey.findProgramAddressSync(
                     [Buffer.from("fee_sharing_config"), tokenCreator.toBuffer()],
                     PROGRAMS.PUMP
@@ -1070,7 +1104,7 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
                             if (shareholder.pubkey.toString() === walletStr) {
                                 const sharePercent = shareholder.shareBps / 100; // BPS to percent (1000 bps = 10%)
                                 const formatInfo = config.format || 'unknown';
-                                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via fee_sharing_config (${sharePercent}% fee share, ${shareholder.shareBps} bps, format: ${formatInfo})`);
+                                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via fee_sharing_config PDA (${sharePercent}% fee share, ${shareholder.shareBps} bps, format: ${formatInfo})`);
                                 return {
                                     isRecipient: true,
                                     source: 'fee_sharing_config',
@@ -1083,7 +1117,7 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
                     }
                 }
             } catch (e) {
-                logger.debug(`[MintExtractor] Fee sharing config check failed for ${mint.slice(0, 8)}...: ${e.message}`);
+                logger.debug(`[MintExtractor] Fee sharing config PDA check failed for ${mint.slice(0, 8)}...: ${e.message}`);
             }
         }
 
