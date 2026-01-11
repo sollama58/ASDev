@@ -1363,19 +1363,59 @@ function init(deps) {
                                 const platformWalletBytes = devKeypair.publicKey.toBuffer();
                                 const foundOffset = directConfigInfo.data.indexOf(platformWalletBytes);
 
-                                if (foundOffset !== -1 && foundOffset + 34 <= directConfigInfo.data.length) {
-                                    const bpsAfter = directConfigInfo.data.readUInt16LE(foundOffset + 32);
+                                if (foundOffset !== -1) {
+                                    // Look for valid bps values in nearby bytes
+                                    const nearbyBpsValues = [];
+
+                                    // Check various offsets relative to wallet position
+                                    const offsetsToCheck = [
+                                        { name: 'after+0 (LE)', offset: foundOffset + 32, fn: (d, o) => d.readUInt16LE(o) },
+                                        { name: 'after+0 (BE)', offset: foundOffset + 32, fn: (d, o) => d.readUInt16BE(o) },
+                                        { name: 'before-2 (LE)', offset: foundOffset - 2, fn: (d, o) => d.readUInt16LE(o) },
+                                        { name: 'before-2 (BE)', offset: foundOffset - 2, fn: (d, o) => d.readUInt16BE(o) },
+                                        { name: 'after+2 (LE)', offset: foundOffset + 34, fn: (d, o) => d.readUInt16LE(o) },
+                                        { name: 'after+4 (LE)', offset: foundOffset + 36, fn: (d, o) => d.readUInt16LE(o) },
+                                    ];
+
+                                    for (const check of offsetsToCheck) {
+                                        if (check.offset >= 0 && check.offset + 2 <= directConfigInfo.data.length) {
+                                            try {
+                                                const value = check.fn(directConfigInfo.data, check.offset);
+                                                nearbyBpsValues.push({
+                                                    location: check.name,
+                                                    offset: check.offset,
+                                                    value,
+                                                    percent: value / 100,
+                                                    isValidBps: value > 0 && value <= 10000
+                                                });
+                                            } catch (e) {}
+                                        }
+                                    }
+
+                                    // Also scan the ENTIRE account for 9000 (0x2328) to find where 90% bps is stored
+                                    const target9000LE = Buffer.from([0x28, 0x23]); // 9000 in little-endian
+                                    const target9000BE = Buffer.from([0x23, 0x28]); // 9000 in big-endian
+                                    const found9000 = [];
+
+                                    for (let i = 0; i < directConfigInfo.data.length - 1; i++) {
+                                        if (directConfigInfo.data[i] === 0x28 && directConfigInfo.data[i+1] === 0x23) {
+                                            found9000.push({ offset: i, endian: 'LE', value: 9000 });
+                                        }
+                                        if (directConfigInfo.data[i] === 0x23 && directConfigInfo.data[i+1] === 0x28) {
+                                            found9000.push({ offset: i, endian: 'BE', value: 9000 });
+                                        }
+                                    }
+
                                     feeAccountWalletScan = {
                                         walletFoundAtOffset: foundOffset,
-                                        bpsAfterWallet: bpsAfter,
-                                        bpsAfterWalletPercent: bpsAfter / 100,
-                                        bytesAfterWallet: directConfigInfo.data.slice(foundOffset + 32, foundOffset + 38).toString('hex'),
-                                        isValid: bpsAfter > 0 && bpsAfter <= 10000
-                                    };
-                                } else if (foundOffset !== -1) {
-                                    feeAccountWalletScan = {
-                                        walletFoundAtOffset: foundOffset,
-                                        error: 'Not enough bytes after wallet for bps'
+                                        bytesAroundWallet: {
+                                            before: directConfigInfo.data.slice(Math.max(0, foundOffset - 10), foundOffset).toString('hex'),
+                                            wallet: directConfigInfo.data.slice(foundOffset, foundOffset + 32).toString('hex').slice(0, 20) + '...',
+                                            after: directConfigInfo.data.slice(foundOffset + 32, Math.min(foundOffset + 50, directConfigInfo.data.length)).toString('hex')
+                                        },
+                                        nearbyBpsValues,
+                                        found9000Locations: found9000,
+                                        accountSize: directConfigInfo.data.length
                                     };
                                 } else {
                                     feeAccountWalletScan = {
