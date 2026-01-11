@@ -1484,6 +1484,37 @@ function init(deps) {
                 }
             }
 
+            // Try to get original creator from token metadata (the new method)
+            let metadataCreatorLookup = null;
+            try {
+                const originalCreatorFromMetadata = await mintExtractor.getOriginalCreatorFromMetadata(mintPubkey, connection);
+                if (originalCreatorFromMetadata) {
+                    // If we found the creator from metadata, try to derive and lookup fee_sharing_config
+                    const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
+                        [Buffer.from("fee_sharing_config"), originalCreatorFromMetadata.toBuffer()],
+                        PUMP
+                    );
+                    const configInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+
+                    metadataCreatorLookup = {
+                        originalCreatorFromMetadata: originalCreatorFromMetadata.toString(),
+                        derivedFeeSharingConfigPDA: feeSharingConfigPDA.toString(),
+                        configExists: !!configInfo,
+                        configOwner: configInfo?.owner.toString() || null,
+                        configDataLength: configInfo?.data.length || 0
+                    };
+
+                    if (configInfo && configInfo.owner.equals(PUMP)) {
+                        const parsed = parseFeeSharingConfigDebug(configInfo.data, feeSharingConfigPDA.toString());
+                        metadataCreatorLookup.parsedConfig = parsed;
+                    }
+                } else {
+                    metadataCreatorLookup = { error: 'Could not find creator in token metadata' };
+                }
+            } catch (e) {
+                metadataCreatorLookup = { error: e.message };
+            }
+
             // Check the known original creator if provided in query string
             let originalCreatorConfig = null;
             const knownOriginalCreator = req.query.originalCreator;
@@ -1600,6 +1631,7 @@ function init(deps) {
                 shareholderConfigs, // Configs where we're a shareholder
                 scanDebug, // Debug info about the scan
                 feeAccountAnalysis, // Analysis of the FEE program account
+                metadataCreatorLookup, // NEW: Original creator from token metadata
                 originalCreatorConfig, // Config lookup using known original creator
                 verificationResult: verification,
                 timestamp: new Date().toISOString()
