@@ -1,37 +1,55 @@
 /**
- * ASDev
- * Main Entry Point
- * v13.0 - PostgreSQL + Redis globalState
- * v22.0 - Added API-only mode support for worker server architecture
+ * ASDev Worker Server
+ * v22.0 - Dedicated worker process for background tasks
+ *
+ * This file runs ONLY the background tasks (holders, metadata, robinhood, flywheel, etc.)
+ * without starting the Express HTTP server. Use this on a second Render instance
+ * to offload background processing from the main API server.
  *
  * Environment Variables:
- *   SERVER_MODE=api-only   - Start without background tasks (use with separate worker server)
- *   SERVER_MODE=full       - Default: Start with both API and background tasks
+ *   SERVER_MODE=worker    - Required to start in worker mode
+ *   WORKER_TASKS          - Comma-separated list of tasks to run (optional, defaults to all)
+ *                           Options: holders,metadata,robinhood,asdf,flywheel,vanity
+ *
+ * Usage:
+ *   SERVER_MODE=worker node src/worker.js
+ *   SERVER_MODE=worker WORKER_TASKS=holders,metadata node src/worker.js
  */
 require('dotenv').config();
 
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const { Connection, Keypair, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
 const { Wallet } = require('@coral-xyz/anchor');
 const bs58 = require('bs58');
-const fs = require('fs');
-const path = require('path');
 
 // Internal imports
 const config = require('./config/env');
 const { WALLETS } = require('./config/constants');
 const { logger, database, redis, twitter, solana } = require('./services');
-const routes = require('./routes');
 const tasks = require('./tasks');
 
-// v13.0: Global state is now stored in Redis for cross-process sharing
-// This local object serves as a proxy/fallback for compatibility
-// BUG FIX: Added proper error logging instead of silent catch blocks
+// Check if running in worker mode
+if (process.env.SERVER_MODE !== 'worker') {
+    console.error('ERROR: Worker mode requires SERVER_MODE=worker environment variable');
+    console.error('Usage: SERVER_MODE=worker node src/worker.js');
+    process.exit(1);
+}
+
+// Parse which tasks to run (defaults to all)
+const TASK_OPTIONS = ['holders', 'metadata', 'robinhood', 'asdf', 'flywheel', 'vanity'];
+const enabledTasks = process.env.WORKER_TASKS
+    ? process.env.WORKER_TASKS.split(',').map(t => t.trim().toLowerCase())
+    : TASK_OPTIONS;
+
+// Validate task names
+const invalidTasks = enabledTasks.filter(t => !TASK_OPTIONS.includes(t));
+if (invalidTasks.length > 0) {
+    console.error(`ERROR: Invalid task names: ${invalidTasks.join(', ')}`);
+    console.error(`Valid options: ${TASK_OPTIONS.join(', ')}`);
+    process.exit(1);
+}
+
+// Global state proxy (same as main server)
 const globalState = {
-    // These are now backed by Redis - use redis.getXxx() for actual values
     get lastBackendUpdate() { return this._lastBackendUpdate || Date.now(); },
     set lastBackendUpdate(val) {
         this._lastBackendUpdate = val;
@@ -68,7 +86,6 @@ const globalState = {
         redis.setAllUserPoints(val).catch(e => logger.debug('Redis setAllUserPoints failed', { error: e.message }));
     },
 
-    // Internal storage
     _lastBackendUpdate: Date.now(),
     _asdfTop50Holders: new Set(),
     _totalPoints: 0,
@@ -78,99 +95,40 @@ const globalState = {
 };
 
 /**
- * Main initialization function
+ * Start worker with selected tasks
  */
-async function main() {
-    logger.info(`Starting ASDev ${config.VERSION}...`);
+async function startWorker() {
+    logger.info(`Starting ASDev Worker ${config.VERSION}...`);
+    logger.info(`Enabled tasks: ${enabledTasks.join(', ')}`);
 
-    // Initialize Redis first (needed for globalState)
+    // Initialize Redis first (needed for globalState and BullMQ)
     redis.init();
 
-    // v13.0: Initialize PostgreSQL database
+    // Initialize PostgreSQL database
     await database.initDB();
     const db = database.getDB();
-    logger.info('[Database] PostgreSQL initialized with connection pooling');
+    logger.info('[Worker] PostgreSQL initialized with connection pooling');
 
-    // Initialize Twitter
-    twitter.init();
+    // Initialize Twitter (needed for social worker)
+    if (enabledTasks.includes('social')) {
+        twitter.init();
+    }
 
     // Initialize Solana connection
     const connection = new Connection(config.RPC_URL, "confirmed");
     const devKeypair = Keypair.fromSecretKey(bs58.decode(config.DEV_WALLET_PRIVATE_KEY));
     const wallet = new Wallet(devKeypair);
 
-    // Validate wallet matches expected platform dev wallet
+    // Validate wallet
     const actualWallet = devKeypair.publicKey.toString();
     const expectedWallet = WALLETS.PLATFORM_DEV.toString();
     if (actualWallet !== expectedWallet) {
         logger.error(`CRITICAL: Wallet mismatch! Expected: ${expectedWallet}, Got: ${actualWallet}`);
-        logger.error('Check DEV_WALLET_PRIVATE_KEY environment variable. Server will continue but functionality may be impaired.');
     } else {
         logger.info(`Wallet verified: ${actualWallet}`);
     }
 
     logger.info(`Network: ${config.SOLANA_NETWORK.toUpperCase()} | RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : (config.HELIUS_API_KEY ? 'Helius' : 'Public Mainnet')}`);
-
-    // Create Express app
-    const app = express();
-
-    // Security middleware - SECURITY FIX: Re-enable CSP with reasonable defaults
-    app.use(helmet({
-        contentSecurityPolicy: {
-            directives: {
-                defaultSrc: ["'self'"],
-                scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline for frontend
-                styleSrc: ["'self'", "'unsafe-inline'"],
-                imgSrc: ["'self'", "data:", "https:"], // Allow external images
-                connectSrc: ["'self'", "https://api.dexscreener.com", "https://mainnet.helius-rpc.com", "https://api.clarifai.com"],
-                fontSrc: ["'self'"],
-                objectSrc: ["'none'"],
-                upgradeInsecureRequests: []
-            }
-        },
-        crossOriginEmbedderPolicy: false // Keep disabled for cross-origin resources
-    }));
-
-    // CORS configuration - SECURITY FIX: Warn if using wildcard in production
-    if (config.CORS_ORIGINS.includes('*') && config.NODE_ENV === 'production') {
-        logger.warn('SECURITY WARNING: CORS is configured with wildcard (*) in production. Consider restricting to specific origins.');
-    }
-    const corsOptions = {
-        origin: config.CORS_ORIGINS.includes('*') ? '*' : config.CORS_ORIGINS,
-        optionsSuccessStatus: 200
-    };
-    app.use(cors(corsOptions));
-    app.use(express.json({ limit: '10mb' })); // SECURITY FIX: Reduced from 50mb to 10mb
-
-    // Rate limiting - SECURITY FIX: Reduced to more reasonable limits
-    const apiLimiter = rateLimit({
-        windowMs: 15 * 60 * 1000, // 15 minutes
-        max: 300, // SECURITY FIX: Reduced from 2000 to 300 (20 req/min average)
-        message: { error: 'Too many requests, please try again later' },
-        standardHeaders: true,
-        legacyHeaders: false,
-        skip: (req) => {
-            // Skip rate limiting for health checks
-            return req.path === '/api/health' || req.path === '/api/version';
-        }
-    });
-
-    const deployLimiter = rateLimit({
-        windowMs: 60 * 1000, // 1 minute
-        max: 3, // SECURITY FIX: Reduced from 10 to 3 deployments per minute
-        message: { error: 'Too many deployment requests, please wait' },
-        standardHeaders: true,
-        legacyHeaders: false
-    });
-
-    app.use('/api/', apiLimiter);
-    app.use('/api/deploy', deployLimiter);
-
-    // Serve frontend
-    app.get('/', (req, res) => {
-        res.sendFile(path.join(__dirname, '..', 'asdev_frontend.html'));
-    });
-
 
     const refundUser = async (userPubkeyStr, reason) => {
         try {
@@ -210,35 +168,56 @@ async function main() {
         refundUser,
     };
 
-    // Register routes
-    routes.register(app, deps);
+    // Start selected background tasks
+    const { vanity } = require('./services');
+    const workers = tasks.workers;
 
-    // v22.0: Check server mode - skip background tasks if running API-only
-    const serverMode = process.env.SERVER_MODE || 'full';
-    if (serverMode === 'api-only') {
-        logger.info('[Server] Running in API-only mode - background tasks disabled');
-        logger.info('[Server] Use a separate worker server (SERVER_MODE=worker node src/worker.js) for background tasks');
-    } else {
-        // Start background tasks
-        tasks.startAll(deps);
+    if (enabledTasks.includes('holders')) {
+        workers.initHolderScannerWorker(deps);
+        logger.info('[Worker] Holder scanner started');
     }
 
-    // Start server
-    app.listen(config.PORT, () => {
-        logger.info(`Server ${config.VERSION} running on port ${config.PORT}`);
-    });
+    if (enabledTasks.includes('metadata')) {
+        workers.initMetadataUpdaterWorker(deps);
+        logger.info('[Worker] Metadata updater started');
+    }
+
+    if (enabledTasks.includes('robinhood')) {
+        workers.initRobinhoodScannerWorker(deps);
+        logger.info('[Worker] Robinhood scanner started');
+    }
+
+    if (enabledTasks.includes('asdf')) {
+        workers.initAsdfSyncWorker(deps);
+        logger.info('[Worker] ASDF sync started');
+    }
+
+    if (enabledTasks.includes('flywheel')) {
+        tasks.flywheel.start(deps);
+        logger.info('[Worker] Flywheel started');
+    }
+
+    if (enabledTasks.includes('vanity') && config.VANITY_GRINDER_ENABLED && config.VANITY_GRINDER_URL) {
+        vanity.startAutoRefill();
+        logger.info('[Worker] Vanity pool auto-refill started');
+    }
+
+    logger.info(`Worker ${config.VERSION} running with ${enabledTasks.length} tasks`);
+
+    // Keep process alive
+    process.stdin.resume();
 }
 
 // Graceful shutdown
 const shutdown = async (signal) => {
-    logger.info(`${signal} received, shutting down gracefully...`);
+    logger.info(`${signal} received, shutting down worker gracefully...`);
     try {
         const db = database.getDB();
         if (db) await db.close();
         redis.getConnection()?.disconnect();
-        logger.info('Cleanup complete, exiting');
+        logger.info('Worker cleanup complete, exiting');
     } catch (e) {
-        logger.error('Shutdown error', { error: e.message });
+        logger.error('Worker shutdown error', { error: e.message });
     }
     process.exit(0);
 };
@@ -246,8 +225,8 @@ const shutdown = async (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// Run main
-main().catch(err => {
-    logger.error("Fatal error", { error: err.message, stack: err.stack });
+// Run worker
+startWorker().catch(err => {
+    logger.error("Worker fatal error", { error: err.message, stack: err.stack });
     process.exit(1);
 });

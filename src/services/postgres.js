@@ -263,6 +263,16 @@ async function createSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_marketcap ON tokens("marketCap" DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_timestamp ON tokens(timestamp DESC)`);
 
+    // v22.0: SCALABILITY FIX - Add composite indexes for optimized JOIN queries
+    // These indexes dramatically improve /check-holder, /user-holdings, and /all-eligible-users endpoints
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_token_holders_pubkey_mint ON token_holders("holderPubkey", mint)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_holders_pubkey_mint ON robinhood_token_holders("holderPubkey", mint)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_volume_eligible ON tokens(volume24h DESC) WHERE volume24h >= 100`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_tokens_volume_active ON robinhood_tokens(volume24h DESC) WHERE "isActive" = 1`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_creator ON tokens("userPubkey")`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_flywheel_logs_timestamp ON flywheel_logs(timestamp DESC)`);
+
     logger.info('[PostgreSQL] Schema created successfully');
 }
 

@@ -1691,23 +1691,33 @@
         } 
     };
 
+    // Helper to stagger API calls and reduce burst load on backend
+    const staggeredFetch = async (tasks, delayMs = 100) => {
+        const results = [];
+        for (const task of tasks) {
+            results.push(task());
+            if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
+        }
+        return Promise.allSettled(results);
+    };
+
     const refreshAllData = async () => {
         if (ui.refreshBtn) ui.refreshBtn.classList.add('opacity-50', 'cursor-wait');
         systemStatus.backend = 'CHECKING';
         systemStatus.db_access = 'CHECKING';
         systemStatus.solana_rpc = 'CHECKING';
         try {
-            await Promise.allSettled([
-                updatePumpPrice(),
-                updateLeaderboard(),
-                updateKOTH(),
-                fetchRecentLaunches(),
-                checkHealth(),
-                refreshWalletBalance(),
-                checkAsdfStatus()
-            ]);
+            // Stagger API calls with 100ms delay to reduce burst load on Render
+            await staggeredFetch([
+                () => checkHealth(),          // Most important - do first
+                () => updateLeaderboard(),
+                () => updateKOTH(),
+                () => fetchRecentLaunches(),
+                () => updatePumpPrice(),
+                () => refreshWalletBalance(),
+                () => checkAsdfStatus()
+            ], 100);
         } catch (e) { console.error("Auto-Refresh Error", e); }
-        checkHealth(); 
         if (ui.refreshBtn) ui.refreshBtn.classList.remove('opacity-50', 'cursor-wait');
     };
     window.refreshAllData = refreshAllData;

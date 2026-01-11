@@ -26,13 +26,24 @@ function init(deps) {
 
     // Get all launches - SCALABILITY FIX: Added pagination
     // v18.0: Added eligibility status based on volume threshold
+    // Cached for 15 seconds per page
+    // v22.0: Added input validation for pagination parameters
     router.get('/all-launches', async (req, res) => {
         try {
-            const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Max 100
-            const offset = parseInt(req.query.offset) || 0;
+            // Validate and sanitize pagination params (prevent negative values and enforce limits)
+            const rawLimit = parseInt(req.query.limit) || 50;
+            const rawOffset = parseInt(req.query.offset) || 0;
+            const limit = Math.min(Math.max(1, rawLimit), 100); // Min 1, Max 100
+            const offset = Math.max(0, rawOffset); // Min 0 (no negative offsets)
 
-            const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT $1 OFFSET $2', [limit, offset]);
-            const total = await db.get('SELECT COUNT(*) as count FROM tokens');
+            // Cache per page (limit + offset combo)
+            const cacheKey = `all_launches_${limit}_${offset}`;
+            const { rows, total } = await redis.smartCache(cacheKey, 15, async () => {
+                const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT $1 OFFSET $2', [limit, offset]);
+                const total = await db.get('SELECT COUNT(*) as count FROM tokens');
+                return { rows, total: parseInt(total?.count) || 0 };
+            });
+
             const allLaunches = rows.map(r => ({
                 mint: r.mint,
                 userPubkey: r.userPubkey,
@@ -49,7 +60,7 @@ function init(deps) {
             res.json({
                 tokens: allLaunches,
                 lastUpdate: globalState.lastBackendUpdate,
-                pagination: { limit, offset, total: parseInt(total?.count) || 0 },
+                pagination: { limit, offset, total },
                 eligibilityThreshold: MIN_VOLUME_USD // v18.0: Include threshold for frontend
             });
         } catch (e) {
@@ -57,35 +68,38 @@ function init(deps) {
         }
     });
 
-    // King of the Pill (KOTH) Endpoint
+    // King of the Pill (KOTH) Endpoint - Cached for 15 seconds
     router.get('/koth', async (req, res) => {
         try {
-            // Select token with highest market cap
-            // Ensure we only select valid tokens (non-null marketCap)
-            const koth = await db.get(`
-                SELECT mint, "userPubkey", name, ticker, image, "marketCap", volume24h
-                FROM tokens
-                WHERE "marketCap" > 0
-                ORDER BY "marketCap" DESC
-                LIMIT 1
-            `);
-            
-            if (koth) {
-                res.json({ 
-                    found: true,
-                    token: {
-                        mint: koth.mint,
-                        creator: koth.userPubkey,
-                        name: koth.name,
-                        ticker: koth.ticker,
-                        image: koth.image,
-                        marketCap: koth.marketCap,
-                        volume: koth.volume24h
-                    }
-                });
-            } else {
-                res.json({ found: false });
-            }
+            const result = await redis.smartCache('koth_data', 15, async () => {
+                // Select token with highest market cap
+                // Ensure we only select valid tokens (non-null marketCap)
+                const koth = await db.get(`
+                    SELECT mint, "userPubkey", name, ticker, image, "marketCap", volume24h
+                    FROM tokens
+                    WHERE "marketCap" > 0
+                    ORDER BY "marketCap" DESC
+                    LIMIT 1
+                `);
+
+                if (koth) {
+                    return {
+                        found: true,
+                        token: {
+                            mint: koth.mint,
+                            creator: koth.userPubkey,
+                            name: koth.name,
+                            ticker: koth.ticker,
+                            image: koth.image,
+                            marketCap: koth.marketCap,
+                            volume: koth.volume24h
+                        }
+                    };
+                } else {
+                    return { found: false };
+                }
+            });
+            res.json(result);
         } catch (e) {
             console.error("KOTH Endpoint Error:", e);
             res.status(500).json({ error: "DB Error" });
@@ -94,6 +108,7 @@ function init(deps) {
 
     // Leaderboard - Shows all tokens where dev wallet receives fees (launched + robinhood)
     // v18.0: Now includes eligibility status based on volume threshold
+    // Cached for 15 seconds (base data), user-specific holdings checked separately
     router.get('/leaderboard', async (req, res) => {
         const { userPubkey } = req.query;
         // Validate userPubkey if provided
@@ -101,41 +116,50 @@ function init(deps) {
             return res.status(400).json({ error: "Invalid Solana address" });
         }
         try {
-            // Combine launched tokens and active robinhood tokens
-            // Use UNION ALL to merge both sources, preserving creator info
-            // v18.0: Removed LIMIT 10 to show all tokens, eligibility determined by volume threshold
-            const rows = await db.all(`
-                SELECT mint, "userPubkey" as creator, name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'launched' as source
-                FROM tokens
-                UNION ALL
-                SELECT mint, "creatorPubkey" as creator, name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source
-                FROM robinhood_tokens
-                WHERE "isActive" = 1
-                ORDER BY volume24h DESC
-            `);
+            // Cache the base leaderboard data (15 seconds)
+            const rows = await redis.smartCache('leaderboard_data', 15, async () => {
+                // Combine launched tokens and active robinhood tokens
+                // Use UNION ALL to merge both sources, preserving creator info
+                // v18.0: Removed LIMIT 10 to show all tokens, eligibility determined by volume threshold
+                return await db.all(`
+                    SELECT mint, "userPubkey" as creator, name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'launched' as source
+                    FROM tokens
+                    UNION ALL
+                    SELECT mint, "creatorPubkey" as creator, name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source
+                    FROM robinhood_tokens
+                    WHERE "isActive" = 1
+                    ORDER BY volume24h DESC
+                `);
+            });
 
             // Batch query for user holder status (check both holder tables)
+            // This is user-specific so we cache it separately with shorter TTL
             let userHoldings = new Set();
             if (userPubkey && rows.length > 0) {
-                const mints = rows.map(r => r.mint);
-                const placeholders = mints.map((_, i) => `$${i + 2}`).join(',');
+                const userCacheKey = `user_holdings_${userPubkey}`;
+                const cachedHoldings = await redis.smartCache(userCacheKey, 30, async () => {
+                    const mints = rows.map(r => r.mint);
+                    const placeholders = mints.map((_, i) => `$${i + 2}`).join(',');
 
-                // Check token_holders (launched tokens)
-                const launchedHoldings = await db.all(
-                    `SELECT mint FROM token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`,
-                    [userPubkey, ...mints]
-                );
+                    // Check token_holders (launched tokens)
+                    const launchedHoldings = await db.all(
+                        `SELECT mint FROM token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`,
+                        [userPubkey, ...mints]
+                    );
 
-                // Check robinhood_token_holders (robinhood tokens)
-                const robinhoodHoldings = await db.all(
-                    `SELECT mint FROM robinhood_token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`,
-                    [userPubkey, ...mints]
-                );
+                    // Check robinhood_token_holders (robinhood tokens)
+                    const robinhoodHoldings = await db.all(
+                        `SELECT mint FROM robinhood_token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`,
+                        [userPubkey, ...mints]
+                    );
 
-                userHoldings = new Set([
-                    ...launchedHoldings.map(h => h.mint),
-                    ...robinhoodHoldings.map(h => h.mint)
-                ]);
+                    return [
+                        ...launchedHoldings.map(h => h.mint),
+                        ...robinhoodHoldings.map(h => h.mint)
+                    ];
+                });
+
+                userHoldings = new Set(cachedHoldings);
             }
 
             const leaderboard = rows.map(r => ({
@@ -165,15 +189,18 @@ function init(deps) {
         }
     });
 
-    // Recent launches
+    // Recent launches - Cached for 15 seconds
     router.get('/recent-launches', async (req, res) => {
         try {
-            const rows = await db.all('SELECT "userPubkey", ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10');
-            res.json(rows.map(r => ({
-                userSnippet: r.userPubkey.slice(0, 5),
-                ticker: r.ticker,
-                mint: r.mint
-            })));
+            const result = await redis.smartCache('recent_launches', 15, async () => {
+                const rows = await db.all('SELECT "userPubkey", ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10');
+                return rows.map(r => ({
+                    userSnippet: r.userPubkey.slice(0, 5),
+                    ticker: r.ticker,
+                    mint: r.mint
+                }));
+            });
+            res.json(result);
         } catch (e) {
             res.status(500).json([]);
         }
@@ -234,6 +261,7 @@ function init(deps) {
     // v11.0: Now returns expected SOL airdrop amount instead of PUMP
     // v14.0: Updated for proportional point system (Top 250 holders)
     // v18.0: Changed from top 10 to all tokens with >$100 volume
+    // v22.0: SCALABILITY FIX - Refactored N+1 queries to use JOINs (2 queries instead of 2000+)
     router.get('/check-holder', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
@@ -249,91 +277,103 @@ function init(deps) {
         }
 
         try {
-            // v18.0: Get all tokens with >$100 24hr volume (no limit)
-            const eligibleTokens = await db.all(
-                'SELECT mint, "userPubkey" FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
-                [MIN_VOLUME_USD]
-            );
-            const eligibleMints = eligibleTokens.map(t => t.mint);
+            const POINTS_PER_TOKEN = 1000;
+
+            // v22.0: Single query to get user's holdings with pre-computed totals using window functions
+            // This replaces 2000+ individual queries with 1 optimized query
+            const userTokenHoldings = await redis.smartCache(`check_holder_${userPubkey}`, 30, async () => {
+                const holdings = await db.all(`
+                    SELECT
+                        th."holderPubkey",
+                        th.mint,
+                        th.balance,
+                        t."userPubkey" as creator,
+                        totals.total_balance
+                    FROM token_holders th
+                    INNER JOIN tokens t ON t.mint = th.mint AND t.volume24h >= $1
+                    INNER JOIN (
+                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
+                        FROM token_holders
+                        GROUP BY mint
+                    ) totals ON totals.mint = th.mint
+                    WHERE th."holderPubkey" = $2
+                `, [MIN_VOLUME_USD, userPubkey]);
+
+                // Also get created tokens count (user is creator but may not be holder)
+                const createdTokens = await db.all(
+                    'SELECT mint FROM tokens WHERE "userPubkey" = $1 AND volume24h >= $2',
+                    [userPubkey, MIN_VOLUME_USD]
+                );
+
+                return { holdings, createdTokens };
+            });
 
             let heldPositionsCount = 0;
             let createdPositionsCount = 0;
             let basePoints = 0;
             let creatorBonus = 0;
+
+            const heldMints = new Set();
+
+            for (const holding of userTokenHoldings.holdings) {
+                heldPositionsCount++;
+                heldMints.add(holding.mint);
+
+                const totalBalance = BigInt(holding.total_balance || '1');
+                const userBalance = BigInt(holding.balance);
+
+                // Protect against division by zero
+                if (totalBalance === 0n) continue;
+
+                // Calculate proportional points
+                const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                basePoints += proportionalPts;
+
+                // Check if user is creator (2x bonus)
+                if (holding.creator === userPubkey) {
+                    creatorBonus += proportionalPts;
+                }
+            }
+
+            // Count created tokens (including those user doesn't hold)
+            for (const token of userTokenHoldings.createdTokens) {
+                createdPositionsCount++;
+            }
+
+            // v22.0: Single query for Robinhood holdings with pre-computed totals
+            const robinhoodHoldings = await redis.smartCache(`check_holder_rh_${userPubkey}`, 30, async () => {
+                return await db.all(`
+                    SELECT
+                        rth."holderPubkey",
+                        rth.mint,
+                        rth.balance,
+                        rt."feeShareBps",
+                        totals.total_balance
+                    FROM robinhood_token_holders rth
+                    INNER JOIN robinhood_tokens rt ON rt.mint = rth.mint AND rt."isActive" = 1 AND rt.volume24h >= $1
+                    INNER JOIN (
+                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
+                        FROM robinhood_token_holders
+                        GROUP BY mint
+                    ) totals ON totals.mint = rth.mint
+                    WHERE rth."holderPubkey" = $2
+                `, [MIN_VOLUME_USD, userPubkey]);
+            });
+
             let robinhoodPoints = 0;
+            for (const holding of robinhoodHoldings) {
+                const totalBalance = BigInt(holding.total_balance || '1');
+                const userBalance = BigInt(holding.balance);
 
-            const POINTS_PER_TOKEN = 1000;
+                // Protect against division by zero
+                if (totalBalance === 0n) continue;
 
-            if (eligibleMints.length > 0) {
-                // v18.0: Calculate proportional points for all eligible tokens (>$100 volume)
-                for (const token of eligibleTokens) {
-                    if (!token.mint) continue;
-
-                    // Check if user holds this token
-                    const userHolding = await db.get(
-                        'SELECT balance FROM token_holders WHERE mint = $1 AND "holderPubkey" = $2',
-                        [token.mint, userPubkey]
-                    );
-
-                    if (userHolding && userHolding.balance) {
-                        heldPositionsCount++;
-
-                        // Get total balance of all top 250 holders for this token
-                        const totalResult = await db.get(
-                            'SELECT SUM(CAST(balance AS BIGINT)) as total FROM token_holders WHERE mint = $1',
-                            [token.mint]
-                        );
-                        const totalBalance = BigInt(totalResult?.total || '1');
-                        const userBalance = BigInt(userHolding.balance);
-
-                        // Calculate proportional points
-                        const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
-                        basePoints += proportionalPts;
-
-                        // Check if user is creator (2x bonus)
-                        if (token.userPubkey === userPubkey) {
-                            createdPositionsCount++;
-                            creatorBonus += proportionalPts; // Add bonus (already got base, so this doubles it)
-                        }
-                    } else if (token.userPubkey === userPubkey) {
-                        // Creator but not holder
-                        createdPositionsCount++;
-                    }
-                }
-
-                // v14.0: Include Robinhood token holdings
-                // v16.0: Scale points by fee share percentage
-                // v18.0: All robinhood tokens with >$100 volume
-                const robinhoodTokens = await db.all(
-                    'SELECT mint, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
-                    [MIN_VOLUME_USD]
-                );
-                for (const rhToken of robinhoodTokens) {
-                    if (!rhToken.mint) continue;
-
-                    const userHolding = await db.get(
-                        'SELECT balance FROM robinhood_token_holders WHERE mint = $1 AND "holderPubkey" = $2',
-                        [rhToken.mint, userPubkey]
-                    );
-
-                    if (userHolding && userHolding.balance) {
-                        const totalResult = await db.get(
-                            'SELECT SUM(CAST(balance AS BIGINT)) as total FROM robinhood_token_holders WHERE mint = $1',
-                            [rhToken.mint]
-                        );
-                        const totalBalance = BigInt(totalResult?.total || '1');
-                        const userBalance = BigInt(userHolding.balance);
-
-                        // Calculate base proportional points
-                        const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
-                        // Scale by fee share percentage (100% = 10000 bps = 1.0 multiplier)
-                        const feeShareBps = rhToken.feeShareBps || 10000;
-                        const feeShareMultiplier = feeShareBps / 10000;
-                        const scaledPts = baseProportionalPts * feeShareMultiplier;
-
-                        robinhoodPoints += scaledPts;
-                    }
-                }
+                // Calculate base proportional points
+                const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                // Scale by fee share percentage (100% = 10000 bps = 1.0 multiplier)
+                const feeShareBps = holding.feeShareBps || 10000;
+                const feeShareMultiplier = feeShareBps / 10000;
+                robinhoodPoints += baseProportionalPts * feeShareMultiplier;
             }
 
             // v13.0: Fetch from Redis for cross-process consistency
@@ -357,6 +397,7 @@ function init(deps) {
                 expectedAirdropCurrency: 'SOL' // v11.0: Now in SOL
             });
         } catch (e) {
+            logger.error('[check-holder] Error', { error: e.message, userPubkey });
             res.status(500).json({ error: "DB Error", expectedAirdrop: 0 });
         }
     });
@@ -495,51 +536,45 @@ function init(deps) {
     // v11.0: Now returns expected SOL airdrop amounts
     // v14.0: Updated for proportional point system (Top 250 holders)
     // v18.0: Changed from top 10 to all tokens with >$100 volume
+    // v22.0: SCALABILITY FIX - Refactored N+1 queries to use aggregated JOINs (2 queries instead of 1000+)
+    //        Added 30-second caching to reduce DB load
     router.get('/all-eligible-users', async (req, res) => {
         try {
-            // v18.0: Get all tokens with >$100 24hr volume (no limit)
-            const eligibleTokens = await db.all(
-                'SELECT mint, "userPubkey" FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
-                [MIN_VOLUME_USD]
-            );
-            const eligibleMints = eligibleTokens.map(t => t.mint);
+            // v22.0: Cache entire computation for 30 seconds - this endpoint is heavy
+            const cachedResult = await redis.smartCache('all_eligible_users_data', 30, async () => {
+                const POINTS_PER_TOKEN = 1000;
+                let userPointsMap = new Map();
 
-            if (eligibleMints.length === 0) {
-                return res.json({ users: [], totalPoints: 0, currency: 'SOL', eligibilityThreshold: MIN_VOLUME_USD });
-            }
+                // v22.0: Single aggregated query for all token holders with pre-computed totals
+                // This replaces hundreds of individual queries with 1 optimized query
+                const tokenHoldingsData = await db.all(`
+                    SELECT
+                        th."holderPubkey",
+                        th.mint,
+                        th.balance,
+                        t."userPubkey" as creator,
+                        totals.total_balance
+                    FROM token_holders th
+                    INNER JOIN tokens t ON t.mint = th.mint AND t.volume24h >= $1
+                    INNER JOIN (
+                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
+                        FROM token_holders
+                        GROUP BY mint
+                    ) totals ON totals.mint = th.mint
+                    WHERE CAST(th.balance AS BIGINT) > 0
+                `, [MIN_VOLUME_USD]);
 
-            const POINTS_PER_TOKEN = 1000;
-            let userPointsMap = new Map(); // pubkey -> { basePoints, creatorBonus, robinhoodPoints, positions, created }
+                // Process token holdings
+                for (const row of tokenHoldingsData) {
+                    const totalBalance = BigInt(row.total_balance || '1');
+                    const holderBalance = BigInt(row.balance || '0');
 
-            // v18.0: Calculate proportional points for all eligible tokens (>$100 volume)
-            for (const token of eligibleTokens) {
-                if (!token.mint) continue;
-
-                // Get all holders with balances
-                const holders = await db.all(
-                    'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1',
-                    [token.mint]
-                );
-
-                if (holders.length === 0) continue;
-
-                // Calculate total balance
-                let totalBalance = BigInt(0);
-                for (const h of holders) {
-                    totalBalance += BigInt(h.balance || '0');
-                }
-
-                if (totalBalance === BigInt(0)) continue;
-
-                // Distribute points proportionally
-                for (const holder of holders) {
-                    const holderBalance = BigInt(holder.balance || '0');
-                    if (holderBalance === BigInt(0)) continue;
+                    if (totalBalance === 0n || holderBalance === 0n) continue;
 
                     const proportionalPts = Number((holderBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
 
-                    const user = userPointsMap.get(holder.holderPubkey) || {
-                        pubkey: holder.holderPubkey,
+                    const user = userPointsMap.get(row.holderPubkey) || {
+                        pubkey: row.holderPubkey,
                         basePoints: 0,
                         creatorBonus: 0,
                         robinhoodPoints: 0,
@@ -550,71 +585,64 @@ function init(deps) {
                     user.basePoints += proportionalPts;
                     user.positions++;
 
-                    // Check if creator
-                    if (holder.holderPubkey === token.userPubkey) {
-                        user.creatorBonus += proportionalPts; // 2x bonus
+                    // Check if creator (2x bonus)
+                    if (row.holderPubkey === row.creator) {
+                        user.creatorBonus += proportionalPts;
                         user.created++;
                     }
 
-                    userPointsMap.set(holder.holderPubkey, user);
+                    userPointsMap.set(row.holderPubkey, user);
                 }
 
-                // Handle creators who don't hold their own token
-                if (token.userPubkey && !userPointsMap.has(token.userPubkey)) {
-                    userPointsMap.set(token.userPubkey, {
-                        pubkey: token.userPubkey,
-                        basePoints: 0,
-                        creatorBonus: 0,
-                        robinhoodPoints: 0,
-                        positions: 0,
-                        created: 1
-                    });
-                } else if (token.userPubkey) {
-                    const existing = userPointsMap.get(token.userPubkey);
-                    if (existing && !holders.find(h => h.holderPubkey === token.userPubkey)) {
-                        existing.created++;
-                    }
-                }
-            }
-
-            // v14.0: Include Robinhood token holdings
-            // v16.0: Scale points by fee share percentage
-            // v18.0: All robinhood tokens with >$100 volume
-            const robinhoodTokens = await db.all(
-                'SELECT mint, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
-                [MIN_VOLUME_USD]
-            );
-            for (const rhToken of robinhoodTokens) {
-                if (!rhToken.mint) continue;
-
-                // Get fee share multiplier (100% = 10000 bps = 1.0 multiplier)
-                const feeShareBps = rhToken.feeShareBps || 10000;
-                const feeShareMultiplier = feeShareBps / 10000;
-
-                const holders = await db.all(
-                    'SELECT "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1',
-                    [rhToken.mint]
+                // Get creators who may not hold their tokens
+                const creators = await db.all(
+                    'SELECT "userPubkey" FROM tokens WHERE volume24h >= $1 AND "userPubkey" IS NOT NULL',
+                    [MIN_VOLUME_USD]
                 );
 
-                if (holders.length === 0) continue;
-
-                let totalBalance = BigInt(0);
-                for (const h of holders) {
-                    totalBalance += BigInt(h.balance || '0');
+                for (const c of creators) {
+                    if (!userPointsMap.has(c.userPubkey)) {
+                        userPointsMap.set(c.userPubkey, {
+                            pubkey: c.userPubkey,
+                            basePoints: 0,
+                            creatorBonus: 0,
+                            robinhoodPoints: 0,
+                            positions: 0,
+                            created: 1
+                        });
+                    }
                 }
 
-                if (totalBalance === BigInt(0)) continue;
+                // v22.0: Single aggregated query for Robinhood holdings
+                const robinhoodHoldingsData = await db.all(`
+                    SELECT
+                        rth."holderPubkey",
+                        rth.balance,
+                        rt."feeShareBps",
+                        totals.total_balance
+                    FROM robinhood_token_holders rth
+                    INNER JOIN robinhood_tokens rt ON rt.mint = rth.mint AND rt."isActive" = 1 AND rt.volume24h >= $1
+                    INNER JOIN (
+                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
+                        FROM robinhood_token_holders
+                        GROUP BY mint
+                    ) totals ON totals.mint = rth.mint
+                    WHERE CAST(rth.balance AS BIGINT) > 0
+                `, [MIN_VOLUME_USD]);
 
-                for (const holder of holders) {
-                    const holderBalance = BigInt(holder.balance || '0');
-                    if (holderBalance === BigInt(0)) continue;
+                for (const row of robinhoodHoldingsData) {
+                    const totalBalance = BigInt(row.total_balance || '1');
+                    const holderBalance = BigInt(row.balance || '0');
 
-                    // Calculate base proportional points and scale by fee share
+                    if (totalBalance === 0n || holderBalance === 0n) continue;
+
+                    const feeShareBps = row.feeShareBps || 10000;
+                    const feeShareMultiplier = feeShareBps / 10000;
                     const baseProportionalPts = Number((holderBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
                     const scaledPts = baseProportionalPts * feeShareMultiplier;
 
-                    const user = userPointsMap.get(holder.holderPubkey) || {
-                        pubkey: holder.holderPubkey,
+                    const user = userPointsMap.get(row.holderPubkey) || {
+                        pubkey: row.holderPubkey,
                         basePoints: 0,
                         creatorBonus: 0,
                         robinhoodPoints: 0,
@@ -623,19 +651,23 @@ function init(deps) {
                     };
 
                     user.robinhoodPoints += scaledPts;
-                    userPointsMap.set(holder.holderPubkey, user);
+                    userPointsMap.set(row.holderPubkey, user);
                 }
-            }
+
+                // Convert map to array for caching
+                return Array.from(userPointsMap.values());
+            });
 
             // v13.0: Fetch from Redis for cross-process consistency
             const asdfTop100Holders = await redis.getAsdfTop100Holders();
             const allUserExpectedAirdrops = await redis.getAllUserExpectedAirdrops();
+            const devPubkey = devKeypair.publicKey.toString();
 
             const eligibleUsers = [];
             let calculatedTotalPoints = 0;
 
-            for (const user of userPointsMap.values()) {
-                if (user.pubkey === devKeypair.publicKey.toString()) continue;
+            for (const user of cachedResult) {
+                if (user.pubkey === devPubkey) continue;
 
                 const isAsdfTop50 = asdfTop100Holders.has(user.pubkey);
                 const multiplier = isAsdfTop50 ? 2 : 1;
@@ -651,7 +683,7 @@ function init(deps) {
                         created: user.created,
                         isAsdfTop50,
                         expectedAirdrop,
-                        expectedAirdropCurrency: 'SOL' // v11.0: Now in SOL
+                        expectedAirdropCurrency: 'SOL'
                     });
                     calculatedTotalPoints += points;
                 }
@@ -661,9 +693,10 @@ function init(deps) {
                 users: eligibleUsers,
                 totalPoints: Math.round(calculatedTotalPoints * 100) / 100,
                 currency: 'SOL',
-                eligibilityThreshold: MIN_VOLUME_USD // v18.0: Include threshold for frontend display
+                eligibilityThreshold: MIN_VOLUME_USD
             });
         } catch (e) {
+            logger.error('[all-eligible-users] Error', { error: e.message });
             res.status(500).json({ error: "DB Error" });
         }
     });

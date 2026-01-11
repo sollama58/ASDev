@@ -11,6 +11,54 @@ const { pump, logger, imageUtils } = require('../services');
 
 const router = express.Router();
 
+// v22.0: Rate limiter for admin login attempts (prevent brute force)
+const adminLoginAttempts = new Map();
+const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const ADMIN_LOGIN_MAX_ATTEMPTS = 5;
+
+function checkAdminRateLimit(ip) {
+    const now = Date.now();
+    const attempts = adminLoginAttempts.get(ip) || { count: 0, resetAt: now + ADMIN_LOGIN_WINDOW_MS };
+
+    // Reset if window expired
+    if (now > attempts.resetAt) {
+        attempts.count = 0;
+        attempts.resetAt = now + ADMIN_LOGIN_WINDOW_MS;
+    }
+
+    return {
+        allowed: attempts.count < ADMIN_LOGIN_MAX_ATTEMPTS,
+        remaining: Math.max(0, ADMIN_LOGIN_MAX_ATTEMPTS - attempts.count),
+        resetAt: attempts.resetAt
+    };
+}
+
+function recordAdminLoginAttempt(ip, success) {
+    const now = Date.now();
+    const attempts = adminLoginAttempts.get(ip) || { count: 0, resetAt: now + ADMIN_LOGIN_WINDOW_MS };
+
+    if (now > attempts.resetAt) {
+        attempts.count = 0;
+        attempts.resetAt = now + ADMIN_LOGIN_WINDOW_MS;
+    }
+
+    if (!success) {
+        attempts.count++;
+    } else {
+        // Reset on successful login
+        attempts.count = 0;
+    }
+
+    adminLoginAttempts.set(ip, attempts);
+
+    // Cleanup old entries periodically
+    if (adminLoginAttempts.size > 1000) {
+        for (const [key, val] of adminLoginAttempts) {
+            if (now > val.resetAt) adminLoginAttempts.delete(key);
+        }
+    }
+}
+
 // Admin auth middleware for sensitive endpoints
 // SECURITY FIX: Always require admin key in all environments
 const adminAuth = (req, res, next) => {
@@ -153,7 +201,8 @@ function init(deps) {
             });
         } catch (e) {
             logger.error('[Health] Endpoint error', { error: e.message, stack: e.stack });
-            res.status(500).json({ error: "Health check failed", details: e.message });
+            // v22.0: Don't expose internal error details to clients
+            res.status(500).json({ error: "Health check failed" });
         }
     });
 
@@ -383,7 +432,8 @@ function init(deps) {
 
         } catch (e) {
             logger.error('[Admin] Token import error', { error: e.message });
-            res.status(500).json({ error: 'Import failed: ' + e.message });
+            // v22.0: Don't expose internal error details
+            res.status(500).json({ error: 'Import failed' });
         }
     });
 
@@ -429,7 +479,8 @@ function init(deps) {
 
         } catch (e) {
             logger.error('[Admin] Bulk import error', { error: e.message });
-            res.status(500).json({ error: 'Bulk import failed: ' + e.message });
+            // v22.0: Don't expose internal error details
+            res.status(500).json({ error: 'Bulk import failed' });
         }
     });
 
@@ -459,7 +510,8 @@ function init(deps) {
             });
         } catch (e) {
             logger.error('[Admin] Trigger metadata update error', { error: e.message });
-            res.status(500).json({ error: e.message });
+            // v22.0: Don't expose internal error details
+            res.status(500).json({ error: 'Failed to trigger metadata update' });
         }
     });
 
@@ -486,7 +538,8 @@ function init(deps) {
             });
         } catch (e) {
             logger.error('[Admin] Trigger holder scan error', { error: e.message });
-            res.status(500).json({ error: e.message });
+            // v22.0: Don't expose internal error details
+            res.status(500).json({ error: 'Failed to trigger holder scan' });
         }
     });
 
@@ -513,7 +566,8 @@ function init(deps) {
             });
         } catch (e) {
             logger.error('[Admin] Trigger fee claim error', { error: e.message });
-            res.status(500).json({ error: e.message });
+            // v22.0: Don't expose internal error details
+            res.status(500).json({ error: 'Failed to trigger fee claim' });
         }
     });
 
@@ -553,7 +607,8 @@ function init(deps) {
             });
         } catch (e) {
             logger.error('[Admin] Trigger airdrop error', { error: e.message });
-            res.status(500).json({ error: e.message });
+            // v22.0: Don't expose internal error details
+            res.status(500).json({ error: 'Failed to trigger airdrop' });
         }
     });
 
@@ -580,15 +635,29 @@ function init(deps) {
             });
         } catch (e) {
             logger.error('[Admin] Trigger Robinhood scan error', { error: e.message });
-            res.status(500).json({ error: e.message });
+            // v22.0: Don't expose internal error details
+            res.status(500).json({ error: 'Failed to trigger Robinhood scan' });
         }
     });
 
     // Admin panel password verification
     // Uses ADMIN_API_KEY environment variable as the password
+    // v22.0: Added rate limiting to prevent brute force attacks
     router.post('/admin/verify', (req, res) => {
+        const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
         const { password } = req.body;
         const expectedKey = config.ADMIN_API_KEY;
+
+        // Check rate limit before processing
+        const rateLimit = checkAdminRateLimit(clientIp);
+        if (!rateLimit.allowed) {
+            logger.warn('Admin login rate limited', { ip: clientIp });
+            return res.status(429).json({
+                valid: false,
+                error: 'Too many login attempts. Try again later.',
+                retryAfter: Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
+            });
+        }
 
         if (!expectedKey) {
             logger.warn('Admin verification attempted but ADMIN_API_KEY not configured');
@@ -596,6 +665,7 @@ function init(deps) {
         }
 
         if (!password) {
+            recordAdminLoginAttempt(clientIp, false);
             return res.status(400).json({ valid: false, error: 'Password required' });
         }
 
@@ -604,15 +674,18 @@ function init(deps) {
         try {
             if (password.length !== expectedKey.length ||
                 !crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expectedKey))) {
-                logger.warn('Failed admin panel login attempt');
+                recordAdminLoginAttempt(clientIp, false);
+                logger.warn('Failed admin panel login attempt', { ip: clientIp, remaining: rateLimit.remaining - 1 });
                 return res.json({ valid: false });
             }
         } catch (e) {
-            logger.warn('Failed admin panel login attempt (comparison error)');
+            recordAdminLoginAttempt(clientIp, false);
+            logger.warn('Failed admin panel login attempt (comparison error)', { ip: clientIp });
             return res.json({ valid: false });
         }
 
-        logger.info('Admin panel authenticated successfully');
+        recordAdminLoginAttempt(clientIp, true);
+        logger.info('Admin panel authenticated successfully', { ip: clientIp });
         res.json({ valid: true });
     });
 
