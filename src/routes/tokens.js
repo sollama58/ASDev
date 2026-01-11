@@ -1378,20 +1378,24 @@ function init(deps) {
 
             // Scan for fee_sharing_configs where platform wallet is a shareholder
             let shareholderConfigs = [];
+            let scanDebug = { sizesChecked: [], errors: [], totalAccountsFound: 0 };
             const configSizes = [78, 112, 146, 180, 214]; // 44 base + 34 per shareholder
-            const platformPubkey = new PublicKey(platformWallet);
 
             for (const dataSize of configSizes) {
                 const maxShareholders = Math.floor((dataSize - 44) / 34);
                 for (let shIdx = 0; shIdx < maxShareholders; shIdx++) {
                     const offset = 44 + (shIdx * 34);
                     try {
+                        scanDebug.sizesChecked.push({ dataSize, shIdx, offset });
+
                         const accounts = await connection.getProgramAccounts(PUMP, {
                             filters: [
                                 { dataSize },
                                 { memcmp: { offset, bytes: platformWallet } }
                             ]
                         });
+
+                        scanDebug.totalAccountsFound += accounts.length;
 
                         for (const acc of accounts) {
                             const parsed = parseFeeSharingConfigDebug(acc.account.data, acc.pubkey.toString());
@@ -1420,8 +1424,82 @@ function init(deps) {
                             }
                         }
                     } catch (e) {
-                        // Continue
+                        scanDebug.errors.push({ dataSize, shIdx, error: e.message });
                     }
+                }
+            }
+
+            // Also try to decode the raw FEE program account data to understand its structure
+            let feeAccountAnalysis = null;
+            if (directConfigLookup && directConfigLookup.rawDataHex) {
+                try {
+                    const rawData = Buffer.from(directConfigLookup.rawDataHex, 'hex');
+                    // Try to find any pubkeys in the data that might be the original creator
+                    const potentialPubkeys = [];
+                    for (let i = 0; i <= rawData.length - 32; i++) {
+                        try {
+                            const pk = new PublicKey(rawData.slice(i, i + 32));
+                            // Check if it's a valid pubkey (not all zeros, not all ones)
+                            const pkStr = pk.toString();
+                            if (pkStr !== '11111111111111111111111111111111' &&
+                                !pkStr.startsWith('1111111111')) {
+                                potentialPubkeys.push({ offset: i, pubkey: pkStr });
+                            }
+                        } catch (e) {
+                            // Not a valid pubkey at this offset
+                        }
+                    }
+                    feeAccountAnalysis = {
+                        dataLength: rawData.length,
+                        potentialPubkeys: potentialPubkeys.slice(0, 10) // First 10
+                    };
+                } catch (e) {
+                    feeAccountAnalysis = { error: e.message };
+                }
+            }
+
+            // Check the known original creator if provided in query string
+            let originalCreatorConfig = null;
+            const knownOriginalCreator = req.query.originalCreator;
+            if (knownOriginalCreator) {
+                try {
+                    const originalCreatorPubkey = new PublicKey(knownOriginalCreator);
+
+                    // Derive fee_sharing_config PDA from original creator
+                    const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
+                        [Buffer.from("fee_sharing_config"), originalCreatorPubkey.toBuffer()],
+                        PUMP
+                    );
+
+                    const configInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+                    if (configInfo) {
+                        const parsed = parseFeeSharingConfigDebug(configInfo.data, feeSharingConfigPDA.toString());
+
+                        // Also derive the creator_vault that would be set as coin_creator
+                        const [creatorVaultPDA] = PublicKey.findProgramAddressSync(
+                            [Buffer.from("creator-vault"), feeSharingConfigPDA.toBuffer()],
+                            PUMP
+                        );
+
+                        originalCreatorConfig = {
+                            originalCreator: knownOriginalCreator,
+                            feeSharingConfigPDA: feeSharingConfigPDA.toString(),
+                            configExists: true,
+                            configOwner: configInfo.owner.toString(),
+                            configDataLength: configInfo.data.length,
+                            parsed,
+                            derivedCreatorVault: creatorVaultPDA.toString(),
+                            tokenCreatorMatchesVault: tokenCreator ? tokenCreator.toString() === creatorVaultPDA.toString() : null
+                        };
+                    } else {
+                        originalCreatorConfig = {
+                            originalCreator: knownOriginalCreator,
+                            feeSharingConfigPDA: feeSharingConfigPDA.toString(),
+                            configExists: false
+                        };
+                    }
+                } catch (e) {
+                    originalCreatorConfig = { error: e.message };
                 }
             }
 
@@ -1442,6 +1520,9 @@ function init(deps) {
                 directConfigLookup, // coin_creator IS the fee sharing config
                 pdaConfigLookup, // Derived PDA lookup result
                 shareholderConfigs, // Configs where we're a shareholder
+                scanDebug, // Debug info about the scan
+                feeAccountAnalysis, // Analysis of the FEE program account
+                originalCreatorConfig, // Config lookup using known original creator
                 verificationResult: verification,
                 timestamp: new Date().toISOString()
             });
