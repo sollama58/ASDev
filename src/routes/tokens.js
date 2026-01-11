@@ -1376,6 +1376,55 @@ function init(deps) {
                 }
             }
 
+            // Scan for fee_sharing_configs where platform wallet is a shareholder
+            let shareholderConfigs = [];
+            const configSizes = [78, 112, 146, 180, 214]; // 44 base + 34 per shareholder
+            const platformPubkey = new PublicKey(platformWallet);
+
+            for (const dataSize of configSizes) {
+                const maxShareholders = Math.floor((dataSize - 44) / 34);
+                for (let shIdx = 0; shIdx < maxShareholders; shIdx++) {
+                    const offset = 44 + (shIdx * 34);
+                    try {
+                        const accounts = await connection.getProgramAccounts(PUMP, {
+                            filters: [
+                                { dataSize },
+                                { memcmp: { offset, bytes: platformWallet } }
+                            ]
+                        });
+
+                        for (const acc of accounts) {
+                            const parsed = parseFeeSharingConfigDebug(acc.account.data, acc.pubkey.toString());
+                            if (parsed) {
+                                // Derive expected PDA to verify
+                                const creatorPubkey = new PublicKey(parsed.creator);
+                                const [expectedPDA] = PublicKey.findProgramAddressSync(
+                                    [Buffer.from("fee_sharing_config"), creatorPubkey.toBuffer()],
+                                    PUMP
+                                );
+
+                                // Derive the creator_vault from this config
+                                const [creatorVault] = PublicKey.findProgramAddressSync(
+                                    [Buffer.from("creator-vault"), expectedPDA.toBuffer()],
+                                    PUMP
+                                );
+
+                                shareholderConfigs.push({
+                                    ...parsed,
+                                    isValidPDA: expectedPDA.toString() === acc.pubkey.toString(),
+                                    expectedPDA: expectedPDA.toString(),
+                                    derivedCreatorVault: creatorVault.toString(),
+                                    tokenCreatorMatches: tokenCreator ? tokenCreator.toString() === creatorVault.toString() : null,
+                                    shareholderPosition: shIdx
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        // Continue
+                    }
+                }
+            }
+
             // Run the actual verification
             const verification = await mintExtractor.verifyFeeRecipient(mint, platformWallet, connection);
 
@@ -1392,6 +1441,7 @@ function init(deps) {
                 },
                 directConfigLookup, // coin_creator IS the fee sharing config
                 pdaConfigLookup, // Derived PDA lookup result
+                shareholderConfigs, // Configs where we're a shareholder
                 verificationResult: verification,
                 timestamp: new Date().toISOString()
             });
