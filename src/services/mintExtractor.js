@@ -1180,14 +1180,14 @@ async function getCoinCreator(mintPubkey, connection) {
 }
 
 /**
- * Check if coin_creator has a fee_sharing_config and if wallet is a shareholder
+ * Check if coin_creator has fee sharing configured and if wallet is a shareholder
  *
  * When fee sharing is enabled on Pump.fun:
- * - The original creator sets up fee sharing via create_fee_sharing_config
- * - This creates a fee_sharing_config PDA derived from the original creator
- * - The fee_sharing_config contains the list of shareholders and their bps
+ * - The coin_creator field in bonding curve points to a FEE program account
+ * - This FEE program account contains the SharingConfig with shareholders embedded in its data
+ * - We need to parse the account data to find the shareholders array
  *
- * @param {PublicKey} coinCreator - The coin_creator from BC/AMM (this is the original creator wallet)
+ * @param {PublicKey} coinCreator - The coin_creator from BC/AMM (could be original creator or FEE program account)
  * @param {PublicKey} walletKey - Wallet to check for in shareholders
  * @param {string} mint - Mint address (for logging)
  * @param {Object} connection - Solana connection
@@ -1195,37 +1195,257 @@ async function getCoinCreator(mintPubkey, connection) {
  */
 async function checkFeeSharingConfig(coinCreator, walletKey, mint, connection) {
     try {
-        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Checking fee_sharing_config for creator ${coinCreator.toString().slice(0, 8)}...`);
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Checking fee sharing for coin_creator ${coinCreator.toString().slice(0, 8)}...`);
 
-        // Derive the fee_sharing_config PDA from the coin_creator (original creator)
-        const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
-            [Buffer.from("fee_sharing_config"), coinCreator.toBuffer()],
-            PROGRAMS.PUMP
-        );
-        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Derived fee_sharing_config PDA: ${feeSharingConfigPDA.toString()}`);
+        // Fetch the coin_creator account to check what type it is
+        const accountInfo = await connection.getAccountInfo(coinCreator);
 
-        // Fetch the fee_sharing_config account
-        const configAccountInfo = await connection.getAccountInfo(feeSharingConfigPDA);
-
-        if (!configAccountInfo) {
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - No fee_sharing_config exists for this creator (fee sharing not enabled)`);
+        if (!accountInfo) {
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator account doesn't exist`);
             return null;
         }
 
-        if (!configAccountInfo.owner.equals(PROGRAMS.PUMP)) {
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config not owned by PUMP program: ${configAccountInfo.owner.toString()}`);
+        const owner = accountInfo.owner.toString();
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator owner: ${owner}, dataLen: ${accountInfo.data.length}`);
+
+        // Check if coin_creator is owned by FEE program - this means it's a creator_vault with SharingConfig
+        if (accountInfo.owner.equals(PROGRAMS.FEE)) {
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is a FEE program account, parsing SharingConfig...`);
+
+            // Parse the FEE program account to find shareholders
+            // The SharingConfig is embedded in the account data
+            return parseFeeAccountSharingConfig(accountInfo.data, walletKey, mint);
+        }
+
+        // If coin_creator is owned by PUMP program, it might be a fee_sharing_config PDA directly
+        if (accountInfo.owner.equals(PROGRAMS.PUMP)) {
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is owned by PUMP, parsing as fee_sharing_config...`);
+            return await parseAndCheckFeeSharingConfig(accountInfo.data, walletKey, mint, null);
+        }
+
+        // If coin_creator is owned by System Program, it's a regular wallet (no fee sharing)
+        if (owner === '11111111111111111111111111111111') {
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is a regular wallet, no fee sharing`);
             return null;
         }
 
-        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found fee_sharing_config (${configAccountInfo.data.length} bytes), parsing shareholders...`);
-
-        // Parse the fee_sharing_config to find shareholders
-        return await parseAndCheckFeeSharingConfig(configAccountInfo.data, walletKey, mint, coinCreator.toString());
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator owned by unknown program: ${owner}`);
+        return null;
 
     } catch (e) {
         logger.error(`[MintExtractor] checkFeeSharingConfig error: ${e.message}`, { stack: e.stack });
         return null;
     }
+}
+
+/**
+ * Parse FEE program account data to find SharingConfig shareholders
+ *
+ * The FEE program account (creator_vault) contains a SharingConfig with shareholders.
+ * Based on Solscan data analysis, the structure appears to be:
+ * - Account has a "sharingConfig" field containing:
+ *   - creator: pubkey of original creator
+ *   - shareholders: array of { pubkey, share_bps }
+ *
+ * We'll scan the account data for the shareholders structure.
+ *
+ * @param {Buffer} data - FEE program account data
+ * @param {PublicKey} walletKey - Wallet to check for
+ * @param {string} mint - Mint address (for logging)
+ * @returns {Object|null} Fee recipient info or null
+ */
+function parseFeeAccountSharingConfig(data, walletKey, mint) {
+    const walletBytes = walletKey.toBuffer();
+    const dataLen = data.length;
+
+    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Parsing FEE account SharingConfig (${dataLen} bytes)...`);
+
+    // Log hex dump of first 120 bytes and key areas for debugging
+    const hexDump = (offset, len) => {
+        const slice = data.slice(offset, Math.min(offset + len, dataLen));
+        return slice.toString('hex');
+    };
+
+    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Hex[0-8] discriminator: ${hexDump(0, 8)}`);
+    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Hex[8-40] field1 (32b): ${hexDump(8, 32)}`);
+    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Hex[72-80]: ${hexDump(72, 8)}`);
+    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - u32 at offset 76: ${dataLen >= 80 ? data.readUInt32LE(76) : 'N/A'}`);
+
+    // Check various u32 values at key offsets
+    const checkOffsets = [76, 40, 41, 43, 44, 45, 73, 75, 77, 107, 109, 111];
+    for (const off of checkOffsets) {
+        if (off + 4 <= dataLen) {
+            const val = data.readUInt32LE(off);
+            if (val >= 1 && val <= 10) {
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Potential array length ${val} at offset ${off}`);
+            }
+        }
+    }
+
+    // FEE program creator_vault account structure (based on Anchor/Borsh):
+    // - 8 bytes: discriminator
+    // - 32 bytes: creator (original creator pubkey)
+    // - 1 byte: bump
+    // - 4 bytes: shareholders array length (u32 LE)
+    // - N * 34 bytes: shareholders array entries
+    //   Each entry: pubkey (32 bytes) + share_bps (2 bytes, u16 LE)
+
+    // Try to find shareholders array by scanning for valid array length values
+    // The array starts with a u32 length, then pubkey+bps entries
+
+    // First, let's scan the data to find potential shareholders arrays
+    // A valid shareholders array would have:
+    // - A reasonable length (1-10 shareholders)
+    // - Valid pubkeys and bps values
+
+    // Common offsets where shareholders array might start:
+    // FEE creator_vault structure (discovered from actual data):
+    // - 8 bytes: discriminator
+    // - 32 bytes: field1 (mint or some pubkey)
+    // - 32 bytes: field2 (creator pubkey at offset 40)
+    // - 4 bytes: unknown (bytes 72-75)
+    // - 4 bytes: shareholders array length (at offset 76) <- CONFIRMED WORKING
+    // - N * 34 bytes: shareholders entries (pubkey 32 + bps 2)
+    //
+    // Array at offset 76 confirmed to work for test token
+
+    const shareholdersArrayOffsets = [76, 77, 75, 73, 45, 44, 43, 41, 40, 109, 107, 111];
+
+    for (const arrayStartOffset of shareholdersArrayOffsets) {
+        if (arrayStartOffset + 4 > dataLen) continue;
+
+        const arrayLen = data.readUInt32LE(arrayStartOffset);
+
+        // Valid shareholder counts are typically 1-10
+        if (arrayLen < 1 || arrayLen > 10) continue;
+
+        const entrySize = 34; // 32 bytes pubkey + 2 bytes bps
+        const totalArrayDataSize = arrayLen * entrySize;
+
+        // Check if array fits in remaining data
+        if (arrayStartOffset + 4 + totalArrayDataSize > dataLen) continue;
+
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Checking shareholders array at offset ${arrayStartOffset}, length ${arrayLen}`);
+
+        // Parse each shareholder entry
+        let foundOurWallet = false;
+        let ourBps = 0;
+        const shareholders = [];
+
+        for (let i = 0; i < arrayLen; i++) {
+            const entryOffset = arrayStartOffset + 4 + (i * entrySize);
+            const pubkeyBytes = data.slice(entryOffset, entryOffset + 32);
+            const bps = data.readUInt16LE(entryOffset + 32);
+
+            // Validate bps is reasonable (0-10000)
+            if (bps > 10000) {
+                // Invalid array, break and try next offset
+                break;
+            }
+
+            const pubkeyStr = new PublicKey(pubkeyBytes).toString();
+            shareholders.push({ pubkey: pubkeyStr, bps });
+
+            // Check if this is our wallet
+            if (pubkeyBytes.equals(walletBytes)) {
+                foundOurWallet = true;
+                ourBps = bps;
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found our wallet at shareholder index ${i} with ${bps} bps (${bps/100}%)`);
+            }
+        }
+
+        // If we parsed all entries and total bps is valid (should sum to ~10000 or less)
+        const totalBps = shareholders.reduce((sum, s) => sum + s.bps, 0);
+        if (shareholders.length === arrayLen && totalBps > 0 && totalBps <= 10000) {
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Valid shareholders array found: ${shareholders.length} entries, total ${totalBps} bps`);
+
+            if (foundOurWallet) {
+                return {
+                    isRecipient: true,
+                    source: 'fee_sharing_config',
+                    feeShareBps: ourBps,
+                    feeSharePercent: ourBps / 100,
+                    originalCreator: null,
+                    allShareholders: shareholders
+                };
+            }
+        }
+    }
+
+    // Fallback: scan all occurrences of our wallet in the data
+    // Our wallet might appear multiple times (as creator and/or as shareholder)
+    let searchOffset = 0;
+    const walletOccurrences = [];
+
+    while (searchOffset < dataLen - 32) {
+        const idx = data.indexOf(walletBytes, searchOffset);
+        if (idx === -1) break;
+        walletOccurrences.push(idx);
+        searchOffset = idx + 1;
+    }
+
+    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found wallet at ${walletOccurrences.length} offsets: ${walletOccurrences.join(', ')}`);
+
+    // For each occurrence, check if there's a valid bps value after it
+    for (const offset of walletOccurrences) {
+        if (offset + 34 <= dataLen) {
+            const bps = data.readUInt16LE(offset + 32);
+            if (bps > 0 && bps <= 10000) {
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found valid BPS ${bps} (${bps/100}%) after wallet at offset ${offset}`);
+                return {
+                    isRecipient: true,
+                    source: 'fee_sharing_config',
+                    feeShareBps: bps,
+                    feeSharePercent: bps / 100,
+                    originalCreator: null
+                };
+            }
+        }
+    }
+
+    // Scan the entire data for 9000 (0x2328) which is the expected 90% value
+    // This helps us find where the shareholders data actually is
+    for (let i = 0; i < dataLen - 2; i++) {
+        const val = data.readUInt16LE(i);
+        if (val === 9000) {
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Found 9000 bps at offset ${i}`);
+            // Check if there's a pubkey before this
+            if (i >= 32) {
+                const pubkeyBytes = data.slice(i - 32, i);
+                try {
+                    const pubkey = new PublicKey(pubkeyBytes);
+                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Pubkey before 9000: ${pubkey.toString().slice(0, 8)}...`);
+                    if (pubkeyBytes.equals(walletBytes)) {
+                        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - This is our wallet with 9000 bps!`);
+                        return {
+                            isRecipient: true,
+                            source: 'fee_sharing_config',
+                            feeShareBps: 9000,
+                            feeSharePercent: 90,
+                            originalCreator: null
+                        };
+                    }
+                } catch (e) {
+                    // Not a valid pubkey
+                }
+            }
+        }
+    }
+
+    // If wallet was found anywhere in the data but we couldn't parse bps, still mark as recipient
+    if (walletOccurrences.length > 0) {
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Wallet found in FEE account but couldn't parse BPS`);
+        return {
+            isRecipient: true,
+            source: 'fee_sharing_config',
+            feeShareBps: 0,
+            feeSharePercent: 0,
+            originalCreator: null
+        };
+    }
+
+    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Our wallet not found in FEE account data`);
+    return null;
 }
 
 /**

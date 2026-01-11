@@ -8,7 +8,9 @@
       "Bash(findstr:*)",
       "Bash(ping:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix creator_vault offset parsing for fee sharing verification\n\nUpdated offsetsToTry array to include offset 43 where the original\ncreator pubkey is stored in FEE program accounts. Also added additional\noffset candidates for robustness.\n\nFEE account structure: 8 discriminator + 1 bump + 2 flags + 32 mint\n\\(offset 11\\) + 32 creator \\(offset 43\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix creator_vault offset parsing for fee sharing verification\n\nUpdated offsetsToTry array to include offset 43 where the original\ncreator pubkey is stored in FEE program accounts. Also added additional\noffset candidates for robustness.\n\nFEE account structure: 8 discriminator + 1 bump + 2 flags + 32 mint\n\\(offset 11\\) + 32 creator \\(offset 43\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(curl:*)",
+      "Bash(node test-fee-parsing.js:*)"
     ]
   }
 }
