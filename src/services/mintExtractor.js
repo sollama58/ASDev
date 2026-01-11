@@ -995,22 +995,33 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
  * @returns {Promise<{coinCreator: PublicKey, source: string}|null>}
  */
 async function getCoinCreator(mintPubkey, connection) {
+    const mintStr = mintPubkey.toString();
+    logger.info(`[MintExtractor] Getting coin_creator for mint: ${mintStr.slice(0, 8)}...`);
+
     // Try bonding curve first (pre-graduation)
     const [bondingCurve] = PublicKey.findProgramAddressSync(
         [Buffer.from("bonding-curve"), mintPubkey.toBuffer()],
         PROGRAMS.PUMP
     );
+    logger.info(`[MintExtractor] Derived BC PDA: ${bondingCurve.toString()}`);
 
     try {
         const bcAccountInfo = await connection.getAccountInfo(bondingCurve);
-        if (bcAccountInfo && bcAccountInfo.data.length >= 81) {
-            // Bonding curve layout: coin_creator at offset 49 (32 bytes)
-            const coinCreator = new PublicKey(bcAccountInfo.data.slice(49, 81));
-            logger.debug(`[MintExtractor] Got coin_creator from BC: ${coinCreator.toString().slice(0, 8)}...`);
-            return { coinCreator, source: 'bonding_curve' };
+        if (bcAccountInfo) {
+            logger.info(`[MintExtractor] BC account exists: dataLen=${bcAccountInfo.data.length}, lamports=${bcAccountInfo.lamports}`);
+            if (bcAccountInfo.data.length >= 81) {
+                // Bonding curve layout: coin_creator at offset 49 (32 bytes)
+                const coinCreator = new PublicKey(bcAccountInfo.data.slice(49, 81));
+                logger.info(`[MintExtractor] Got coin_creator from BC: ${coinCreator.toString()}`);
+                return { coinCreator, source: 'bonding_curve' };
+            } else {
+                logger.info(`[MintExtractor] BC data too short: ${bcAccountInfo.data.length} < 81`);
+            }
+        } else {
+            logger.info(`[MintExtractor] BC account does not exist (token may be graduated)`);
         }
     } catch (e) {
-        logger.debug(`[MintExtractor] BC fetch failed: ${e.message}`);
+        logger.info(`[MintExtractor] BC fetch error: ${e.message}`);
     }
 
     // Try AMM pool (post-graduation)
@@ -1024,19 +1035,28 @@ async function getCoinCreator(mintPubkey, connection) {
         [Buffer.from("pool"), poolAuthority.toBuffer(), mintPubkey.toBuffer(), WSOL.toBuffer()],
         PROGRAMS.PUMP_AMM
     );
+    logger.info(`[MintExtractor] Derived AMM pool PDA: ${pool.toString()}`);
 
     try {
         const poolAccountInfo = await connection.getAccountInfo(pool);
-        if (poolAccountInfo && poolAccountInfo.data.length >= 43) {
-            // AMM Pool layout: coin_creator at offset 11 (32 bytes)
-            const coinCreator = new PublicKey(poolAccountInfo.data.slice(11, 43));
-            logger.debug(`[MintExtractor] Got coin_creator from AMM: ${coinCreator.toString().slice(0, 8)}...`);
-            return { coinCreator, source: 'amm_pool' };
+        if (poolAccountInfo) {
+            logger.info(`[MintExtractor] AMM pool exists: dataLen=${poolAccountInfo.data.length}, lamports=${poolAccountInfo.lamports}`);
+            if (poolAccountInfo.data.length >= 43) {
+                // AMM Pool layout: coin_creator at offset 11 (32 bytes)
+                const coinCreator = new PublicKey(poolAccountInfo.data.slice(11, 43));
+                logger.info(`[MintExtractor] Got coin_creator from AMM: ${coinCreator.toString()}`);
+                return { coinCreator, source: 'amm_pool' };
+            } else {
+                logger.info(`[MintExtractor] AMM pool data too short: ${poolAccountInfo.data.length} < 43`);
+            }
+        } else {
+            logger.info(`[MintExtractor] AMM pool does not exist`);
         }
     } catch (e) {
-        logger.debug(`[MintExtractor] AMM fetch failed: ${e.message}`);
+        logger.info(`[MintExtractor] AMM fetch error: ${e.message}`);
     }
 
+    logger.info(`[MintExtractor] ${mintStr.slice(0, 8)}... - No coin_creator found in BC or AMM`);
     return null;
 }
 
@@ -1054,23 +1074,29 @@ async function getCoinCreator(mintPubkey, connection) {
  */
 async function checkFeeSharingConfig(coinCreator, walletKey, mint, connection) {
     try {
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Checking if coin_creator ${coinCreator.toString().slice(0, 8)}... is a fee_sharing_config`);
+
         const accountInfo = await connection.getAccountInfo(coinCreator);
 
         if (!accountInfo) {
-            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator account doesn't exist`);
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator account doesn't exist on-chain`);
             return null;
         }
 
+        const owner = accountInfo.owner.toString();
+        const dataLen = accountInfo.data.length;
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator account: owner=${owner.slice(0, 8)}..., dataLen=${dataLen}`);
+
         // coin_creator must be owned by PUMP program to be a fee_sharing_config
         if (!accountInfo.owner.equals(PROGRAMS.PUMP)) {
-            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator not owned by PUMP (owner: ${accountInfo.owner.toString().slice(0, 8)}...)`);
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator NOT owned by PUMP program. Owner: ${owner}`);
+            logger.info(`[MintExtractor] Expected PUMP: ${PROGRAMS.PUMP.toString()}`);
             return null;
         }
 
         // Valid fee_sharing_config sizes: 78, 112, 146, 180, 214 (44 base + 34 per shareholder, 1-5 shareholders)
-        const dataLen = accountInfo.data.length;
         if (dataLen < 78 || dataLen > 214) {
-            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Invalid fee_sharing_config size: ${dataLen}`);
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Invalid fee_sharing_config size: ${dataLen} (expected 78-214)`);
             return null;
         }
 
@@ -1078,16 +1104,26 @@ async function checkFeeSharingConfig(coinCreator, walletKey, mint, connection) {
         const config = parseFeeSharingConfig(accountInfo.data);
 
         if (!config || !config.shareholders || config.shareholders.length === 0) {
-            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Failed to parse fee_sharing_config`);
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Failed to parse fee_sharing_config. Raw data (first 100 bytes): ${accountInfo.data.slice(0, 100).toString('hex')}`);
             return null;
+        }
+
+        // Log all shareholders found
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Parsed fee_sharing_config successfully:`);
+        logger.info(`[MintExtractor]   Creator: ${config.creator.toString()}`);
+        logger.info(`[MintExtractor]   Shareholders (${config.shareholders.length}):`);
+        for (const sh of config.shareholders) {
+            logger.info(`[MintExtractor]     - ${sh.pubkey.toString()}: ${sh.shareBps} bps (${sh.shareBps / 100}%)`);
         }
 
         // Check if our wallet is in the shareholders list
         const walletStr = walletKey.toString();
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Looking for our wallet: ${walletStr}`);
+
         for (const shareholder of config.shareholders) {
             if (shareholder.pubkey.toString() === walletStr) {
                 const sharePercent = shareholder.shareBps / 100;
-                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder (${sharePercent}% = ${shareholder.shareBps} bps)`);
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - MATCH! We are a fee shareholder (${sharePercent}% = ${shareholder.shareBps} bps)`);
                 return {
                     isRecipient: true,
                     source: 'fee_sharing_config',
@@ -1099,11 +1135,11 @@ async function checkFeeSharingConfig(coinCreator, walletKey, mint, connection) {
         }
 
         // Config exists but we're not in shareholders
-        logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config found but wallet not in shareholders`);
+        logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config found but our wallet is NOT in shareholders list`);
         return null;
 
     } catch (e) {
-        logger.debug(`[MintExtractor] checkFeeSharingConfig error: ${e.message}`);
+        logger.error(`[MintExtractor] checkFeeSharingConfig error: ${e.message}`, { stack: e.stack });
         return null;
     }
 }

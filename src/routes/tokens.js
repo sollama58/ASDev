@@ -1551,6 +1551,38 @@ function init(deps) {
             // Run the actual verification
             const verification = await mintExtractor.verifyFeeRecipient(mint, platformWallet, connection);
 
+            // Build a step-by-step trace for debugging
+            const debugTrace = {
+                step1_getCoinCreator: {
+                    bcAddress: bondingCurve.toString(),
+                    bcExists: !!bcData?.exists,
+                    bcCreator: bcData?.creator || null,
+                    ammAddress: pool.toString(),
+                    ammExists: !!ammData?.exists,
+                    ammCreator: ammData?.creator || null,
+                    coinCreatorFound: bcData?.creator || ammData?.creator || null,
+                    source: bcData?.exists ? 'bonding_curve' : (ammData?.exists ? 'amm_pool' : 'none')
+                },
+                step2_directCreatorCheck: {
+                    coinCreator: bcData?.creator || ammData?.creator || null,
+                    platformWallet: platformWallet,
+                    isDirectCreator: (bcData?.creator === platformWallet) || (ammData?.creator === platformWallet)
+                },
+                step3_feeSharingConfigCheck: directConfigLookup ? {
+                    coinCreatorIsConfig: directConfigLookup.method === 'coin_creator_is_config',
+                    configOwner: directConfigLookup.owner,
+                    isOwnedByPump: directConfigLookup.isOwnedByPump,
+                    shareholderCount: directConfigLookup.shareholderCount,
+                    weAreShareHolder: directConfigLookup.weAreShareHolder,
+                    shareholders: directConfigLookup.shareholders?.map(s => ({
+                        pubkey: s.pubkey,
+                        bps: s.shareBps,
+                        percent: s.sharePercent,
+                        isUs: s.isUs
+                    })) || []
+                } : { error: 'coin_creator is not a fee_sharing_config' }
+            };
+
             res.json({
                 mint,
                 platformWallet,
@@ -1562,6 +1594,7 @@ function init(deps) {
                     address: pool.toString(),
                     ...ammData
                 },
+                debugTrace, // Step-by-step verification trace
                 directConfigLookup, // coin_creator IS the fee sharing config
                 pdaConfigLookup, // Derived PDA lookup result
                 shareholderConfigs, // Configs where we're a shareholder

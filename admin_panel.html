@@ -996,7 +996,7 @@
                 return;
             }
 
-            document.getElementById('verify-result').textContent = 'Verifying... This may take a moment...';
+            document.getElementById('verify-result').innerHTML = '<span class="text-blue-400">Verifying... This may take a moment...</span>';
             log(`Verifying fee sharing for ${shortenPubkey(mint)}${originalCreator ? ' with original creator ' + shortenPubkey(originalCreator) : ''}...`);
 
             try {
@@ -1005,15 +1005,85 @@
                     url += `?originalCreator=${originalCreator}`;
                 }
                 const data = await apiCall(url);
-                document.getElementById('verify-result').textContent = formatJson(data);
 
-                if (data.verificationResult?.isRecipient) {
-                    log(`Verification SUCCESS: We ARE a fee recipient via ${data.verificationResult.source}`, 'success');
+                // Build a more readable summary
+                const v = data.verificationResult || {};
+                const trace = data.debugTrace || {};
+                const bc = data.bondingCurve || {};
+                const amm = data.ammPool || {};
+                const directConfig = data.directConfigLookup || {};
+
+                let html = '<div class="space-y-4">';
+
+                // Verification Result Summary
+                html += `<div class="p-3 rounded ${v.isRecipient ? 'bg-green-900/30 border border-green-500' : 'bg-red-900/30 border border-red-500'}">`;
+                html += `<h4 class="font-bold ${v.isRecipient ? 'text-green-400' : 'text-red-400'}">`;
+                html += v.isRecipient ? '✅ VERIFIED: We ARE a fee recipient' : '❌ NOT VERIFIED: We are NOT a fee recipient';
+                html += '</h4>';
+                if (v.isRecipient) {
+                    html += `<p class="text-sm text-gray-300">Source: ${v.source} | Share: ${v.feeShareBps} bps (${v.feeSharePercent}%)</p>`;
+                }
+                html += '</div>';
+
+                // Step 1: coin_creator lookup
+                html += '<div class="p-3 bg-gray-800/50 rounded">';
+                html += '<h4 class="text-orange-400 font-bold mb-2">Step 1: Get coin_creator</h4>';
+                html += `<p class="text-xs text-gray-400">Platform Wallet: <span class="text-white font-mono">${data.platformWallet}</span></p>`;
+                html += '<table class="w-full text-xs mt-2">';
+                html += '<tr class="border-b border-gray-700"><th class="text-left py-1">Source</th><th class="text-left">Exists</th><th class="text-left">coin_creator</th><th class="text-left">Is Us?</th></tr>';
+                html += `<tr><td class="py-1">Bonding Curve</td><td>${bc.exists ? '✅' : '❌'}</td><td class="font-mono text-xs">${bc.creator ? shortenPubkey(bc.creator, 8) : '-'}</td><td>${bc.isWeCreator ? '✅ YES' : (bc.creator ? '❌ NO' : '-')}</td></tr>`;
+                html += `<tr><td class="py-1">AMM Pool</td><td>${amm.exists ? '✅' : '❌'}</td><td class="font-mono text-xs">${amm.creator ? shortenPubkey(amm.creator, 8) : '-'}</td><td>${amm.isWeCreator ? '✅ YES' : (amm.creator ? '❌ NO' : '-')}</td></tr>`;
+                html += '</table>';
+                html += '</div>';
+
+                // Step 2: Check if coin_creator is a fee_sharing_config
+                html += '<div class="p-3 bg-gray-800/50 rounded">';
+                html += '<h4 class="text-orange-400 font-bold mb-2">Step 2: Check fee_sharing_config</h4>';
+                const coinCreator = bc.creator || amm.creator;
+                if (coinCreator) {
+                    html += `<p class="text-xs">coin_creator: <span class="font-mono text-white">${coinCreator}</span></p>`;
+                    if (directConfig.method === 'coin_creator_is_config') {
+                        html += '<p class="text-green-400 text-sm mt-1">✅ coin_creator IS a fee_sharing_config PDA</p>';
+                        html += `<p class="text-xs text-gray-400">Owner: ${directConfig.owner} | Data Length: ${directConfig.dataLength}</p>`;
+                        if (directConfig.shareholders && directConfig.shareholders.length > 0) {
+                            html += '<div class="mt-2"><p class="text-xs text-gray-400">Shareholders:</p><ul class="text-xs ml-4">';
+                            for (const sh of directConfig.shareholders) {
+                                const color = sh.isUs ? 'text-green-400 font-bold' : 'text-gray-300';
+                                html += `<li class="${color}">${shortenPubkey(sh.pubkey, 6)}: ${sh.shareBps} bps (${sh.sharePercent}%) ${sh.isUs ? '← THIS IS US' : ''}</li>`;
+                            }
+                            html += '</ul></div>';
+                        }
+                    } else if (directConfig.isOwnedByPump === false) {
+                        html += `<p class="text-yellow-400 text-sm mt-1">⚠️ coin_creator is NOT owned by PUMP program</p>`;
+                        html += `<p class="text-xs text-gray-400">Owner: ${directConfig.owner}</p>`;
+                        html += `<p class="text-xs text-gray-400">This means it's a regular wallet, not a fee_sharing_config</p>`;
+                    } else if (directConfig.error) {
+                        html += `<p class="text-yellow-400 text-sm mt-1">⚠️ ${directConfig.error}</p>`;
+                        if (directConfig.rawDataHex) {
+                            html += `<p class="text-xs text-gray-500 font-mono break-all mt-1">Raw: ${directConfig.rawDataHex.slice(0, 100)}...</p>`;
+                        }
+                    }
                 } else {
-                    log('Verification FAILED: We are NOT a fee recipient', 'error');
+                    html += '<p class="text-red-400">No coin_creator found in BC or AMM</p>';
+                }
+                html += '</div>';
+
+                // Full JSON (collapsed)
+                html += '<details class="mt-4"><summary class="cursor-pointer text-blue-400 text-sm">View Full JSON Response</summary>';
+                html += `<pre class="text-xs mt-2 p-2 bg-gray-900 rounded overflow-auto max-h-96">${formatJson(data)}</pre>`;
+                html += '</details>';
+
+                html += '</div>';
+
+                document.getElementById('verify-result').innerHTML = html;
+
+                if (v.isRecipient) {
+                    log(`Verification SUCCESS: We ARE a fee recipient via ${v.source} (${v.feeShareBps} bps)`, 'success');
+                } else {
+                    log('Verification FAILED: We are NOT a fee recipient. Check the debug trace above.', 'error');
                 }
             } catch (e) {
-                document.getElementById('verify-result').textContent = `Error: ${e.message}`;
+                document.getElementById('verify-result').innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Verification error: ${e.message}`, 'error');
             }
         }
