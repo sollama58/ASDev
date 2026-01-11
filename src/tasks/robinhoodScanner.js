@@ -26,61 +26,43 @@ const FEE_SHARING_DISCRIMINATOR = Buffer.from([0x87, 0xc8, 0x18, 0x7b, 0x9b, 0x8
 
 /**
  * Parse fee sharing config account data
- * Structure:
- * - 8 bytes: discriminator
- * - 32 bytes: creator (original token creator)
- * - 32 bytes: mint (token mint address)
- * - 4 bytes: shareholder count
- * - N * 34 bytes: shareholders (32 byte pubkey + 2 byte bps)
+ *
+ * The ACTUAL Pump.fun fee_sharing_config structure is:
+ * - 8 bytes: discriminator (anchor account discriminator)
+ * - 32 bytes: creator (the original token creator's pubkey)
+ * - 4 bytes: shareholder_count (u32, little-endian)
+ * - N * 34 bytes: shareholders (32 byte pubkey + 2 byte bps each)
+ *
+ * Total sizes: 44 base + 34 per shareholder
+ * - 1 shareholder: 78 bytes
+ * - 2 shareholders: 112 bytes
+ * - 3 shareholders: 146 bytes
+ * - 4 shareholders: 180 bytes
+ * - 5 shareholders: 214 bytes
+ *
+ * NOTE: The fee_sharing_config does NOT store the mint.
+ * When fee sharing is enabled, the coin_creator field in BC/AMM
+ * IS set to the fee_sharing_config PDA itself.
  *
  * @param {Buffer} data - Raw account data
+ * @param {PublicKey} [accountPubkey] - Optional: The account's public key
  * @returns {Object|null} Parsed config or null if invalid
  */
-function parseFeeSharingConfig(data) {
+function parseFeeSharingConfig(data, accountPubkey = null) {
     try {
-        if (data.length < 76) return null; // Minimum: 8 + 32 + 32 + 4 bytes
-
-        // Check discriminator
-        const discriminator = data.slice(0, 8);
-        // Skip discriminator check for now - we'll validate by structure
+        if (data.length < 44) return null; // Minimum: 8 (discriminator) + 32 (creator) + 4 (count)
 
         const creator = new PublicKey(data.slice(8, 40));
-        const mint = new PublicKey(data.slice(40, 72));
 
-        // Number of shareholders (4 bytes, little-endian)
-        const shareholderCount = data.readUInt32LE(72);
-
-        // Sanity check - shouldn't have more than 10 shareholders
-        if (shareholderCount > 10 || shareholderCount < 1) return null;
-
-        const shareholders = [];
-        let offset = 76;
-
-        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-            const shareBps = data.readUInt16LE(offset + 32);
-            shareholders.push({ pubkey, shareBps });
-            offset += 34;
-        }
-
-        return { creator, mint, shareholders };
-    } catch (e) {
-        return null;
-    }
-}
-
-/**
- * Alternative parsing for fee sharing configs without mint in account
- * In this case, mint is derived from the PDA seed
- */
-function parseFeeSharingConfigAlt(data, accountPubkey) {
-    try {
-        if (data.length < 44) return null;
-
-        const creator = new PublicKey(data.slice(8, 40));
+        // Number of shareholders (4 bytes, little-endian) at offset 40
         const shareholderCount = data.readUInt32LE(40);
 
+        // Sanity check - shouldn't have more than 10 shareholders, and must have at least 1
         if (shareholderCount > 10 || shareholderCount < 1) return null;
+
+        // Expected size: 44 base + 34 per shareholder
+        const expectedMinSize = 44 + (shareholderCount * 34);
+        if (data.length < expectedMinSize) return null;
 
         const shareholders = [];
         let offset = 44;
@@ -88,14 +70,29 @@ function parseFeeSharingConfigAlt(data, accountPubkey) {
         for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
             const pubkey = new PublicKey(data.slice(offset, offset + 32));
             const shareBps = data.readUInt16LE(offset + 32);
+
+            // Sanity check - bps should be 0-10000
+            if (shareBps > 10000) return null;
+
             shareholders.push({ pubkey, shareBps });
             offset += 34;
         }
+
+        // Verify we got all expected shareholders
+        if (shareholders.length !== shareholderCount) return null;
 
         return { creator, mint: null, shareholders, configPubkey: accountPubkey };
     } catch (e) {
         return null;
     }
+}
+
+/**
+ * Alternative parsing - kept for backwards compatibility
+ * Now just calls parseFeeSharingConfig since the structure is the same
+ */
+function parseFeeSharingConfigAlt(data, accountPubkey) {
+    return parseFeeSharingConfig(data, accountPubkey);
 }
 
 /**
@@ -378,69 +375,50 @@ async function scanForFeeSharingConfigs(deps) {
         let newTokensFound = 0;
 
         // Scan for accounts where we might be a shareholder
-        // Fee sharing configs have variable sizes based on number of shareholders
-        // Format with mint: 76 base + 34 per shareholder (1-5 shareholders)
-        const sizesWithMint = [110, 144, 178, 212, 246];
-        // Format without mint: 44 base + 34 per shareholder (1-5 shareholders)
-        const sizesWithoutMint = [78, 112, 146, 180, 214];
-        const allSizes = [...sizesWithMint, ...sizesWithoutMint];
+        // Fee sharing config sizes: 44 base + 34 per shareholder (1-5 shareholders)
+        // Sizes: 78, 112, 146, 180, 214
+        const configSizes = [78, 112, 146, 180, 214];
 
         // Track creators we've found configs for (to avoid duplicate processing)
         const processedCreators = new Set();
 
-        for (const dataSize of allSizes) {
+        for (const dataSize of configSizes) {
             try {
-                // Determine shareholder offsets based on format
-                const isWithMint = sizesWithMint.includes(dataSize);
-                const firstShareholderOffset = isWithMint ? 76 : 44;
-                const secondShareholderOffset = isWithMint ? 110 : 78;
+                // Shareholders start at offset 44, each is 34 bytes (32 pubkey + 2 bps)
+                const maxShareholdersForSize = Math.floor((dataSize - 44) / 34);
 
-                const accounts = await connection.getProgramAccounts(PROGRAMS.PUMP, {
-                    filters: [
-                        { dataSize },
-                        // Filter for accounts containing our wallet pubkey at first shareholder position
-                        { memcmp: { offset: firstShareholderOffset, bytes: devKeypair.publicKey.toBase58() } }
-                    ]
-                }).catch(() => []);
+                // Search for our wallet at each possible shareholder position
+                for (let shIdx = 0; shIdx < maxShareholdersForSize; shIdx++) {
+                    const shareholderOffset = 44 + (shIdx * 34);
 
-                // Also try second shareholder position
-                const accounts2 = await connection.getProgramAccounts(PROGRAMS.PUMP, {
-                    filters: [
-                        { dataSize },
-                        { memcmp: { offset: secondShareholderOffset, bytes: devKeypair.publicKey.toBase58() } }
-                    ]
-                }).catch(() => []);
+                    const accounts = await connection.getProgramAccounts(PROGRAMS.PUMP, {
+                        filters: [
+                            { dataSize },
+                            // Filter for accounts containing our wallet pubkey at this shareholder position
+                            { memcmp: { offset: shareholderOffset, bytes: devKeypair.publicKey.toBase58() } }
+                        ]
+                    }).catch(() => []);
 
-                const allAccounts = [...accounts, ...accounts2];
+                    for (const account of accounts) {
+                        try {
+                            const config = parseFeeSharingConfig(account.account.data, account.pubkey);
 
-                for (const account of allAccounts) {
-                    try {
-                        // Try parsing with mint included
-                        let config = parseFeeSharingConfig(account.account.data);
+                            if (!config) continue;
 
-                        // If that fails, try alternative parsing
-                        if (!config) {
-                            config = parseFeeSharingConfigAlt(account.account.data, account.pubkey);
-                        }
+                            const ourShare = findOurShare(config, devKeypair.publicKey);
+                            if (!ourShare) continue;
 
-                        if (!config) continue;
+                            const creatorStr = config.creator.toString();
 
-                        const ourShare = findOurShare(config, devKeypair.publicKey);
-                        if (!ourShare) continue;
+                            // Skip if we've already processed this creator
+                            if (processedCreators.has(creatorStr)) {
+                                continue;
+                            }
+                            processedCreators.add(creatorStr);
 
-                        const creatorStr = config.creator.toString();
-
-                        // Skip if we've already processed this creator
-                        if (processedCreators.has(creatorStr)) {
-                            continue;
-                        }
-                        processedCreators.add(creatorStr);
-
-                        let mintStr = config.mint ? config.mint.toString() : null;
-
-                        // If no mint in config, try to find tokens by scanning creator's vault transactions
-                        if (!mintStr) {
-                            logger.info(`[Robinhood] Found config without mint for creator ${creatorStr.slice(0, 8)}... - scanning their vault transactions`);
+                            // fee_sharing_config does NOT store the mint
+                            // We need to find tokens by scanning the creator's vault transactions
+                            logger.info(`[Robinhood] Found fee sharing config for creator ${creatorStr.slice(0, 8)}... - scanning their vault transactions`);
 
                             try {
                                 // Scan the creator's vault transactions to find their tokens
@@ -466,21 +444,17 @@ async function scanForFeeSharingConfigs(deps) {
                             } catch (scanErr) {
                                 logger.debug(`[Robinhood] Failed to scan vault for creator ${creatorStr.slice(0, 8)}...`, { error: scanErr.message });
                             }
-                            continue;
+                        } catch (e) {
+                            // Skip invalid accounts
                         }
-
-                        // Process the token with mint
-                        const added = await processFeeSharingToken(deps, mintStr, creatorStr, ourShare);
-                        if (added) {
-                            newTokensFound++;
-                        }
-                    } catch (e) {
-                        // Skip invalid accounts
                     }
+
+                    // Small delay between shareholder position queries
+                    await new Promise(r => setTimeout(r, 200));
                 }
 
                 // Small delay between size queries
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise(r => setTimeout(r, 300));
 
             } catch (e) {
                 logger.debug(`[Robinhood] Error scanning size ${dataSize}`, { error: e.message });

@@ -838,14 +838,13 @@ function init(deps) {
 
             // Verify that our platform wallet is a fee recipient on-chain
             // This checks bonding curve, AMM pool, AND fee sharing configs
-            // Pass originalCreator for fee-shared tokens (required for direct PDA lookup)
-            logger.info(`[TokenRegistration] Verifying platform wallet is fee recipient for ${mint.slice(0, 8)}...${originalCreator ? ' (with originalCreator)' : ''}`);
+            // coin_creator field IS the fee_sharing_config PDA when fee sharing is enabled
+            logger.info(`[TokenRegistration] Verifying platform wallet is fee recipient for ${mint.slice(0, 8)}...`);
 
             const verification = await mintExtractor.verifyFeeRecipient(
                 mint,
                 platformWallet,
-                connection,
-                originalCreator || null
+                connection
             );
 
             if (!verification.isRecipient) {
@@ -1059,12 +1058,12 @@ function init(deps) {
                 });
             }
 
-            // Verify platform wallet is fee recipient (pass originalCreator for fee-shared tokens)
+            // Verify platform wallet is fee recipient
+            // coin_creator field IS the fee_sharing_config PDA when fee sharing is enabled
             const verification = await mintExtractor.verifyFeeRecipient(
                 mint,
                 platformWallet,
-                connection,
-                originalCreator || null
+                connection
             );
 
             // Also fetch token metadata for preview
