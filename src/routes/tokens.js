@@ -1406,6 +1406,35 @@ function init(deps) {
                                         }
                                     }
 
+                                    // Try to find the original creator by checking pubkeys at various offsets
+                                    // and seeing if their fee_sharing_config PDA exists
+                                    const potentialOriginalCreators = [];
+                                    const offsetsToTry = [8, 11, 43, 75, 107];
+
+                                    for (const off of offsetsToTry) {
+                                        if (off + 32 <= directConfigInfo.data.length) {
+                                            try {
+                                                const potentialCreator = new PublicKey(directConfigInfo.data.slice(off, off + 32));
+                                                const [feeSharingPDA] = PublicKey.findProgramAddressSync(
+                                                    [Buffer.from("fee_sharing_config"), potentialCreator.toBuffer()],
+                                                    PUMP
+                                                );
+
+                                                // Check if this PDA exists
+                                                const pdaInfo = await connection.getAccountInfo(feeSharingPDA);
+
+                                                potentialOriginalCreators.push({
+                                                    offset: off,
+                                                    pubkey: potentialCreator.toString(),
+                                                    derivedFeeSharingPDA: feeSharingPDA.toString(),
+                                                    pdaExists: !!pdaInfo,
+                                                    pdaOwner: pdaInfo?.owner?.toString() || null,
+                                                    pdaDataLength: pdaInfo?.data?.length || 0
+                                                });
+                                            } catch (e) {}
+                                        }
+                                    }
+
                                     feeAccountWalletScan = {
                                         walletFoundAtOffset: foundOffset,
                                         bytesAroundWallet: {
@@ -1415,6 +1444,7 @@ function init(deps) {
                                         },
                                         nearbyBpsValues,
                                         found9000Locations: found9000,
+                                        potentialOriginalCreators,
                                         accountSize: directConfigInfo.data.length
                                     };
                                 } else {
