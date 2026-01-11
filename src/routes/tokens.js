@@ -1541,31 +1541,78 @@ function init(deps) {
                 } else {
                     metadataCreatorLookup.creatorLookupError = 'getOriginalCreatorFromMetadata returned null';
 
-                    // If metadata doesn't have creator, try extracting from FEE account
-                    if (directConfigLookup && directConfigLookup.rawDataHex && directConfigLookup.dataLength >= 43) {
+                    // If metadata doesn't have creator, try extracting from FEE account (creator_vault)
+                    // Also try to verify by deriving the creator_vault PDA from potential creators
+                    if (directConfigLookup && directConfigLookup.rawDataHex) {
                         try {
                             const feeData = Buffer.from(directConfigLookup.rawDataHex, 'hex');
-                            if (feeData.length >= 43) {
-                                const creatorFromFeeAccount = new PublicKey(feeData.slice(11, 43));
-                                metadataCreatorLookup.creatorFromFeeAccountFallback = creatorFromFeeAccount.toString();
+                            const PUMP_AMM = new PublicKey('pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA');
 
-                                // Try deriving fee_sharing_config from this creator
-                                const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("fee_sharing_config"), creatorFromFeeAccount.toBuffer()],
-                                    PUMP
-                                );
-                                metadataCreatorLookup.feeAccountFallback_derivedPDA = feeSharingConfigPDA.toString();
+                            metadataCreatorLookup.creatorVaultAnalysis = {
+                                rawDataLength: feeData.length,
+                                coinCreator: tokenCreator?.toString()
+                            };
 
-                                const configInfo = await connection.getAccountInfo(feeSharingConfigPDA);
-                                metadataCreatorLookup.feeAccountFallback_configExists = !!configInfo;
+                            // Try multiple offsets to find the original creator
+                            const offsetsToTry = [8, 9, 10, 11, 12];
+                            const potentialCreators = [];
 
-                                if (configInfo && configInfo.owner.equals(PUMP)) {
-                                    const parsed = parseFeeSharingConfigDebug(configInfo.data, feeSharingConfigPDA.toString());
-                                    metadataCreatorLookup.feeAccountFallback_parsedConfig = parsed;
+                            for (const offset of offsetsToTry) {
+                                if (feeData.length >= offset + 32) {
+                                    try {
+                                        const potentialCreator = new PublicKey(feeData.slice(offset, offset + 32));
+
+                                        // Derive creator_vault PDAs to verify
+                                        const [expectedVaultBC] = PublicKey.findProgramAddressSync(
+                                            [Buffer.from("creator-vault"), potentialCreator.toBuffer()],
+                                            PUMP
+                                        );
+                                        const [expectedVaultAMM] = PublicKey.findProgramAddressSync(
+                                            [Buffer.from("creator_vault"), potentialCreator.toBuffer()],
+                                            PUMP_AMM
+                                        );
+
+                                        const matchesBC = tokenCreator && expectedVaultBC.toString() === tokenCreator.toString();
+                                        const matchesAMM = tokenCreator && expectedVaultAMM.toString() === tokenCreator.toString();
+
+                                        potentialCreators.push({
+                                            offset,
+                                            pubkey: potentialCreator.toString(),
+                                            derivedVaultBC: expectedVaultBC.toString(),
+                                            derivedVaultAMM: expectedVaultAMM.toString(),
+                                            matchesBC,
+                                            matchesAMM
+                                        });
+
+                                        // If we found a match, derive the fee_sharing_config
+                                        if (matchesBC || matchesAMM) {
+                                            const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
+                                                [Buffer.from("fee_sharing_config"), potentialCreator.toBuffer()],
+                                                PUMP
+                                            );
+                                            metadataCreatorLookup.matchedOriginalCreator = potentialCreator.toString();
+                                            metadataCreatorLookup.matchedAtOffset = offset;
+                                            metadataCreatorLookup.matchType = matchesBC ? 'BC' : 'AMM';
+                                            metadataCreatorLookup.derivedFeeSharingConfigPDA = feeSharingConfigPDA.toString();
+
+                                            const configInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+                                            metadataCreatorLookup.configExists = !!configInfo;
+                                            metadataCreatorLookup.configOwner = configInfo?.owner.toString() || null;
+
+                                            if (configInfo && configInfo.owner.equals(PUMP)) {
+                                                const parsed = parseFeeSharingConfigDebug(configInfo.data, feeSharingConfigPDA.toString());
+                                                metadataCreatorLookup.parsedConfig = parsed;
+                                            }
+                                        }
+                                    } catch (e) {
+                                        // Invalid pubkey at this offset
+                                    }
                                 }
                             }
+
+                            metadataCreatorLookup.creatorVaultAnalysis.potentialCreators = potentialCreators;
                         } catch (fallbackError) {
-                            metadataCreatorLookup.feeAccountFallbackError = fallbackError.message;
+                            metadataCreatorLookup.creatorVaultAnalysisError = fallbackError.message;
                         }
                     }
                 }
