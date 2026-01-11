@@ -1042,6 +1042,11 @@
                 const coinCreator = bc.creator || amm.creator;
                 if (coinCreator) {
                     html += `<p class="text-xs">coin_creator: <span class="font-mono text-white">${coinCreator}</span></p>`;
+
+                    // Check owner type
+                    const ownerIsPump = directConfig.owner === '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
+                    const ownerIsFee = directConfig.owner === 'pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ';
+
                     if (directConfig.method === 'coin_creator_is_config') {
                         html += '<p class="text-green-400 text-sm mt-1">✅ coin_creator IS a fee_sharing_config PDA</p>';
                         html += `<p class="text-xs text-gray-400">Owner: ${directConfig.owner} | Data Length: ${directConfig.dataLength}</p>`;
@@ -1053,8 +1058,32 @@
                             }
                             html += '</ul></div>';
                         }
-                    } else if (directConfig.isOwnedByPump === false) {
-                        html += `<p class="text-yellow-400 text-sm mt-1">⚠️ coin_creator is NOT owned by PUMP program</p>`;
+                    } else if (ownerIsFee) {
+                        // coin_creator is owned by FEE program - need to extract original creator
+                        html += '<p class="text-blue-400 text-sm mt-1">ℹ️ coin_creator is owned by FEE program (creator_vault)</p>';
+                        html += `<p class="text-xs text-gray-400">Owner: ${directConfig.owner}</p>`;
+                        html += '<p class="text-xs text-gray-400">The verification will extract original creator and look up fee_sharing_config PDA.</p>';
+                        if (directConfig.rawDataHex) {
+                            html += `<p class="text-xs text-gray-500 font-mono break-all mt-1">Raw: ${directConfig.rawDataHex.slice(0, 100)}...</p>`;
+                        }
+                        // Show pdaConfigLookup if available
+                        if (data.pdaConfigLookup && data.pdaConfigLookup.parsed) {
+                            const pda = data.pdaConfigLookup;
+                            html += '<div class="mt-2 p-2 bg-gray-900/50 rounded">';
+                            html += '<p class="text-xs text-blue-400 font-bold">Derived fee_sharing_config:</p>';
+                            html += `<p class="text-xs text-gray-400">PDA: ${shortenPubkey(pda.configAddress || pda.foundAt, 8)}</p>`;
+                            if (pda.parsed && pda.parsed.shareholders) {
+                                html += '<ul class="text-xs ml-4 mt-1">';
+                                for (const sh of pda.parsed.shareholders) {
+                                    const color = sh.isUs ? 'text-green-400 font-bold' : 'text-gray-300';
+                                    html += `<li class="${color}">${shortenPubkey(sh.pubkey, 6)}: ${sh.shareBps} bps (${sh.sharePercent}%) ${sh.isUs ? '← THIS IS US' : ''}</li>`;
+                                }
+                                html += '</ul>';
+                            }
+                            html += '</div>';
+                        }
+                    } else if (!ownerIsPump && !ownerIsFee) {
+                        html += `<p class="text-yellow-400 text-sm mt-1">⚠️ coin_creator is NOT owned by PUMP or FEE program</p>`;
                         html += `<p class="text-xs text-gray-400">Owner: ${directConfig.owner}</p>`;
                         html += `<p class="text-xs text-gray-400">This means it's a regular wallet, not a fee_sharing_config</p>`;
                     } else if (directConfig.error) {
