@@ -389,7 +389,7 @@ function init(deps) {
                     [token.mint, userPubkey]
                 );
 
-                if (!userHolding) continue;
+                if (!userHolding || !userHolding.balance) continue;
 
                 // Get total balance for proportional calculation
                 const totalResult = await db.get(
@@ -397,7 +397,8 @@ function init(deps) {
                     [token.mint]
                 );
                 const totalBalance = BigInt(totalResult?.total || '1');
-                const userBalance = BigInt(userHolding.balance);
+                const userBalance = BigInt(userHolding.balance || '0');
+                if (userBalance === BigInt(0)) continue;
 
                 // Calculate proportional points
                 const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
@@ -439,14 +440,15 @@ function init(deps) {
                     [rhToken.mint, userPubkey]
                 );
 
-                if (!userHolding) continue;
+                if (!userHolding || !userHolding.balance) continue;
 
                 const totalResult = await db.get(
                     'SELECT SUM(CAST(balance AS BIGINT)) as total FROM robinhood_token_holders WHERE mint = $1',
                     [rhToken.mint]
                 );
                 const totalBalance = BigInt(totalResult?.total || '1');
-                const userBalance = BigInt(userHolding.balance);
+                const userBalance = BigInt(userHolding.balance || '0');
+                if (userBalance === BigInt(0)) continue;
 
                 // Calculate proportional points scaled by fee share
                 const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
@@ -1076,7 +1078,7 @@ function init(deps) {
         }
     });
 
-    // ========== DIAGNOSTIC ENDPOINT ==========
+    // ========== DIAGNOSTIC ENDPOINTS ==========
     // Provides database health check and token count information
     router.get('/debug/db-status', async (req, res) => {
         try {
@@ -1107,6 +1109,148 @@ function init(deps) {
                 status: 'error',
                 error: e.message,
                 serverTime: new Date().toISOString()
+            });
+        }
+    });
+
+    // v19.0: Metadata status debug endpoint
+    // Shows which tokens have missing metadata (images, price, volume)
+    router.get('/debug/metadata-status', async (req, res) => {
+        try {
+            // Get all tokens with their metadata status
+            const tokens = await db.all(`
+                SELECT mint, ticker, name, image, "priceUsd", volume24h, "marketCap", "lastUpdated"
+                FROM tokens
+                ORDER BY volume24h DESC
+                LIMIT 100
+            `);
+
+            const robinhoodTokens = await db.all(`
+                SELECT mint, ticker, name, image, volume24h, "marketCap"
+                FROM robinhood_tokens
+                WHERE "isActive" = 1
+                LIMIT 50
+            `);
+
+            // Analyze metadata completeness
+            const tokensAnalysis = tokens.map(t => ({
+                mint: t.mint,
+                ticker: t.ticker,
+                name: t.name,
+                hasImage: !!(t.image && t.image !== ''),
+                imageUrl: t.image || null,
+                hasPrice: (t.priceUsd || 0) > 0,
+                hasVolume: (t.volume24h || 0) > 0,
+                hasMarketCap: (t.marketCap || 0) > 0,
+                priceUsd: t.priceUsd || 0,
+                volume24h: t.volume24h || 0,
+                marketCap: t.marketCap || 0,
+                lastUpdated: t.lastUpdated ? new Date(t.lastUpdated).toISOString() : null
+            }));
+
+            const robinhoodAnalysis = robinhoodTokens.map(t => ({
+                mint: t.mint,
+                ticker: t.ticker,
+                name: t.name,
+                hasImage: !!(t.image && t.image !== ''),
+                imageUrl: t.image || null,
+                hasVolume: (t.volume24h || 0) > 0,
+                hasMarketCap: (t.marketCap || 0) > 0
+            }));
+
+            // Summary stats
+            const tokenSummary = {
+                total: tokens.length,
+                withImage: tokensAnalysis.filter(t => t.hasImage).length,
+                withPrice: tokensAnalysis.filter(t => t.hasPrice).length,
+                withVolume: tokensAnalysis.filter(t => t.hasVolume).length,
+                withMarketCap: tokensAnalysis.filter(t => t.hasMarketCap).length,
+                complete: tokensAnalysis.filter(t => t.hasImage && t.hasPrice && t.hasVolume && t.hasMarketCap).length
+            };
+
+            const robinhoodSummary = {
+                total: robinhoodTokens.length,
+                withImage: robinhoodAnalysis.filter(t => t.hasImage).length,
+                withVolume: robinhoodAnalysis.filter(t => t.hasVolume).length,
+                withMarketCap: robinhoodAnalysis.filter(t => t.hasMarketCap).length
+            };
+
+            res.json({
+                tokens: {
+                    summary: tokenSummary,
+                    // Show tokens missing any metadata
+                    missingMetadata: tokensAnalysis.filter(t => !t.hasImage || !t.hasPrice || !t.hasVolume),
+                    // Show tokens with complete metadata
+                    complete: tokensAnalysis.filter(t => t.hasImage && t.hasPrice && t.hasVolume && t.hasMarketCap).slice(0, 10)
+                },
+                robinhoodTokens: {
+                    summary: robinhoodSummary,
+                    missingMetadata: robinhoodAnalysis.filter(t => !t.hasImage || !t.hasVolume)
+                },
+                lastBackendUpdate: globalState.lastBackendUpdate ? new Date(globalState.lastBackendUpdate).toISOString() : null,
+                serverTime: new Date().toISOString()
+            });
+        } catch (e) {
+            res.status(500).json({
+                status: 'error',
+                error: e.message
+            });
+        }
+    });
+
+    // v19.0: Test DexScreener fetch for a specific token
+    router.get('/debug/test-dexscreener/:mint', async (req, res) => {
+        try {
+            const { mint } = req.params;
+
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({ error: 'Invalid mint address' });
+            }
+
+            // Direct fetch from DexScreener
+            const response = await axios.get(
+                `https://api.dexscreener.com/latest/dex/tokens/${mint}`,
+                { timeout: 10000 }
+            );
+
+            const pairs = response.data?.pairs || [];
+
+            if (pairs.length === 0) {
+                return res.json({
+                    success: false,
+                    message: 'Token not found on DexScreener',
+                    mint,
+                    rawResponse: response.data
+                });
+            }
+
+            // Return the best pair (highest liquidity)
+            const bestPair = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+
+            res.json({
+                success: true,
+                mint,
+                pairCount: pairs.length,
+                bestPair: {
+                    dexId: bestPair.dexId,
+                    pairAddress: bestPair.pairAddress,
+                    baseToken: bestPair.baseToken,
+                    priceUsd: bestPair.priceUsd,
+                    volume24h: bestPair.volume?.h24,
+                    marketCap: bestPair.fdv || bestPair.marketCap,
+                    liquidity: bestPair.liquidity?.usd,
+                    imageUrl: bestPair.info?.imageUrl || null,
+                    headerUrl: bestPair.info?.header || null,
+                    // Show full info object for debugging
+                    infoObject: bestPair.info
+                },
+                rawResponse: response.data
+            });
+        } catch (e) {
+            res.status(500).json({
+                success: false,
+                error: e.message,
+                response: e.response?.data
             });
         }
     });
