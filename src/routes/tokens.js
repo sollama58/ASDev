@@ -1548,8 +1548,8 @@ function init(deps) {
                 }
             }
 
-            // Run the actual verification (pass originalCreator if provided for direct PDA lookup)
-            const verification = await mintExtractor.verifyFeeRecipient(mint, platformWallet, connection, knownOriginalCreator);
+            // Run the actual verification
+            const verification = await mintExtractor.verifyFeeRecipient(mint, platformWallet, connection);
 
             res.json({
                 mint,
