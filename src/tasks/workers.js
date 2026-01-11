@@ -227,7 +227,7 @@ function initHolderScannerWorker(deps) {
             const topTokens = await db.all('SELECT mint, "userPubkey" FROM tokens ORDER BY volume24h DESC LIMIT 10');
             const top10Mints = topTokens.map(t => t.mint);
 
-            // 2. Cache dev wallet PUMP holdings
+            // 2. Cache dev wallet PUMP holdings (legacy, kept for backwards compatibility)
             let devPumpHoldings = 0;
             try {
                 const devPumpAta = await getAssociatedTokenAddress(
@@ -240,8 +240,21 @@ function initHolderScannerWorker(deps) {
             }
             await redis.setDevPumpHoldings(devPumpHoldings);
 
-            // 3. Calculate distribution pots
-            const totalDistributable = devPumpHoldings * 0.99;
+            // 3. Calculate distribution pots based on SOL balance (v11.0+: SOL airdrops)
+            // BUG FIX: Previously used devPumpHoldings which was for PUMP token airdrops
+            // Now we use the actual SOL balance available for airdrop distribution
+            const SAFETY_RESERVE = 0.5; // SOL reserved for operations
+            let solBalance = 0;
+            try {
+                const balanceLamports = await connection.getBalance(devKeypair.publicKey);
+                solBalance = balanceLamports / 1e9; // Convert lamports to SOL
+            } catch (e) {
+                logger.error('[Worker] Failed to fetch SOL balance', { error: e.message });
+                solBalance = 0;
+            }
+
+            const availableForAirdrop = Math.max(0, solBalance - SAFETY_RESERVE);
+            const totalDistributable = availableForAirdrop * 0.99; // 99% distributed, 1% buffer
             const kothPot = totalDistributable * 0.10;
             const communityPot = totalDistributable * 0.90;
 
@@ -390,7 +403,7 @@ function initHolderScannerWorker(deps) {
             }
 
             await redis.setTotalPoints(tempTotalPoints);
-            logger.info(`[Worker] Global Points: ${tempTotalPoints} | Community Pot: ${communityPot.toFixed(2)} | KOTH Pot: ${kothPot.toFixed(2)}`);
+            logger.info(`[Worker] Global Points: ${tempTotalPoints} | Community Pot: ${communityPot.toFixed(4)} SOL | KOTH Pot: ${kothPot.toFixed(4)} SOL | Available: ${availableForAirdrop.toFixed(4)} SOL`);
 
             // 10. Update expected airdrops in Redis
             await redis.clearUserExpectedAirdrops();
