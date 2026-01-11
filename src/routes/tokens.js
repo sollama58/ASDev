@@ -786,13 +786,12 @@ function init(deps) {
      *
      * Optional:
      * - submitterPubkey: Wallet of the person submitting (for tracking)
-     * - originalCreator: Original creator wallet (REQUIRED for fee-shared tokens where
-     *   the coin_creator has been changed to a fee_sharing_config PDA. This allows
-     *   direct PDA lookup instead of scanning millions of accounts)
+     * - originalCreator: Legacy parameter, no longer needed (auto-detected from on-chain data)
      *
      * The endpoint verifies that our platform wallet (devKeypair) is a fee
-     * recipient for the token by checking on-chain bonding curve and AMM pool data.
-     * This ensures only tokens that share fees with us can be registered.
+     * recipient for the token by checking on-chain bonding curve, AMM pool,
+     * and fee sharing config data. This ensures only tokens that share fees
+     * with us can be registered.
      */
     router.post('/register-token', async (req, res) => {
         try {
@@ -1013,7 +1012,7 @@ function init(deps) {
      * - mint: Token mint address
      *
      * Optional:
-     * - originalCreator: Original creator wallet (REQUIRED for fee-shared tokens)
+     * - originalCreator: Legacy parameter, no longer needed (auto-detected from on-chain data)
      */
     router.post('/verify-token', async (req, res) => {
         try {

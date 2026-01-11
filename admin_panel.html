@@ -429,9 +429,9 @@
                                 <button onclick="verifyFeeSharing()" class="btn btn-primary">Verify Fee Sharing</button>
                             </div>
                             <div class="flex gap-2">
-                                <input type="text" id="verify-original-creator" class="input-field flex-1" placeholder="Original creator wallet (required for fee-shared tokens)">
+                                <input type="text" id="verify-original-creator" class="input-field flex-1" placeholder="Original creator wallet (optional - for debug only)">
                             </div>
-                            <p class="text-xs text-gray-500">For fee-shared tokens, enter the original creator wallet that set up fee sharing.</p>
+                            <p class="text-xs text-gray-500">Original creator is auto-detected from on-chain data. Only enter for additional debug output.</p>
                         </div>
                         <div id="verify-result" class="result-box text-yellow-400" style="max-height: 500px;">
                             // Verification results will appear here
@@ -445,7 +445,6 @@
                         </div>
                         <div class="space-y-2 mb-4">
                             <input type="text" id="precheck-mint" class="input-field w-full" placeholder="Enter token mint address...">
-                            <input type="text" id="precheck-original-creator" class="input-field w-full" placeholder="Original creator wallet (for fee-shared tokens)">
                             <button onclick="precheckToken()" class="btn btn-secondary w-full">Check Eligibility</button>
                         </div>
                         <div id="precheck-result" class="result-box">
@@ -460,7 +459,6 @@
                         </div>
                         <div class="space-y-3">
                             <input type="text" id="register-mint" class="input-field w-full" placeholder="Token mint address">
-                            <input type="text" id="register-original-creator" class="input-field w-full" placeholder="Original creator wallet (for fee-shared tokens)">
                             <input type="text" id="register-submitter" class="input-field w-full" placeholder="Submitter pubkey (optional)">
                             <button onclick="registerToken()" class="btn btn-success w-full">Register Token</button>
                         </div>
@@ -1022,14 +1020,10 @@
 
         async function precheckToken() {
             const mint = document.getElementById('precheck-mint').value.trim();
-            const originalCreator = document.getElementById('precheck-original-creator').value.trim();
             if (!mint) return;
 
             try {
-                const body = { mint };
-                if (originalCreator) body.originalCreator = originalCreator;
-
-                const data = await apiCall('/api/verify-token', 'POST', body);
+                const data = await apiCall('/api/verify-token', 'POST', { mint });
                 document.getElementById('precheck-result').textContent = formatJson(data);
                 log(`Pre-check completed for ${shortenPubkey(mint)}`, data.isEligible ? 'success' : 'warning');
             } catch (e) {
@@ -1039,7 +1033,6 @@
 
         async function registerToken() {
             const mint = document.getElementById('register-mint').value.trim();
-            const originalCreator = document.getElementById('register-original-creator').value.trim();
             const submitter = document.getElementById('register-submitter').value.trim();
 
             if (!mint) {
@@ -1049,10 +1042,9 @@
 
             try {
                 const body = { mint };
-                if (originalCreator) body.originalCreator = originalCreator;
                 if (submitter) body.submitterPubkey = submitter;
 
-                const data = await apiCall('/api/tokens/register-token', 'POST', body);
+                const data = await apiCall('/api/register-token', 'POST', body);
                 document.getElementById('register-result').textContent = formatJson(data);
                 log(`Registration ${data.success ? 'successful' : 'failed'}: ${data.message || data.error}`, data.success ? 'success' : 'error');
             } catch (e) {
