@@ -8,6 +8,7 @@
  */
 const express = require('express');
 const axios = require('axios');
+const { PublicKey } = require('@solana/web3.js');
 const { isValidPubkey } = require('./solana');
 const { redis, mintExtractor, logger } = require('../services');
 const config = require('../config/env');
@@ -1172,6 +1173,157 @@ function init(deps) {
                 status: 'error',
                 error: e.message,
                 serverTime: new Date().toISOString()
+            });
+        }
+    });
+
+    // v19.0: Debug endpoint for fee sharing verification
+    // Helps troubleshoot why a token registration might be failing
+    router.get('/debug/verify-fee-sharing/:mint', async (req, res) => {
+        try {
+            const { mint } = req.params;
+
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({ error: 'Invalid mint address' });
+            }
+
+            const platformWallet = devKeypair.publicKey.toString();
+            const mintPubkey = new PublicKey(mint);
+
+            // Check bonding curve
+            const [bondingCurve] = PublicKey.findProgramAddressSync(
+                [Buffer.from("bonding-curve"), mintPubkey.toBuffer()],
+                new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P')
+            );
+
+            let bcData = null;
+            try {
+                const bcAccountInfo = await connection.getAccountInfo(bondingCurve);
+                if (bcAccountInfo) {
+                    bcData = {
+                        exists: true,
+                        dataLength: bcAccountInfo.data.length,
+                        lamports: bcAccountInfo.lamports
+                    };
+                    // Try to parse creator at offset 49
+                    if (bcAccountInfo.data.length >= 81) {
+                        const storedCreator = new PublicKey(bcAccountInfo.data.slice(49, 81));
+                        bcData.creator = storedCreator.toString();
+                        bcData.isWeCreator = storedCreator.toString() === platformWallet;
+                    }
+                }
+            } catch (e) {
+                bcData = { exists: false, error: e.message };
+            }
+
+            // Check AMM pool
+            const WSOL = new PublicKey('So11111111111111111111111111111111111111112');
+            const PUMP_AMM = new PublicKey('pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA');
+
+            const [poolAuthority] = PublicKey.findProgramAddressSync(
+                [Buffer.from("pool-authority"), mintPubkey.toBuffer()],
+                PUMP_AMM
+            );
+            const [pool] = PublicKey.findProgramAddressSync(
+                [Buffer.from("pool"), poolAuthority.toBuffer(), mintPubkey.toBuffer(), WSOL.toBuffer()],
+                PUMP_AMM
+            );
+
+            let ammData = null;
+            try {
+                const poolAccountInfo = await connection.getAccountInfo(pool);
+                if (poolAccountInfo) {
+                    ammData = {
+                        exists: true,
+                        dataLength: poolAccountInfo.data.length,
+                        lamports: poolAccountInfo.lamports
+                    };
+                    // Try to parse creator at offset 11
+                    if (poolAccountInfo.data.length >= 43) {
+                        const storedCreator = new PublicKey(poolAccountInfo.data.slice(11, 43));
+                        ammData.creator = storedCreator.toString();
+                        ammData.isWeCreator = storedCreator.toString() === platformWallet;
+                    }
+                }
+            } catch (e) {
+                ammData = { exists: false, error: e.message };
+            }
+
+            // Scan for fee sharing configs with this mint
+            const PUMP = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
+            const sizes = [110, 144, 178, 212, 246];
+            let feeSharingConfigs = [];
+
+            for (const dataSize of sizes) {
+                try {
+                    const accounts = await connection.getProgramAccounts(PUMP, {
+                        filters: [
+                            { dataSize },
+                            { memcmp: { offset: 40, bytes: mintPubkey.toBase58() } }
+                        ]
+                    });
+
+                    for (const account of accounts) {
+                        try {
+                            const data = account.account.data;
+                            const creator = new PublicKey(data.slice(8, 40));
+                            const configMint = new PublicKey(data.slice(40, 72));
+                            const shareholderCount = data.readUInt32LE(72);
+
+                            const shareholders = [];
+                            let offset = 76;
+                            for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
+                                const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                                const shareBps = data.readUInt16LE(offset + 32);
+                                shareholders.push({
+                                    pubkey: pubkey.toString(),
+                                    shareBps,
+                                    sharePercent: shareBps / 100,
+                                    isUs: pubkey.toString() === platformWallet
+                                });
+                                offset += 34;
+                            }
+
+                            feeSharingConfigs.push({
+                                configAddress: account.pubkey.toString(),
+                                creator: creator.toString(),
+                                mint: configMint.toString(),
+                                shareholderCount,
+                                shareholders,
+                                weAreShareHolder: shareholders.some(s => s.isUs)
+                            });
+                        } catch (parseErr) {
+                            // Skip invalid accounts
+                        }
+                    }
+                } catch (scanErr) {
+                    // Continue
+                }
+            }
+
+            // Run the actual verification
+            const verification = await mintExtractor.verifyFeeRecipient(mint, platformWallet, connection);
+
+            res.json({
+                mint,
+                platformWallet,
+                bondingCurve: {
+                    address: bondingCurve.toString(),
+                    ...bcData
+                },
+                ammPool: {
+                    address: pool.toString(),
+                    ...ammData
+                },
+                feeSharingConfigs,
+                verificationResult: verification,
+                timestamp: new Date().toISOString()
+            });
+
+        } catch (e) {
+            res.status(500).json({
+                error: e.message,
+                stack: e.stack
             });
         }
     });

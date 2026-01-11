@@ -1021,8 +1021,60 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
             }
         }
 
+        // FALLBACK: Scan for fee sharing configs that contain this specific mint
+        // The mint is stored at offset 40-72, so we can filter directly by mint
+        try {
+            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Trying fallback scan for fee sharing configs by mint...`);
+
+            // Fee sharing configs have variable sizes based on number of shareholders
+            // 76 base + 34 per shareholder (1-5 shareholders)
+            const sizes = [110, 144, 178, 212, 246];
+
+            for (const dataSize of sizes) {
+                try {
+                    // Filter by mint address at offset 40 (after discriminator + creator)
+                    const accounts = await connection.getProgramAccounts(PROGRAMS.PUMP, {
+                        filters: [
+                            { dataSize },
+                            { memcmp: { offset: 40, bytes: mintPubkey.toBase58() } }
+                        ]
+                    });
+
+                    for (const account of accounts) {
+                        const config = parseFeeSharingConfig(account.account.data);
+                        if (!config || !config.shareholders) continue;
+
+                        // Verify the mint matches
+                        if (config.mint && config.mint.toString() === mint) {
+                            // Check if our wallet is in the shareholders list
+                            const walletStr = walletKey.toString();
+                            for (const shareholder of config.shareholders) {
+                                if (shareholder.pubkey.toString() === walletStr) {
+                                    const sharePercent = shareholder.shareBps / 100;
+                                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via mint scan (${sharePercent}% fee share, ${shareholder.shareBps} bps)`);
+                                    return {
+                                        isRecipient: true,
+                                        source: 'fee_sharing_config_scan',
+                                        feeShareBps: shareholder.shareBps,
+                                        feeSharePercent: sharePercent
+                                    };
+                                }
+                            }
+                            // Found config for this mint but we're not in shareholders
+                            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Found fee sharing config but wallet not in shareholders list`);
+                        }
+                    }
+                } catch (scanErr) {
+                    // Continue to next size
+                    logger.debug(`[MintExtractor] Scan size ${dataSize} failed: ${scanErr.message}`);
+                }
+            }
+        } catch (e) {
+            logger.debug(`[MintExtractor] Fallback fee sharing scan failed for ${mint.slice(0, 8)}...: ${e.message}`);
+        }
+
         // Neither direct creator nor fee shareholder
-        logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Not a fee recipient (checked BC, AMM, and fee sharing config)`);
+        logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Not a fee recipient (checked BC, AMM, fee sharing config, and fallback scan)`);
         return { isRecipient: false, source: null, feeShareBps: 0, feeSharePercent: 0 };
 
     } catch (e) {
