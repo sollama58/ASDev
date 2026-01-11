@@ -1246,8 +1246,14 @@ async function checkFeeSharingConfig(coinCreator, walletKey, mint, connection) {
                 logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - creator_vault raw data (first 100 bytes): ${rawHex}`);
 
                 // Try to find a valid pubkey in the data
-                // Common offsets: 8 (after discriminator), 9, 10, 11
-                const offsetsToTry = [8, 9, 10, 11, 12];
+                // The FEE program account structure seems to be:
+                // - 8 bytes: discriminator
+                // - 1 byte: bump (0xff)
+                // - 2 bytes: flags (0x01 0x01)
+                // - 32 bytes: mint (at offset 11)
+                // - 32 bytes: original creator (at offset 43)
+                // - more data...
+                const offsetsToTry = [43, 8, 9, 10, 11, 12, 44, 45, 75, 76, 77];
 
                 for (const offset of offsetsToTry) {
                     if (dataLen >= offset + 32) {

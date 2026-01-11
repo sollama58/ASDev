@@ -1554,7 +1554,8 @@ function init(deps) {
                             };
 
                             // Try multiple offsets to find the original creator
-                            const offsetsToTry = [8, 9, 10, 11, 12];
+                            // FEE account structure: 8 discriminator + 1 bump + 2 flags + 32 mint (offset 11) + 32 creator (offset 43)
+                            const offsetsToTry = [43, 8, 9, 10, 11, 12, 44, 45, 75, 76, 77];
                             const potentialCreators = [];
 
                             for (const offset of offsetsToTry) {
