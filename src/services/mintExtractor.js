@@ -1013,74 +1013,90 @@ async function getOriginalCreatorFromMetadata(mintPubkey, connection) {
             return null;
         }
 
-        // Parse Metaplex metadata
-        // Metadata structure:
-        // - 1 byte: key
-        // - 32 bytes: update authority  <-- For Pump.fun, this IS the original creator
-        // - 32 bytes: mint
-        // - 4 bytes + variable: name (string with length prefix)
-        // - 4 bytes + variable: symbol (string with length prefix)
-        // - 4 bytes + variable: uri (string with length prefix)
-        // - 2 bytes: seller fee basis points
-        // - 1 byte: has creators (Option<bool>)
-        // - if has creators: 4 bytes count + N * (32 bytes address + 1 byte verified + 1 byte share)
-
         const data = metadataAccount.data;
+        logger.info(`[MintExtractor] Metadata account data length: ${data.length}`);
+
+        // Ensure we have enough data for the basic fields
+        if (data.length < 65) {
+            logger.info(`[MintExtractor] Metadata data too short: ${data.length}`);
+            return null;
+        }
 
         // For Pump.fun tokens, the update_authority is set to the original creator
         // This is at offset 1-33 in the metadata account
+        // Structure: 1 byte key + 32 bytes update_authority + 32 bytes mint + ...
         const updateAuthority = new PublicKey(data.slice(1, 33));
         logger.info(`[MintExtractor] Update authority from metadata: ${updateAuthority.toString()}`);
 
-        // Also try to get the creators array for completeness
-        let offset = 1 + 32 + 32; // Skip key, update authority, mint
+        // Try to parse creators array but don't fail if we can't
+        try {
+            // Skip key (1) + update_authority (32) + mint (32) = offset 65
+            let offset = 65;
 
-        // Skip name (4 byte length + chars)
-        const nameLen = data.readUInt32LE(offset);
-        offset += 4 + nameLen;
-
-        // Skip symbol (4 byte length + chars)
-        const symbolLen = data.readUInt32LE(offset);
-        offset += 4 + symbolLen;
-
-        // Skip uri (4 byte length + chars)
-        const uriLen = data.readUInt32LE(offset);
-        offset += 4 + uriLen;
-
-        // Skip seller fee basis points
-        offset += 2;
-
-        // Check if has creators (Option<Vec<Creator>>)
-        // In borsh, Option is 1 byte: 0 = None, 1 = Some
-        const hasCreatorsOption = data[offset];
-        offset += 1;
-
-        if (hasCreatorsOption === 1) {
-            // Read creator count
-            const creatorCount = data.readUInt32LE(offset);
-            offset += 4;
-
-            logger.info(`[MintExtractor] Found ${creatorCount} creator(s) in metadata creators array`);
-
-            if (creatorCount > 0 && offset + 34 <= data.length) {
-                // Read first creator (32 bytes address + 1 byte verified + 1 byte share)
-                const creatorAddress = new PublicKey(data.slice(offset, offset + 32));
-                const verified = data[offset + 32] === 1;
-                const share = data[offset + 33];
-
-                logger.info(`[MintExtractor] First creator from array: ${creatorAddress.toString()}, verified: ${verified}, share: ${share}`);
-
-                // Return the verified creator if available, otherwise return update authority
-                if (verified) {
-                    return creatorAddress;
-                }
+            // Skip name (4 byte length prefix + chars)
+            if (offset + 4 > data.length) {
+                logger.info(`[MintExtractor] Not enough data for name length at offset ${offset}`);
+                return updateAuthority;
             }
-        } else {
-            logger.info(`[MintExtractor] Metadata has no creators array (hasCreatorsOption=${hasCreatorsOption})`);
+            const nameLen = data.readUInt32LE(offset);
+            offset += 4 + nameLen;
+
+            // Skip symbol (4 byte length prefix + chars)
+            if (offset + 4 > data.length) {
+                logger.info(`[MintExtractor] Not enough data for symbol length at offset ${offset}`);
+                return updateAuthority;
+            }
+            const symbolLen = data.readUInt32LE(offset);
+            offset += 4 + symbolLen;
+
+            // Skip uri (4 byte length prefix + chars)
+            if (offset + 4 > data.length) {
+                logger.info(`[MintExtractor] Not enough data for uri length at offset ${offset}`);
+                return updateAuthority;
+            }
+            const uriLen = data.readUInt32LE(offset);
+            offset += 4 + uriLen;
+
+            // Skip seller fee basis points (2 bytes)
+            offset += 2;
+
+            // Check if has creators (Option<Vec<Creator>>)
+            if (offset >= data.length) {
+                logger.info(`[MintExtractor] Not enough data for creators option at offset ${offset}`);
+                return updateAuthority;
+            }
+            const hasCreatorsOption = data[offset];
+            offset += 1;
+
+            if (hasCreatorsOption === 1) {
+                if (offset + 4 > data.length) {
+                    logger.info(`[MintExtractor] Not enough data for creator count`);
+                    return updateAuthority;
+                }
+                const creatorCount = data.readUInt32LE(offset);
+                offset += 4;
+
+                logger.info(`[MintExtractor] Found ${creatorCount} creator(s) in metadata creators array`);
+
+                if (creatorCount > 0 && creatorCount < 10 && offset + 34 <= data.length) {
+                    const creatorAddress = new PublicKey(data.slice(offset, offset + 32));
+                    const verified = data[offset + 32] === 1;
+                    const share = data[offset + 33];
+
+                    logger.info(`[MintExtractor] First creator: ${creatorAddress.toString()}, verified: ${verified}, share: ${share}`);
+
+                    if (verified) {
+                        return creatorAddress;
+                    }
+                }
+            } else {
+                logger.info(`[MintExtractor] Metadata has no creators array (hasCreatorsOption=${hasCreatorsOption})`);
+            }
+        } catch (parseError) {
+            logger.info(`[MintExtractor] Error parsing creators array, using update_authority: ${parseError.message}`);
         }
 
-        // For Pump.fun tokens, the update_authority is typically the original creator
-        // Return it as the fallback
+        // Return update_authority as the original creator
         logger.info(`[MintExtractor] Using update_authority as original creator: ${updateAuthority.toString()}`);
         return updateAuthority;
 

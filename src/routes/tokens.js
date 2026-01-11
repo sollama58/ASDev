@@ -1486,9 +1486,42 @@ function init(deps) {
 
             // Try to get original creator from token metadata (the new method)
             let metadataCreatorLookup = null;
+            const METADATA_PROGRAM = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
             try {
+                // Derive metadata PDA for debugging
+                const [metadataPDA] = PublicKey.findProgramAddressSync(
+                    [Buffer.from("metadata"), METADATA_PROGRAM.toBuffer(), mintPubkey.toBuffer()],
+                    METADATA_PROGRAM
+                );
+
+                // Fetch metadata account to see what's there
+                const metadataAccountInfo = await connection.getAccountInfo(metadataPDA);
+
+                metadataCreatorLookup = {
+                    metadataPDA: metadataPDA.toString(),
+                    metadataExists: !!metadataAccountInfo,
+                    metadataOwner: metadataAccountInfo?.owner.toString() || null,
+                    metadataDataLength: metadataAccountInfo?.data.length || 0
+                };
+
+                if (metadataAccountInfo) {
+                    const data = metadataAccountInfo.data;
+                    // Extract update authority (offset 1-33)
+                    const updateAuthority = new PublicKey(data.slice(1, 33));
+                    metadataCreatorLookup.updateAuthority = updateAuthority.toString();
+
+                    // Extract mint (offset 33-65)
+                    const mintFromMetadata = new PublicKey(data.slice(33, 65));
+                    metadataCreatorLookup.mintFromMetadata = mintFromMetadata.toString();
+
+                    // Raw first 100 bytes for debugging
+                    metadataCreatorLookup.rawDataHex = data.slice(0, 100).toString('hex');
+                }
+
                 const originalCreatorFromMetadata = await mintExtractor.getOriginalCreatorFromMetadata(mintPubkey, connection);
                 if (originalCreatorFromMetadata) {
+                    metadataCreatorLookup.originalCreatorFromMetadata = originalCreatorFromMetadata.toString();
+
                     // If we found the creator from metadata, try to derive and lookup fee_sharing_config
                     const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
                         [Buffer.from("fee_sharing_config"), originalCreatorFromMetadata.toBuffer()],
@@ -1496,23 +1529,20 @@ function init(deps) {
                     );
                     const configInfo = await connection.getAccountInfo(feeSharingConfigPDA);
 
-                    metadataCreatorLookup = {
-                        originalCreatorFromMetadata: originalCreatorFromMetadata.toString(),
-                        derivedFeeSharingConfigPDA: feeSharingConfigPDA.toString(),
-                        configExists: !!configInfo,
-                        configOwner: configInfo?.owner.toString() || null,
-                        configDataLength: configInfo?.data.length || 0
-                    };
+                    metadataCreatorLookup.derivedFeeSharingConfigPDA = feeSharingConfigPDA.toString();
+                    metadataCreatorLookup.configExists = !!configInfo;
+                    metadataCreatorLookup.configOwner = configInfo?.owner.toString() || null;
+                    metadataCreatorLookup.configDataLength = configInfo?.data.length || 0;
 
                     if (configInfo && configInfo.owner.equals(PUMP)) {
                         const parsed = parseFeeSharingConfigDebug(configInfo.data, feeSharingConfigPDA.toString());
                         metadataCreatorLookup.parsedConfig = parsed;
                     }
                 } else {
-                    metadataCreatorLookup = { error: 'Could not find creator in token metadata' };
+                    metadataCreatorLookup.creatorLookupError = 'getOriginalCreatorFromMetadata returned null';
                 }
             } catch (e) {
-                metadataCreatorLookup = { error: e.message };
+                metadataCreatorLookup = { error: e.message, stack: e.stack };
             }
 
             // Check the known original creator if provided in query string
