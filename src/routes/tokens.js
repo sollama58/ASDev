@@ -786,6 +786,9 @@ function init(deps) {
      *
      * Optional:
      * - submitterPubkey: Wallet of the person submitting (for tracking)
+     * - originalCreator: Original creator wallet (REQUIRED for fee-shared tokens where
+     *   the coin_creator has been changed to a fee_sharing_config PDA. This allows
+     *   direct PDA lookup instead of scanning millions of accounts)
      *
      * The endpoint verifies that our platform wallet (devKeypair) is a fee
      * recipient for the token by checking on-chain bonding curve and AMM pool data.
@@ -793,7 +796,7 @@ function init(deps) {
      */
     router.post('/register-token', async (req, res) => {
         try {
-            const { mint, submitterPubkey } = req.body;
+            const { mint, submitterPubkey, originalCreator } = req.body;
 
             // Validate inputs
             if (!mint) {
@@ -807,6 +810,14 @@ function init(deps) {
                 return res.status(400).json({
                     success: false,
                     error: 'Invalid mint address'
+                });
+            }
+
+            // Validate originalCreator if provided (required for fee-shared tokens)
+            if (originalCreator && !isValidPubkey(originalCreator)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid originalCreator address'
                 });
             }
 
@@ -827,12 +838,14 @@ function init(deps) {
 
             // Verify that our platform wallet is a fee recipient on-chain
             // This checks bonding curve, AMM pool, AND fee sharing configs
-            logger.info(`[TokenRegistration] Verifying platform wallet is fee recipient for ${mint.slice(0, 8)}...`);
+            // Pass originalCreator for fee-shared tokens (required for direct PDA lookup)
+            logger.info(`[TokenRegistration] Verifying platform wallet is fee recipient for ${mint.slice(0, 8)}...${originalCreator ? ' (with originalCreator)' : ''}`);
 
             const verification = await mintExtractor.verifyFeeRecipient(
                 mint,
                 platformWallet,
-                connection
+                connection,
+                originalCreator || null
             );
 
             if (!verification.isRecipient) {
@@ -996,10 +1009,16 @@ function init(deps) {
      * POST /verify-token
      * Pre-check if our platform wallet is a fee recipient for a token (without registering)
      * Useful for frontend validation before attempting registration
+     *
+     * Required:
+     * - mint: Token mint address
+     *
+     * Optional:
+     * - originalCreator: Original creator wallet (REQUIRED for fee-shared tokens)
      */
     router.post('/verify-token', async (req, res) => {
         try {
-            const { mint } = req.body;
+            const { mint, originalCreator } = req.body;
 
             if (!mint) {
                 return res.status(400).json({
@@ -1012,6 +1031,14 @@ function init(deps) {
                 return res.status(400).json({
                     success: false,
                     error: 'Invalid mint address'
+                });
+            }
+
+            // Validate originalCreator if provided
+            if (originalCreator && !isValidPubkey(originalCreator)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid originalCreator address'
                 });
             }
 
@@ -1032,11 +1059,12 @@ function init(deps) {
                 });
             }
 
-            // Verify platform wallet is fee recipient
+            // Verify platform wallet is fee recipient (pass originalCreator for fee-shared tokens)
             const verification = await mintExtractor.verifyFeeRecipient(
                 mint,
                 platformWallet,
-                connection
+                connection,
+                originalCreator || null
             );
 
             // Also fetch token metadata for preview
@@ -1461,40 +1489,59 @@ function init(deps) {
             // Check the known original creator if provided in query string
             let originalCreatorConfig = null;
             const knownOriginalCreator = req.query.originalCreator;
+            const FEE_PROGRAM = new PublicKey('pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ');
+
             if (knownOriginalCreator) {
                 try {
                     const originalCreatorPubkey = new PublicKey(knownOriginalCreator);
 
-                    // Derive fee_sharing_config PDA from original creator
-                    const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
+                    // Try both FEE program and PUMP program for fee_sharing_config PDA
+                    const [feeSharingConfigPDA_FEE] = PublicKey.findProgramAddressSync(
+                        [Buffer.from("fee_sharing_config"), originalCreatorPubkey.toBuffer()],
+                        FEE_PROGRAM
+                    );
+
+                    const [feeSharingConfigPDA_PUMP] = PublicKey.findProgramAddressSync(
                         [Buffer.from("fee_sharing_config"), originalCreatorPubkey.toBuffer()],
                         PUMP
                     );
 
-                    const configInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+                    // Check FEE program first
+                    let configInfo = await connection.getAccountInfo(feeSharingConfigPDA_FEE);
+                    let usedPDA = feeSharingConfigPDA_FEE;
+                    let programUsed = 'FEE';
+
+                    if (!configInfo) {
+                        // Try PUMP program
+                        configInfo = await connection.getAccountInfo(feeSharingConfigPDA_PUMP);
+                        usedPDA = feeSharingConfigPDA_PUMP;
+                        programUsed = 'PUMP';
+                    }
+
                     if (configInfo) {
-                        const parsed = parseFeeSharingConfigDebug(configInfo.data, feeSharingConfigPDA.toString());
+                        const parsed = parseFeeSharingConfigDebug(configInfo.data, usedPDA.toString());
 
-                        // Also derive the creator_vault that would be set as coin_creator
-                        const [creatorVaultPDA] = PublicKey.findProgramAddressSync(
-                            [Buffer.from("creator-vault"), feeSharingConfigPDA.toBuffer()],
-                            PUMP
-                        );
-
+                        // The coin_creator should be set to the fee_sharing_config PDA itself
+                        // when fee sharing is enabled
                         originalCreatorConfig = {
                             originalCreator: knownOriginalCreator,
-                            feeSharingConfigPDA: feeSharingConfigPDA.toString(),
+                            feeSharingConfigPDA_FEE: feeSharingConfigPDA_FEE.toString(),
+                            feeSharingConfigPDA_PUMP: feeSharingConfigPDA_PUMP.toString(),
+                            foundAt: usedPDA.toString(),
+                            programUsed,
                             configExists: true,
                             configOwner: configInfo.owner.toString(),
                             configDataLength: configInfo.data.length,
                             parsed,
-                            derivedCreatorVault: creatorVaultPDA.toString(),
-                            tokenCreatorMatchesVault: tokenCreator ? tokenCreator.toString() === creatorVaultPDA.toString() : null
+                            // Check if tokenCreator matches the fee_sharing_config PDA
+                            tokenCreatorMatchesConfigPDA: tokenCreator ? tokenCreator.toString() === usedPDA.toString() : null,
+                            rawDataHex: configInfo.data.slice(0, 150).toString('hex')
                         };
                     } else {
                         originalCreatorConfig = {
                             originalCreator: knownOriginalCreator,
-                            feeSharingConfigPDA: feeSharingConfigPDA.toString(),
+                            feeSharingConfigPDA_FEE: feeSharingConfigPDA_FEE.toString(),
+                            feeSharingConfigPDA_PUMP: feeSharingConfigPDA_PUMP.toString(),
                             configExists: false
                         };
                     }
@@ -1503,8 +1550,8 @@ function init(deps) {
                 }
             }
 
-            // Run the actual verification
-            const verification = await mintExtractor.verifyFeeRecipient(mint, platformWallet, connection);
+            // Run the actual verification (pass originalCreator if provided for direct PDA lookup)
+            const verification = await mintExtractor.verifyFeeRecipient(mint, platformWallet, connection, knownOriginalCreator);
 
             res.json({
                 mint,

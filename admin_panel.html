@@ -423,9 +423,15 @@
                         <p class="text-xs text-gray-400 mb-4">
                             Use this to debug why a token registration might be failing. It checks bonding curve, AMM pool, and fee sharing configs.
                         </p>
-                        <div class="flex gap-2 mb-4">
-                            <input type="text" id="verify-mint" class="input-field flex-1" placeholder="Enter token mint address...">
-                            <button onclick="verifyFeeSharing()" class="btn btn-primary">Verify Fee Sharing</button>
+                        <div class="space-y-2 mb-4">
+                            <div class="flex gap-2">
+                                <input type="text" id="verify-mint" class="input-field flex-1" placeholder="Enter token mint address...">
+                                <button onclick="verifyFeeSharing()" class="btn btn-primary">Verify Fee Sharing</button>
+                            </div>
+                            <div class="flex gap-2">
+                                <input type="text" id="verify-original-creator" class="input-field flex-1" placeholder="Original creator wallet (required for fee-shared tokens)">
+                            </div>
+                            <p class="text-xs text-gray-500">For fee-shared tokens, enter the original creator wallet that set up fee sharing.</p>
                         </div>
                         <div id="verify-result" class="result-box text-yellow-400" style="max-height: 500px;">
                             // Verification results will appear here
@@ -437,9 +443,10 @@
                         <div class="panel-header">
                             <h3 class="text-orange-500 font-bold">Pre-Registration Check</h3>
                         </div>
-                        <div class="flex gap-2 mb-4">
-                            <input type="text" id="precheck-mint" class="input-field flex-1" placeholder="Enter token mint address...">
-                            <button onclick="precheckToken()" class="btn btn-secondary">Check Eligibility</button>
+                        <div class="space-y-2 mb-4">
+                            <input type="text" id="precheck-mint" class="input-field w-full" placeholder="Enter token mint address...">
+                            <input type="text" id="precheck-original-creator" class="input-field w-full" placeholder="Original creator wallet (for fee-shared tokens)">
+                            <button onclick="precheckToken()" class="btn btn-secondary w-full">Check Eligibility</button>
                         </div>
                         <div id="precheck-result" class="result-box">
                             // Pre-check results will appear here
@@ -453,6 +460,7 @@
                         </div>
                         <div class="space-y-3">
                             <input type="text" id="register-mint" class="input-field w-full" placeholder="Token mint address">
+                            <input type="text" id="register-original-creator" class="input-field w-full" placeholder="Original creator wallet (for fee-shared tokens)">
                             <input type="text" id="register-submitter" class="input-field w-full" placeholder="Submitter pubkey (optional)">
                             <button onclick="registerToken()" class="btn btn-success w-full">Register Token</button>
                         </div>
@@ -979,16 +987,22 @@
         // ===== REGISTRATION DEBUG =====
         async function verifyFeeSharing() {
             const mint = document.getElementById('verify-mint').value.trim();
+            const originalCreator = document.getElementById('verify-original-creator').value.trim();
+
             if (!mint) {
                 log('Please enter a mint address', 'warning');
                 return;
             }
 
             document.getElementById('verify-result').textContent = 'Verifying... This may take a moment...';
-            log(`Verifying fee sharing for ${shortenPubkey(mint)}...`);
+            log(`Verifying fee sharing for ${shortenPubkey(mint)}${originalCreator ? ' with original creator ' + shortenPubkey(originalCreator) : ''}...`);
 
             try {
-                const data = await apiCall(`/api/debug/verify-fee-sharing/${mint}`);
+                let url = `/api/debug/verify-fee-sharing/${mint}`;
+                if (originalCreator) {
+                    url += `?originalCreator=${originalCreator}`;
+                }
+                const data = await apiCall(url);
                 document.getElementById('verify-result').textContent = formatJson(data);
 
                 if (data.verificationResult?.isRecipient) {
@@ -1004,10 +1018,14 @@
 
         async function precheckToken() {
             const mint = document.getElementById('precheck-mint').value.trim();
+            const originalCreator = document.getElementById('precheck-original-creator').value.trim();
             if (!mint) return;
 
             try {
-                const data = await apiCall('/api/verify-token', 'POST', { mint });
+                const body = { mint };
+                if (originalCreator) body.originalCreator = originalCreator;
+
+                const data = await apiCall('/api/verify-token', 'POST', body);
                 document.getElementById('precheck-result').textContent = formatJson(data);
                 log(`Pre-check completed for ${shortenPubkey(mint)}`, data.isEligible ? 'success' : 'warning');
             } catch (e) {
@@ -1017,6 +1035,7 @@
 
         async function registerToken() {
             const mint = document.getElementById('register-mint').value.trim();
+            const originalCreator = document.getElementById('register-original-creator').value.trim();
             const submitter = document.getElementById('register-submitter').value.trim();
 
             if (!mint) {
@@ -1026,6 +1045,7 @@
 
             try {
                 const body = { mint };
+                if (originalCreator) body.originalCreator = originalCreator;
                 if (submitter) body.submitterPubkey = submitter;
 
                 const data = await apiCall('/api/tokens/register-token', 'POST', body);
