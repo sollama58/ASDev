@@ -1354,13 +1354,46 @@ function init(deps) {
 
                         if (!directConfigLookup) {
                             // Not a valid fee sharing config, log raw data for debugging
+                            const FEE_PROGRAM = new PublicKey('pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ');
+                            const isOwnedByFee = directConfigInfo.owner.equals(FEE_PROGRAM);
+
+                            // If owned by FEE program, scan for platform wallet in the data
+                            let feeAccountWalletScan = null;
+                            if (isOwnedByFee) {
+                                const platformWalletBytes = devKeypair.publicKey.toBuffer();
+                                const foundOffset = directConfigInfo.data.indexOf(platformWalletBytes);
+
+                                if (foundOffset !== -1 && foundOffset + 34 <= directConfigInfo.data.length) {
+                                    const bpsAfter = directConfigInfo.data.readUInt16LE(foundOffset + 32);
+                                    feeAccountWalletScan = {
+                                        walletFoundAtOffset: foundOffset,
+                                        bpsAfterWallet: bpsAfter,
+                                        bpsAfterWalletPercent: bpsAfter / 100,
+                                        bytesAfterWallet: directConfigInfo.data.slice(foundOffset + 32, foundOffset + 38).toString('hex'),
+                                        isValid: bpsAfter > 0 && bpsAfter <= 10000
+                                    };
+                                } else if (foundOffset !== -1) {
+                                    feeAccountWalletScan = {
+                                        walletFoundAtOffset: foundOffset,
+                                        error: 'Not enough bytes after wallet for bps'
+                                    };
+                                } else {
+                                    feeAccountWalletScan = {
+                                        walletFound: false,
+                                        platformWalletBytes: platformWalletBytes.toString('hex').slice(0, 32) + '...'
+                                    };
+                                }
+                            }
+
                             directConfigLookup = {
                                 configAddress: tokenCreator.toString(),
                                 owner: directConfigInfo.owner.toString(),
                                 isOwnedByPump,
+                                isOwnedByFee,
                                 dataLength: directConfigInfo.data.length,
                                 error: 'Failed to parse as fee_sharing_config',
-                                rawDataHex: directConfigInfo.data.slice(0, 100).toString('hex')
+                                rawDataHex: directConfigInfo.data.slice(0, 100).toString('hex'),
+                                feeAccountWalletScan
                             };
                         }
                     }
