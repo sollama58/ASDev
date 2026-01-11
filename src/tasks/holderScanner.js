@@ -4,8 +4,10 @@
  *
  * v14.0 - Changed to Top 250 holders with proportional points based on holdings
  *         Points are now calculated proportionally to token balance, not just position count
+ * v17.0 - Fixed expected airdrop calculation to use actual SOL balance (not PUMP holdings)
+ * v18.0 - Changed from top 10 tokens to all tokens with >$100 24hr volume
  */
-const { PublicKey } = require('@solana/web3.js');
+const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const { BN } = require('@coral-xyz/anchor');
 const config = require('../config/env');
@@ -15,6 +17,8 @@ const { logger } = require('../services');
 // Constants for point calculation
 const TOP_HOLDERS_LIMIT = 250; // Track top 250 holders per eligible token
 const CREATOR_BONUS_MULTIPLIER = 2; // Creators get 2x points on their created tokens
+const SAFETY_RESERVE_SOL = 0.5; // Reserve 0.5 SOL for operations
+const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // v18.0: Minimum 24hr volume for eligibility
 
 /**
  * Update global state (holders, points, expected airdrops)
@@ -26,30 +30,41 @@ const CREATOR_BONUS_MULTIPLIER = 2; // Creators get 2x points on their created t
  * - Creator bonus: 2x points for tokens they created
  * - ASDF multiplier: 2x total points if top 100 ASDF holder
  * - KOTH: 10% of airdrop reserved for king token holders (unchanged)
+ *
+ * v18.0 - Eligibility now based on volume threshold:
+ * - All tokens with >$100 24hr volume are eligible (no limit)
+ * - Includes both tokens table and robinhood_tokens table
  */
 async function updateGlobalState(deps) {
     const { connection, devKeypair, db, globalState } = deps;
 
     try {
-        const topTokens = await db.all('SELECT mint, userPubkey FROM tokens ORDER BY volume24h DESC LIMIT 10');
-        const top10Mints = topTokens.map(t => t.mint);
+        // v18.0: Get all tokens with >$100 24hr volume (no limit)
+        const eligibleTokens = await db.all(
+            'SELECT mint, userPubkey FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
+            [MIN_VOLUME_USD]
+        );
+        const eligibleMints = eligibleTokens.map(t => t.mint);
 
-        // Cache dev wallet PUMP holdings
+        logger.debug(`[HolderScanner] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume`);
+
+        // v17.0: Get actual SOL balance for expected airdrop calculation (not PUMP holdings)
+        let availableSolForAirdrop = 0;
         try {
-            const devPumpAta = await getAssociatedTokenAddress(
-                TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
-            );
-            const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
-            globalState.devPumpHoldings = tokenBal.value.uiAmount || 0;
+            const solBalance = await connection.getBalance(devKeypair.publicKey);
+            // Available for airdrop = SOL balance minus safety reserve
+            const safetyReserveLamports = SAFETY_RESERVE_SOL * LAMPORTS_PER_SOL;
+            availableSolForAirdrop = Math.max(0, (solBalance - safetyReserveLamports) / LAMPORTS_PER_SOL);
+            globalState.devSolBalance = solBalance / LAMPORTS_PER_SOL;
         } catch (e) {
-            globalState.devPumpHoldings = 0;
+            availableSolForAirdrop = 0;
+            globalState.devSolBalance = 0;
         }
 
         // --- CALCULATION LOGIC ---
 
-        // 1. Determine Pots
-        const rawHoldings = globalState.devPumpHoldings;
-        const totalDistributable = rawHoldings * 0.99;
+        // 1. Determine Pots (based on actual SOL available for airdrop)
+        const totalDistributable = availableSolForAirdrop * 0.99; // 99% distributed, 1% dust buffer
 
         // KOTH gets 10% of the distributable amount
         const kothPot = totalDistributable * 0.10;
@@ -62,8 +77,8 @@ async function updateGlobalState(deps) {
 
         // --- END CALCULATION PREP ---
 
-        // Update holders for each top token - now tracking Top 250 with balances
-        for (const token of topTokens) {
+        // v18.0: Update holders for all eligible tokens (>$100 volume) - tracking Top 250 with balances
+        for (const token of eligibleTokens) {
             try {
                 if (!token.mint) continue;
 
@@ -147,9 +162,9 @@ async function updateGlobalState(deps) {
         let rawPointsMap = new Map(); // pubkey -> { basePoints, creatorBonus, robinhoodPoints }
         let tempTotalPoints = 0;
 
-        if (top10Mints.length > 0) {
-            // For each token, calculate proportional points
-            for (const token of topTokens) {
+        if (eligibleMints.length > 0) {
+            // v18.0: For each eligible token (>$100 volume), calculate proportional points
+            for (const token of eligibleTokens) {
                 if (!token.mint) continue;
 
                 // Get all holders with balances for this token
@@ -200,9 +215,15 @@ async function updateGlobalState(deps) {
         // v12.0: Include Robinhood token holders in points calculation
         // Holders of tokens that share fees with us also earn airdrop eligibility
         // v16.0: Points are now scaled proportionally to our fee share percentage
+        // v18.0: All robinhood tokens with >$100 volume are eligible (no limit)
         try {
-            const robinhoodTokens = await db.all('SELECT mint, "feeShareBps", ticker FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 10');
+            const robinhoodTokens = await db.all(
+                'SELECT mint, "feeShareBps", ticker FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
+                [MIN_VOLUME_USD]
+            );
             const robinhoodMints = robinhoodTokens.map(t => t.mint).filter(m => m);
+
+            logger.debug(`[HolderScanner] Found ${robinhoodMints.length} eligible Robinhood tokens with >${MIN_VOLUME_USD} USD volume`);
 
             if (robinhoodMints.length > 0) {
                 // For each robinhood token, calculate proportional points scaled by our fee share
@@ -273,7 +294,8 @@ async function updateGlobalState(deps) {
         }
 
         globalState.totalPoints = tempTotalPoints;
-        logger.info(`Global Points: ${globalState.totalPoints.toFixed(2)} | Community Pot: ${communityPot.toFixed(2)} | KOTH Pot: ${kothPot.toFixed(2)}`);
+        globalState.availableSolForAirdrop = availableSolForAirdrop; // v17.0: Track available SOL
+        logger.info(`Global Points: ${globalState.totalPoints.toFixed(2)} | Available SOL: ${availableSolForAirdrop.toFixed(4)} | Community Pot: ${communityPot.toFixed(4)} SOL | KOTH Pot: ${kothPot.toFixed(4)} SOL`);
 
         // Update expected airdrops and points map
         globalState.userExpectedAirdrops.clear();

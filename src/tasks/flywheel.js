@@ -5,6 +5,7 @@
  * v11.0 - Changed from PUMP token airdrops to direct SOL airdrops
  * v13.0 - KOTH bonus now distributed to all holders of king token (not just creator)
  * v14.0 - Updated to work with proportional point system (Top 250 holders)
+ * v17.0 - Separated fee collection (1 min, >0.05 SOL) from airdrop (15 min, >1 SOL)
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -257,12 +258,14 @@ async function processAirdrop(deps) {
 
         // Calculate airdrop pool: SOL balance minus safety reserve (0.5 SOL for operations)
         const SAFETY_RESERVE = 0.5 * LAMPORTS_PER_SOL;
-        const MIN_AIRDROP_POOL = 0.1 * LAMPORTS_PER_SOL; // Minimum 0.1 SOL to trigger airdrop
+        // v17.0: Minimum 1 SOL to trigger airdrop (configurable)
+        const MIN_AIRDROP_POOL = (config.AIRDROP_THRESHOLD_SOL || 1.0) * LAMPORTS_PER_SOL;
 
         const availableForAirdrop = solBalance - SAFETY_RESERVE;
 
         // Basic Threshold Check - need at least MIN_AIRDROP_POOL SOL after reserve
         if (availableForAirdrop < MIN_AIRDROP_POOL) {
+            logger.debug(`[Airdrop] Below threshold: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available, need ${config.AIRDROP_THRESHOLD_SOL || 1.0} SOL`);
             return; // Lock will be released in finally block
         }
 
@@ -648,11 +651,104 @@ async function runPurchaseAndFees(deps) {
 }
 
 /**
- * Start the flywheel interval
+ * Run fee collection only (called every 1 minute)
+ * v17.0: Separated from airdrop processing for more frequent fee collection
  */
-function start(deps) {
-    setInterval(() => runPurchaseAndFees(deps), 5 * 60 * 1000);
-    logger.info("Flywheel started (5 min interval)");
+async function runFeeCollection(deps) {
+    const { connection, devKeypair, db, globalState } = deps;
+
+    // RACE CONDITION FIX: Use mutex for atomic locking
+    const release = await buybackMutex.tryAcquire();
+    if (!release) {
+        logger.debug('[FeeCollection] Skipping - already in progress');
+        return;
+    }
+
+    try {
+        const { bcVault, ammVaultAuth, ammVaultAta } = pump.getCreatorFeeVaults(devKeypair.publicKey);
+
+        // Check pending fees (both BC and AMM)
+        let totalPendingFees = new BN(0);
+        try {
+            const bcInfo = await connection.getAccountInfo(bcVault);
+            if (bcInfo) totalPendingFees = totalPendingFees.add(new BN(bcInfo.lamports));
+        } catch (e) {}
+
+        try {
+            const ammVaultAtaKey = await ammVaultAta;
+            const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
+            totalPendingFees = totalPendingFees.add(new BN(bal.value.amount));
+        } catch (e) {}
+
+        // v17.0: Fee threshold is 0.05 SOL
+        const threshold = new BN((config.FEE_THRESHOLD_SOL || 0.05) * LAMPORTS_PER_SOL);
+
+        if (totalPendingFees.gte(threshold)) {
+            logger.info(`[FeeCollection] Claiming ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL in fees...`);
+
+            let claimedAmount = await claimCreatorFees(deps);
+
+            if (claimedAmount > 0) {
+                await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [claimedAmount, 'lifetimeCreatorFeesLamports']);
+                logger.info(`[FeeCollection] Claimed ${(claimedAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL from creator fees`);
+            }
+            await new Promise(r => setTimeout(r, 1000));
+
+            // Also claim Robinhood fees
+            try {
+                const { totalClaimed: robinhoodClaimed, claimedTokens } = await claimRobinhoodFees(deps);
+                if (robinhoodClaimed > 0) {
+                    logger.info(`[FeeCollection] Claimed ${(robinhoodClaimed / LAMPORTS_PER_SOL).toFixed(4)} SOL from ${claimedTokens.length} Robinhood tokens`);
+                    await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [robinhoodClaimed, 'lifetimeRobinhoodFeesLamports']);
+                    claimedAmount += robinhoodClaimed;
+                }
+            } catch (e) {
+                logger.debug('[FeeCollection] Robinhood fee claiming skipped', { error: e.message });
+            }
+
+            // Distribute platform fees (5% to fee wallets)
+            if (claimedAmount > 0) {
+                const MIN_SPEND = 0.01 * LAMPORTS_PER_SOL;
+                if (claimedAmount > MIN_SPEND) {
+                    const transfer9_5 = Math.floor(claimedAmount * 0.045);
+                    const transfer0_5 = Math.floor(claimedAmount * 0.005);
+
+                    const feeTx = new Transaction();
+                    solana.addPriorityFee(feeTx);
+                    feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_95, lamports: transfer9_5 }));
+                    feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_05, lamports: transfer0_5 }));
+                    await solana.sendTxWithRetry(feeTx, [devKeypair]);
+                    logger.info(`[FeeCollection] Distributed ${((transfer9_5 + transfer0_5) / LAMPORTS_PER_SOL).toFixed(4)} SOL to platform (5%)`);
+                }
+            }
+        } else {
+            logger.debug(`[FeeCollection] Below threshold: ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL pending, need ${config.FEE_THRESHOLD_SOL || 0.05} SOL`);
+        }
+    } catch (e) {
+        logger.error('[FeeCollection] Error', { error: e.message });
+    } finally {
+        await release();
+    }
 }
 
-module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, sendSolAirdropBatch, runPurchaseAndFees, start };
+/**
+ * Start the flywheel intervals
+ * v17.0: Separate intervals for fee collection (1 min) and airdrop (15 min)
+ */
+function start(deps) {
+    // Fee collection every 1 minute
+    const feeInterval = config.FEE_COLLECTION_INTERVAL || 60000;
+    setInterval(() => runFeeCollection(deps), feeInterval);
+    logger.info(`Fee collection started (${feeInterval / 1000}s interval, >${config.FEE_THRESHOLD_SOL || 0.05} SOL threshold)`);
+
+    // Airdrop processing every 15 minutes
+    const airdropInterval = config.AIRDROP_INTERVAL || 900000;
+    setInterval(() => processAirdrop(deps), airdropInterval);
+    logger.info(`Airdrop distribution started (${airdropInterval / 60000}min interval, >${config.AIRDROP_THRESHOLD_SOL || 1.0} SOL threshold)`);
+
+    // Initial runs after short delay
+    setTimeout(() => runFeeCollection(deps), 5000);
+    setTimeout(() => processAirdrop(deps), 10000);
+}
+
+module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, start };

@@ -4,13 +4,18 @@
  * v13.0 - Updated for PostgreSQL
  * v14.0 - Updated for proportional point system (Top 250 holders)
  * v15.0 - Added developer token registration endpoint
+ * v18.0 - Changed from top 10 to volume threshold eligibility
  */
 const express = require('express');
 const axios = require('axios');
 const { isValidPubkey } = require('./solana');
 const { redis, mintExtractor, logger } = require('../services');
+const config = require('../config/env');
 
 const router = express.Router();
+
+// v18.0: Minimum 24hr volume for airdrop eligibility
+const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
 
 /**
  * Initialize routes with dependencies
@@ -19,6 +24,7 @@ function init(deps) {
     const { db, globalState, devKeypair, connection } = deps;
 
     // Get all launches - SCALABILITY FIX: Added pagination
+    // v18.0: Added eligibility status based on volume threshold
     router.get('/all-launches', async (req, res) => {
         try {
             const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Max 100
@@ -35,12 +41,15 @@ function init(deps) {
                 metadataUri: r.metadataUri,
                 marketCap: r.marketCap || 0,
                 volume: r.volume24h,
-                complete: !!r.complete
+                complete: !!r.complete,
+                // v18.0: Eligibility based on volume threshold
+                isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD
             }));
             res.json({
                 tokens: allLaunches,
                 lastUpdate: globalState.lastBackendUpdate,
-                pagination: { limit, offset, total: parseInt(total?.count) || 0 }
+                pagination: { limit, offset, total: parseInt(total?.count) || 0 },
+                eligibilityThreshold: MIN_VOLUME_USD // v18.0: Include threshold for frontend
             });
         } catch (e) {
             res.status(500).json({ tokens: [], lastUpdate: Date.now() });
@@ -83,6 +92,7 @@ function init(deps) {
     });
 
     // Leaderboard - Shows all tokens where dev wallet receives fees (launched + robinhood)
+    // v18.0: Now includes eligibility status based on volume threshold
     router.get('/leaderboard', async (req, res) => {
         const { userPubkey } = req.query;
         // Validate userPubkey if provided
@@ -92,6 +102,7 @@ function init(deps) {
         try {
             // Combine launched tokens and active robinhood tokens
             // Use UNION ALL to merge both sources, preserving creator info
+            // v18.0: Removed LIMIT 10 to show all tokens, eligibility determined by volume threshold
             const rows = await db.all(`
                 SELECT mint, "userPubkey" as creator, name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'launched' as source
                 FROM tokens
@@ -100,7 +111,6 @@ function init(deps) {
                 FROM robinhood_tokens
                 WHERE "isActive" = 1
                 ORDER BY volume24h DESC
-                LIMIT 10
             `);
 
             // Batch query for user holder status (check both holder tables)
@@ -139,9 +149,15 @@ function init(deps) {
                 volume: r.volume24h,
                 isUserTopHolder: userHoldings.has(r.mint),
                 complete: !!r.complete,
-                isRobinhood: r.source === 'robinhood'
+                isRobinhood: r.source === 'robinhood',
+                // v18.0: Eligibility based on volume threshold ($100 minimum)
+                isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD
             }));
-            res.json({ tokens: leaderboard, lastUpdate: globalState.lastBackendUpdate });
+            res.json({
+                tokens: leaderboard,
+                lastUpdate: globalState.lastBackendUpdate,
+                eligibilityThreshold: MIN_VOLUME_USD // v18.0: Include threshold for frontend display
+            });
         } catch (e) {
             console.error("Leaderboard Error:", e);
             res.status(500).json({ tokens: [], lastUpdate: Date.now() });
@@ -216,6 +232,7 @@ function init(deps) {
     // Check holder status
     // v11.0: Now returns expected SOL airdrop amount instead of PUMP
     // v14.0: Updated for proportional point system (Top 250 holders)
+    // v18.0: Changed from top 10 to all tokens with >$100 volume
     router.get('/check-holder', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
@@ -231,8 +248,12 @@ function init(deps) {
         }
 
         try {
-            const top10 = await db.all('SELECT mint, "userPubkey" FROM tokens ORDER BY volume24h DESC LIMIT 10');
-            const top10Mints = top10.map(t => t.mint);
+            // v18.0: Get all tokens with >$100 24hr volume (no limit)
+            const eligibleTokens = await db.all(
+                'SELECT mint, "userPubkey" FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
+                [MIN_VOLUME_USD]
+            );
+            const eligibleMints = eligibleTokens.map(t => t.mint);
 
             let heldPositionsCount = 0;
             let createdPositionsCount = 0;
@@ -242,9 +263,9 @@ function init(deps) {
 
             const POINTS_PER_TOKEN = 1000;
 
-            if (top10Mints.length > 0) {
-                // v14.0: Calculate proportional points based on holdings
-                for (const token of top10) {
+            if (eligibleMints.length > 0) {
+                // v18.0: Calculate proportional points for all eligible tokens (>$100 volume)
+                for (const token of eligibleTokens) {
                     if (!token.mint) continue;
 
                     // Check if user holds this token
@@ -281,7 +302,11 @@ function init(deps) {
 
                 // v14.0: Include Robinhood token holdings
                 // v16.0: Scale points by fee share percentage
-                const robinhoodTokens = await db.all('SELECT mint, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 10');
+                // v18.0: All robinhood tokens with >$100 volume
+                const robinhoodTokens = await db.all(
+                    'SELECT mint, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
+                    [MIN_VOLUME_USD]
+                );
                 for (const rhToken of robinhoodTokens) {
                     if (!rhToken.mint) continue;
 
@@ -335,23 +360,156 @@ function init(deps) {
         }
     });
 
+    // v18.0: Get detailed holdings breakdown for a user
+    // Returns each token the user holds, eligibility status, and points earned
+    router.get('/user-holdings', async (req, res) => {
+        const { userPubkey } = req.query;
+        if (!userPubkey) {
+            return res.json({ holdings: [], totalPoints: 0, eligibilityThreshold: MIN_VOLUME_USD });
+        }
+        if (!isValidPubkey(userPubkey)) {
+            return res.status(400).json({ error: "Invalid Solana address" });
+        }
+
+        try {
+            const POINTS_PER_TOKEN = 1000;
+            const holdings = [];
+
+            // Get all tokens (both eligible and non-eligible) where user is a holder
+            const allTokens = await db.all(
+                'SELECT t.mint, t.ticker, t.name, t.image, t."userPubkey" as creator, t.volume24h, t."marketCap" FROM tokens t ORDER BY t.volume24h DESC'
+            );
+
+            for (const token of allTokens) {
+                if (!token.mint) continue;
+
+                // Check if user holds this token
+                const userHolding = await db.get(
+                    'SELECT balance, rank FROM token_holders WHERE mint = $1 AND "holderPubkey" = $2',
+                    [token.mint, userPubkey]
+                );
+
+                if (!userHolding) continue;
+
+                // Get total balance for proportional calculation
+                const totalResult = await db.get(
+                    'SELECT SUM(CAST(balance AS BIGINT)) as total FROM token_holders WHERE mint = $1',
+                    [token.mint]
+                );
+                const totalBalance = BigInt(totalResult?.total || '1');
+                const userBalance = BigInt(userHolding.balance);
+
+                // Calculate proportional points
+                const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+
+                // Check if user is creator
+                const isCreator = token.creator === userPubkey;
+                const creatorBonus = isCreator ? proportionalPts : 0;
+
+                // Check eligibility based on volume threshold
+                const isEligible = (token.volume24h || 0) >= MIN_VOLUME_USD;
+
+                holdings.push({
+                    mint: token.mint,
+                    ticker: token.ticker,
+                    name: token.name,
+                    image: token.image,
+                    volume24h: token.volume24h || 0,
+                    marketCap: token.marketCap || 0,
+                    rank: userHolding.rank,
+                    isEligible,
+                    isCreator,
+                    basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
+                    creatorBonus: isEligible ? Math.round(creatorBonus * 100) / 100 : 0,
+                    totalPoints: isEligible ? Math.round((proportionalPts + creatorBonus) * 100) / 100 : 0,
+                    source: 'launched'
+                });
+            }
+
+            // Also check Robinhood tokens
+            const allRobinhoodTokens = await db.all(
+                'SELECT mint, ticker, name, image, "feeShareBps", volume24h, "marketCap" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL ORDER BY volume24h DESC'
+            );
+
+            for (const rhToken of allRobinhoodTokens) {
+                if (!rhToken.mint) continue;
+
+                const userHolding = await db.get(
+                    'SELECT balance, rank FROM robinhood_token_holders WHERE mint = $1 AND "holderPubkey" = $2',
+                    [rhToken.mint, userPubkey]
+                );
+
+                if (!userHolding) continue;
+
+                const totalResult = await db.get(
+                    'SELECT SUM(CAST(balance AS BIGINT)) as total FROM robinhood_token_holders WHERE mint = $1',
+                    [rhToken.mint]
+                );
+                const totalBalance = BigInt(totalResult?.total || '1');
+                const userBalance = BigInt(userHolding.balance);
+
+                // Calculate proportional points scaled by fee share
+                const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                const feeShareBps = rhToken.feeShareBps || 10000;
+                const feeShareMultiplier = feeShareBps / 10000;
+                const scaledPts = baseProportionalPts * feeShareMultiplier;
+
+                const isEligible = (rhToken.volume24h || 0) >= MIN_VOLUME_USD;
+
+                holdings.push({
+                    mint: rhToken.mint,
+                    ticker: rhToken.ticker,
+                    name: rhToken.name,
+                    image: rhToken.image,
+                    volume24h: rhToken.volume24h || 0,
+                    marketCap: rhToken.marketCap || 0,
+                    rank: userHolding.rank,
+                    isEligible,
+                    isCreator: false,
+                    feeSharePercent: (feeShareBps / 100),
+                    basePoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
+                    creatorBonus: 0,
+                    totalPoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
+                    source: 'robinhood'
+                });
+            }
+
+            // Calculate total points
+            const totalPoints = holdings.reduce((sum, h) => sum + h.totalPoints, 0);
+
+            res.json({
+                holdings: holdings.sort((a, b) => b.totalPoints - a.totalPoints),
+                totalPoints: Math.round(totalPoints * 100) / 100,
+                eligibilityThreshold: MIN_VOLUME_USD
+            });
+        } catch (e) {
+            logger.error('User holdings error', { error: e.message });
+            res.status(500).json({ error: "DB Error" });
+        }
+    });
+
     // Eligible users for airdrop
     // v11.0: Now returns expected SOL airdrop amounts
     // v14.0: Updated for proportional point system (Top 250 holders)
+    // v18.0: Changed from top 10 to all tokens with >$100 volume
     router.get('/all-eligible-users', async (req, res) => {
         try {
-            const top10 = await db.all('SELECT mint, "userPubkey" FROM tokens ORDER BY volume24h DESC LIMIT 10');
-            const top10Mints = top10.map(t => t.mint);
+            // v18.0: Get all tokens with >$100 24hr volume (no limit)
+            const eligibleTokens = await db.all(
+                'SELECT mint, "userPubkey" FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
+                [MIN_VOLUME_USD]
+            );
+            const eligibleMints = eligibleTokens.map(t => t.mint);
 
-            if (top10Mints.length === 0) {
-                return res.json({ users: [], totalPoints: 0, currency: 'SOL' });
+            if (eligibleMints.length === 0) {
+                return res.json({ users: [], totalPoints: 0, currency: 'SOL', eligibilityThreshold: MIN_VOLUME_USD });
             }
 
             const POINTS_PER_TOKEN = 1000;
             let userPointsMap = new Map(); // pubkey -> { basePoints, creatorBonus, robinhoodPoints, positions, created }
 
-            // v14.0: Calculate proportional points for each token
-            for (const token of top10) {
+            // v18.0: Calculate proportional points for all eligible tokens (>$100 volume)
+            for (const token of eligibleTokens) {
                 if (!token.mint) continue;
 
                 // Get all holders with balances
@@ -418,7 +576,11 @@ function init(deps) {
 
             // v14.0: Include Robinhood token holdings
             // v16.0: Scale points by fee share percentage
-            const robinhoodTokens = await db.all('SELECT mint, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 10');
+            // v18.0: All robinhood tokens with >$100 volume
+            const robinhoodTokens = await db.all(
+                'SELECT mint, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
+                [MIN_VOLUME_USD]
+            );
             for (const rhToken of robinhoodTokens) {
                 if (!rhToken.mint) continue;
 
@@ -492,7 +654,12 @@ function init(deps) {
                 }
             }
 
-            res.json({ users: eligibleUsers, totalPoints: Math.round(calculatedTotalPoints * 100) / 100, currency: 'SOL' });
+            res.json({
+                users: eligibleUsers,
+                totalPoints: Math.round(calculatedTotalPoints * 100) / 100,
+                currency: 'SOL',
+                eligibilityThreshold: MIN_VOLUME_USD // v18.0: Include threshold for frontend display
+            });
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
         }

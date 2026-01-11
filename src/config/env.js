@@ -35,9 +35,13 @@ const config = {
     // Fees & Transactions
     PRIORITY_FEE_MICRO_LAMPORTS: 100000,
     DEPLOYMENT_FEE_SOL: 0.02,
-    FEE_THRESHOLD_SOL: 0.20,
+    FEE_THRESHOLD_SOL: 0.05,  // v17.0: Lowered to 0.05 SOL for fee collection
+    AIRDROP_THRESHOLD_SOL: 1.0, // v17.0: Minimum 1 SOL to trigger airdrop distribution
+    AIRDROP_MIN_VOLUME_USD: 100, // v18.0: Minimum 24hr volume for airdrop eligibility
 
     // Update Intervals (ms)
+    FEE_COLLECTION_INTERVAL: 60000, // v17.0: Fee collection every 1 minute
+    AIRDROP_INTERVAL: 900000, // v17.0: Airdrop processing every 15 minutes
     HOLDER_UPDATE_INTERVAL: parseInt(process.env.HOLDER_UPDATE_INTERVAL) || 120000,
     METADATA_UPDATE_INTERVAL: parseInt(process.env.METADATA_UPDATE_INTERVAL) || 60000,
     ASDF_UPDATE_INTERVAL: 300000,

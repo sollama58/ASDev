@@ -565,6 +565,7 @@
             <div class="flex justify-between items-center border-b border-purple-800/50 pb-2 mb-4">
                 <h3 class="text-purple-400 font-mono text-sm uppercase tracking-widest">🪂 AIRDROP STATUS & POINTS</h3>
                 <div class="flex items-center gap-4">
+                    <button onclick="toggleUserHoldingsModal()" class="text-yellow-400 hover:text-white transition font-mono text-xs underline p-1" title="View your token holdings and points breakdown">MY HOLDINGS</button>
                     <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">ELIGIBLE USERS</button>
                     <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-xs underline p-1">HISTORY</button>
                 </div>
@@ -642,11 +643,11 @@
             </div>
         </div>
 
-        <!-- TOP 10 LEADERBOARD -->
+        <!-- LEADERBOARD - v18.0: Now shows all tokens, eligibility based on $100 volume -->
         <div class="panel bg-black/30 border border-orange-900 mb-8">
             <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
                 <div class="flex items-center gap-4">
-                    <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">🔥 TOP 10 LAUNCHES (BY 24H VOL)</h3>
+                    <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">🔥 TOKEN LEADERBOARD (BY 24H VOL)</h3>
                     <span id="leaderboard-last-updated" class="text-orange-600 text-xs font-mono">Syncing...</span>
                 </div>
                 <div class="flex items-center gap-2">
@@ -962,23 +963,38 @@
 
 <div id="all-eligible-users-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAllEligibleUsersModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">ELIGIBLE AIRDROP USERS & POINTS</h3><div id="modal-all-eligible-users-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
+<!-- v18.0: User Holdings Breakdown Modal -->
+<div id="user-holdings-modal" class="modal">
+    <div class="modal-content border-yellow-600" style="max-width: 700px;">
+        <span class="close-btn" onclick="closeUserHoldingsModal()">&times;</span>
+        <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2">YOUR TOKEN HOLDINGS & POINTS</h3>
+        <div id="user-holdings-content" class="max-h-[65vh] overflow-y-auto pr-2">
+            <div class="text-center text-yellow-400 p-4">Connect wallet to view holdings...</div>
+        </div>
+    </div>
+</div>
+
 <div id="airdrop-log-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAirdropLogModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">AIRDROP DISTRIBUTION HISTORY</h3><div id="modal-airdrop-log-content" class="max-h-[60vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
 <div id="airdrop-info-modal" class="modal">
     <div class="modal-content border-purple-600">
         <span class="close-btn" onclick="closeAirdropInfoModal()">&times;</span>
-        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">SOL AIRDROP POINT CALCULATION (v14.0)</h3>
+        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2">SOL AIRDROP SYSTEM (v17.0)</h3>
         <div class="font-sans text-sm text-purple-200 space-y-3">
             <div class="bg-green-900/30 p-3 rounded border border-green-700/50 mb-4">
                 <p class="text-green-400 font-bold text-xs uppercase mb-1">💰 PROPORTIONAL AIRDROPS</p>
                 <p class="text-xs text-gray-300">Airdrops are distributed in **SOL** proportionally to your holdings. The more you hold, the more you earn!</p>
             </div>
+            <div class="bg-orange-900/30 p-3 rounded border border-orange-700/50 mb-4">
+                <p class="text-orange-400 font-bold text-xs uppercase mb-1">⏱️ TIMING</p>
+                <p class="text-xs text-gray-300">Fees collected <span class="text-yellow-400">every 1 minute</span> (>0.05 SOL) | Airdrops distributed <span class="text-yellow-400">every 15 minutes</span> (>1.0 SOL pool)</p>
+            </div>
             <p>Points are calculated based on your **proportional holdings** in eligible tokens:</p>
             <ul class="list-disc list-inside ml-4 space-y-2 text-purple-300">
-                <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400 font-bold">250 holders</span> of each Top 10 Leaderboard Token earn points.</li>
-                <li><span class="text-white">Base Points:</span> Each token distributes <span class="text-yellow-400">1000 points</span> proportionally based on your balance vs total holdings.</li>
+                <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400 font-bold">250 holders</span> of tokens with <span class="text-green-400 font-bold">>$100 24hr volume</span> earn points.</li>
+                <li><span class="text-white">Base Points:</span> Each eligible token distributes <span class="text-yellow-400">1000 points</span> proportionally based on your balance vs total holdings.</li>
                 <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">2x Points</span> on tokens you created (if you're also a top holder).</li>
-                <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400 font-bold">+Points</span> for holding partner tokens (proportional to holdings).</li>
+                <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400 font-bold">+Points</span> for holding partner tokens (scaled by fee share %).</li>
                 <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you're a Top 100 $ASDF holder.</li>
             </ul>
             <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mt-4">
@@ -1004,21 +1020,21 @@
                     <li><span class="text-white font-bold">Trading Rewards:</span> 1% of the bonding curve volume (Creator Fee).</li>
                 </ul>
 
-                <h4 class="text-orange-400 font-bold mb-3 border-b border-orange-800 pb-1">2. THE FLYWHEEL (FEE DISTRIBUTION)</h4>
-                <p class="text-orange-200 mb-2">Every 5 minutes, if the Fee Pool > 0.20 SOL:</p>
+                <h4 class="text-orange-400 font-bold mb-3 border-b border-orange-800 pb-1">2. THE FLYWHEEL (FEE COLLECTION)</h4>
+                <p class="text-orange-200 mb-2">Every <span class="text-yellow-400 font-bold">1 minute</span>, if pending fees > 0.05 SOL:</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <li><span class="text-green-400 font-bold">95.0%</span>: Goes to **SOL Airdrop Pool** (for direct distribution).</li>
+                    <li><span class="text-green-400 font-bold">95.0%</span>: Added to **SOL Airdrop Pool** (for direct distribution).</li>
                     <li><span class="text-red-400 font-bold">4.5%</span>: Sent to $ASDF Burns Wallet.</li>
                     <li><span class="text-red-400 font-bold">0.5%</span>: Sent to Upkeep and Reserves Wallet.</li>
                 </ul>
             </div>
             
             <div>
-                <h4 class="text-purple-400 font-bold mb-3 border-b border-purple-800 pb-1">3. PROPORTIONAL POINTS SYSTEM (v14.0)</h4>
+                <h4 class="text-purple-400 font-bold mb-3 border-b border-purple-800 pb-1">3. PROPORTIONAL POINTS SYSTEM (v18.0)</h4>
                 <p class="text-purple-200 mb-2">Points are distributed proportionally based on your holdings. No signup required.</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400 font-bold">250 holders</span> of each Top 10 token.</li>
-                    <li><span class="text-white">Base Points:</span> Each token distributes <span class="text-yellow-400">1000 points</span> proportionally to holdings.</li>
+                    <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400 font-bold">250 holders</span> of tokens with <span class="text-green-400 font-bold">>$100 24hr volume</span>.</li>
+                    <li><span class="text-white">Base Points:</span> Each eligible token distributes <span class="text-yellow-400">1000 points</span> proportionally to holdings.</li>
                     <li><span class="text-white">Creator Bonus:</span> <span class="text-blue-400 font-bold">2x Points</span> on tokens you created.</li>
                     <li><span class="text-white">Multiplier:</span> <span class="text-green-400 font-bold">2x Total Points</span> if you are a Top 100 Holder of **$ASDF**.</li>
                 </ul>
@@ -1031,9 +1047,9 @@
 
         <div class="mt-6">
             <h4 class="text-green-400 font-bold mb-3 border-b border-green-800 pb-1">4. AUTOMATED AIRDROP ENGINE</h4>
-            <p class="text-gray-300 mb-2">Runs automatically after the Flywheel check.</p>
+            <p class="text-gray-300 mb-2">Runs every <span class="text-yellow-400 font-bold">15 minutes</span> automatically.</p>
             <ul class="list-disc list-inside text-gray-400 space-y-1">
-                <li><span class="text-white font-bold">Trigger:</span> When SOL Airdrop Pool > 0.1 SOL (after 0.5 SOL reserve).</li>
+                <li><span class="text-white font-bold">Trigger:</span> When SOL Airdrop Pool > <span class="text-yellow-400">1.0 SOL</span> (after 0.5 SOL reserve).</li>
                 <li><span class="text-white font-bold">Action:</span> Distributes **99%** of the SOL pool directly to all qualified users.</li>
                 <li><span class="text-white font-bold">Distribution:</span> Proportional based on your share of the Total Global Points (minus 10% KOTH allocation).</li>
             </ul>
@@ -1074,9 +1090,10 @@
             </div>
 
             <div>
-                <h4 class="text-green-400 font-bold mb-2 border-b border-green-800 pb-1">HOW YOU BENEFIT</h4>
+                <h4 class="text-green-400 font-bold mb-2 border-b border-green-800 pb-1">HOW YOU BENEFIT (v16.0)</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
-                    <li><span class="text-white font-bold">+1 Point</span> for every Robinhood token where you're a Top 100 holder</li>
+                    <li><span class="text-white font-bold">Proportional Points</span> based on your holdings (Top 250 holders)</li>
+                    <li><span class="text-yellow-400 font-bold">Points scaled by fee share %</span> (e.g., 50% share = 50% points)</li>
                     <li>These points stack with your regular leaderboard holdings</li>
                     <li>More Robinhood partnerships = more airdrop opportunities!</li>
                 </ul>
@@ -1087,13 +1104,14 @@
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
                     <li>Share fees with our wallet to join the Robinhood network</li>
                     <li>Your holders gain airdrop eligibility automatically</li>
+                    <li>Points are proportional to your fee share (higher % = more points for holders)</li>
                     <li>Creates additional incentives for holders to stay in your token</li>
                 </ul>
             </div>
 
             <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 mt-4">
-                <p class="text-purple-400 font-bold text-xs uppercase mb-1">COMBINED POINTS FORMULA</p>
-                <p class="text-xs text-gray-300">(Leaderboard Holdings + (Created * 2) + <span class="text-green-400">Robinhood Holdings</span>) * ASDF Multiplier</p>
+                <p class="text-purple-400 font-bold text-xs uppercase mb-1">COMBINED POINTS FORMULA (v16.0)</p>
+                <p class="text-xs text-gray-300">(Leaderboard Holdings + (Created * 2) + <span class="text-green-400">Robinhood Holdings * Fee Share %</span>) * ASDF Multiplier</p>
             </div>
         </div>
     </div>
@@ -1220,6 +1238,8 @@
         allEligibleUsersModal: document.getElementById('all-eligible-users-modal'),
         modalAllEligibleUsersContent: document.getElementById('modal-all-eligible-users-content'),
         airdropInfoModal: document.getElementById('airdrop-info-modal'),
+        userHoldingsModal: document.getElementById('user-holdings-modal'),
+        userHoldingsContent: document.getElementById('user-holdings-content'),
         statusModal: document.getElementById('status-modal'),
         statusDetailsList: document.getElementById('status-details-list'),
         socialLoading: document.getElementById('social-loading'),
@@ -1316,12 +1336,18 @@
                     ? `<span class="badge-robinhood" title="External Token (Fee Share Partner)">🏹 ROBINHOOD</span>`
                     : '';
 
+                // v18.0: Eligibility badge based on $100 volume threshold
+                const eligibilityMark = item.isEligible
+                    ? `<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded border border-green-700/50" title="Eligible for airdrop (>$100 volume)">ELIGIBLE</span>`
+                    : `<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded border border-red-800/30" title="Not eligible (needs >$100 24hr volume)">NOT ELIGIBLE</span>`;
+
                 return `
                 <tr>
                     <td class="text-orange-500 font-bold">${index + 1}</td>
                     <td>
                         <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
                         <span class="text-white font-bold">${escapeHtml(item.ticker)}</span>
+                        ${eligibilityMark}
                         ${robinhoodMark}
                         ${creatorMark}
                         ${holderMark}
@@ -1748,18 +1774,28 @@
                     ui.modalAllLaunchesContent.innerHTML = '<div class="text-center text-gray-500 p-4">No tokens have been launched yet.</div>';
                     return;
                 }
+                // v18.0: Show eligibility threshold info
+                const thresholdInfo = data.eligibilityThreshold
+                    ? `<p class="text-orange-400/70 text-xs mb-3">Tokens need >${data.eligibilityThreshold} USD 24hr volume to be eligible for airdrops</p>`
+                    : '';
                 const tableHTML = `
+                    ${thresholdInfo}
                     <table class="w-full text-left font-mono text-xs leader-table">
                         <thead class="text-orange-400 border-b border-orange-800">
-                            <tr><th class="p-2">#</th><th class="p-2">Token</th><th class="p-2">Creator</th><th class="p-2 text-right">MCAP</th><th class="p-2 text-right">Vol (24H)</th><th class="p-2 text-right">Status</th></tr>
+                            <tr><th class="p-2">#</th><th class="p-2">Token</th><th class="p-2">Creator</th><th class="p-2 text-right">MCAP</th><th class="p-2 text-right">Vol (24H)</th><th class="p-2 text-right">Eligible</th><th class="p-2 text-right">Status</th></tr>
                         </thead>
                         <tbody class="text-orange-200">
                             ${await Promise.all(tokens.map(async (item, index) => {
-                                const badge = item.complete ? 
-                                    '<span class="badge-bonded text-xs" style="background-color:#22c55e;">BONDED</span>' : 
+                                const badge = item.complete ?
+                                    '<span class="badge-bonded text-xs" style="background-color:#22c55e;">BONDED</span>' :
                                     '<span class="badge-bonding text-xs" style="background-color:#eab308;">PRE-BOND</span>';
-                                    
+
                                 let imgSrc = resolveTokenImage(item.image);
+
+                                // v18.0: Eligibility badge
+                                const eligibilityBadge = item.isEligible
+                                    ? '<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded">YES</span>'
+                                    : '<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded">NO</span>';
 
                                 return `
                                 <tr class="border-b border-orange-800/30 hover:bg-orange-900/20">
@@ -1771,6 +1807,7 @@
                                     <td class="p-2 text-orange-400">${escapeHtml(item.userPubkey?.slice(0, 5) || '?????')}...</td>
                                     <td class="p-2 text-right font-bold text-green-400">${formatMcap(item.marketCap)}</td>
                                     <td class="p-2 text-right font-bold">$${(parseFloat(item.volume) || 0).toLocaleString()}</td>
+                                    <td class="p-2 text-right">${eligibilityBadge}</td>
                                     <td class="p-2 text-right">${badge}</td>
                                 </tr>
                                 `;
@@ -1803,8 +1840,13 @@
                     ui.modalAllEligibleUsersContent.innerHTML = '<div class="text-center text-gray-500 p-4">No users currently qualify for the airdrop (0 global points).</div>';
                     return;
                 }
+                // v18.0: Show eligibility threshold info
+                const thresholdInfo = data.eligibilityThreshold
+                    ? `<p class="text-purple-400/60 font-mono text-xs mb-2">Eligibility: Top 250 holders of tokens with >${data.eligibilityThreshold} USD 24hr volume</p>`
+                    : '';
                 const tableHTML = `
                     <p class="text-purple-300 font-mono text-sm mb-4">Total Global Points: <span class="text-white font-bold">${data.totalPoints.toLocaleString(undefined, {maximumFractionDigits: 2})}</span> | Total Eligible Users: <span class="text-white font-bold">${users.length}</span></p>
+                    ${thresholdInfo}
                     <p class="text-purple-400/60 font-mono text-xs mb-4">Points are proportional to holdings in Top 250 of each eligible token (1000 pts/token distributed)</p>
                     <table class="w-full text-left font-mono text-xs">
                         <thead class="text-purple-400 border-b border-purple-800">
@@ -1846,6 +1888,126 @@
     window.toggleAirdropInfoModal = toggleAirdropInfoModal;
     const closeAirdropInfoModal = () => { ui.airdropInfoModal.style.display = 'none'; };
     window.closeAirdropInfoModal = closeAirdropInfoModal;
+
+    // v18.0: User Holdings Modal - shows each token, eligibility, and points
+    const toggleUserHoldingsModal = async () => {
+        ui.userHoldingsModal.style.display = 'block';
+        ui.userHoldingsContent.innerHTML = '<div class="text-center text-yellow-400 p-4">Loading your holdings...</div>';
+
+        if (!userPubkey) {
+            ui.userHoldingsContent.innerHTML = '<div class="text-center text-gray-400 p-4">Please connect your wallet to view holdings.</div>';
+            return;
+        }
+
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/user-holdings?userPubkey=${userPubkey}`);
+            if (!res.ok) throw new Error("Failed to fetch holdings");
+            const data = await res.json();
+
+            const holdings = data.holdings || [];
+            if (holdings.length === 0) {
+                ui.userHoldingsContent.innerHTML = `
+                    <div class="text-center text-gray-400 p-4">
+                        <p class="mb-2">You don't hold any tokens on the leaderboard yet.</p>
+                        <p class="text-xs">Buy tokens from the leaderboard to start earning points!</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const eligibleCount = holdings.filter(h => h.isEligible).length;
+            const ineligibleCount = holdings.length - eligibleCount;
+
+            let html = `
+                <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mb-4">
+                    <p class="text-yellow-400 font-bold text-sm mb-1">Summary</p>
+                    <div class="grid grid-cols-3 gap-4 text-center">
+                        <div>
+                            <div class="text-2xl font-bold text-white">${holdings.length}</div>
+                            <div class="text-[10px] text-yellow-400 uppercase">Total Holdings</div>
+                        </div>
+                        <div>
+                            <div class="text-2xl font-bold text-green-400">${eligibleCount}</div>
+                            <div class="text-[10px] text-green-400 uppercase">Eligible</div>
+                        </div>
+                        <div>
+                            <div class="text-2xl font-bold text-yellow-400">${data.totalPoints.toFixed(2)}</div>
+                            <div class="text-[10px] text-yellow-400 uppercase">Total Pts</div>
+                        </div>
+                    </div>
+                    <p class="text-[10px] text-yellow-400/60 mt-2 text-center">Tokens need >${data.eligibilityThreshold} USD 24hr volume to be eligible</p>
+                </div>
+
+                <table class="w-full text-left font-mono text-xs">
+                    <thead class="text-yellow-400 border-b border-yellow-800">
+                        <tr>
+                            <th class="p-2">Token</th>
+                            <th class="p-2 text-right">Rank</th>
+                            <th class="p-2 text-right">Vol 24H</th>
+                            <th class="p-2 text-center">Status</th>
+                            <th class="p-2 text-right">Points</th>
+                        </tr>
+                    </thead>
+                    <tbody class="text-yellow-200">
+            `;
+
+            for (const h of holdings) {
+                const imgSrc = resolveTokenImage(h.image);
+                const eligibilityBadge = h.isEligible
+                    ? '<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded">ELIGIBLE</span>'
+                    : '<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded">NOT ELIGIBLE</span>';
+
+                const creatorBadge = h.isCreator
+                    ? '<span class="text-[9px] bg-blue-900/50 text-blue-400 px-1 py-0.5 rounded ml-1">CREATOR</span>'
+                    : '';
+
+                const robinhoodBadge = h.source === 'robinhood'
+                    ? `<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded ml-1">${h.feeSharePercent || 100}% FEE</span>`
+                    : '';
+
+                const pointsDisplay = h.isEligible
+                    ? `<span class="text-yellow-400 font-bold">${h.basePoints.toFixed(2)}</span>${h.creatorBonus > 0 ? `<span class="text-blue-400 text-[10px] ml-1">+${h.creatorBonus.toFixed(2)}</span>` : ''}`
+                    : '<span class="text-gray-500">0</span>';
+
+                html += `
+                    <tr class="border-b border-yellow-800/30 hover:bg-yellow-900/20">
+                        <td class="p-2">
+                            <div class="flex items-center gap-2">
+                                <img src="${imgSrc}" class="w-6 h-6 rounded border border-yellow-700/50 object-cover" alt="">
+                                <div>
+                                    <a href="${PUMPFUN_URL_BASE}${escapeHtml(h.mint)}" target="_blank" class="text-white font-bold hover:underline">${escapeHtml(h.ticker)}</a>
+                                    ${robinhoodBadge}
+                                    ${creatorBadge}
+                                    <div class="text-[10px] text-yellow-400/60 truncate max-w-[120px]">${escapeHtml(h.name)}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="p-2 text-right text-orange-400">#${h.rank}</td>
+                        <td class="p-2 text-right">$${(h.volume24h || 0).toLocaleString()}</td>
+                        <td class="p-2 text-center">${eligibilityBadge}</td>
+                        <td class="p-2 text-right">${pointsDisplay}</td>
+                    </tr>
+                `;
+            }
+
+            html += '</tbody></table>';
+
+            html += `
+                <div class="mt-4 p-3 bg-purple-900/20 rounded border border-purple-700/30">
+                    <p class="text-[10px] text-purple-300 uppercase mb-1">Note</p>
+                    <p class="text-xs text-gray-400">Points shown are before ASDF multiplier. If you're a Top 100 ASDF holder, your total points are doubled!</p>
+                </div>
+            `;
+
+            ui.userHoldingsContent.innerHTML = html;
+        } catch (e) {
+            console.error("User holdings error", e);
+            ui.userHoldingsContent.innerHTML = '<div class="text-center text-red-400 p-4">Error loading holdings. Please try again.</div>';
+        }
+    };
+    window.toggleUserHoldingsModal = toggleUserHoldingsModal;
+    const closeUserHoldingsModal = () => { ui.userHoldingsModal.style.display = 'none'; };
+    window.closeUserHoldingsModal = closeUserHoldingsModal;
 
     const toggleLogModal = () => { 
         ui.modalLogContent.innerHTML = ''; 
