@@ -907,9 +907,11 @@ function init(deps) {
                 logger.info(`[TokenRegistration] Registered as DIRECT CREATOR: ${token.ticker} (${mint.slice(0, 8)}...) - 100% fee share`);
             } else {
                 // Fee shareholder - insert into robinhood_tokens table
-                const creatorPubkey = submitterPubkey && isValidPubkey(submitterPubkey)
-                    ? submitterPubkey
-                    : 'unknown_creator';
+                // Use the original creator from verification (needed for fee vault derivation)
+                // Fall back to submitter if originalCreator not available
+                const creatorPubkey = verification.originalCreator
+                    || (submitterPubkey && isValidPubkey(submitterPubkey) ? submitterPubkey : null)
+                    || 'unknown_creator';
 
                 await db.run(`
                     INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive")
@@ -926,7 +928,7 @@ function init(deps) {
                     token.volume24h || 0
                 ]);
 
-                logger.info(`[TokenRegistration] Registered as FEE SHAREHOLDER: ${token.ticker} (${mint.slice(0, 8)}...) - ${verification.feeSharePercent}% fee share (${verification.feeShareBps} bps)`);
+                logger.info(`[TokenRegistration] Registered as FEE SHAREHOLDER: ${token.ticker} (${mint.slice(0, 8)}...) - ${verification.feeSharePercent}% fee share (${verification.feeShareBps} bps), originalCreator: ${creatorPubkey.slice(0, 8)}...`);
             }
 
             res.json({

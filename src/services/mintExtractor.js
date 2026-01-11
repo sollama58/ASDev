@@ -704,6 +704,8 @@ async function validateMintsBatch(mints, options = {}) {
     const mintArray = Array.isArray(mints) ? mints : Array.from(mints);
     const processedMints = new Set();
 
+    logger.info(`[MintExtractor] validateMintsBatch called for ${mintArray.length} mints`);
+
     // Phase 1: Try Helius first for tokens that have metadata indexed
     if (config.HELIUS_API_KEY) {
         // Process in batches of 100 (Helius limit)
@@ -723,18 +725,30 @@ async function validateMintsBatch(mints, options = {}) {
                 );
 
                 const assets = batchResponse.data?.result || [];
+                logger.info(`[MintExtractor] Helius returned ${assets.length} assets`);
                 for (const asset of assets) {
-                    if (asset && asset.id && (asset.interface === 'FungibleToken' || asset.interface === 'FungibleAsset')) {
+                    // Accept FungibleToken, FungibleAsset, or any asset with metadata
+                    // Some new tokens might have different interface types
+                    const hasMetadata = asset?.content?.metadata?.name || asset?.content?.metadata?.symbol;
+                    const isFungible = asset?.interface === 'FungibleToken' || asset?.interface === 'FungibleAsset';
+
+                    if (asset && asset.id && (isFungible || hasMetadata)) {
+                        logger.info(`[MintExtractor] Processing asset ${asset.id.slice(0, 8)}... interface=${asset.interface}, hasMetadata=${hasMetadata}`);
                         const metadata = asset.content?.metadata || {};
                         const files = asset.content?.files || [];
                         const imageFile = files.find(f => f.mime?.startsWith('image/')) || files[0];
+
+                        // Try multiple image sources
+                        const heliusImage = imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null;
+
+                        logger.info(`[MintExtractor] Helius asset ${asset.id.slice(0, 8)}...: name=${metadata.name}, symbol=${metadata.symbol}, image=${heliusImage ? 'YES' : 'NO'}, files=${files.length}`);
 
                         const tokenData = {
                             mint: asset.id,
                             name: metadata.name || 'Unknown',
                             ticker: metadata.symbol || 'UNKNOWN',
                             description: metadata.description || '',
-                            image: imageFile?.cdn_uri || imageFile?.uri || asset.content?.links?.image || null,
+                            image: heliusImage,
                             metadataUri: asset.content?.json_uri || null,
                             twitter: asset.content?.links?.twitter || '',
                             website: asset.content?.links?.external_url || '',
@@ -760,11 +774,13 @@ async function validateMintsBatch(mints, options = {}) {
                                 }
                                 if (!tokenData.image && dexData.dexImage) {
                                     tokenData.image = dexData.dexImage;
+                                    logger.info(`[MintExtractor] Using DexScreener image for ${asset.id.slice(0, 8)}...`);
                                 }
                             }
                             await new Promise(r => setTimeout(r, 150));
                         }
 
+                        logger.info(`[MintExtractor] Final token data for ${asset.id.slice(0, 8)}...: ticker=${tokenData.ticker}, image=${tokenData.image ? tokenData.image.slice(0, 50) + '...' : 'NULL'}`);
                         validTokens.push(tokenData);
                         processedMints.add(asset.id);
                     }
@@ -818,32 +834,69 @@ async function validateMintsBatch(mints, options = {}) {
     }
 
     // Phase 3: For any remaining mints (not in Helius or DexScreener),
-    // still add them with minimal data so they're tracked
+    // try to fetch metadata directly from on-chain metadata JSON
     const stillMissing = mintArray.filter(m => !processedMints.has(m));
     if (stillMissing.length > 0) {
-        logger.debug(`[MintExtractor] ${stillMissing.length} mints not found in any source, adding with minimal data`);
+        logger.info(`[MintExtractor] ${stillMissing.length} mints not found in Helius/DexScreener, trying on-chain metadata...`);
 
         for (const mint of stillMissing) {
-            // Only add if it looks like a valid Pump.fun token (ends in "pump")
+            // Only process if it looks like a valid Pump.fun token (ends in "pump")
             if (mint.toLowerCase().endsWith('pump')) {
-                validTokens.push({
-                    mint,
-                    name: 'Unknown Token',
-                    ticker: 'UNKNOWN',
-                    description: '',
-                    image: null,
-                    metadataUri: null,
-                    twitter: '',
-                    website: '',
-                    creator: null,
-                    marketCap: 0,
-                    volume24h: 0,
-                    priceUsd: 0,
-                });
+                try {
+                    // Try to fetch metadata from pump.fun's CDN or ipfs
+                    const metadataUrl = `https://pump.mypinata.cloud/ipfs/${mint}`;
+                    const pumpMetaUrl = `https://frontend-api.pump.fun/coins/${mint}`;
+
+                    // Try pump.fun API first (faster and more reliable for new tokens)
+                    try {
+                        const pumpResponse = await axios.get(pumpMetaUrl, { timeout: 5000 });
+                        if (pumpResponse.data) {
+                            const pumpData = pumpResponse.data;
+                            logger.info(`[MintExtractor] Found ${mint.slice(0, 8)}... via pump.fun API: ${pumpData.symbol}`);
+                            validTokens.push({
+                                mint,
+                                name: pumpData.name || 'Unknown Token',
+                                ticker: pumpData.symbol || 'UNKNOWN',
+                                description: pumpData.description || '',
+                                image: pumpData.image_uri || pumpData.image || null,
+                                metadataUri: pumpData.metadata_uri || null,
+                                twitter: pumpData.twitter || '',
+                                website: pumpData.website || '',
+                                creator: pumpData.creator || null,
+                                marketCap: pumpData.usd_market_cap || 0,
+                                volume24h: 0,
+                                priceUsd: 0,
+                            });
+                            processedMints.add(mint);
+                            continue;
+                        }
+                    } catch (e) {
+                        // pump.fun API failed, continue to fallback
+                    }
+
+                    // Fallback: add with minimal data
+                    validTokens.push({
+                        mint,
+                        name: 'Unknown Token',
+                        ticker: 'UNKNOWN',
+                        description: '',
+                        image: null,
+                        metadataUri: null,
+                        twitter: '',
+                        website: '',
+                        creator: null,
+                        marketCap: 0,
+                        volume24h: 0,
+                        priceUsd: 0,
+                    });
+                } catch (e) {
+                    logger.debug(`[MintExtractor] Failed to fetch metadata for ${mint}`, { error: e.message });
+                }
             }
         }
     }
 
+    logger.info(`[MintExtractor] validateMintsBatch complete: ${validTokens.length} tokens returned`);
     return validTokens;
 }
 
@@ -1301,13 +1354,25 @@ function parseFeeAccountSharingConfig(data, walletKey, mint) {
     // Common offsets where shareholders array might start:
     // FEE creator_vault structure (discovered from actual data):
     // - 8 bytes: discriminator
-    // - 32 bytes: field1 (mint or some pubkey)
-    // - 32 bytes: field2 (creator pubkey at offset 40)
-    // - 4 bytes: unknown (bytes 72-75)
+    // - 32 bytes: mint pubkey (8-40)
+    // - 3 bytes: bump + padding (40-43)
+    // - 32 bytes: original creator pubkey (43-75)
+    // - 1 byte: unknown (75)
     // - 4 bytes: shareholders array length (at offset 76) <- CONFIRMED WORKING
     // - N * 34 bytes: shareholders entries (pubkey 32 + bps 2)
     //
     // Array at offset 76 confirmed to work for test token
+
+    // Try to extract the original creator (at offset 43)
+    let originalCreator = null;
+    if (dataLen >= 75) {
+        try {
+            originalCreator = new PublicKey(data.slice(43, 75)).toString();
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Original creator from FEE account: ${originalCreator.slice(0, 8)}...`);
+        } catch (e) {
+            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Could not parse original creator at offset 43`);
+        }
+    }
 
     const shareholdersArrayOffsets = [76, 77, 75, 73, 45, 44, 43, 41, 40, 109, 107, 111];
 
@@ -1365,7 +1430,7 @@ function parseFeeAccountSharingConfig(data, walletKey, mint) {
                     source: 'fee_sharing_config',
                     feeShareBps: ourBps,
                     feeSharePercent: ourBps / 100,
-                    originalCreator: null,
+                    originalCreator: originalCreator,
                     allShareholders: shareholders
                 };
             }
@@ -1397,7 +1462,7 @@ function parseFeeAccountSharingConfig(data, walletKey, mint) {
                     source: 'fee_sharing_config',
                     feeShareBps: bps,
                     feeSharePercent: bps / 100,
-                    originalCreator: null
+                    originalCreator: originalCreator
                 };
             }
         }
@@ -1422,7 +1487,7 @@ function parseFeeAccountSharingConfig(data, walletKey, mint) {
                             source: 'fee_sharing_config',
                             feeShareBps: 9000,
                             feeSharePercent: 90,
-                            originalCreator: null
+                            originalCreator: originalCreator
                         };
                     }
                 } catch (e) {
@@ -1440,7 +1505,7 @@ function parseFeeAccountSharingConfig(data, walletKey, mint) {
             source: 'fee_sharing_config',
             feeShareBps: 0,
             feeSharePercent: 0,
-            originalCreator: null
+            originalCreator: originalCreator
         };
     }
 

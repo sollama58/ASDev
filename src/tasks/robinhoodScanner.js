@@ -282,13 +282,20 @@ async function updateRobinhoodHolders(deps) {
 
                 const holdersToInsert = [];
 
-                // Fetch token accounts
-                const accounts = await connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
-                    filters: [
-                        { memcmp: { offset: 0, bytes: token.mint } }
-                    ],
-                    encoding: 'base64'
-                }).catch(() => []);
+                // Fetch token accounts from both Token Program and Token-2022
+                // Most Pump.fun tokens use regular Token Program, but some may use Token-2022
+                const [tokenAccounts, token2022Accounts] = await Promise.all([
+                    connection.getProgramAccounts(PROGRAMS.TOKEN, {
+                        filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                        encoding: 'base64'
+                    }).catch(() => []),
+                    connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
+                        filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                        encoding: 'base64'
+                    }).catch(() => [])
+                ]);
+
+                const accounts = [...tokenAccounts, ...token2022Accounts];
 
                 const parsedAccounts = accounts.map(acc => {
                     const data = Buffer.from(acc.account.data);
