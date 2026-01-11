@@ -500,16 +500,18 @@ function initMetadataUpdaterWorker(deps) {
                     const updates = new Map();
 
                     for (const pair of pairs) {
-                        const mint = pair.baseToken.address;
+                        const mint = pair.baseToken?.address;
+                        if (!mint) continue;
+
                         const existing = updates.get(mint);
 
                         if (!existing || (pair.liquidity?.usd > existing.liquidity)) {
                             updates.set(mint, {
                                 marketCap: pair.fdv || pair.marketCap || 0,
                                 volume24h: pair.volume?.h24 || 0,
-                                priceUsd: pair.priceUsd || 0,
+                                priceUsd: parseFloat(pair.priceUsd) || 0,
                                 liquidity: pair.liquidity?.usd || 0,
-                                imageUrl: pair.info?.imageUrl
+                                imageUrl: pair.info?.imageUrl || pair.info?.header || pair.baseToken?.info?.imageUrl || null
                             });
                         }
                     }
@@ -551,14 +553,34 @@ function initMetadataUpdaterWorker(deps) {
                             );
                             const assets = heliusRes.data?.result || [];
                             for (const asset of assets) {
-                                if (asset?.id && asset?.token_info?.price_info?.total_price) {
-                                    await db.run(
-                                        `UPDATE tokens SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
-                                        [asset.token_info.price_info.total_price, Date.now(), asset.id]
-                                    );
+                                if (asset?.id) {
+                                    const marketCap = asset?.token_info?.price_info?.total_price || 0;
+                                    const image = asset?.content?.links?.image ||
+                                                  asset?.content?.files?.[0]?.cdn_uri ||
+                                                  asset?.content?.files?.[0]?.uri || null;
+
+                                    // Update with both marketCap and image if available
+                                    if (image && marketCap > 0) {
+                                        await db.run(
+                                            `UPDATE tokens SET "marketCap" = $1, image = $2, "lastUpdated" = $3 WHERE mint = $4`,
+                                            [marketCap, image, Date.now(), asset.id]
+                                        );
+                                    } else if (marketCap > 0) {
+                                        await db.run(
+                                            `UPDATE tokens SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
+                                            [marketCap, Date.now(), asset.id]
+                                        );
+                                    } else if (image) {
+                                        await db.run(
+                                            `UPDATE tokens SET image = $1, "lastUpdated" = $2 WHERE mint = $3`,
+                                            [image, Date.now(), asset.id]
+                                        );
+                                    }
                                 }
                             }
-                        } catch (heliusErr) { /* Silent fail */ }
+                        } catch (heliusErr) {
+                            logger.debug('[Worker] Helius fallback error', { error: heliusErr.message });
+                        }
                     }
                     await delay(1500);
 
