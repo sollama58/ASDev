@@ -647,7 +647,7 @@
         <div class="panel bg-black/30 border border-orange-900 mb-8">
             <div class="flex justify-between items-center border-b border-orange-900/50 pb-2 mb-4">
                 <div class="flex items-center gap-4">
-                    <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">🔥 TOKEN LEADERBOARD (BY 24H VOL)</h3>
+                    <h3 class="text-orange-500 font-mono text-sm uppercase tracking-widest">🔥 TOP 10 TOKENS (BY 24H VOL)</h3>
                     <span id="leaderboard-last-updated" class="text-orange-600 text-xs font-mono">Syncing...</span>
                 </div>
                 <div class="flex items-center gap-2">
@@ -1296,10 +1296,10 @@
             const endpoint = `${BACKEND_URL}/api/leaderboard${userPubkey ? '?userPubkey='+userPubkey : ''}`;
             const res = await fetchWithRetry(endpoint);
             const data = await res.json();
-            
+
             systemStatus.db_access = 'ONLINE';
-            
-            const tokens = data.tokens || [];
+
+            const allTokens = data.tokens || [];
             const lastUpdate = data.lastUpdate;
 
             if (lastUpdate) {
@@ -1309,8 +1309,13 @@
                  ui.leaderboardLastUpdated.innerText = `Synced: ${new Date().toLocaleTimeString()}`;
             }
 
-            if (!tokens || tokens.length === 0) { ui.leaderboardBody.innerHTML = '<tr><td colspan="5" class="text-center text-orange-400 py-4">No active tokens found.</td></tr>'; return; }
-            
+            if (!allTokens || allTokens.length === 0) { ui.leaderboardBody.innerHTML = '<tr><td colspan="5" class="text-center text-orange-400 py-4">No active tokens found.</td></tr>'; return; }
+
+            // Only display top 10 tokens in main leaderboard view
+            const TOP_N = 10;
+            const tokens = allTokens.slice(0, TOP_N);
+            const hasMore = allTokens.length > TOP_N;
+
             const rows = tokens.map((item, index) => {
                 let displayMcap = item.marketCap; 
                 let displayVol = parseFloat(item.volume);
@@ -1366,7 +1371,18 @@
                     </td>
                 </tr>`;
             });
-            
+
+            // Add "View All" row if there are more tokens
+            if (hasMore) {
+                rows.push(`
+                <tr class="bg-orange-900/20 hover:bg-orange-900/40 cursor-pointer" onclick="toggleAllLaunchesModal()">
+                    <td colspan="5" class="text-center text-orange-400 py-3 font-mono">
+                        <span class="text-orange-300">+ ${allTokens.length - TOP_N} more tokens</span>
+                        <span class="ml-2 text-xs text-orange-500 underline">Click to view all</span>
+                    </td>
+                </tr>`);
+            }
+
             ui.leaderboardBody.innerHTML = rows.join('');
 
         } catch (e) {
