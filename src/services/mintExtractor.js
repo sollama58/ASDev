@@ -930,15 +930,11 @@ function parseFeeSharingConfigAny(data) {
 /**
  * Verify that a wallet is a fee recipient for a given token mint
  *
- * OPTIMIZED APPROACH:
- * When fee sharing is enabled, the coin_creator field in BC/AMM IS the fee_sharing_config PDA.
- * This allows us to directly fetch and parse the config without needing the originalCreator
- * or expensive account scanning.
- *
  * Flow:
  * 1. Read coin_creator from BC or AMM
  * 2. If coin_creator === wallet -> direct creator (100% share)
- * 3. Otherwise, coin_creator IS the fee_sharing_config PDA -> fetch & parse shareholders
+ * 3. If coin_creator is owned by PUMP program -> it's a fee_sharing_config, parse it
+ * 4. If coin_creator is owned by FEE program -> extract original creator, derive fee_sharing_config PDA
  *
  * @param {string} mint - Token mint address
  * @param {string} walletToVerify - Wallet public key to verify as fee recipient
@@ -1053,6 +1049,53 @@ async function verifyFeeRecipient(mint, walletToVerify, connection, originalCrea
                         }
                         // Config exists but we're not in shareholders
                         logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Fee sharing config found but wallet not in shareholders`);
+                    }
+                }
+            } else if (creatorAccountInfo.owner.equals(PROGRAMS.FEE)) {
+                // coin_creator is owned by FEE program (pfee...)
+                // This means fee sharing is enabled. Extract the original creator from the FEE account
+                // and look up the fee_sharing_config PDA to find shareholders
+                logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator owned by FEE program, extracting original creator...`);
+
+                if (creatorAccountInfo.data.length >= 43) {
+                    // FEE account structure: discriminator(8) + bump(1) + flags(2) + creator(32)
+                    // Original creator is at offset 11-43
+                    const originalCreatorPubkey = new PublicKey(creatorAccountInfo.data.slice(11, 43));
+                    logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Original creator: ${originalCreatorPubkey.toString().slice(0, 8)}...`);
+
+                    // Derive the fee_sharing_config PDA from the original creator
+                    const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
+                        [Buffer.from("fee_sharing_config"), originalCreatorPubkey.toBuffer()],
+                        PROGRAMS.PUMP
+                    );
+
+                    logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config PDA: ${feeSharingConfigPDA.toString().slice(0, 8)}...`);
+
+                    // Fetch the fee_sharing_config
+                    const configAccountInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+
+                    if (configAccountInfo && configAccountInfo.owner.equals(PROGRAMS.PUMP)) {
+                        const config = parseFeeSharingConfigAny(configAccountInfo.data);
+
+                        if (config && config.shareholders && config.shareholders.length > 0) {
+                            const walletStr = walletKey.toString();
+                            for (const shareholder of config.shareholders) {
+                                if (shareholder.pubkey.toString() === walletStr) {
+                                    const sharePercent = shareholder.shareBps / 100;
+                                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via fee_sharing_config (${sharePercent}% share)`);
+                                    return {
+                                        isRecipient: true,
+                                        source: 'fee_sharing_config',
+                                        feeShareBps: shareholder.shareBps,
+                                        feeSharePercent: sharePercent,
+                                        originalCreator: originalCreatorPubkey.toString()
+                                    };
+                                }
+                            }
+                            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config found but wallet not in shareholders`);
+                        }
+                    } else {
+                        logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - fee_sharing_config PDA not found or not owned by PUMP`);
                     }
                 }
             } else {
