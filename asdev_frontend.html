@@ -1416,13 +1416,22 @@
     window.viewTokenHolders = viewTokenHolders;
 
     // v11.0: Updated for SOL display with appropriate decimal places
+    // v19.0: Improved formatting for different value ranges
     const updateExpectedAirdropDisplay = (expectedAmount) => {
-        const amount = parseFloat(expectedAmount);
+        const amount = parseFloat(expectedAmount) || 0;
         if (amount <= 0) {
-            ui.expectedAirdrop.innerText = '0.00';
+            ui.expectedAirdrop.innerText = '0.0000';
         } else if (amount < 0.0001) {
+            // Very small amounts - show in scientific notation
             ui.expectedAirdrop.innerText = amount.toExponential(2);
+        } else if (amount < 1) {
+            // Small amounts (less than 1 SOL) - show 4 decimal places
+            ui.expectedAirdrop.innerText = amount.toFixed(4);
+        } else if (amount < 10) {
+            // Medium amounts - show 3 decimal places
+            ui.expectedAirdrop.innerText = amount.toFixed(3);
         } else {
+            // Large amounts - show 2 decimal places
             ui.expectedAirdrop.innerText = amount.toFixed(2);
         }
     };

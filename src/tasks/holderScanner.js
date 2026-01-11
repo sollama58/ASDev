@@ -295,7 +295,9 @@ async function updateGlobalState(deps) {
 
         globalState.totalPoints = tempTotalPoints;
         globalState.availableSolForAirdrop = availableSolForAirdrop; // v17.0: Track available SOL
-        logger.info(`Global Points: ${globalState.totalPoints.toFixed(2)} | Available SOL: ${availableSolForAirdrop.toFixed(4)} | Community Pot: ${communityPot.toFixed(4)} SOL | KOTH Pot: ${kothPot.toFixed(4)} SOL`);
+        globalState.communityPot = communityPot; // v19.0: Track community pot for debugging
+        globalState.kothPot = kothPot; // v19.0: Track KOTH pot for debugging
+        logger.info(`[HolderScanner] Global Points: ${globalState.totalPoints.toFixed(2)} | Available SOL: ${availableSolForAirdrop.toFixed(4)} | Community Pot: ${communityPot.toFixed(4)} SOL | KOTH Pot: ${kothPot.toFixed(4)} SOL`);
 
         // Update expected airdrops and points map
         globalState.userExpectedAirdrops.clear();

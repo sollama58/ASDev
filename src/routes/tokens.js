@@ -1079,6 +1079,69 @@ function init(deps) {
     });
 
     // ========== DIAGNOSTIC ENDPOINTS ==========
+
+    // v19.0: Debug endpoint for expected airdrop calculation
+    router.get('/debug/airdrop-calculation', async (req, res) => {
+        const { userPubkey } = req.query;
+
+        try {
+            // Get global state values
+            const totalPoints = await redis.getTotalPoints();
+            const availableSol = globalState.availableSolForAirdrop || 0;
+            const communityPot = globalState.communityPot || 0;
+            const kothPot = globalState.kothPot || 0;
+
+            // Get top 10 expected airdrops for verification
+            const allAirdrops = await redis.getAllUserExpectedAirdrops();
+            const topAirdrops = Array.from(allAirdrops.entries())
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10)
+                .map(([pubkey, amount]) => ({
+                    pubkey: pubkey.slice(0, 8) + '...',
+                    expectedAirdropSOL: amount,
+                    formattedSOL: amount.toFixed(6)
+                }));
+
+            // Get user-specific info if provided
+            let userInfo = null;
+            if (userPubkey && isValidPubkey(userPubkey)) {
+                const expectedAirdrop = await redis.getUserExpectedAirdrop(userPubkey);
+                const userPoints = await redis.getUserPoints(userPubkey);
+
+                userInfo = {
+                    pubkey: userPubkey,
+                    points: userPoints,
+                    expectedAirdropSOL: expectedAirdrop,
+                    formattedSOL: expectedAirdrop.toFixed(6),
+                    shareOfPool: totalPoints > 0 ? ((userPoints / totalPoints) * 100).toFixed(4) + '%' : '0%'
+                };
+            }
+
+            res.json({
+                globalState: {
+                    totalPoints,
+                    availableSolForAirdrop: availableSol,
+                    communityPotSOL: communityPot,
+                    kothPotSOL: kothPot,
+                    formattedAvailable: availableSol.toFixed(4) + ' SOL',
+                    formattedCommunityPot: communityPot.toFixed(4) + ' SOL',
+                    formattedKothPot: kothPot.toFixed(4) + ' SOL'
+                },
+                topExpectedAirdrops: topAirdrops,
+                totalUsersWithAirdrop: allAirdrops.size,
+                userInfo,
+                calculationFormula: 'expectedAirdrop = (userPoints / totalPoints) * communityPot + kothBonus',
+                currency: 'SOL',
+                serverTime: new Date().toISOString()
+            });
+        } catch (e) {
+            res.status(500).json({
+                error: e.message,
+                serverTime: new Date().toISOString()
+            });
+        }
+    });
+
     // Provides database health check and token count information
     router.get('/debug/db-status', async (req, res) => {
         try {
