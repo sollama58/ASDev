@@ -136,7 +136,10 @@ function init(deps) {
                 totalAirdropped: cachedHealth.totalAirdropped,
                 // v11.0: SOL airdrop total (new)
                 totalSolAirdropped: cachedHealth.totalSolAirdropped || 0,
-                // v11.0: Current airdrop pool available (SOL balance minus reserve)
+                // v14.0: Raw SOL balance (actual wallet balance)
+                solBalance: (cachedHealth.currentBalance / LAMPORTS_PER_SOL).toFixed(4),
+                solBalanceLamports: cachedHealth.currentBalance,
+                // v11.0: Current airdrop pool available (SOL balance minus 0.5 SOL reserve)
                 airdropPoolSol: Math.max(0, (cachedHealth.currentBalance / LAMPORTS_PER_SOL) - 0.5).toFixed(4),
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
                 // Pass dynamic conservation status to frontend

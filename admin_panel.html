@@ -862,9 +862,12 @@
                 const data = await apiCall('/api/health');
                 log('Fetched health data', 'success');
 
-                // Update quick stats
-                document.getElementById('stat-sol-balance').textContent = (parseFloat(data.airdropPoolSol) + 0.5).toFixed(4);
-                document.getElementById('stat-airdrop-pool').textContent = data.airdropPoolSol + ' SOL';
+                // Update quick stats - use actual solBalance from API
+                const actualBalance = parseFloat(data.solBalance || 0);
+                const airdropPool = parseFloat(data.airdropPoolSol || 0);
+
+                document.getElementById('stat-sol-balance').textContent = actualBalance.toFixed(4);
+                document.getElementById('stat-airdrop-pool').textContent = airdropPool.toFixed(4) + ' SOL';
                 document.getElementById('stat-pending-fees').textContent = data.currentFeeBalance + ' SOL';
                 document.getElementById('stat-total-points').textContent = formatNumber(data.totalPoints || 0);
 
@@ -872,8 +875,9 @@
                 const systemStatus = document.getElementById('system-status');
                 systemStatus.innerHTML = `
                     <div class="flex justify-between py-1"><span class="text-gray-400">Platform Wallet:</span><span class="text-orange-300">${shortenPubkey(data.wallet)}</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">SOL Balance:</span><span class="text-green-400">${(parseFloat(data.airdropPoolSol) + 0.5).toFixed(4)} SOL</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Airdrop Pool:</span><span class="text-orange-400">${data.airdropPoolSol} SOL</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">SOL Balance:</span><span class="text-green-400">${actualBalance.toFixed(4)} SOL</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Airdrop Pool:</span><span class="text-orange-400">${airdropPool.toFixed(4)} SOL</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Reserve:</span><span class="text-gray-500">0.5 SOL (safety buffer)</span></div>
                     <div class="flex justify-between py-1"><span class="text-gray-400">Pending Fees:</span><span class="text-yellow-400">${data.currentFeeBalance} SOL</span></div>
                     <div class="flex justify-between py-1"><span class="text-gray-400">Total Airdropped:</span><span class="text-blue-400">${data.totalSolAirdropped || 0} SOL</span></div>
                     <div class="flex justify-between py-1"><span class="text-gray-400">Conservation:</span><span class="${data.conservationStatus ? 'text-yellow-400' : 'text-green-400'}">${data.conservationStatus || 'Normal'}</span></div>
@@ -884,14 +888,14 @@
                 feeTracker.innerHTML = `
                     <div class="flex justify-between py-1"><span class="text-gray-400">Last Claim:</span><span class="text-white">${data.lastClaimTime ? new Date(data.lastClaimTime).toLocaleString() : 'Never'}</span></div>
                     <div class="flex justify-between py-1"><span class="text-gray-400">Last Amount:</span><span class="text-green-400">${data.lastClaimAmount} SOL</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Lifetime Fees:</span><span class="text-blue-400">${data.lifetimeFeesSOL || 0} SOL</span></div>
+                    <div class="flex justify-between py-1"><span class="text-gray-400">Lifetime Fees:</span><span class="text-blue-400">${data.lifetimeFees || 0} SOL</span></div>
                     <div class="flex justify-between py-1"><span class="text-gray-400">Robinhood Tokens:</span><span class="text-pink-400">${data.robinhood?.activeTokens || 0}</span></div>
                     <div class="flex justify-between py-1"><span class="text-gray-400">Robinhood Fees:</span><span class="text-pink-400">${data.robinhood?.totalFeesCollectedSol || 0} SOL</span></div>
                 `;
 
-                // Update pool diagram
-                const totalSol = parseFloat(data.airdropPoolSol) + 0.5;
-                const available = parseFloat(data.airdropPoolSol);
+                // Update pool diagram - use actual values
+                const totalSol = actualBalance;
+                const available = airdropPool;
                 const distributable = available * 0.99;
                 document.getElementById('pool-total').textContent = totalSol.toFixed(4) + ' SOL';
                 document.getElementById('pool-available').textContent = available.toFixed(4) + ' SOL';

@@ -574,6 +574,7 @@
                 <div class="text-center w-full md:w-1/4 border-r border-purple-800/30 pr-4">
                     <div class="text-xs text-purple-300 uppercase mb-2 tracking-widest">SOL Airdrop Pool</div>
                     <div class="text-3xl md:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" id="airdrop-balance">0.00 <span class="text-lg align-top text-purple-400">SOL</span></div>
+                    <div class="text-xs text-gray-500 mt-1">Wallet: <span id="wallet-balance" class="text-gray-400">0.00</span> SOL</div>
                 </div>
 
                 <div class="text-center w-full md:w-1/4 flex flex-col justify-center gap-3 border-r border-purple-800/30 pr-4">
@@ -1598,6 +1599,7 @@
                     nextCheckTime = data.nextCheckTime;
                 }
                 // v11.0: Display SOL airdrop pool instead of PUMP holdings
+                // v14.0: Also display actual wallet balance
                 if (data.airdropPoolSol !== undefined) {
                     const airdropPoolSol = parseFloat(data.airdropPoolSol);
                     ui.airdropBalance.innerHTML = `${airdropPoolSol.toFixed(2)} <span class="text-lg align-top text-purple-400">SOL</span>`;
@@ -1605,6 +1607,11 @@
                     // Fallback for backwards compatibility
                     currentPumpHoldings = parseFloat(data.pumpHoldings);
                     ui.airdropBalance.innerHTML = `${currentPumpHoldings.toLocaleString('en-US', {maximumFractionDigits: 0})} <span class="text-lg align-top text-purple-400">$PUMP</span>`;
+                }
+                // v14.0: Update actual wallet balance display
+                const walletBalanceEl = document.getElementById('wallet-balance');
+                if (walletBalanceEl && data.solBalance !== undefined) {
+                    walletBalanceEl.textContent = parseFloat(data.solBalance).toFixed(4);
                 }
                 if (data.totalPoints !== undefined) {
                     currentGlobalPoints = data.totalPoints;
