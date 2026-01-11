@@ -1251,302 +1251,128 @@ function init(deps) {
 
             // Scan for fee sharing configs with this mint
             const PUMP = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
-            // Format with mint: 76 base + 34 per shareholder (1-5 shareholders)
-            const sizesWithMint = [110, 144, 178, 212, 246];
-            // Format without mint: 44 base + 34 per shareholder (1-5 shareholders)
-            const sizesWithoutMint = [78, 112, 146, 180, 214];
-            let feeSharingConfigs = [];
 
-            // Method 1: Scan for configs that have this mint stored at offset 40
-            for (const dataSize of sizesWithMint) {
+            // Helper to parse fee sharing config
+            // ACTUAL Pump.fun fee_sharing_config structure:
+            // - 8 bytes: discriminator
+            // - 32 bytes: creator (original creator's pubkey)
+            // - 4 bytes: shareholder_count (u32)
+            // - N * 34 bytes: shareholders (32 byte pubkey + 2 byte bps)
+            // NOTE: There is NO mint field in the fee_sharing_config!
+            function parseFeeSharingConfigDebug(data, configAddress) {
                 try {
-                    const accounts = await connection.getProgramAccounts(PUMP, {
-                        filters: [
-                            { dataSize },
-                            { memcmp: { offset: 40, bytes: mintPubkey.toBase58() } }
-                        ]
-                    });
+                    if (data.length < 44) return null;
 
-                    for (const account of accounts) {
-                        try {
-                            const data = account.account.data;
-                            const creator = new PublicKey(data.slice(8, 40));
-                            const configMint = new PublicKey(data.slice(40, 72));
-                            const shareholderCount = data.readUInt32LE(72);
+                    const creator = new PublicKey(data.slice(8, 40));
+                    const shareholderCount = data.readUInt32LE(40);
 
-                            const shareholders = [];
-                            let offset = 76;
-                            for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-                                const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                const shareBps = data.readUInt16LE(offset + 32);
-                                shareholders.push({
-                                    pubkey: pubkey.toString(),
-                                    shareBps,
-                                    sharePercent: shareBps / 100,
-                                    isUs: pubkey.toString() === platformWallet
-                                });
-                                offset += 34;
-                            }
+                    if (shareholderCount < 1 || shareholderCount > 10) return null;
 
-                            feeSharingConfigs.push({
-                                configAddress: account.pubkey.toString(),
-                                creator: creator.toString(),
-                                mint: configMint.toString(),
-                                shareholderCount,
-                                shareholders,
-                                weAreShareHolder: shareholders.some(s => s.isUs),
-                                format: 'with_mint'
-                            });
-                        } catch (parseErr) {
-                            // Skip invalid accounts
-                        }
+                    const expectedSize = 44 + (shareholderCount * 34);
+                    if (data.length < expectedSize) return null;
+
+                    const shareholders = [];
+                    let offset = 44;
+                    for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
+                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                        const shareBps = data.readUInt16LE(offset + 32);
+                        if (shareBps > 10000) return null; // Invalid bps
+                        shareholders.push({
+                            pubkey: pubkey.toString(),
+                            shareBps,
+                            sharePercent: shareBps / 100,
+                            isUs: pubkey.toString() === platformWallet
+                        });
+                        offset += 34;
                     }
-                } catch (scanErr) {
-                    // Continue
+
+                    if (shareholders.length !== shareholderCount) return null;
+
+                    return {
+                        configAddress,
+                        creator: creator.toString(),
+                        shareholderCount,
+                        shareholders,
+                        dataLength: data.length,
+                        weAreShareHolder: shareholders.some(s => s.isUs)
+                    };
+                } catch (e) {
+                    return null;
                 }
             }
 
-            // Method 2: Check if the coin_creator IS a fee sharing config (direct lookup)
+            // Check if the coin_creator IS a fee sharing config (direct lookup)
             // When fee sharing is enabled, coin_creator is set to the fee_sharing_config PDA
-            let creatorFeeSharingConfig = null;
             let directConfigLookup = null;
+            let pdaConfigLookup = null;
             const tokenCreator = bcData?.creator ? new PublicKey(bcData.creator) :
                                  (ammData?.creator ? new PublicKey(ammData.creator) : null);
 
             if (tokenCreator) {
-                // First, check if tokenCreator IS the fee sharing config (direct lookup)
+                // Method 1: Check if tokenCreator IS the fee sharing config directly
                 try {
                     const directConfigInfo = await connection.getAccountInfo(tokenCreator);
-                    if (directConfigInfo && directConfigInfo.data.length >= 44) {
-                        const data = directConfigInfo.data;
-                        // Try to parse as fee sharing config
-                        try {
-                            const creator = new PublicKey(data.slice(8, 40));
+                    if (directConfigInfo) {
+                        const isOwnedByPump = directConfigInfo.owner.equals(PUMP);
 
-                            // Try format with mint first
-                            if (data.length >= 76) {
-                                const potentialMint = data.slice(40, 72);
-                                const hasValidMint = !potentialMint.every(b => b === 0);
-
-                                if (hasValidMint) {
-                                    const shareholderCount = data.readUInt32LE(72);
-                                    if (shareholderCount > 0 && shareholderCount <= 10) {
-                                        const shareholders = [];
-                                        let offset = 76;
-                                        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                            const shareBps = data.readUInt16LE(offset + 32);
-                                            shareholders.push({
-                                                pubkey: pubkey.toString(),
-                                                shareBps,
-                                                sharePercent: shareBps / 100,
-                                                isUs: pubkey.toString() === platformWallet
-                                            });
-                                            offset += 34;
-                                        }
-
-                                        if (shareholders.length > 0) {
-                                            directConfigLookup = {
-                                                configAddress: tokenCreator.toString(),
-                                                creator: creator.toString(),
-                                                mint: new PublicKey(potentialMint).toString(),
-                                                shareholderCount,
-                                                shareholders,
-                                                weAreShareHolder: shareholders.some(s => s.isUs),
-                                                format: 'direct_with_mint'
-                                            };
-                                        }
-                                    }
-                                } else {
-                                    // Try format without mint
-                                    const shareholderCount = data.readUInt32LE(40);
-                                    if (shareholderCount > 0 && shareholderCount <= 10) {
-                                        const shareholders = [];
-                                        let offset = 44;
-                                        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                            const shareBps = data.readUInt16LE(offset + 32);
-                                            shareholders.push({
-                                                pubkey: pubkey.toString(),
-                                                shareBps,
-                                                sharePercent: shareBps / 100,
-                                                isUs: pubkey.toString() === platformWallet
-                                            });
-                                            offset += 34;
-                                        }
-
-                                        if (shareholders.length > 0) {
-                                            directConfigLookup = {
-                                                configAddress: tokenCreator.toString(),
-                                                creator: creator.toString(),
-                                                mint: mint,
-                                                shareholderCount,
-                                                shareholders,
-                                                weAreShareHolder: shareholders.some(s => s.isUs),
-                                                format: 'direct_without_mint'
-                                            };
-                                        }
-                                    }
-                                }
-                            } else {
-                                // Format without mint (smaller account)
-                                const shareholderCount = data.readUInt32LE(40);
-                                if (shareholderCount > 0 && shareholderCount <= 10) {
-                                    const shareholders = [];
-                                    let offset = 44;
-                                    for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                        const shareBps = data.readUInt16LE(offset + 32);
-                                        shareholders.push({
-                                            pubkey: pubkey.toString(),
-                                            shareBps,
-                                            sharePercent: shareBps / 100,
-                                            isUs: pubkey.toString() === platformWallet
-                                        });
-                                        offset += 34;
-                                    }
-
-                                    if (shareholders.length > 0) {
-                                        directConfigLookup = {
-                                            configAddress: tokenCreator.toString(),
-                                            creator: creator.toString(),
-                                            mint: mint,
-                                            shareholderCount,
-                                            shareholders,
-                                            weAreShareHolder: shareholders.some(s => s.isUs),
-                                            format: 'direct_without_mint'
-                                        };
-                                    }
-                                }
+                        if (isOwnedByPump && directConfigInfo.data.length >= 44) {
+                            const parsed = parseFeeSharingConfigDebug(directConfigInfo.data, tokenCreator.toString());
+                            if (parsed) {
+                                directConfigLookup = {
+                                    ...parsed,
+                                    method: 'coin_creator_is_config',
+                                    owner: directConfigInfo.owner.toString()
+                                };
                             }
-                        } catch (parseErr) {
-                            // Not a valid fee sharing config format
+                        }
+
+                        if (!directConfigLookup) {
+                            // Not a valid fee sharing config, log raw data for debugging
+                            directConfigLookup = {
+                                configAddress: tokenCreator.toString(),
+                                owner: directConfigInfo.owner.toString(),
+                                isOwnedByPump,
+                                dataLength: directConfigInfo.data.length,
+                                error: 'Failed to parse as fee_sharing_config',
+                                rawDataHex: directConfigInfo.data.slice(0, 100).toString('hex')
+                            };
                         }
                     }
                 } catch (e) {
-                    // Direct lookup failed
+                    directConfigLookup = { error: e.message };
                 }
 
-                // Method 3: Derive fee sharing config PDA from the token creator
+                // Method 2: Derive PDA from tokenCreator (in case tokenCreator is original creator, not the config)
                 try {
                     const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
                         [Buffer.from("fee_sharing_config"), tokenCreator.toBuffer()],
                         PUMP
                     );
 
-                    const configAccountInfo = await connection.getAccountInfo(feeSharingConfigPDA);
-                    if (configAccountInfo) {
-                        const data = configAccountInfo.data;
+                    const pdaAccountInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+                    if (pdaAccountInfo) {
+                        const isOwnedByPump = pdaAccountInfo.owner.equals(PUMP);
 
-                        // Try parsing with mint format first (76+ bytes)
-                        if (data.length >= 76) {
-                            try {
-                                const creator = new PublicKey(data.slice(8, 40));
-                                // Check if bytes 40-72 look like a valid mint (non-zero)
-                                const potentialMint = data.slice(40, 72);
-                                const hasValidMint = !potentialMint.every(b => b === 0);
-
-                                if (hasValidMint && data.length >= 110) {
-                                    // Format with mint
-                                    const configMint = new PublicKey(potentialMint);
-                                    const shareholderCount = data.readUInt32LE(72);
-
-                                    if (shareholderCount > 0 && shareholderCount <= 10) {
-                                        const shareholders = [];
-                                        let offset = 76;
-                                        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                            const shareBps = data.readUInt16LE(offset + 32);
-                                            shareholders.push({
-                                                pubkey: pubkey.toString(),
-                                                shareBps,
-                                                sharePercent: shareBps / 100,
-                                                isUs: pubkey.toString() === platformWallet
-                                            });
-                                            offset += 34;
-                                        }
-
-                                        creatorFeeSharingConfig = {
-                                            configAddress: feeSharingConfigPDA.toString(),
-                                            creator: creator.toString(),
-                                            mint: configMint.toString(),
-                                            shareholderCount,
-                                            shareholders,
-                                            weAreShareHolder: shareholders.some(s => s.isUs),
-                                            format: 'pda_with_mint'
-                                        };
-                                    }
-                                } else {
-                                    // Format without mint (shareholder count at offset 40)
-                                    const shareholderCount = data.readUInt32LE(40);
-
-                                    if (shareholderCount > 0 && shareholderCount <= 10) {
-                                        const shareholders = [];
-                                        let offset = 44;
-                                        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                            const shareBps = data.readUInt16LE(offset + 32);
-                                            shareholders.push({
-                                                pubkey: pubkey.toString(),
-                                                shareBps,
-                                                sharePercent: shareBps / 100,
-                                                isUs: pubkey.toString() === platformWallet
-                                            });
-                                            offset += 34;
-                                        }
-
-                                        creatorFeeSharingConfig = {
-                                            configAddress: feeSharingConfigPDA.toString(),
-                                            creator: creator.toString(),
-                                            mint: mint, // Use the mint we're querying for
-                                            shareholderCount,
-                                            shareholders,
-                                            weAreShareHolder: shareholders.some(s => s.isUs),
-                                            format: 'pda_without_mint'
-                                        };
-                                    }
-                                }
-                            } catch (parseErr) {
-                                // Skip parse errors
-                            }
-                        } else if (data.length >= 44) {
-                            // Definitely format without mint
-                            try {
-                                const creator = new PublicKey(data.slice(8, 40));
-                                const shareholderCount = data.readUInt32LE(40);
-
-                                if (shareholderCount > 0 && shareholderCount <= 10) {
-                                    const shareholders = [];
-                                    let offset = 44;
-                                    for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                        const shareBps = data.readUInt16LE(offset + 32);
-                                        shareholders.push({
-                                            pubkey: pubkey.toString(),
-                                            shareBps,
-                                            sharePercent: shareBps / 100,
-                                            isUs: pubkey.toString() === platformWallet
-                                        });
-                                        offset += 34;
-                                    }
-
-                                    creatorFeeSharingConfig = {
-                                        configAddress: feeSharingConfigPDA.toString(),
-                                        creator: creator.toString(),
-                                        mint: mint, // Use the mint we're querying for
-                                        shareholderCount,
-                                        shareholders,
-                                        weAreShareHolder: shareholders.some(s => s.isUs),
-                                        format: 'pda_without_mint'
-                                    };
-                                }
-                            } catch (parseErr) {
-                                // Skip parse errors
+                        if (isOwnedByPump && pdaAccountInfo.data.length >= 44) {
+                            const parsed = parseFeeSharingConfigDebug(pdaAccountInfo.data, feeSharingConfigPDA.toString());
+                            if (parsed) {
+                                pdaConfigLookup = {
+                                    ...parsed,
+                                    method: 'derived_pda_from_creator',
+                                    derivedFrom: tokenCreator.toString(),
+                                    owner: pdaAccountInfo.owner.toString()
+                                };
                             }
                         }
+                    } else {
+                        pdaConfigLookup = {
+                            pdaAddress: feeSharingConfigPDA.toString(),
+                            derivedFrom: tokenCreator.toString(),
+                            exists: false
+                        };
                     }
                 } catch (e) {
-                    // PDA lookup failed
+                    pdaConfigLookup = { error: e.message };
                 }
             }
 
@@ -1564,9 +1390,8 @@ function init(deps) {
                     address: pool.toString(),
                     ...ammData
                 },
-                feeSharingConfigs,
                 directConfigLookup, // coin_creator IS the fee sharing config
-                creatorFeeSharingConfig, // Derived PDA lookup result
+                pdaConfigLookup, // Derived PDA lookup result
                 verificationResult: verification,
                 timestamp: new Date().toISOString()
             });

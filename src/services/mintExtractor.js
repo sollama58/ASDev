@@ -849,69 +849,38 @@ async function validateMintsBatch(mints, options = {}) {
 
 /**
  * Parse fee sharing config account data
- * Structure:
- * - 8 bytes: discriminator
- * - 32 bytes: creator (original token creator)
- * - 32 bytes: mint (token mint address)
- * - 4 bytes: shareholder count
- * - N * 34 bytes: shareholders (32 byte pubkey + 2 byte bps)
+ *
+ * The ACTUAL Pump.fun fee_sharing_config structure is:
+ * - 8 bytes: discriminator (anchor account discriminator)
+ * - 32 bytes: creator (the original token creator's pubkey)
+ * - 4 bytes: shareholder_count (u32, little-endian)
+ * - N * 34 bytes: shareholders (32 byte pubkey + 2 byte bps each)
+ *
+ * Total sizes: 44 base + 34 per shareholder
+ * - 1 shareholder: 78 bytes
+ * - 2 shareholders: 112 bytes
+ * - 3 shareholders: 146 bytes
+ * - 4 shareholders: 180 bytes
+ * - 5 shareholders: 214 bytes
  *
  * @param {Buffer} data - Raw account data
  * @returns {Object|null} Parsed config or null if invalid
  */
 function parseFeeSharingConfig(data) {
     try {
-        if (data.length < 76) return null; // Minimum: 8 + 32 + 32 + 4 bytes
-
-        const creator = new PublicKey(data.slice(8, 40));
-        const mint = new PublicKey(data.slice(40, 72));
-
-        // Number of shareholders (4 bytes, little-endian)
-        const shareholderCount = data.readUInt32LE(72);
-
-        // Sanity check - shouldn't have more than 10 shareholders
-        if (shareholderCount > 10 || shareholderCount < 1) return null;
-
-        const shareholders = [];
-        let offset = 76;
-
-        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-            const shareBps = data.readUInt16LE(offset + 32);
-            shareholders.push({ pubkey, shareBps });
-            offset += 34;
-        }
-
-        return { creator, mint, shareholders, format: 'with_mint' };
-    } catch (e) {
-        return null;
-    }
-}
-
-/**
- * Parse fee sharing config account data (alternative format without mint)
- * This format is used when fees are modified - mint is not stored in account
- *
- * Layout (alternative):
- * - 8 bytes: discriminator
- * - 32 bytes: creator (pubkey)
- * - 4 bytes: shareholder_count (u32)
- * - N * 34 bytes: shareholders (32 byte pubkey + 2 byte bps)
- *
- * @param {Buffer} data - Raw account data
- * @returns {Object|null} Parsed config or null if invalid
- */
-function parseFeeSharingConfigAlt(data) {
-    try {
-        if (data.length < 44) return null; // Minimum: 8 + 32 + 4 bytes
+        if (data.length < 44) return null; // Minimum: 8 (discriminator) + 32 (creator) + 4 (count)
 
         const creator = new PublicKey(data.slice(8, 40));
 
         // Number of shareholders (4 bytes, little-endian) at offset 40
         const shareholderCount = data.readUInt32LE(40);
 
-        // Sanity check - shouldn't have more than 10 shareholders
+        // Sanity check - shouldn't have more than 10 shareholders, and must have at least 1
         if (shareholderCount > 10 || shareholderCount < 1) return null;
+
+        // Expected size: 44 base + 34 per shareholder
+        const expectedMinSize = 44 + (shareholderCount * 34);
+        if (data.length < expectedMinSize) return null;
 
         const shareholders = [];
         let offset = 44;
@@ -919,37 +888,43 @@ function parseFeeSharingConfigAlt(data) {
         for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
             const pubkey = new PublicKey(data.slice(offset, offset + 32));
             const shareBps = data.readUInt16LE(offset + 32);
+
+            // Sanity check - bps should be 0-10000
+            if (shareBps > 10000) return null;
+
             shareholders.push({ pubkey, shareBps });
             offset += 34;
         }
 
-        return { creator, mint: null, shareholders, format: 'without_mint' };
+        // Verify we got all expected shareholders
+        if (shareholders.length !== shareholderCount) return null;
+
+        return { creator, mint: null, shareholders, format: 'standard' };
     } catch (e) {
         return null;
     }
 }
 
 /**
- * Try parsing fee sharing config with both formats
- * First tries the format with mint, then falls back to format without mint
+ * Parse fee sharing config - alias for backward compatibility
+ * The "alt" format was a misunderstanding - there's only one format
+ *
+ * @param {Buffer} data - Raw account data
+ * @returns {Object|null} Parsed config or null if invalid
+ */
+function parseFeeSharingConfigAlt(data) {
+    return parseFeeSharingConfig(data);
+}
+
+/**
+ * Try parsing fee sharing config
+ * Uses the standard format (no mint stored in config)
  *
  * @param {Buffer} data - Raw account data
  * @returns {Object|null} Parsed config or null if invalid
  */
 function parseFeeSharingConfigAny(data) {
-    // First try format with mint (more common)
-    let config = parseFeeSharingConfig(data);
-    if (config && config.shareholders.length > 0) {
-        return config;
-    }
-
-    // Try format without mint
-    config = parseFeeSharingConfigAlt(data);
-    if (config && config.shareholders.length > 0) {
-        return config;
-    }
-
-    return null;
+    return parseFeeSharingConfig(data);
 }
 
 /**
@@ -1054,31 +1029,53 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
         // 1. First check if tokenCreator IS a fee_sharing_config account (direct fetch)
         // 2. If not, derive the fee_sharing_config PDA from tokenCreator
         if (tokenCreator) {
+            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - tokenCreator found: ${tokenCreator.toString()}, checking if it's a fee_sharing_config...`);
+
             // Method 1: Check if tokenCreator IS the fee_sharing_config PDA
             // (This happens when fee sharing is enabled - coin_creator points to the config)
             try {
                 const configAccountInfo = await connection.getAccountInfo(tokenCreator);
-                if (configAccountInfo && configAccountInfo.data.length >= 44) {
-                    const config = parseFeeSharingConfigAny(configAccountInfo.data);
+                if (configAccountInfo) {
+                    logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - tokenCreator account exists, dataLen=${configAccountInfo.data.length}, owner=${configAccountInfo.owner.toString()}`);
 
-                    if (config && config.shareholders && config.shareholders.length > 0) {
-                        // This is a fee sharing config! Check if we're in it
-                        const walletStr = walletKey.toString();
-                        for (const shareholder of config.shareholders) {
-                            if (shareholder.pubkey.toString() === walletStr) {
-                                const sharePercent = shareholder.shareBps / 100;
-                                const formatInfo = config.format || 'unknown';
-                                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via direct config lookup (${sharePercent}% fee share, ${shareholder.shareBps} bps, format: ${formatInfo})`);
-                                return {
-                                    isRecipient: true,
-                                    source: 'fee_sharing_config_direct',
-                                    feeShareBps: shareholder.shareBps,
-                                    feeSharePercent: sharePercent
-                                };
+                    // Check if this account is owned by the PUMP program (fee_sharing_config accounts are)
+                    const isOwnedByPump = configAccountInfo.owner.equals(PROGRAMS.PUMP);
+                    logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - isOwnedByPump=${isOwnedByPump}`);
+
+                    if (isOwnedByPump && configAccountInfo.data.length >= 44) {
+                        const config = parseFeeSharingConfigAny(configAccountInfo.data);
+
+                        if (config) {
+                            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Parsed fee_sharing_config: creator=${config.creator.toString()}, shareholders=${config.shareholders.length}`);
+                            for (let i = 0; i < config.shareholders.length; i++) {
+                                const sh = config.shareholders[i];
+                                logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Shareholder[${i}]: ${sh.pubkey.toString()}, ${sh.shareBps} bps`);
                             }
+                        } else {
+                            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Failed to parse as fee_sharing_config`);
                         }
-                        logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Fee sharing config found (direct) but wallet not in shareholders`);
+
+                        if (config && config.shareholders && config.shareholders.length > 0) {
+                            // This is a fee sharing config! Check if we're in it
+                            const walletStr = walletKey.toString();
+                            for (const shareholder of config.shareholders) {
+                                if (shareholder.pubkey.toString() === walletStr) {
+                                    const sharePercent = shareholder.shareBps / 100;
+                                    const formatInfo = config.format || 'unknown';
+                                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via direct config lookup (${sharePercent}% fee share, ${shareholder.shareBps} bps, format: ${formatInfo})`);
+                                    return {
+                                        isRecipient: true,
+                                        source: 'fee_sharing_config_direct',
+                                        feeShareBps: shareholder.shareBps,
+                                        feeSharePercent: sharePercent
+                                    };
+                                }
+                            }
+                            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Fee sharing config found (direct) but wallet ${walletStr.slice(0, 8)}... not in shareholders`);
+                        }
                     }
+                } else {
+                    logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - tokenCreator account does not exist`);
                 }
             } catch (e) {
                 logger.debug(`[MintExtractor] Direct config check failed for ${mint.slice(0, 8)}...: ${e.message}`);
@@ -1121,57 +1118,15 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
             }
         }
 
-        // FALLBACK: Scan for fee sharing configs that contain this specific mint
-        // The mint is stored at offset 40-72, so we can filter directly by mint
-        try {
-            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Trying fallback scan for fee sharing configs by mint...`);
-
-            // Fee sharing configs have variable sizes based on number of shareholders
-            // 76 base + 34 per shareholder (1-5 shareholders)
-            const sizes = [110, 144, 178, 212, 246];
-
-            for (const dataSize of sizes) {
-                try {
-                    // Filter by mint address at offset 40 (after discriminator + creator)
-                    const accounts = await connection.getProgramAccounts(PROGRAMS.PUMP, {
-                        filters: [
-                            { dataSize },
-                            { memcmp: { offset: 40, bytes: mintPubkey.toBase58() } }
-                        ]
-                    });
-
-                    for (const account of accounts) {
-                        const config = parseFeeSharingConfig(account.account.data);
-                        if (!config || !config.shareholders) continue;
-
-                        // Verify the mint matches
-                        if (config.mint && config.mint.toString() === mint) {
-                            // Check if our wallet is in the shareholders list
-                            const walletStr = walletKey.toString();
-                            for (const shareholder of config.shareholders) {
-                                if (shareholder.pubkey.toString() === walletStr) {
-                                    const sharePercent = shareholder.shareBps / 100;
-                                    logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via mint scan (${sharePercent}% fee share, ${shareholder.shareBps} bps)`);
-                                    return {
-                                        isRecipient: true,
-                                        source: 'fee_sharing_config_scan',
-                                        feeShareBps: shareholder.shareBps,
-                                        feeSharePercent: sharePercent
-                                    };
-                                }
-                            }
-                            // Found config for this mint but we're not in shareholders
-                            logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Found fee sharing config but wallet not in shareholders list`);
-                        }
-                    }
-                } catch (scanErr) {
-                    // Continue to next size
-                    logger.debug(`[MintExtractor] Scan size ${dataSize} failed: ${scanErr.message}`);
-                }
-            }
-        } catch (e) {
-            logger.debug(`[MintExtractor] Fallback fee sharing scan failed for ${mint.slice(0, 8)}...: ${e.message}`);
-        }
+        // NOTE: Fee sharing configs do NOT store the mint address.
+        // The config is tied to a creator wallet via PDA seeds ["fee_sharing_config", creator].
+        // We can't scan by mint - we must look up via the tokenCreator which IS the fee_sharing_config PDA
+        // when fee sharing is enabled.
+        //
+        // If we reached here, it means:
+        // 1. tokenCreator wasn't the fee_sharing_config PDA (Method 1 failed)
+        // 2. Deriving PDA from tokenCreator didn't find a config (Method 2 failed)
+        // This typically means fee sharing isn't enabled for this token.
 
         // Neither direct creator nor fee shareholder
         logger.debug(`[MintExtractor] ${mint.slice(0, 8)}... - Not a fee recipient (checked BC, AMM, fee sharing config, and fallback scan)`);
