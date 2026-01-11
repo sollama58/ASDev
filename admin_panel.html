@@ -255,7 +255,7 @@
                     <span class="status-indicator status-offline"></span>
                     <span>Disconnected</span>
                 </div>
-                <input type="text" id="backend-url" class="input-field w-64" value="http://localhost:3000" placeholder="Backend URL">
+                <input type="text" id="backend-url" class="input-field w-64" value="https://asdev-1kvy.onrender.com" placeholder="Backend URL">
                 <button onclick="connectBackend()" class="btn btn-primary">Connect</button>
             </div>
         </div>
@@ -735,7 +735,7 @@
 
     <script>
         // ===== STATE =====
-        let backendUrl = 'http://localhost:3000';
+        let backendUrl = 'https://asdev-1kvy.onrender.com';
         let isConnected = false;
         let refreshInterval = null;
 
@@ -1212,7 +1212,7 @@
             }
 
             // Get backend URL from input or use default
-            const backendUrlInput = document.getElementById('backend-url').value.replace(/\/$/, '') || 'http://localhost:3000';
+            const backendUrlInput = document.getElementById('backend-url').value.replace(/\/$/, '') || 'https://asdev-1kvy.onrender.com';
 
             try {
                 const response = await fetch(`${backendUrlInput}/api/admin/verify`, {

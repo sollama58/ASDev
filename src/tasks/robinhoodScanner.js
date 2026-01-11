@@ -307,6 +307,57 @@ async function scanForOurCreatedTokens(deps) {
 }
 
 /**
+ * Process a fee sharing token - fetch metadata and insert/update in DB
+ * @param {Object} deps - Dependencies (connection, db, etc.)
+ * @param {string} mintStr - Token mint address
+ * @param {string} creatorStr - Creator pubkey
+ * @param {Object} ourShare - Our share info { shareBps, sharePercent }
+ */
+async function processFeeSharingToken(deps, mintStr, creatorStr, ourShare) {
+    const { db } = deps;
+
+    try {
+        // Check if we already have this token
+        const existing = await db.get(
+            'SELECT id FROM robinhood_tokens WHERE mint = $1',
+            [mintStr]
+        );
+
+        if (!existing) {
+            // Fetch metadata
+            const pumpMeta = await fetchHeliusMetadata(mintStr);
+            const dexMeta = await fetchDexScreenerMetadata(mintStr);
+
+            const metadata = {
+                name: pumpMeta?.name || dexMeta?.name || 'Unknown Token',
+                ticker: pumpMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
+                image: pumpMeta?.image || dexMeta?.image || null,
+                marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || 0,
+                volume24h: dexMeta?.volume24h || 0
+            };
+
+            logger.info(`[Robinhood] Found new fee sharing: ${metadata.ticker} (${mintStr.slice(0, 8)}...) | Our share: ${ourShare.sharePercent}%`);
+
+            await db.run(`
+                INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive")
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
+                ON CONFLICT (mint) DO UPDATE SET
+                    ticker = EXCLUDED.ticker,
+                    name = EXCLUDED.name,
+                    image = COALESCE(EXCLUDED.image, robinhood_tokens.image),
+                    "feeShareBps" = EXCLUDED."feeShareBps"
+            `, [mintStr, metadata.ticker, metadata.name, metadata.image, creatorStr, ourShare.shareBps, Date.now(), metadata.marketCap, metadata.volume24h]);
+
+            return true; // New token added
+        }
+        return false; // Token already exists
+    } catch (e) {
+        logger.debug(`[Robinhood] Failed to process token ${mintStr}`, { error: e.message });
+        return false;
+    }
+}
+
+/**
  * Scan for fee sharing configs where our wallet is a shareholder
  * Uses getProgramAccounts with memcmp filter for our wallet
  */
@@ -328,25 +379,35 @@ async function scanForFeeSharingConfigs(deps) {
 
         // Scan for accounts where we might be a shareholder
         // Fee sharing configs have variable sizes based on number of shareholders
-        // We'll scan a range of sizes
-        const sizes = [110, 144, 178, 212, 246]; // 76 base + 34 per shareholder (1-5 shareholders)
+        // Format with mint: 76 base + 34 per shareholder (1-5 shareholders)
+        const sizesWithMint = [110, 144, 178, 212, 246];
+        // Format without mint: 44 base + 34 per shareholder (1-5 shareholders)
+        const sizesWithoutMint = [78, 112, 146, 180, 214];
+        const allSizes = [...sizesWithMint, ...sizesWithoutMint];
 
-        for (const dataSize of sizes) {
+        // Track creators we've found configs for (to avoid duplicate processing)
+        const processedCreators = new Set();
+
+        for (const dataSize of allSizes) {
             try {
+                // Determine shareholder offsets based on format
+                const isWithMint = sizesWithMint.includes(dataSize);
+                const firstShareholderOffset = isWithMint ? 76 : 44;
+                const secondShareholderOffset = isWithMint ? 110 : 78;
+
                 const accounts = await connection.getProgramAccounts(PROGRAMS.PUMP, {
                     filters: [
                         { dataSize },
-                        // Filter for accounts containing our wallet pubkey
-                        // This will catch us whether we're a shareholder or creator
-                        { memcmp: { offset: 76, bytes: devKeypair.publicKey.toBase58() } }
+                        // Filter for accounts containing our wallet pubkey at first shareholder position
+                        { memcmp: { offset: firstShareholderOffset, bytes: devKeypair.publicKey.toBase58() } }
                     ]
                 }).catch(() => []);
 
-                // Also try offset 110 (second shareholder position)
+                // Also try second shareholder position
                 const accounts2 = await connection.getProgramAccounts(PROGRAMS.PUMP, {
                     filters: [
                         { dataSize },
-                        { memcmp: { offset: 110, bytes: devKeypair.publicKey.toBase58() } }
+                        { memcmp: { offset: secondShareholderOffset, bytes: devKeypair.publicKey.toBase58() } }
                     ]
                 }).catch(() => []);
 
@@ -367,46 +428,50 @@ async function scanForFeeSharingConfigs(deps) {
                         const ourShare = findOurShare(config, devKeypair.publicKey);
                         if (!ourShare) continue;
 
-                        const mintStr = config.mint ? config.mint.toString() : null;
                         const creatorStr = config.creator.toString();
 
-                        // Skip if no mint found
+                        // Skip if we've already processed this creator
+                        if (processedCreators.has(creatorStr)) {
+                            continue;
+                        }
+                        processedCreators.add(creatorStr);
+
+                        let mintStr = config.mint ? config.mint.toString() : null;
+
+                        // If no mint in config, try to find tokens by scanning creator's vault transactions
                         if (!mintStr) {
-                            logger.debug(`[Robinhood] Found config without mint for creator ${creatorStr.slice(0, 8)}...`);
+                            logger.info(`[Robinhood] Found config without mint for creator ${creatorStr.slice(0, 8)}... - scanning their vault transactions`);
+
+                            try {
+                                // Scan the creator's vault transactions to find their tokens
+                                const creatorPubkey = new PublicKey(creatorStr);
+                                const { foundMints } = await mintExtractor.scanCreatorVaultsForMints({
+                                    creatorPubkey: creatorPubkey,
+                                    db,
+                                    getCreatorFeeVaults: pump.getCreatorFeeVaults,
+                                    saveProgress: false // Don't save progress for external creators
+                                });
+
+                                if (foundMints.size > 0) {
+                                    logger.info(`[Robinhood] Found ${foundMints.size} tokens from creator ${creatorStr.slice(0, 8)}...`);
+
+                                    // Process each found mint
+                                    for (const foundMint of foundMints) {
+                                        const added = await processFeeSharingToken(deps, foundMint, creatorStr, ourShare);
+                                        if (added) {
+                                            newTokensFound++;
+                                        }
+                                    }
+                                }
+                            } catch (scanErr) {
+                                logger.debug(`[Robinhood] Failed to scan vault for creator ${creatorStr.slice(0, 8)}...`, { error: scanErr.message });
+                            }
                             continue;
                         }
 
-                        // Check if we already have this token
-                        const existing = await db.get(
-                            'SELECT id FROM robinhood_tokens WHERE mint = $1',
-                            [mintStr]
-                        );
-
-                        if (!existing) {
-                            // Fetch metadata
-                            const pumpMeta = await fetchHeliusMetadata(mintStr);
-                            const dexMeta = await fetchDexScreenerMetadata(mintStr);
-
-                            const metadata = {
-                                name: pumpMeta?.name || dexMeta?.name || 'Unknown Token',
-                                ticker: pumpMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
-                                image: pumpMeta?.image || dexMeta?.image || null,
-                                marketCap: dexMeta?.marketCap || pumpMeta?.marketCap || 0,
-                                volume24h: dexMeta?.volume24h || 0
-                            };
-
-                            logger.info(`[Robinhood] Found new fee sharing: ${metadata.ticker} (${mintStr.slice(0, 8)}...) | Our share: ${ourShare.sharePercent}%`);
-
-                            await db.run(`
-                                INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive")
-                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
-                                ON CONFLICT (mint) DO UPDATE SET
-                                    ticker = EXCLUDED.ticker,
-                                    name = EXCLUDED.name,
-                                    image = COALESCE(EXCLUDED.image, robinhood_tokens.image),
-                                    "feeShareBps" = EXCLUDED."feeShareBps"
-                            `, [mintStr, metadata.ticker, metadata.name, metadata.image, creatorStr, ourShare.shareBps, Date.now(), metadata.marketCap, metadata.volume24h]);
-
+                        // Process the token with mint
+                        const added = await processFeeSharingToken(deps, mintStr, creatorStr, ourShare);
+                        if (added) {
                             newTokensFound++;
                         }
                     } catch (e) {

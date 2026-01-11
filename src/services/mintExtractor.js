@@ -882,10 +882,74 @@ function parseFeeSharingConfig(data) {
             offset += 34;
         }
 
-        return { creator, mint, shareholders };
+        return { creator, mint, shareholders, format: 'with_mint' };
     } catch (e) {
         return null;
     }
+}
+
+/**
+ * Parse fee sharing config account data (alternative format without mint)
+ * This format is used when fees are modified - mint is not stored in account
+ *
+ * Layout (alternative):
+ * - 8 bytes: discriminator
+ * - 32 bytes: creator (pubkey)
+ * - 4 bytes: shareholder_count (u32)
+ * - N * 34 bytes: shareholders (32 byte pubkey + 2 byte bps)
+ *
+ * @param {Buffer} data - Raw account data
+ * @returns {Object|null} Parsed config or null if invalid
+ */
+function parseFeeSharingConfigAlt(data) {
+    try {
+        if (data.length < 44) return null; // Minimum: 8 + 32 + 4 bytes
+
+        const creator = new PublicKey(data.slice(8, 40));
+
+        // Number of shareholders (4 bytes, little-endian) at offset 40
+        const shareholderCount = data.readUInt32LE(40);
+
+        // Sanity check - shouldn't have more than 10 shareholders
+        if (shareholderCount > 10 || shareholderCount < 1) return null;
+
+        const shareholders = [];
+        let offset = 44;
+
+        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
+            const pubkey = new PublicKey(data.slice(offset, offset + 32));
+            const shareBps = data.readUInt16LE(offset + 32);
+            shareholders.push({ pubkey, shareBps });
+            offset += 34;
+        }
+
+        return { creator, mint: null, shareholders, format: 'without_mint' };
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Try parsing fee sharing config with both formats
+ * First tries the format with mint, then falls back to format without mint
+ *
+ * @param {Buffer} data - Raw account data
+ * @returns {Object|null} Parsed config or null if invalid
+ */
+function parseFeeSharingConfigAny(data) {
+    // First try format with mint (more common)
+    let config = parseFeeSharingConfig(data);
+    if (config && config.shareholders.length > 0) {
+        return config;
+    }
+
+    // Try format without mint
+    config = parseFeeSharingConfigAlt(data);
+    if (config && config.shareholders.length > 0) {
+        return config;
+    }
+
+    return null;
 }
 
 /**
@@ -995,8 +1059,9 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
                 );
 
                 const configAccountInfo = await connection.getAccountInfo(feeSharingConfig);
-                if (configAccountInfo && configAccountInfo.data.length >= 76) {
-                    const config = parseFeeSharingConfig(configAccountInfo.data);
+                // Use parseFeeSharingConfigAny to handle both formats (with and without mint)
+                if (configAccountInfo && configAccountInfo.data.length >= 44) {
+                    const config = parseFeeSharingConfigAny(configAccountInfo.data);
 
                     if (config && config.shareholders) {
                         // Check if our wallet is in the shareholders list
@@ -1004,7 +1069,8 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
                         for (const shareholder of config.shareholders) {
                             if (shareholder.pubkey.toString() === walletStr) {
                                 const sharePercent = shareholder.shareBps / 100; // BPS to percent (1000 bps = 10%)
-                                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via fee_sharing_config (${sharePercent}% fee share, ${shareholder.shareBps} bps)`);
+                                const formatInfo = config.format || 'unknown';
+                                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee shareholder via fee_sharing_config (${sharePercent}% fee share, ${shareholder.shareBps} bps, format: ${formatInfo})`);
                                 return {
                                     isRecipient: true,
                                     source: 'fee_sharing_config',

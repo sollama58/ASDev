@@ -1251,10 +1251,14 @@ function init(deps) {
 
             // Scan for fee sharing configs with this mint
             const PUMP = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
-            const sizes = [110, 144, 178, 212, 246];
+            // Format with mint: 76 base + 34 per shareholder (1-5 shareholders)
+            const sizesWithMint = [110, 144, 178, 212, 246];
+            // Format without mint: 44 base + 34 per shareholder (1-5 shareholders)
+            const sizesWithoutMint = [78, 112, 146, 180, 214];
             let feeSharingConfigs = [];
 
-            for (const dataSize of sizes) {
+            // Method 1: Scan for configs that have this mint stored at offset 40
+            for (const dataSize of sizesWithMint) {
                 try {
                     const accounts = await connection.getProgramAccounts(PUMP, {
                         filters: [
@@ -1290,7 +1294,8 @@ function init(deps) {
                                 mint: configMint.toString(),
                                 shareholderCount,
                                 shareholders,
-                                weAreShareHolder: shareholders.some(s => s.isUs)
+                                weAreShareHolder: shareholders.some(s => s.isUs),
+                                format: 'with_mint'
                             });
                         } catch (parseErr) {
                             // Skip invalid accounts
@@ -1298,6 +1303,136 @@ function init(deps) {
                     }
                 } catch (scanErr) {
                     // Continue
+                }
+            }
+
+            // Method 2: Check if the token creator has a fee sharing config (PDA lookup)
+            // This is the more reliable method for configs that don't store mint
+            let creatorFeeSharingConfig = null;
+            const tokenCreator = bcData?.creator ? new PublicKey(bcData.creator) :
+                                 (ammData?.creator ? new PublicKey(ammData.creator) : null);
+
+            if (tokenCreator) {
+                try {
+                    // Derive fee sharing config PDA for the token creator
+                    const [feeSharingConfigPDA] = PublicKey.findProgramAddressSync(
+                        [Buffer.from("fee_sharing_config"), tokenCreator.toBuffer()],
+                        PUMP
+                    );
+
+                    const configAccountInfo = await connection.getAccountInfo(feeSharingConfigPDA);
+                    if (configAccountInfo) {
+                        const data = configAccountInfo.data;
+
+                        // Try parsing with mint format first (76+ bytes)
+                        if (data.length >= 76) {
+                            try {
+                                const creator = new PublicKey(data.slice(8, 40));
+                                // Check if bytes 40-72 look like a valid mint (non-zero)
+                                const potentialMint = data.slice(40, 72);
+                                const hasValidMint = !potentialMint.every(b => b === 0);
+
+                                if (hasValidMint && data.length >= 110) {
+                                    // Format with mint
+                                    const configMint = new PublicKey(potentialMint);
+                                    const shareholderCount = data.readUInt32LE(72);
+
+                                    if (shareholderCount > 0 && shareholderCount <= 10) {
+                                        const shareholders = [];
+                                        let offset = 76;
+                                        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
+                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                                            const shareBps = data.readUInt16LE(offset + 32);
+                                            shareholders.push({
+                                                pubkey: pubkey.toString(),
+                                                shareBps,
+                                                sharePercent: shareBps / 100,
+                                                isUs: pubkey.toString() === platformWallet
+                                            });
+                                            offset += 34;
+                                        }
+
+                                        creatorFeeSharingConfig = {
+                                            configAddress: feeSharingConfigPDA.toString(),
+                                            creator: creator.toString(),
+                                            mint: configMint.toString(),
+                                            shareholderCount,
+                                            shareholders,
+                                            weAreShareHolder: shareholders.some(s => s.isUs),
+                                            format: 'pda_with_mint'
+                                        };
+                                    }
+                                } else {
+                                    // Format without mint (shareholder count at offset 40)
+                                    const shareholderCount = data.readUInt32LE(40);
+
+                                    if (shareholderCount > 0 && shareholderCount <= 10) {
+                                        const shareholders = [];
+                                        let offset = 44;
+                                        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
+                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                                            const shareBps = data.readUInt16LE(offset + 32);
+                                            shareholders.push({
+                                                pubkey: pubkey.toString(),
+                                                shareBps,
+                                                sharePercent: shareBps / 100,
+                                                isUs: pubkey.toString() === platformWallet
+                                            });
+                                            offset += 34;
+                                        }
+
+                                        creatorFeeSharingConfig = {
+                                            configAddress: feeSharingConfigPDA.toString(),
+                                            creator: creator.toString(),
+                                            mint: mint, // Use the mint we're querying for
+                                            shareholderCount,
+                                            shareholders,
+                                            weAreShareHolder: shareholders.some(s => s.isUs),
+                                            format: 'pda_without_mint'
+                                        };
+                                    }
+                                }
+                            } catch (parseErr) {
+                                // Skip parse errors
+                            }
+                        } else if (data.length >= 44) {
+                            // Definitely format without mint
+                            try {
+                                const creator = new PublicKey(data.slice(8, 40));
+                                const shareholderCount = data.readUInt32LE(40);
+
+                                if (shareholderCount > 0 && shareholderCount <= 10) {
+                                    const shareholders = [];
+                                    let offset = 44;
+                                    for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
+                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                                        const shareBps = data.readUInt16LE(offset + 32);
+                                        shareholders.push({
+                                            pubkey: pubkey.toString(),
+                                            shareBps,
+                                            sharePercent: shareBps / 100,
+                                            isUs: pubkey.toString() === platformWallet
+                                        });
+                                        offset += 34;
+                                    }
+
+                                    creatorFeeSharingConfig = {
+                                        configAddress: feeSharingConfigPDA.toString(),
+                                        creator: creator.toString(),
+                                        mint: mint, // Use the mint we're querying for
+                                        shareholderCount,
+                                        shareholders,
+                                        weAreShareHolder: shareholders.some(s => s.isUs),
+                                        format: 'pda_without_mint'
+                                    };
+                                }
+                            } catch (parseErr) {
+                                // Skip parse errors
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // PDA lookup failed
                 }
             }
 
@@ -1316,6 +1451,7 @@ function init(deps) {
                     ...ammData
                 },
                 feeSharingConfigs,
+                creatorFeeSharingConfig, // Direct PDA lookup result
                 verificationResult: verification,
                 timestamp: new Date().toISOString()
             });
