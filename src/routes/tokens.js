@@ -5,18 +5,35 @@
  * v14.0 - Updated for proportional point system (Top 250 holders)
  * v15.0 - Added developer token registration endpoint
  * v18.0 - Changed from top 10 to volume threshold eligibility
+ * v24.0 - Added rate limiting for token registration, input sanitization
  */
 const express = require('express');
 const axios = require('axios');
+const rateLimit = require('express-rate-limit');
 const { PublicKey } = require('@solana/web3.js');
 const { isValidPubkey } = require('./solana');
-const { redis, mintExtractor, logger } = require('../services');
+const { redis, mintExtractor, logger, circuitBreaker } = require('../services');
 const config = require('../config/env');
 
 const router = express.Router();
 
 // v18.0: Minimum 24hr volume for airdrop eligibility
 const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
+
+// v24.0 SECURITY: Rate limiter for token registration (expensive on-chain operations)
+const tokenRegistrationLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 10, // 10 registrations per hour per IP
+    message: { error: 'Too many token registration attempts. Please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        // Use IP + optional submitter pubkey for more precise limiting
+        const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+        const pubkey = req.body?.submitterPubkey || '';
+        return `${ip}:${pubkey.slice(0, 10)}`;
+    }
+});
 
 /**
  * Initialize routes with dependencies
@@ -117,10 +134,12 @@ function init(deps) {
         }
         try {
             // Cache the base leaderboard data (15 seconds)
+            // v24.0: Added LIMIT 500 to prevent unbounded result sets on large datasets
             const rows = await redis.smartCache('leaderboard_data', 15, async () => {
                 // Combine launched tokens and active robinhood tokens
                 // Use UNION ALL to merge both sources, preserving creator info
                 // v18.0: Removed LIMIT 10 to show all tokens, eligibility determined by volume threshold
+                // v24.0: Added LIMIT 500 for scalability (prevents unbounded queries)
                 return await db.all(`
                     SELECT mint, "userPubkey" as creator, name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'launched' as source
                     FROM tokens
@@ -129,6 +148,7 @@ function init(deps) {
                     FROM robinhood_tokens
                     WHERE "isActive" = 1
                     ORDER BY volume24h DESC
+                    LIMIT 500
                 `);
             });
 
@@ -206,11 +226,17 @@ function init(deps) {
         }
     });
 
-    // Get single token
+    // Get single token - v24.0: Added caching (30s TTL)
     router.get('/token/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
-            const token = await db.get('SELECT "tweetUrl" FROM tokens WHERE mint = $1', [mint]);
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({ error: "Invalid mint address" });
+            }
+            const cacheKey = `token_detail_${mint}`;
+            const token = await redis.smartCache(cacheKey, 30, async () => {
+                return await db.get('SELECT "tweetUrl" FROM tokens WHERE mint = $1', [mint]);
+            });
             res.json(token || {});
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
@@ -218,26 +244,43 @@ function init(deps) {
     });
 
     // Proxy for token price data (uses DexScreener API)
+    // v24.0: Added caching (10s TTL) and circuit breaker for external API resilience
     router.get('/pump-proxy/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
             if (!isValidPubkey(mint)) {
                 return res.status(400).json({ error: "Invalid mint address" });
             }
-            const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
-                timeout: 5000
+
+            // v24.0: Cache price data for 10 seconds to reduce external API calls
+            const cacheKey = `pump_proxy_${mint}`;
+            const priceData = await redis.smartCache(cacheKey, 10, async () => {
+                // Use circuit breaker to handle DexScreener API failures gracefully
+                return await circuitBreaker.execute(
+                    'dexscreener-api',
+                    async () => {
+                        const response = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
+                            timeout: 5000
+                        });
+                        const pairs = response.data?.pairs || [];
+                        if (pairs.length > 0) {
+                            const pair = pairs[0];
+                            return {
+                                priceUsd: parseFloat(pair.priceUsd) || 0,
+                                priceNative: parseFloat(pair.priceNative) || 0,
+                                cached: false
+                            };
+                        }
+                        return { priceUsd: 0, priceNative: 0, cached: false };
+                    },
+                    { priceUsd: 0, priceNative: 0, cached: false, circuitOpen: true },
+                    { failureThreshold: 5, timeout: 30000 }
+                );
             });
-            const pairs = response.data?.pairs || [];
-            if (pairs.length > 0) {
-                const pair = pairs[0];
-                res.json({
-                    priceUsd: parseFloat(pair.priceUsd) || 0,
-                    priceNative: parseFloat(pair.priceNative) || 0
-                });
-            } else {
-                res.json({ priceUsd: 0, priceNative: 0 });
-            }
+
+            res.json(priceData);
         } catch (e) {
+            logger.debug('[pump-proxy] Error fetching price data', { mint, error: e.message });
             res.status(500).json({ error: "Failed to fetch price data" });
         }
     });
@@ -384,6 +427,8 @@ function init(deps) {
 
     // v18.0: Get detailed holdings breakdown for a user
     // Returns each token the user holds, eligibility status, and points earned
+    // v24.0: SCALABILITY FIX - Refactored N+1 queries to use JOINs (2 queries instead of 100s)
+    //        Added 30-second caching to reduce DB load
     router.get('/user-holdings', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
@@ -394,112 +439,124 @@ function init(deps) {
         }
 
         try {
-            const POINTS_PER_TOKEN = 1000;
-            const holdings = [];
+            // v24.0: Cache user holdings for 30 seconds
+            const cacheKey = `user_holdings_detail_${userPubkey}`;
+            const result = await redis.smartCache(cacheKey, 30, async () => {
+                const POINTS_PER_TOKEN = 1000;
+                const holdings = [];
 
-            // Get all tokens (both eligible and non-eligible) where user is a holder
-            const allTokens = await db.all(
-                'SELECT t.mint, t.ticker, t.name, t.image, t."userPubkey" as creator, t.volume24h, t."marketCap" FROM tokens t ORDER BY t.volume24h DESC'
-            );
+                // v24.0: Single optimized query with JOINs for launched tokens
+                // Replaces N+1 pattern (1 query for all tokens + 2 queries per token)
+                const launchedHoldings = await db.all(`
+                    SELECT
+                        t.mint,
+                        t.ticker,
+                        t.name,
+                        t.image,
+                        t."userPubkey" as creator,
+                        t.volume24h,
+                        t."marketCap",
+                        th.balance,
+                        th.rank,
+                        totals.total_balance
+                    FROM token_holders th
+                    INNER JOIN tokens t ON t.mint = th.mint
+                    INNER JOIN (
+                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
+                        FROM token_holders
+                        GROUP BY mint
+                    ) totals ON totals.mint = th.mint
+                    WHERE th."holderPubkey" = $1 AND CAST(th.balance AS BIGINT) > 0
+                    ORDER BY t.volume24h DESC
+                `, [userPubkey]);
 
-            for (const token of allTokens) {
-                if (!token.mint) continue;
+                for (const row of launchedHoldings) {
+                    const totalBalance = BigInt(row.total_balance || '1');
+                    const userBalance = BigInt(row.balance || '0');
+                    if (userBalance === BigInt(0)) continue;
 
-                // Check if user holds this token
-                const userHolding = await db.get(
-                    'SELECT balance, rank FROM token_holders WHERE mint = $1 AND "holderPubkey" = $2',
-                    [token.mint, userPubkey]
-                );
+                    // Calculate proportional points
+                    const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                    const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
 
-                if (!userHolding || !userHolding.balance) continue;
+                    holdings.push({
+                        mint: row.mint,
+                        ticker: row.ticker,
+                        name: row.name,
+                        image: row.image,
+                        volume24h: row.volume24h || 0,
+                        marketCap: row.marketCap || 0,
+                        rank: row.rank,
+                        isEligible,
+                        basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
+                        totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
+                        source: 'launched'
+                    });
+                }
 
-                // Get total balance for proportional calculation
-                const totalResult = await db.get(
-                    'SELECT SUM(CAST(balance AS BIGINT)) as total FROM token_holders WHERE mint = $1',
-                    [token.mint]
-                );
-                const totalBalance = BigInt(totalResult?.total || '1');
-                const userBalance = BigInt(userHolding.balance || '0');
-                if (userBalance === BigInt(0)) continue;
+                // v24.0: Single optimized query with JOINs for Robinhood tokens
+                const robinhoodHoldings = await db.all(`
+                    SELECT
+                        rt.mint,
+                        rt.ticker,
+                        rt.name,
+                        rt.image,
+                        rt."feeShareBps",
+                        rt.volume24h,
+                        rt."marketCap",
+                        rth.balance,
+                        rth.rank,
+                        totals.total_balance
+                    FROM robinhood_token_holders rth
+                    INNER JOIN robinhood_tokens rt ON rt.mint = rth.mint AND rt."isActive" = 1
+                    INNER JOIN (
+                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
+                        FROM robinhood_token_holders
+                        GROUP BY mint
+                    ) totals ON totals.mint = rth.mint
+                    WHERE rth."holderPubkey" = $1 AND CAST(rth.balance AS BIGINT) > 0
+                    ORDER BY rt.volume24h DESC
+                `, [userPubkey]);
 
-                // Calculate proportional points
-                const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                for (const row of robinhoodHoldings) {
+                    const totalBalance = BigInt(row.total_balance || '1');
+                    const userBalance = BigInt(row.balance || '0');
+                    if (userBalance === BigInt(0)) continue;
 
-                // Check if user is creator
-                const isCreator = token.creator === userPubkey;
-                // Check eligibility based on volume threshold
-                const isEligible = (token.volume24h || 0) >= MIN_VOLUME_USD;
+                    // Calculate proportional points scaled by fee share
+                    const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                    const feeShareBps = row.feeShareBps || 10000;
+                    const feeShareMultiplier = feeShareBps / 10000;
+                    const scaledPts = baseProportionalPts * feeShareMultiplier;
+                    const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
 
-                holdings.push({
-                    mint: token.mint,
-                    ticker: token.ticker,
-                    name: token.name,
-                    image: token.image,
-                    volume24h: token.volume24h || 0,
-                    marketCap: token.marketCap || 0,
-                    rank: userHolding.rank,
-                    isEligible,
-                    basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
-                    totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
-                    source: 'launched'
-                });
-            }
+                    holdings.push({
+                        mint: row.mint,
+                        ticker: row.ticker,
+                        name: row.name,
+                        image: row.image,
+                        volume24h: row.volume24h || 0,
+                        marketCap: row.marketCap || 0,
+                        rank: row.rank,
+                        isEligible,
+                        feeSharePercent: (feeShareBps / 100),
+                        basePoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
+                        totalPoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
+                        source: 'robinhood'
+                    });
+                }
 
-            // Also check Robinhood tokens
-            const allRobinhoodTokens = await db.all(
-                'SELECT mint, ticker, name, image, "feeShareBps", volume24h, "marketCap" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL ORDER BY volume24h DESC'
-            );
+                // Calculate total points
+                const totalPoints = holdings.reduce((sum, h) => sum + h.totalPoints, 0);
 
-            for (const rhToken of allRobinhoodTokens) {
-                if (!rhToken.mint) continue;
-
-                const userHolding = await db.get(
-                    'SELECT balance, rank FROM robinhood_token_holders WHERE mint = $1 AND "holderPubkey" = $2',
-                    [rhToken.mint, userPubkey]
-                );
-
-                if (!userHolding || !userHolding.balance) continue;
-
-                const totalResult = await db.get(
-                    'SELECT SUM(CAST(balance AS BIGINT)) as total FROM robinhood_token_holders WHERE mint = $1',
-                    [rhToken.mint]
-                );
-                const totalBalance = BigInt(totalResult?.total || '1');
-                const userBalance = BigInt(userHolding.balance || '0');
-                if (userBalance === BigInt(0)) continue;
-
-                // Calculate proportional points scaled by fee share
-                const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
-                const feeShareBps = rhToken.feeShareBps || 10000;
-                const feeShareMultiplier = feeShareBps / 10000;
-                const scaledPts = baseProportionalPts * feeShareMultiplier;
-
-                const isEligible = (rhToken.volume24h || 0) >= MIN_VOLUME_USD;
-
-                holdings.push({
-                    mint: rhToken.mint,
-                    ticker: rhToken.ticker,
-                    name: rhToken.name,
-                    image: rhToken.image,
-                    volume24h: rhToken.volume24h || 0,
-                    marketCap: rhToken.marketCap || 0,
-                    rank: userHolding.rank,
-                    isEligible,
-                    feeSharePercent: (feeShareBps / 100),
-                    basePoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
-                    totalPoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
-                    source: 'robinhood'
-                });
-            }
-
-            // Calculate total points
-            const totalPoints = holdings.reduce((sum, h) => sum + h.totalPoints, 0);
-
-            res.json({
-                holdings: holdings.sort((a, b) => b.totalPoints - a.totalPoints),
-                totalPoints: Math.round(totalPoints * 100) / 100,
-                eligibilityThreshold: MIN_VOLUME_USD
+                return {
+                    holdings: holdings.sort((a, b) => b.totalPoints - a.totalPoints),
+                    totalPoints: Math.round(totalPoints * 100) / 100,
+                    eligibilityThreshold: MIN_VOLUME_USD
+                };
             });
+
+            res.json(result);
         } catch (e) {
             logger.error('User holdings error', { error: e.message });
             res.status(500).json({ error: "DB Error" });
@@ -769,8 +826,10 @@ function init(deps) {
      * recipient for the token by checking on-chain bonding curve, AMM pool,
      * and fee sharing config data. This ensures only tokens that share fees
      * with us can be registered.
+     *
+     * v24.0: Added rate limiting (10 registrations per hour per IP)
      */
-    router.post('/register-token', async (req, res) => {
+    router.post('/register-token', tokenRegistrationLimiter, async (req, res) => {
         try {
             const { mint, submitterPubkey, originalCreator } = req.body;
 
@@ -2446,8 +2505,10 @@ function init(deps) {
      * 2. Re-verify on-chain fee share configuration
      * 3. Update the fee share BPS if changed
      * 4. Reactivate if previously deactivated
+     *
+     * v24.0: Added rate limiting (same as register-token)
      */
-    router.post('/reregister-token', async (req, res) => {
+    router.post('/reregister-token', tokenRegistrationLimiter, async (req, res) => {
         try {
             const { mint } = req.body;
 

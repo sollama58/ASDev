@@ -313,21 +313,30 @@ function initHolderScannerWorker(deps) {
                     await db.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
 
                     if (holdersToInsert.length > 0) {
-                        // Batch insert up to 50 holders at a time
+                        // v24.0 SECURITY FIX: Use parameterized queries to prevent SQL injection
                         const BATCH_SIZE = 50;
                         const now = Date.now();
                         for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
                             const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
-                            const values = batch.map((h, idx) => {
-                                const rank = i + idx + 1;
-                                return `('${h.mint}', '${h.owner}', ${rank}, ${now})`;
-                            }).join(',');
+                            // Build parameterized placeholders: ($1, $2, $3, $4), ($5, $6, $7, $8), ...
+                            const placeholders = batch.map((_, idx) => {
+                                const baseIdx = idx * 4;
+                                return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4})`;
+                            }).join(', ');
+
+                            // Flatten params array: [mint1, owner1, rank1, now, mint2, owner2, rank2, now, ...]
+                            const params = batch.flatMap((h, idx) => [
+                                h.mint,
+                                h.owner,
+                                i + idx + 1, // rank
+                                now
+                            ]);
 
                             await db.run(`
                                 INSERT INTO token_holders (mint, "holderPubkey", rank, "lastUpdated")
-                                VALUES ${values}
+                                VALUES ${placeholders}
                                 ON CONFLICT DO NOTHING
-                            `);
+                            `, params);
                         }
                     }
                 } catch (e) {

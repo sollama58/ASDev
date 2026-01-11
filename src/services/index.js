@@ -3,6 +3,7 @@
  * Central export for all services
  * v13.0 - PostgreSQL + Redis globalState
  * v14.0 - Added mintExtractor for unified mint discovery
+ * v24.0 - Added circuitBreaker for external API resilience
  */
 const logger = require('./logger');
 const postgres = require('./postgres');
@@ -17,6 +18,8 @@ const jupiter = require('./jupiter');
 const mutex = require('./mutex');
 const mintExtractor = require('./mintExtractor');
 const imageUtils = require('./imageUtils');
+const circuitBreaker = require('./circuitBreaker');
+const sanitizer = require('./sanitizer');
 
 // v13.0: Use PostgreSQL as the database layer
 const database = postgres;
@@ -36,4 +39,6 @@ module.exports = {
     mutex,
     mintExtractor,
     imageUtils,
+    circuitBreaker,
+    sanitizer,
 };

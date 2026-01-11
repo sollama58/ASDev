@@ -3,6 +3,7 @@
  * Main Entry Point
  * v13.0 - PostgreSQL + Redis globalState
  * v22.0 - Added API-only mode support for worker server architecture
+ * v24.0 - Redis connection validation on startup
  *
  * Environment Variables:
  *   SERVER_MODE=api-only   - Start without background tasks (use with separate worker server)
@@ -83,8 +84,11 @@ const globalState = {
 async function main() {
     logger.info(`Starting ASDev ${config.VERSION}...`);
 
-    // Initialize Redis first (needed for globalState)
-    redis.init();
+    // v24.0: Initialize Redis first (needed for globalState) with connection validation
+    const redisInitSuccess = await redis.init();
+    if (!redisInitSuccess) {
+        logger.warn('Redis initialization failed - running with degraded caching');
+    }
 
     // v13.0: Initialize PostgreSQL database
     await database.initDB();
@@ -131,13 +135,29 @@ async function main() {
         crossOriginEmbedderPolicy: false // Keep disabled for cross-origin resources
     }));
 
-    // CORS configuration - SECURITY FIX: Warn if using wildcard in production
-    if (config.CORS_ORIGINS.includes('*') && config.NODE_ENV === 'production') {
-        logger.warn('SECURITY WARNING: CORS is configured with wildcard (*) in production. Consider restricting to specific origins.');
+    // v24.0 SECURITY FIX: Stricter CORS configuration
+    // In production, reject wildcard CORS and require explicit origins
+    let corsOrigins;
+    if (config.NODE_ENV === 'production') {
+        if (config.CORS_ORIGINS.includes('*') || !config.CORS_ORIGINS || config.CORS_ORIGINS.length === 0) {
+            // Default to same-origin only in production if not configured
+            logger.warn('SECURITY: CORS wildcard rejected in production. Using same-origin policy.');
+            logger.warn('Set CORS_ORIGINS environment variable to allow specific origins.');
+            corsOrigins = false; // Disables CORS (same-origin only)
+        } else {
+            corsOrigins = config.CORS_ORIGINS;
+        }
+    } else {
+        // In development, allow wildcard for convenience
+        corsOrigins = config.CORS_ORIGINS.includes('*') ? '*' : config.CORS_ORIGINS;
     }
+
     const corsOptions = {
-        origin: config.CORS_ORIGINS.includes('*') ? '*' : config.CORS_ORIGINS,
-        optionsSuccessStatus: 200
+        origin: corsOrigins,
+        optionsSuccessStatus: 200,
+        credentials: true, // v24.0: Allow credentials for authenticated requests
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Key', 'X-Requested-With']
     };
     app.use(cors(corsOptions));
     app.use(express.json({ limit: '10mb' })); // SECURITY FIX: Reduced from 50mb to 10mb

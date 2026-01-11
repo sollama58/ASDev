@@ -1,11 +1,12 @@
 /**
  * Deploy Routes
  * Token deployment and metadata preparation endpoints
+ * v24.0 - Added input sanitization for user-provided content
  */
 const express = require('express');
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const config = require('../config/env');
-const { pinata, moderation, vanity, redis, logger } = require('../services');
+const { pinata, moderation, vanity, redis, logger, sanitizer } = require('../services');
 const { isValidPubkey } = require('./solana');
 
 const router = express.Router();
@@ -28,23 +29,37 @@ function init(deps) {
     });
 
     // Prepare metadata
+    // v24.0: Added input sanitization for all user-provided content
     router.post('/prepare-metadata', async (req, res) => {
         try {
-            let { name, ticker, description, twitter, website, image } = req.body;
+            // v24.0 SECURITY: Sanitize all user inputs
+            const name = sanitizer.sanitizeName(req.body.name);
+            const ticker = sanitizer.sanitizeTicker(req.body.ticker);
+            const description = sanitizer.sanitizeDescription(req.body.description || '');
+            const twitter = sanitizer.sanitizeTwitterHandle(req.body.twitter);
+            const website = sanitizer.sanitizeUrl(req.body.website);
+            const image = req.body.image; // Image is validated by moderation
 
-            const descInput = description || "";
-            if (descInput.length > 75) return res.status(400).json({ error: "Description too long." });
+            // Log if suspicious patterns were detected (for monitoring)
+            if (sanitizer.hasSuspiciousPatterns(req.body.name) ||
+                sanitizer.hasSuspiciousPatterns(req.body.description)) {
+                logger.warn('[Deploy] Suspicious patterns in metadata request', {
+                    ip: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip
+                });
+            }
+
+            if (description.length > 75) return res.status(400).json({ error: "Description too long." });
             if (!name || !ticker || !image) return res.status(400).json({ error: "Missing fields." });
 
             const DESCRIPTION_FOOTER = " Launched via Ignition.";
-            const finalDescription = descInput + DESCRIPTION_FOOTER;
+            const finalDescription = description + DESCRIPTION_FOOTER;
 
             const isSafe = await moderation.checkContentSafety(image);
             if (!isSafe) return res.status(400).json({ error: "Upload blocked: Illegal content." });
 
             // Returns { metadataUri, imageUrl }
             const result = await pinata.uploadMetadata(name, ticker, finalDescription, twitter, website, image);
-            
+
             res.json({ success: true, ...result });
         } catch (err) {
             logger.error("Metadata Prep Error", { error: err.message, stack: err.stack });
@@ -54,25 +69,33 @@ function init(deps) {
     });
 
     // Deploy token
+    // v24.0: Added input sanitization
     router.post('/deploy', async (req, res) => {
         try {
-            // ACCEPT imageUrl explicitly
-            const { name, ticker, description, twitter, website, metadataUri, imageUrl, userTx, userPubkey, isMayhemMode } = req.body;
+            // v24.0 SECURITY: Sanitize user inputs
+            const sanitized = sanitizer.sanitizeDeploymentRequest(req.body);
+            const { metadataUri, userPubkey, isMayhemMode } = req.body;
 
             if (!metadataUri) return res.status(400).json({ error: "Missing metadata URI" });
             if (!userPubkey || !isValidPubkey(userPubkey)) return res.status(400).json({ error: "Invalid Address" });
-            
+
             // Transaction verification logic (simplified for brevity, keep your existing logic)
             // ... (keep existing payment verification loop) ...
-            
+
             // Assume payment verified for this file replacement context:
             // In real file, keep the verification loop here.
-            
-            // Add job with explicit imageUrl
+
+            // Add job with sanitized data
             const job = await redis.addDeployJob({
-                name, ticker, description, twitter, website, 
-                image: imageUrl, // Pass the direct URL, not base64
-                userPubkey, isMayhemMode, metadataUri
+                name: sanitized.name,
+                ticker: sanitized.ticker,
+                description: sanitized.description,
+                twitter: sanitized.twitter,
+                website: sanitized.website,
+                image: sanitized.imageUrl || sanitized.image, // Pass the direct URL, not base64
+                userPubkey,
+                isMayhemMode,
+                metadataUri
             });
 
             res.json({ success: true, jobId: job.id, message: "Queued" });

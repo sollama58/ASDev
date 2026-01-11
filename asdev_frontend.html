@@ -10,7 +10,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        /* HOLDEX-STYLE DARK THEME v25.0 */
+        /* HOLDEX-STYLE DARK THEME v25.1 - Added text/number display improvements */
         :root {
             --bg-primary: #0a0a0f;
             --bg-secondary: #12121a;
@@ -354,6 +354,37 @@
         .tx-link { color: var(--accent-purple); text-decoration: none; font-size: 11px; }
         .tx-link:hover { text-decoration: underline; }
         .ca-display { word-break: break-all; user-select: all; cursor: copy; }
+
+        /* v25.1: Text and number display utilities - prevent breaking */
+        .no-break { white-space: nowrap; }
+        .num-value {
+            white-space: nowrap;
+            display: inline-block;
+        }
+        .metric-value {
+            white-space: nowrap;
+        }
+        .sol-amount, .price-amount, .mcap-amount, .volume-amount {
+            white-space: nowrap;
+            display: inline-block;
+        }
+        /* Prevent ticker/token names from breaking mid-word */
+        .token-name {
+            word-break: keep-all;
+            overflow-wrap: normal;
+        }
+        .ticker-symbol {
+            white-space: nowrap;
+            word-break: keep-all;
+        }
+        /* Table cells with numbers should not wrap */
+        .leader-table td.text-right {
+            white-space: nowrap;
+        }
+        /* Badge text should never wrap */
+        .badge-bonded, .badge-bonding, .holder-check, .badge-creator, .badge-robinhood, .score-badge, .status-badge {
+            white-space: nowrap;
+        }
 
         /* Log Grid */
         .log-grid { display: grid; grid-template-columns: 100px 1fr; gap: 8px; font-size: 11px; }
@@ -931,7 +962,7 @@
                 <div id="wallet-ui" class="hidden items-center gap-2 md:gap-3 bg-orange-950 border border-orange-800 p-2 md:p-3 rounded-lg shadow-xl flex-wrap justify-center">
                     <span class="w-2 h-2 md:w-3 md:h-3 rounded-full bg-green-500 animate-pulse"></span>
                     <span id="wallet-addr" class="font-mono text-xs md:text-sm text-orange-200 truncate max-w-[80px] md:max-w-[120px]"></span>
-                    <span id="wallet-bal" class="font-mono text-xs md:text-sm text-white font-bold bg-orange-900/50 px-2 md:px-3 py-1 rounded">0.00 SOL</span>
+                    <span id="wallet-bal" class="font-mono text-xs md:text-sm text-white font-bold bg-orange-900/50 px-2 md:px-3 py-1 rounded sol-amount">0.00&nbsp;SOL</span>
                     <div class="flex gap-1">
                         <button id="refresh-btn" class="text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded" aria-label="Refresh"><i data-lucide="refresh-cw" width="16"></i></button>
                         <button id="disconnect-btn" class="text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded" aria-label="Disconnect"><i data-lucide="log-out" width="16"></i></button>
@@ -972,43 +1003,43 @@
                 <!-- SOL Airdrop Pool -->
                 <div class="text-center p-3 md:p-4 bg-purple-900/10 rounded-lg md:bg-transparent md:border-r md:border-purple-800/30 md:rounded-none">
                     <div class="text-[10px] md:text-xs text-purple-300 uppercase mb-1 md:mb-2 tracking-widest">SOL Airdrop Pool</div>
-                    <div class="text-xl sm:text-2xl md:text-3xl lg:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" id="airdrop-balance">0.00 <span class="text-xs md:text-lg align-top text-purple-400">SOL</span></div>
-                    <div class="text-[10px] text-gray-500 mt-1">Wallet: <span id="wallet-balance" class="text-gray-400">0.00</span> SOL</div>
+                    <div class="text-xl sm:text-2xl md:text-3xl lg:text-4xl text-purple-200 font-bold font-mono drop-shadow-[0_0_10px_rgba(168,85,247,0.5)] sol-amount" id="airdrop-balance">0.00&nbsp;<span class="text-xs md:text-lg align-top text-purple-400">SOL</span></div>
+                    <div class="text-[10px] text-gray-500 mt-1 no-break">Wallet:&nbsp;<span id="wallet-balance" class="text-gray-400">0.00</span>&nbsp;SOL</div>
                 </div>
 
                 <!-- Points Breakdown -->
                 <div class="text-center p-3 md:p-4 bg-purple-900/10 rounded-lg md:bg-transparent md:border-r md:border-purple-800/30 md:rounded-none flex flex-col justify-center gap-2">
                     <div class="flex justify-between items-center px-1 md:px-4">
-                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest">Holder</span>
-                        <span class="text-sm md:text-lg text-yellow-400 font-bold font-mono" id="user-top-positions">0.00</span>
+                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest no-break">Holder</span>
+                        <span class="text-sm md:text-lg text-yellow-400 font-bold font-mono num-value" id="user-top-positions">0.00</span>
                     </div>
                     <div class="flex justify-between items-center px-1 md:px-4">
-                        <span class="text-[9px] md:text-[10px] text-green-300 uppercase tracking-widest">Robinhood</span>
-                        <span class="text-sm md:text-lg text-green-400 font-bold font-mono" id="user-robinhood-points">0.00</span>
+                        <span class="text-[9px] md:text-[10px] text-green-300 uppercase tracking-widest no-break">Robinhood</span>
+                        <span class="text-sm md:text-lg text-green-400 font-bold font-mono num-value" id="user-robinhood-points">0.00</span>
                     </div>
                     <div class="flex justify-between items-center px-1 md:px-4">
-                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest">ASDF 100</span>
-                        <span id="asdf-status" class="text-[10px] md:text-sm font-bold font-mono text-gray-500">CHECKING...</span>
+                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest no-break">ASDF&nbsp;100</span>
+                        <span id="asdf-status" class="text-[10px] md:text-sm font-bold font-mono text-gray-500 no-break">CHECKING...</span>
                     </div>
                 </div>
 
                 <!-- Total Points -->
                 <div class="text-center p-3 md:p-4 bg-purple-900/10 rounded-lg md:bg-transparent md:border-r md:border-purple-800/30 md:rounded-none flex flex-col justify-center items-center">
                     <div class="flex justify-center items-center gap-1 md:gap-2 mb-1">
-                        <div class="text-[10px] md:text-xs text-purple-300 uppercase tracking-widest">Total Points</div>
+                        <div class="text-[10px] md:text-xs text-purple-300 uppercase tracking-widest no-break">Total&nbsp;Points</div>
                         <button onclick="toggleAirdropInfoModal()" class="p-0 text-purple-400 hover:text-white transition" title="View Update Information">
                             <i data-lucide="info" width="12" height="12"></i>
                         </button>
                     </div>
-                    <div class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl text-white font-bold font-mono drop-shadow-[0_0_15px_rgba(234,179,8,0.6)]" id="user-total-points">0</div>
-                    <div id="points-multiplier-badge" class="hidden mt-1 px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[8px] md:text-[10px] text-green-400 font-bold tracking-wider">2X MULTIPLIER</div>
+                    <div class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl text-white font-bold font-mono drop-shadow-[0_0_15px_rgba(234,179,8,0.6)] num-value" id="user-total-points">0</div>
+                    <div id="points-multiplier-badge" class="hidden mt-1 px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[8px] md:text-[10px] text-green-400 font-bold tracking-wider no-break">2X&nbsp;MULTIPLIER</div>
                 </div>
 
                 <!-- Expected Airdrop -->
                 <div class="text-center p-3 md:p-4 bg-purple-900/20 rounded-lg flex flex-col justify-center items-center">
-                    <div class="text-[9px] md:text-[10px] text-purple-300 uppercase mb-1 tracking-widest">Expected Airdrop</div>
-                    <div class="text-lg sm:text-xl md:text-2xl text-green-400 font-bold font-mono" id="expected-airdrop">0.0000</div>
-                    <div class="text-[9px] md:text-[10px] text-purple-400 font-mono mt-1">SOL (Est)</div>
+                    <div class="text-[9px] md:text-[10px] text-purple-300 uppercase mb-1 tracking-widest no-break">Expected&nbsp;Airdrop</div>
+                    <div class="text-lg sm:text-xl md:text-2xl text-green-400 font-bold font-mono num-value" id="expected-airdrop">0.0000</div>
+                    <div class="text-[9px] md:text-[10px] text-purple-400 font-mono mt-1 no-break">SOL&nbsp;(Est)</div>
                 </div>
             </div>
         </div>
@@ -1029,17 +1060,17 @@
                 <div class="flex items-center gap-4 md:gap-6 bg-black/40 p-3 rounded-lg border border-fuchsia-600/30 w-full md:flex-1 justify-center">
                     <img id="koth-img" src="" class="w-10 h-10 md:w-12 md:h-12 rounded border border-fuchsia-500 object-cover hidden">
                     <div class="text-center">
-                        <div id="koth-ticker" class="text-xl md:text-2xl font-bold text-white font-mono">$????</div>
-                        <div id="koth-name" class="text-[10px] md:text-xs text-fuchsia-500 font-mono uppercase">LOADING...</div>
-                        <div id="koth-holders" class="text-[9px] md:text-[10px] text-green-400 font-mono mt-1">HOLDERS GET 10% BONUS!</div>
+                        <div id="koth-ticker" class="text-xl md:text-2xl font-bold text-white font-mono ticker-symbol">$????</div>
+                        <div id="koth-name" class="text-[10px] md:text-xs text-fuchsia-500 font-mono uppercase token-name">LOADING...</div>
+                        <div id="koth-holders" class="text-[9px] md:text-[10px] text-green-400 font-mono mt-1 no-break">HOLDERS&nbsp;GET&nbsp;10%&nbsp;BONUS!</div>
                     </div>
                 </div>
 
                 <!-- Stats Row (Mobile: inline, Desktop: separate) -->
                 <div class="flex justify-center gap-6 md:gap-4 w-full md:w-auto">
                     <div class="text-center">
-                        <div class="text-[10px] md:text-xs text-fuchsia-500 uppercase font-mono mb-1">MARKET CAP</div>
-                        <div id="koth-mcap" class="text-lg md:text-2xl font-bold text-white font-mono">$0</div>
+                        <div class="text-[10px] md:text-xs text-fuchsia-500 uppercase font-mono mb-1 no-break">MARKET&nbsp;CAP</div>
+                        <div id="koth-mcap" class="text-lg md:text-2xl font-bold text-white font-mono mcap-amount">$0</div>
                     </div>
                     <div class="text-center md:text-right">
                         <div class="text-[9px] md:text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">HOLDER BONUS</div>
@@ -1090,35 +1121,35 @@
             </div>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 text-center">
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Pending Fees</div>
-                    <div class="text-base md:text-xl text-white font-bold font-mono mt-1"><span id="track-balance">0.0000</span> SOL</div>
-                    <div class="text-[9px] md:text-[10px] text-gray-500 mt-1 hidden sm:block">
-                        <span class="text-orange-400">P:</span> <span id="track-platform-fees">0.0000</span> |
-                        <span class="text-green-400">R:</span> <span id="track-robinhood-fees">0.0000</span>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase no-break">Pending&nbsp;Fees</div>
+                    <div class="text-base md:text-xl text-white font-bold font-mono mt-1 sol-amount"><span id="track-balance">0.0000</span>&nbsp;SOL</div>
+                    <div class="text-[9px] md:text-[10px] text-gray-500 mt-1 hidden sm:block no-break">
+                        <span class="text-orange-400">P:</span>&nbsp;<span id="track-platform-fees">0.0000</span>&nbsp;|
+                        <span class="text-green-400">R:</span>&nbsp;<span id="track-robinhood-fees">0.0000</span>
                     </div>
                 </div>
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Last Claim</div>
-                    <div class="text-base md:text-xl text-green-400 font-bold font-mono mt-1"><span id="track-last-amt">0.0000</span> SOL</div>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase no-break">Last&nbsp;Claim</div>
+                    <div class="text-base md:text-xl text-green-400 font-bold font-mono mt-1 sol-amount"><span id="track-last-amt">0.0000</span>&nbsp;SOL</div>
                 </div>
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Claim Time</div>
-                    <div class="text-xs md:text-sm text-white font-mono mt-2" id="track-last-time">Never</div>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase no-break">Claim&nbsp;Time</div>
+                    <div class="text-xs md:text-sm text-white font-mono mt-2 no-break" id="track-last-time">Never</div>
                 </div>
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Next Check</div>
-                    <div class="text-base md:text-xl text-yellow-400 font-bold font-mono mt-1" id="track-next-check">--:--</div>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase no-break">Next&nbsp;Check</div>
+                    <div class="text-base md:text-xl text-yellow-400 font-bold font-mono mt-1 no-break" id="track-next-check">--:--</div>
                 </div>
 
                 <!-- Dynamic Conservation Notice -->
                 <div id="conservation-notice" class="conservation-notice col-span-2 md:col-span-4">
                     <div class="flex items-center justify-center gap-2 mb-1">
                         <i data-lucide="shield-alert" class="text-blue-400" width="14"></i>
-                        <span class="text-blue-300 font-bold uppercase text-[10px] md:text-xs">Conserving SOL for Airdrop</span>
+                        <span class="text-blue-300 font-bold uppercase text-[10px] md:text-xs no-break">Conserving&nbsp;SOL&nbsp;for&nbsp;Airdrop</span>
                     </div>
                     <div class="text-blue-200 text-[10px] md:text-xs text-center">
-                        Targeting <span id="cons-users" class="font-bold text-white">0</span> users.
-                        Need <span id="cons-need" class="font-bold text-white">0.0000</span> SOL (Have <span id="cons-have" class="text-gray-400">0.0000</span>).
+                        Targeting&nbsp;<span id="cons-users" class="font-bold text-white num-value">0</span>&nbsp;users.
+                        Need&nbsp;<span id="cons-need" class="font-bold text-white num-value">0.0000</span>&nbsp;SOL (Have&nbsp;<span id="cons-have" class="text-gray-400 num-value">0.0000</span>).
                         <span id="cons-missing" class="text-yellow-400 ml-1"></span>
                     </div>
                 </div>
@@ -1129,11 +1160,11 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-8">
             <!-- Platform Metrics -->
             <div class="panel bg-orange-900/10">
-                <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-4 md:mb-6">PLATFORM METRICS</h3>
+                <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-4 md:mb-6 no-break">PLATFORM&nbsp;METRICS</h3>
                 <div class="grid grid-cols-3 gap-2 md:gap-4">
-                    <div class="metric-card"><div class="metric-label">Launches</div><div id="metric-launches" class="metric-value">0</div></div>
-                    <div class="metric-card"><div class="metric-label">Airdropped</div><div id="metric-pump" class="metric-value">0.00</div></div>
-                    <div class="metric-card"><div class="metric-label">Daily Vol</div><div id="metric-fees" class="metric-value">$0.00</div></div>
+                    <div class="metric-card"><div class="metric-label no-break">Launches</div><div id="metric-launches" class="metric-value">0</div></div>
+                    <div class="metric-card"><div class="metric-label no-break">Airdropped</div><div id="metric-pump" class="metric-value">0.00</div></div>
+                    <div class="metric-card"><div class="metric-label no-break">Daily&nbsp;Vol</div><div id="metric-fees" class="metric-value">$0.00</div></div>
                 </div>
                 <div class="text-center mt-4">
                     <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-[10px] md:text-xs border border-orange-700 hover:bg-orange-800 px-3 md:px-4 py-2 rounded transition">FEE MECHANICS</button>
@@ -1142,25 +1173,25 @@
 
             <!-- Robinhood Section -->
             <div class="panel bg-green-900/10" id="robinhood-section">
-                <h3 class="text-green-400 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-4 md:mb-6 flex items-center gap-2">
+                <h3 class="text-green-400 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-4 md:mb-6 flex items-center gap-2 no-break">
                     <svg class="w-3 h-3 md:w-4 md:h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
-                    ROBINHOOD PARTNERS
+                    ROBINHOOD&nbsp;PARTNERS
                 </h3>
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Partners</div>
+                        <div class="metric-label no-break" style="color: #86efac;">Partners</div>
                         <div id="robinhood-token-count" class="metric-value" style="color: #4ade80;">0</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Pending</div>
+                        <div class="metric-label no-break" style="color: #86efac;">Pending</div>
                         <div id="robinhood-pending-fees" class="metric-value text-sm md:text-lg" style="color: #4ade80;">0.00</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Collected</div>
+                        <div class="metric-label no-break" style="color: #86efac;">Collected</div>
                         <div id="robinhood-fees" class="metric-value text-sm md:text-lg" style="color: #4ade80;">0.00</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Holdings</div>
+                        <div class="metric-label no-break" style="color: #86efac;">Holdings</div>
                         <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80;">-</div>
                     </div>
                 </div>
@@ -1766,24 +1797,24 @@
 
                 // v18.0: Eligibility badge based on $100 volume threshold
                 const eligibilityMark = item.isEligible
-                    ? `<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded border border-green-700/50" title="Eligible for airdrop (>$100 volume)">ELIGIBLE</span>`
-                    : `<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded border border-red-800/30" title="Not eligible (needs >$100 24hr volume)">NOT ELIGIBLE</span>`;
+                    ? `<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded border border-green-700/50 no-break" title="Eligible for airdrop (>$100 volume)">ELIGIBLE</span>`
+                    : `<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded border border-red-800/30 no-break" title="Not eligible (needs >$100 24hr volume)">NOT&nbsp;ELIGIBLE</span>`;
 
                 return `
                 <tr>
                     <td class="text-orange-500 font-bold">${index + 1}</td>
                     <td>
                         <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
-                        <span class="text-white font-bold">${escapeHtml(item.ticker)}</span>
+                        <span class="text-white font-bold ticker-symbol">${escapeHtml(item.ticker)}</span>
                         ${eligibilityMark}
                         ${robinhoodMark}
                         ${creatorMark}
                         ${holderMark}
                         ${badge}
-                        <div class="text-[10px] text-orange-300 mt-1 truncate max-w-[150px]">${escapeHtml(item.name)}</div>
+                        <div class="text-[10px] text-orange-300 mt-1 truncate max-w-[150px] token-name">${escapeHtml(item.name)}</div>
                     </td>
-                    <td class="text-right text-green-400 font-bold font-mono">${formatMcap(displayMcap)}</td>
-                    <td class="text-right text-white font-bold">$${displayVol.toLocaleString()}</td>
+                    <td class="text-right text-green-400 font-bold font-mono mcap-amount">${formatMcap(displayMcap)}</td>
+                    <td class="text-right text-white font-bold volume-amount">$${displayVol.toLocaleString()}</td>
                     <td class="text-right">
                         <div class="flex gap-2 justify-end items-center">
                             <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}', ${!!item.isRobinhood})" class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition" title="View Top 50 Holders">
@@ -1990,19 +2021,19 @@
                 if (data.totalVolume !== undefined) {
                     ui.metricFees.innerText = "$" + (parseFloat(data.totalVolume) || 0).toLocaleString();
                 } else if (data.lifetimeFees) {
-                    ui.metricFees.innerText = data.lifetimeFees + " SOL"; 
+                    ui.metricFees.innerText = data.lifetimeFees + "\u00A0SOL";
                 }
-                if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches; 
+                if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches;
                 // v11.0: Display SOL airdrop total (or legacy PUMP for backwards compat)
                 if (data.totalSolAirdropped !== undefined && parseFloat(data.totalSolAirdropped) > 0) {
-                    ui.metricPump.innerText = parseFloat(data.totalSolAirdropped).toFixed(2) + ' SOL';
+                    ui.metricPump.innerText = parseFloat(data.totalSolAirdropped).toFixed(2) + '\u00A0SOL';
                 } else if (data.totalAirdropped !== undefined) {
                     // Backwards compatibility: show old PUMP airdrops if no SOL airdrops yet
                     const totalPump = parseFloat(data.totalAirdropped);
                     if (totalPump > 0) {
-                        ui.metricPump.innerText = totalPump.toLocaleString('en-US', {maximumFractionDigits: 0}) + ' $PUMP';
+                        ui.metricPump.innerText = totalPump.toLocaleString('en-US', {maximumFractionDigits: 0}) + '\u00A0$PUMP';
                     } else {
-                        ui.metricPump.innerText = '0.00 SOL';
+                        ui.metricPump.innerText = '0.00\u00A0SOL';
                     }
                 } else if (data.totalPumpTokensBought) {
                     ui.metricPump.innerText = data.totalPumpTokensBought;
@@ -2029,11 +2060,11 @@
                 // v14.0: Also display actual wallet balance
                 if (data.airdropPoolSol !== undefined) {
                     const airdropPoolSol = parseFloat(data.airdropPoolSol);
-                    ui.airdropBalance.innerHTML = `${airdropPoolSol.toFixed(2)} <span class="text-lg align-top text-purple-400">SOL</span>`;
+                    ui.airdropBalance.innerHTML = `${airdropPoolSol.toFixed(2)}&nbsp;<span class="text-lg align-top text-purple-400">SOL</span>`;
                 } else if (data.pumpHoldings !== undefined) {
                     // Fallback for backwards compatibility
                     currentPumpHoldings = parseFloat(data.pumpHoldings);
-                    ui.airdropBalance.innerHTML = `${currentPumpHoldings.toLocaleString('en-US', {maximumFractionDigits: 0})} <span class="text-lg align-top text-purple-400">$PUMP</span>`;
+                    ui.airdropBalance.innerHTML = `${currentPumpHoldings.toLocaleString('en-US', {maximumFractionDigits: 0})}&nbsp;<span class="text-lg align-top text-purple-400">$PUMP</span>`;
                 }
                 // v14.0: Update actual wallet balance display
                 const walletBalanceEl = document.getElementById('wallet-balance');
@@ -2058,8 +2089,8 @@
                 // v12.0: Update Robinhood stats from health response (v23.0: Added pending fees)
                 if (data.robinhood) {
                     document.getElementById('robinhood-token-count').textContent = data.robinhood.activeTokens || 0;
-                    document.getElementById('robinhood-fees').textContent = `${(data.robinhood.totalFeesCollectedSol || 0).toFixed(2)} SOL`;
-                    document.getElementById('robinhood-pending-fees').textContent = `${data.robinhood.pendingFeesSol || '0.00'} SOL`;
+                    document.getElementById('robinhood-fees').textContent = `${(data.robinhood.totalFeesCollectedSol || 0).toFixed(2)}\u00A0SOL`;
+                    document.getElementById('robinhood-pending-fees').textContent = `${data.robinhood.pendingFeesSol || '0.00'}\u00A0SOL`;
                 }
             } else { 
                 status = 'OFFLINE';
@@ -2104,7 +2135,7 @@
             if (!res.ok) throw new Error("Balance fetch failed");
             const data = await res.json();
             const solBalance = data.balance / solanaWeb3.LAMPORTS_PER_SOL;
-            ui.walletBal.innerText = solBalance.toFixed(3) + " SOL"; 
+            ui.walletBal.innerText = solBalance.toFixed(3) + "\u00A0SOL"; 
             systemStatus.solana_rpc = 'ONLINE'; 
             if (!isDeploying) {
                 if (solBalance < DEPLOYMENT_FEE) {
@@ -2260,7 +2291,7 @@
                     ${thresholdInfo}
                     <table class="w-full text-left font-mono text-xs leader-table">
                         <thead class="text-orange-400 border-b border-orange-800">
-                            <tr><th class="p-2">#</th><th class="p-2">Token</th><th class="p-2">Creator</th><th class="p-2 text-right">MCAP</th><th class="p-2 text-right">Vol (24H)</th><th class="p-2 text-right">Eligible</th><th class="p-2 text-right">Status</th></tr>
+                            <tr><th class="p-2">#</th><th class="p-2">Token</th><th class="p-2 no-break">Creator</th><th class="p-2 text-right no-break">MCAP</th><th class="p-2 text-right no-break">Vol&nbsp;(24H)</th><th class="p-2 text-right no-break">Eligible</th><th class="p-2 text-right no-break">Status</th></tr>
                         </thead>
                         <tbody class="text-orange-200">
                             ${await Promise.all(tokens.map(async (item, index) => {
@@ -2272,19 +2303,19 @@
 
                                 // v18.0: Eligibility badge
                                 const eligibilityBadge = item.isEligible
-                                    ? '<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded">YES</span>'
-                                    : '<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded">NO</span>';
+                                    ? '<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded no-break">YES</span>'
+                                    : '<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded no-break">NO</span>';
 
                                 return `
                                 <tr class="border-b border-orange-800/30 hover:bg-orange-900/20">
                                     <td class="p-2">${index + 1}</td>
                                     <td class="p-2">
                                         <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
-                                        <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="font-bold underline text-white">${escapeHtml(item.ticker)}</a> (${escapeHtml(item.name)})
+                                        <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="font-bold underline text-white ticker-symbol">${escapeHtml(item.ticker)}</a> <span class="token-name">(${escapeHtml(item.name)})</span>
                                     </td>
-                                    <td class="p-2 text-orange-400">${escapeHtml(item.userPubkey?.slice(0, 5) || '?????')}...</td>
-                                    <td class="p-2 text-right font-bold text-green-400">${formatMcap(item.marketCap)}</td>
-                                    <td class="p-2 text-right font-bold">$${(parseFloat(item.volume) || 0).toLocaleString()}</td>
+                                    <td class="p-2 text-orange-400 no-break">${escapeHtml(item.userPubkey?.slice(0, 5) || '?????')}...</td>
+                                    <td class="p-2 text-right font-bold text-green-400 mcap-amount">${formatMcap(item.marketCap)}</td>
+                                    <td class="p-2 text-right font-bold volume-amount">$${(parseFloat(item.volume) || 0).toLocaleString()}</td>
                                     <td class="p-2 text-right">${eligibilityBadge}</td>
                                     <td class="p-2 text-right">${badge}</td>
                                 </tr>
@@ -2328,22 +2359,22 @@
                     <p class="text-purple-400/60 font-mono text-xs mb-4">Points are proportional to holdings in Top 250 of each eligible token (1000 pts/token distributed)</p>
                     <table class="w-full text-left font-mono text-xs">
                         <thead class="text-purple-400 border-b border-purple-800">
-                            <tr><th class="p-2">#</th><th class="p-2">Wallet</th><th class="p-2 text-right">Tokens</th><th class="p-2 text-right">Created</th><th class="p-2 text-right">Multiplier</th><th class="p-2 text-right">Points</th><th class="p-2 text-right">Est. SOL</th></tr>
+                            <tr><th class="p-2">#</th><th class="p-2">Wallet</th><th class="p-2 text-right no-break">Tokens</th><th class="p-2 text-right no-break">Created</th><th class="p-2 text-right no-break">Multiplier</th><th class="p-2 text-right no-break">Points</th><th class="p-2 text-right no-break">Est.&nbsp;SOL</th></tr>
                         </thead>
                         <tbody class="text-purple-200">
                             ${users.sort((a, b) => b.points - a.points).map((user, index) => {
                                 const multiplierBadge = user.isAsdfTop50
-                                    ? '<span class="px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold">2X</span>'
-                                    : '<span class="px-2 py-0.5 bg-gray-500/20 border border-gray-500 rounded text-[9px] text-gray-400 font-bold">1X</span>';
+                                    ? '<span class="px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold no-break">2X</span>'
+                                    : '<span class="px-2 py-0.5 bg-gray-500/20 border border-gray-500 rounded text-[9px] text-gray-400 font-bold no-break">1X</span>';
                                 return `
                                 <tr class="border-b border-purple-800/30 hover:bg-purple-900/20">
                                     <td class="p-2">${index + 1}</td>
-                                    <td class="p-2 text-white font-bold">${escapeHtml(user.pubkey?.slice(0, 5) || '?????')}...</td>
-                                    <td class="p-2 text-right">${user.positions}</td>
-                                    <td class="p-2 text-right text-blue-400">${user.created || 0}</td>
+                                    <td class="p-2 text-white font-bold no-break">${escapeHtml(user.pubkey?.slice(0, 5) || '?????')}...</td>
+                                    <td class="p-2 text-right num-value">${user.positions}</td>
+                                    <td class="p-2 text-right text-blue-400 num-value">${user.created || 0}</td>
                                     <td class="p-2 text-right">${multiplierBadge}</td>
-                                    <td class="p-2 text-right text-yellow-400 font-bold">${user.points.toFixed(2)}</td>
-                                    <td class="p-2 text-right text-green-400 font-bold">${parseFloat(user.expectedAirdrop).toFixed(4)}</td>
+                                    <td class="p-2 text-right text-yellow-400 font-bold num-value">${user.points.toFixed(2)}</td>
+                                    <td class="p-2 text-right text-green-400 font-bold num-value">${parseFloat(user.expectedAirdrop).toFixed(4)}</td>
                                 </tr>
                                 `;
                             }).join('')}
@@ -2401,29 +2432,29 @@
                     <p class="text-yellow-400 font-bold text-sm mb-1">Summary</p>
                     <div class="grid grid-cols-3 gap-4 text-center">
                         <div>
-                            <div class="text-2xl font-bold text-white">${holdings.length}</div>
-                            <div class="text-[10px] text-yellow-400 uppercase">Total Holdings</div>
+                            <div class="text-2xl font-bold text-white num-value">${holdings.length}</div>
+                            <div class="text-[10px] text-yellow-400 uppercase no-break">Total&nbsp;Holdings</div>
                         </div>
                         <div>
-                            <div class="text-2xl font-bold text-green-400">${eligibleCount}</div>
-                            <div class="text-[10px] text-green-400 uppercase">Eligible</div>
+                            <div class="text-2xl font-bold text-green-400 num-value">${eligibleCount}</div>
+                            <div class="text-[10px] text-green-400 uppercase no-break">Eligible</div>
                         </div>
                         <div>
-                            <div class="text-2xl font-bold text-yellow-400">${data.totalPoints.toFixed(2)}</div>
-                            <div class="text-[10px] text-yellow-400 uppercase">Total Pts</div>
+                            <div class="text-2xl font-bold text-yellow-400 num-value">${data.totalPoints.toFixed(2)}</div>
+                            <div class="text-[10px] text-yellow-400 uppercase no-break">Total&nbsp;Pts</div>
                         </div>
                     </div>
-                    <p class="text-[10px] text-yellow-400/60 mt-2 text-center">Tokens need >${data.eligibilityThreshold} USD 24hr volume to be eligible</p>
+                    <p class="text-[10px] text-yellow-400/60 mt-2 text-center">Tokens need >${data.eligibilityThreshold}&nbsp;USD 24hr volume to be eligible</p>
                 </div>
 
                 <table class="w-full text-left font-mono text-xs">
                     <thead class="text-yellow-400 border-b border-yellow-800">
                         <tr>
                             <th class="p-2">Token</th>
-                            <th class="p-2 text-right">Rank</th>
-                            <th class="p-2 text-right">Vol 24H</th>
-                            <th class="p-2 text-center">Status</th>
-                            <th class="p-2 text-right">Points</th>
+                            <th class="p-2 text-right no-break">Rank</th>
+                            <th class="p-2 text-right no-break">Vol&nbsp;24H</th>
+                            <th class="p-2 text-center no-break">Status</th>
+                            <th class="p-2 text-right no-break">Points</th>
                         </tr>
                     </thead>
                     <tbody class="text-yellow-200">
@@ -2432,19 +2463,19 @@
             for (const h of holdings) {
                 const imgSrc = resolveTokenImage(h.image);
                 const eligibilityBadge = h.isEligible
-                    ? '<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded">ELIGIBLE</span>'
-                    : '<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded">NOT ELIGIBLE</span>';
+                    ? '<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded no-break">ELIGIBLE</span>'
+                    : '<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded no-break">NOT&nbsp;ELIGIBLE</span>';
 
                 const creatorBadge = h.isCreator
-                    ? '<span class="text-[9px] bg-blue-900/50 text-blue-400 px-1 py-0.5 rounded ml-1">CREATOR</span>'
+                    ? '<span class="text-[9px] bg-blue-900/50 text-blue-400 px-1 py-0.5 rounded ml-1 no-break">CREATOR</span>'
                     : '';
 
                 const robinhoodBadge = h.source === 'robinhood'
-                    ? `<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded ml-1">${h.feeSharePercent || 100}% FEE</span>`
+                    ? `<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded ml-1 no-break">${h.feeSharePercent || 100}%&nbsp;FEE</span>`
                     : '';
 
                 const pointsDisplay = h.isEligible
-                    ? `<span class="text-yellow-400 font-bold">${h.basePoints.toFixed(2)}</span>`
+                    ? `<span class="text-yellow-400 font-bold num-value">${h.basePoints.toFixed(2)}</span>`
                     : '<span class="text-gray-500">0</span>';
 
                 html += `
@@ -2453,15 +2484,15 @@
                             <div class="flex items-center gap-2">
                                 <img src="${imgSrc}" class="w-6 h-6 rounded border border-yellow-700/50 object-cover" alt="">
                                 <div>
-                                    <a href="${PUMPFUN_URL_BASE}${escapeHtml(h.mint)}" target="_blank" class="text-white font-bold hover:underline">${escapeHtml(h.ticker)}</a>
+                                    <a href="${PUMPFUN_URL_BASE}${escapeHtml(h.mint)}" target="_blank" class="text-white font-bold hover:underline ticker-symbol">${escapeHtml(h.ticker)}</a>
                                     ${robinhoodBadge}
                                     ${creatorBadge}
-                                    <div class="text-[10px] text-yellow-400/60 truncate max-w-[120px]">${escapeHtml(h.name)}</div>
+                                    <div class="text-[10px] text-yellow-400/60 truncate max-w-[120px] token-name">${escapeHtml(h.name)}</div>
                                 </div>
                             </div>
                         </td>
-                        <td class="p-2 text-right text-orange-400">#${h.rank}</td>
-                        <td class="p-2 text-right">$${(h.volume24h || 0).toLocaleString()}</td>
+                        <td class="p-2 text-right text-orange-400 no-break">#${h.rank}</td>
+                        <td class="p-2 text-right volume-amount">$${(h.volume24h || 0).toLocaleString()}</td>
                         <td class="p-2 text-center">${eligibilityBadge}</td>
                         <td class="p-2 text-right">${pointsDisplay}</td>
                     </tr>
@@ -2507,7 +2538,7 @@
                     let displayValue = value;
                     if (key.toLowerCase().includes('sol') || key.toLowerCase().includes('fees')) {
                         const numVal = parseFloat(value);
-                        if (!isNaN(numVal)) displayValue = numVal.toFixed(2) + ' SOL';
+                        if (!isNaN(numVal)) displayValue = numVal.toFixed(2) + '\u00A0SOL';
                     }
                     if (key === 'kothWinner') {
                         displayValue = value || 'N/A';
@@ -2554,7 +2585,7 @@
                 ui.modalAirdropLogContent.innerHTML = `
                     <table class="w-full text-left font-mono text-xs">
                         <thead class="text-purple-400 border-b border-purple-800">
-                            <tr><th class="p-2">Date/Time</th><th class="p-2">Amount</th><th class="p-2">Currency</th><th class="p-2">Users</th><th class="p-2">Total Pts</th><th class="p-2 text-right">TXs</th></tr>
+                            <tr><th class="p-2 no-break">Date/Time</th><th class="p-2 no-break">Amount</th><th class="p-2 no-break">Currency</th><th class="p-2 no-break">Users</th><th class="p-2 no-break">Total&nbsp;Pts</th><th class="p-2 text-right no-break">TXs</th></tr>
                         </thead>
                         <tbody class="text-purple-200">
                             ${logs.map(log => {
@@ -2570,21 +2601,21 @@
                                 } catch(e) {}
 
                                 const currencyBadge = currency === 'SOL'
-                                    ? '<span class="px-1.5 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold">SOL</span>'
-                                    : '<span class="px-1.5 py-0.5 bg-purple-500/20 border border-purple-500 rounded text-[9px] text-purple-400 font-bold">$PUMP</span>';
+                                    ? '<span class="px-1.5 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold no-break">SOL</span>'
+                                    : '<span class="px-1.5 py-0.5 bg-purple-500/20 border border-purple-500 rounded text-[9px] text-purple-400 font-bold no-break">$PUMP</span>';
 
                                 return `
                                 <tr class="border-b border-purple-800/30 hover:bg-purple-900/20">
-                                    <td class="p-2">${new Date(log.timestamp).toLocaleString()}</td>
-                                    <td class="p-2 font-bold text-green-400">${amountDisplay}</td>
+                                    <td class="p-2 no-break">${new Date(log.timestamp).toLocaleString()}</td>
+                                    <td class="p-2 font-bold text-green-400 num-value">${amountDisplay}</td>
                                     <td class="p-2">${currencyBadge}</td>
-                                    <td class="p-2">${log.recipients}</td>
-                                    <td class="p-2">${log.totalPoints || '-'}</td>
-                                    <td class="p-2 text-right">
+                                    <td class="p-2 num-value">${log.recipients}</td>
+                                    <td class="p-2 num-value">${log.totalPoints || '-'}</td>
+                                    <td class="p-2 text-right no-break">
                                         ${log.signatures ? log.signatures.split(',').map((sig, i) =>
                                             sig.startsWith('KOTH')
                                             ? `<a href="https://solscan.io/tx/${sig.split(':')[1]}" target="_blank" class="tx-link text-fuchsia-400">[💊]</a>`
-                                            : `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link">[TX ${i+1}]</a>`
+                                            : `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link">[TX&nbsp;${i+1}]</a>`
                                         ).join(' ') : 'Pending'}
                                     </td>
                                 </tr>
@@ -2643,9 +2674,9 @@
                     <thead>
                         <tr>
                             <th class="p-2" style="color: #22c55e;">Token</th>
-                            <th class="p-2 text-right" style="color: #22c55e;">Fee Share</th>
-                            <th class="p-2 text-right" style="color: #22c55e;">Fees Collected</th>
-                            <th class="p-2 text-right" style="color: #22c55e;">Actions</th>
+                            <th class="p-2 text-right no-break" style="color: #22c55e;">Fee&nbsp;Share</th>
+                            <th class="p-2 text-right no-break" style="color: #22c55e;">Fees&nbsp;Collected</th>
+                            <th class="p-2 text-right no-break" style="color: #22c55e;">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -2655,13 +2686,13 @@
                                     <div class="flex items-center gap-2">
                                         <img src="${resolveTokenImage(t.image)}" class="token-img-sm" onerror="this.src='https://placehold.co/32x32/333/fff?text=?'" loading="lazy">
                                         <div>
-                                            <span class="text-white font-bold">${escapeHtml(t.ticker)}</span>
-                                            <span class="text-xs text-gray-500 block">${t.mint ? t.mint.slice(0, 8) + '...' : 'Pending'}</span>
+                                            <span class="text-white font-bold ticker-symbol">${escapeHtml(t.ticker)}</span>
+                                            <span class="text-xs text-gray-500 block no-break">${t.mint ? t.mint.slice(0, 8) + '...' : 'Pending'}</span>
                                         </div>
                                     </div>
                                 </td>
-                                <td class="p-2 text-right text-green-400 font-bold">${t.feeSharePercent.toFixed(1)}%</td>
-                                <td class="p-2 text-right text-white">${t.totalFeesCollected.toFixed(2)} SOL</td>
+                                <td class="p-2 text-right text-green-400 font-bold num-value">${t.feeSharePercent.toFixed(1)}%</td>
+                                <td class="p-2 text-right text-white sol-amount">${t.totalFeesCollected.toFixed(2)}&nbsp;SOL</td>
                                 <td class="p-2 text-right">
                                     ${t.mint ? `<a href="${PUMPFUN_URL_BASE}${t.mint}" target="_blank" class="text-green-400 hover:text-white text-xs underline">View</a>` : '-'}
                                 </td>
@@ -2682,7 +2713,7 @@
             const stats = await res.json();
 
             document.getElementById('robinhood-token-count').textContent = stats.activeTokens || 0;
-            document.getElementById('robinhood-fees').textContent = `${(stats.totalFeesCollectedSol || 0).toFixed(2)} SOL`;
+            document.getElementById('robinhood-fees').textContent = `${(stats.totalFeesCollectedSol || 0).toFixed(2)}\u00A0SOL`;
 
             // Check user's Robinhood holdings if connected
             if (userPubkey) {

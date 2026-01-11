@@ -2,26 +2,59 @@
  * Health & Status Routes
  * Server health, stats, and debugging endpoints
  * v23.0 - Added Robinhood pending fees to health endpoint
+ * v24.0 - Parallelized Robinhood fee calculation, added circuit breaker
  */
 const express = require('express');
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS } = require('../config/constants');
-const { pump, logger, imageUtils } = require('../services');
+const { pump, logger, imageUtils, circuitBreaker, redis } = require('../services');
 
 const router = express.Router();
 
-// v22.0: Rate limiter for admin login attempts (prevent brute force)
-const adminLoginAttempts = new Map();
+// v24.0 SECURITY FIX: Rate limiter using Redis for multi-instance support
+// Fallback to in-memory Map if Redis unavailable
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const ADMIN_LOGIN_MAX_ATTEMPTS = 5;
+const ADMIN_RATE_LIMIT_KEY_PREFIX = 'admin_rate_limit:';
 
-function checkAdminRateLimit(ip) {
+// In-memory fallback for when Redis is unavailable
+const adminLoginAttemptsFallback = new Map();
+
+async function checkAdminRateLimit(ip) {
     const now = Date.now();
-    const attempts = adminLoginAttempts.get(ip) || { count: 0, resetAt: now + ADMIN_LOGIN_WINDOW_MS };
+    const redisConn = redis.getConnection?.();
 
-    // Reset if window expired
+    // v24.0: Try Redis first for distributed rate limiting
+    if (redisConn && redis.isRedisConnected()) {
+        try {
+            const key = `${ADMIN_RATE_LIMIT_KEY_PREFIX}${ip}`;
+            const data = await redisConn.get(key);
+
+            if (!data) {
+                return { allowed: true, remaining: ADMIN_LOGIN_MAX_ATTEMPTS, resetAt: now + ADMIN_LOGIN_WINDOW_MS };
+            }
+
+            const attempts = JSON.parse(data);
+            if (now > attempts.resetAt) {
+                // Window expired, reset
+                await redisConn.del(key);
+                return { allowed: true, remaining: ADMIN_LOGIN_MAX_ATTEMPTS, resetAt: now + ADMIN_LOGIN_WINDOW_MS };
+            }
+
+            return {
+                allowed: attempts.count < ADMIN_LOGIN_MAX_ATTEMPTS,
+                remaining: Math.max(0, ADMIN_LOGIN_MAX_ATTEMPTS - attempts.count),
+                resetAt: attempts.resetAt
+            };
+        } catch (e) {
+            logger.debug('[AdminRateLimit] Redis check failed, using fallback', { error: e.message });
+        }
+    }
+
+    // Fallback to in-memory
+    const attempts = adminLoginAttemptsFallback.get(ip) || { count: 0, resetAt: now + ADMIN_LOGIN_WINDOW_MS };
     if (now > attempts.resetAt) {
         attempts.count = 0;
         attempts.resetAt = now + ADMIN_LOGIN_WINDOW_MS;
@@ -34,9 +67,39 @@ function checkAdminRateLimit(ip) {
     };
 }
 
-function recordAdminLoginAttempt(ip, success) {
+async function recordAdminLoginAttempt(ip, success) {
     const now = Date.now();
-    const attempts = adminLoginAttempts.get(ip) || { count: 0, resetAt: now + ADMIN_LOGIN_WINDOW_MS };
+    const redisConn = redis.getConnection?.();
+
+    // v24.0: Try Redis first for distributed rate limiting
+    if (redisConn && redis.isRedisConnected()) {
+        try {
+            const key = `${ADMIN_RATE_LIMIT_KEY_PREFIX}${ip}`;
+            const data = await redisConn.get(key);
+
+            let attempts = data ? JSON.parse(data) : { count: 0, resetAt: now + ADMIN_LOGIN_WINDOW_MS };
+
+            if (now > attempts.resetAt) {
+                attempts = { count: 0, resetAt: now + ADMIN_LOGIN_WINDOW_MS };
+            }
+
+            if (!success) {
+                attempts.count++;
+            } else {
+                attempts.count = 0;
+            }
+
+            // Set with TTL matching the window
+            const ttlSeconds = Math.ceil((attempts.resetAt - now) / 1000);
+            await redisConn.set(key, JSON.stringify(attempts), 'EX', Math.max(1, ttlSeconds));
+            return;
+        } catch (e) {
+            logger.debug('[AdminRateLimit] Redis record failed, using fallback', { error: e.message });
+        }
+    }
+
+    // Fallback to in-memory
+    let attempts = adminLoginAttemptsFallback.get(ip) || { count: 0, resetAt: now + ADMIN_LOGIN_WINDOW_MS };
 
     if (now > attempts.resetAt) {
         attempts.count = 0;
@@ -46,16 +109,15 @@ function recordAdminLoginAttempt(ip, success) {
     if (!success) {
         attempts.count++;
     } else {
-        // Reset on successful login
         attempts.count = 0;
     }
 
-    adminLoginAttempts.set(ip, attempts);
+    adminLoginAttemptsFallback.set(ip, attempts);
 
     // Cleanup old entries periodically
-    if (adminLoginAttempts.size > 1000) {
-        for (const [key, val] of adminLoginAttempts) {
-            if (now > val.resetAt) adminLoginAttempts.delete(key);
+    if (adminLoginAttemptsFallback.size > 1000) {
+        for (const [key, val] of adminLoginAttemptsFallback) {
+            if (now > val.resetAt) adminLoginAttemptsFallback.delete(key);
         }
     }
 }
@@ -147,48 +209,77 @@ function init(deps) {
                 const robinhoodTokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
                 const robinhoodTotalFees = await db.get('SELECT SUM("totalFeesCollected") as total FROM robinhood_tokens');
 
-                // v23.0: Calculate pending fees from Robinhood tokens
+                // v24.0: Calculate pending fees from Robinhood tokens (parallelized with circuit breaker)
                 let robinhoodPendingFees = 0;
-                const robinhoodPendingDetails = [];
+                let robinhoodPendingDetails = [];
                 try {
                     const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1');
-                    for (const token of robinhoodTokens) {
-                        try {
-                            const creatorPubkey = new PublicKey(token.creatorPubkey);
-                            const { bcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkey);
 
-                            let tokenPendingFees = 0;
+                    // v24.0: Process tokens in parallel batches for better responsiveness
+                    const BATCH_SIZE = 10;
+                    const batches = [];
+                    for (let i = 0; i < robinhoodTokens.length; i += BATCH_SIZE) {
+                        batches.push(robinhoodTokens.slice(i, i + BATCH_SIZE));
+                    }
 
-                            // Check BC vault
+                    for (const batch of batches) {
+                        const batchResults = await Promise.all(batch.map(async (token) => {
                             try {
-                                const bcInfo = await connection.getAccountInfo(bcVault);
-                                if (bcInfo && bcInfo.lamports > 5000) {
-                                    const ourShare = Math.floor((bcInfo.lamports - 5000) * (token.feeShareBps / 10000));
-                                    tokenPendingFees += ourShare;
-                                }
-                            } catch (e) { /* Silent */ }
+                                const creatorPubkey = new PublicKey(token.creatorPubkey);
+                                const { bcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkey);
 
-                            // Check AMM vault
-                            try {
-                                const ammVaultAtaKey = await ammVaultAta;
-                                const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-                                if (bal.value.amount && parseInt(bal.value.amount) > 0) {
-                                    const ourShare = Math.floor(parseInt(bal.value.amount) * (token.feeShareBps / 10000));
-                                    tokenPendingFees += ourShare;
-                                }
-                            } catch (e) { /* Silent */ }
+                                // v24.0: Use circuit breaker for RPC calls
+                                const [bcLamports, ammBalance] = await Promise.all([
+                                    circuitBreaker.execute(
+                                        'solana-rpc-health',
+                                        async () => {
+                                            const bcInfo = await connection.getAccountInfo(bcVault);
+                                            return bcInfo?.lamports || 0;
+                                        },
+                                        0,
+                                        { failureThreshold: 10, timeout: 60000 }
+                                    ),
+                                    circuitBreaker.execute(
+                                        'solana-rpc-health',
+                                        async () => {
+                                            const ammVaultAtaKey = await ammVaultAta;
+                                            const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
+                                            return parseInt(bal.value.amount) || 0;
+                                        },
+                                        0,
+                                        { failureThreshold: 10, timeout: 60000 }
+                                    )
+                                ]);
 
-                            if (tokenPendingFees > 0) {
-                                robinhoodPendingFees += tokenPendingFees;
-                                robinhoodPendingDetails.push({
-                                    mint: token.mint,
-                                    ticker: token.ticker,
-                                    pendingLamports: tokenPendingFees,
-                                    feeShareBps: token.feeShareBps
-                                });
+                                let tokenPendingFees = 0;
+                                if (bcLamports > 5000) {
+                                    tokenPendingFees += Math.floor((bcLamports - 5000) * (token.feeShareBps / 10000));
+                                }
+                                if (ammBalance > 0) {
+                                    tokenPendingFees += Math.floor(ammBalance * (token.feeShareBps / 10000));
+                                }
+
+                                if (tokenPendingFees > 0) {
+                                    return {
+                                        mint: token.mint,
+                                        ticker: token.ticker,
+                                        pendingLamports: tokenPendingFees,
+                                        feeShareBps: token.feeShareBps
+                                    };
+                                }
+                                return null;
+                            } catch (e) {
+                                logger.debug(`[Health] Robinhood pending fee check error for ${token.mint}`, { error: e.message });
+                                return null;
                             }
-                        } catch (e) {
-                            logger.debug(`[Health] Robinhood pending fee check error for ${token.mint}`, { error: e.message });
+                        }));
+
+                        // Aggregate batch results
+                        for (const result of batchResults) {
+                            if (result) {
+                                robinhoodPendingFees += result.pendingLamports;
+                                robinhoodPendingDetails.push(result);
+                            }
                         }
                     }
                 } catch (e) {
@@ -700,14 +791,14 @@ function init(deps) {
 
     // Admin panel password verification
     // Uses ADMIN_API_KEY environment variable as the password
-    // v22.0: Added rate limiting to prevent brute force attacks
-    router.post('/admin/verify', (req, res) => {
+    // v24.0: Updated to async for Redis-based rate limiting
+    router.post('/admin/verify', async (req, res) => {
         const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
         const { password } = req.body;
         const expectedKey = config.ADMIN_API_KEY;
 
-        // Check rate limit before processing
-        const rateLimit = checkAdminRateLimit(clientIp);
+        // Check rate limit before processing (v24.0: now async for Redis support)
+        const rateLimit = await checkAdminRateLimit(clientIp);
         if (!rateLimit.allowed) {
             logger.warn('Admin login rate limited', { ip: clientIp });
             return res.status(429).json({
@@ -723,7 +814,7 @@ function init(deps) {
         }
 
         if (!password) {
-            recordAdminLoginAttempt(clientIp, false);
+            await recordAdminLoginAttempt(clientIp, false);
             return res.status(400).json({ valid: false, error: 'Password required' });
         }
 
@@ -732,17 +823,17 @@ function init(deps) {
         try {
             if (password.length !== expectedKey.length ||
                 !crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expectedKey))) {
-                recordAdminLoginAttempt(clientIp, false);
+                await recordAdminLoginAttempt(clientIp, false);
                 logger.warn('Failed admin panel login attempt', { ip: clientIp, remaining: rateLimit.remaining - 1 });
                 return res.json({ valid: false });
             }
         } catch (e) {
-            recordAdminLoginAttempt(clientIp, false);
+            await recordAdminLoginAttempt(clientIp, false);
             logger.warn('Failed admin panel login attempt (comparison error)', { ip: clientIp });
             return res.json({ valid: false });
         }
 
-        recordAdminLoginAttempt(clientIp, true);
+        await recordAdminLoginAttempt(clientIp, true);
         logger.info('Admin panel authenticated successfully', { ip: clientIp });
         res.json({ valid: true });
     });

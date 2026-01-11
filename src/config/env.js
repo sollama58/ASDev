@@ -61,6 +61,12 @@ const config = {
     DB_POOL_MAX: parseInt(process.env.DB_POOL_MAX) || 25,  // Increased from 10
     DB_IDLE_TIMEOUT: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
     DB_CONNECTION_TIMEOUT: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 10000, // Increased from 5000
+    // v24.0: SSL configuration options
+    // DB_SSL_MODE: 'disable', 'require', 'verify-ca', 'verify-full'
+    DB_SSL_MODE: process.env.DB_SSL_MODE || 'require',
+    DB_SSL_ENABLED: process.env.DB_SSL_ENABLED === 'true',
+    DB_SSL_CA_PATH: process.env.DB_SSL_CA_PATH || null,
+    DB_SSL_CA: process.env.DB_SSL_CA || null, // CA certificate as env var
 
     // Clarifai (Content Safety)
     CLARIFAI_API_KEY: process.env.CLARIFAI_API_KEY,

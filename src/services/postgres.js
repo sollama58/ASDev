@@ -1,6 +1,7 @@
 /**
  * PostgreSQL Database Service
  * v13.0 - Production-ready PostgreSQL with connection pooling
+ * v24.0 - Improved SSL configuration with certificate validation options
  *
  * Replaces SQLite for:
  * - Better concurrent write handling
@@ -9,6 +10,8 @@
  * - Render.com managed database compatibility
  */
 const { Pool } = require('pg');
+const fs = require('fs');
+const path = require('path');
 const config = require('../config/env');
 const logger = require('./logger');
 
@@ -39,6 +42,59 @@ async function smartCache(key, ttlSeconds, fetchFunction) {
 }
 
 /**
+ * v24.0: Build SSL configuration based on environment
+ * Supports: disabled, require (no verify), verify-ca, verify-full
+ */
+function buildSslConfig() {
+    // In development, disable SSL unless explicitly enabled
+    if (config.NODE_ENV !== 'production') {
+        return config.DB_SSL_ENABLED ? { rejectUnauthorized: false } : false;
+    }
+
+    // In production, default to SSL enabled
+    const sslMode = config.DB_SSL_MODE || 'require';
+
+    switch (sslMode) {
+        case 'disable':
+            logger.warn('[PostgreSQL] SSL disabled - NOT RECOMMENDED for production');
+            return false;
+
+        case 'require':
+            // SSL required but no certificate verification (common for managed DBs like Render)
+            logger.info('[PostgreSQL] SSL mode: require (no cert verification)');
+            return { rejectUnauthorized: false };
+
+        case 'verify-ca':
+        case 'verify-full':
+            // Full certificate verification
+            const sslConfig = { rejectUnauthorized: true };
+
+            // Load CA certificate if provided
+            if (config.DB_SSL_CA_PATH) {
+                try {
+                    sslConfig.ca = fs.readFileSync(path.resolve(config.DB_SSL_CA_PATH), 'utf8');
+                    logger.info('[PostgreSQL] SSL mode: verify-full (CA cert loaded)');
+                } catch (e) {
+                    logger.error('[PostgreSQL] Failed to load CA certificate', { error: e.message });
+                    throw new Error('SSL CA certificate required but could not be loaded');
+                }
+            } else if (config.DB_SSL_CA) {
+                // CA certificate provided as environment variable
+                sslConfig.ca = config.DB_SSL_CA;
+                logger.info('[PostgreSQL] SSL mode: verify-full (CA cert from env)');
+            } else {
+                logger.warn('[PostgreSQL] SSL verify mode enabled but no CA certificate provided');
+            }
+
+            return sslConfig;
+
+        default:
+            logger.info('[PostgreSQL] SSL mode: require (default)');
+            return { rejectUnauthorized: false };
+    }
+}
+
+/**
  * Initialize PostgreSQL connection pool and create schema
  */
 async function initDB() {
@@ -47,6 +103,9 @@ async function initDB() {
     }
 
     try {
+        // v24.0: Build SSL config with better security options
+        const sslConfig = buildSslConfig();
+
         // Create connection pool
         pool = new Pool({
             connectionString: config.DATABASE_URL,
@@ -54,7 +113,7 @@ async function initDB() {
             max: config.DB_POOL_MAX,
             idleTimeoutMillis: config.DB_IDLE_TIMEOUT,
             connectionTimeoutMillis: config.DB_CONNECTION_TIMEOUT,
-            ssl: config.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+            ssl: sslConfig
         });
 
         // Test connection

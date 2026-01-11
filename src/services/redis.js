@@ -2,6 +2,7 @@
  * Redis Service
  * Redis connection, queue management, and globalState
  * v13.0 - Added globalState for cross-process sharing
+ * v24.0 - Added connection validation and health checking
  */
 const IORedis = require('ioredis');
 const { Queue, Worker } = require('bullmq');
@@ -14,6 +15,7 @@ let socialQueue = null;
 let holderScannerQueue = null;
 let metadataUpdaterQueue = null;
 let robinhoodScannerQueue = null;
+let isConnected = false;
 
 // Redis keys for globalState
 const GLOBAL_STATE_KEYS = {
@@ -37,13 +39,50 @@ const GLOBAL_STATE_TTL = {
 
 /**
  * Initialize Redis connection and queues
+ * v24.0: Added async initialization with connection validation
  */
-function init() {
+async function init() {
     try {
         redisConnection = new IORedis(config.REDIS_URL, {
             maxRetriesPerRequest: null,
-            enableReadyCheck: false
+            enableReadyCheck: true,  // v24.0: Enable ready check for connection validation
+            retryStrategy: (times) => {
+                if (times > 10) {
+                    logger.error('Redis: Max reconnection attempts reached');
+                    return null; // Stop retrying
+                }
+                const delay = Math.min(times * 200, 5000);
+                logger.warn(`Redis: Reconnecting in ${delay}ms (attempt ${times})`);
+                return delay;
+            }
         });
+
+        // v24.0: Connection event handlers for better observability
+        redisConnection.on('connect', () => {
+            logger.info('Redis: Connection established');
+        });
+
+        redisConnection.on('ready', () => {
+            isConnected = true;
+            logger.info('Redis: Ready to accept commands');
+        });
+
+        redisConnection.on('error', (err) => {
+            isConnected = false;
+            logger.error('Redis: Connection error', { error: err.message });
+        });
+
+        redisConnection.on('close', () => {
+            isConnected = false;
+            logger.warn('Redis: Connection closed');
+        });
+
+        redisConnection.on('reconnecting', () => {
+            logger.info('Redis: Attempting to reconnect...');
+        });
+
+        // v24.0: Validate connection with ping before proceeding
+        await validateConnection();
 
         // Existing queues
         deployQueue = new Queue('deployQueue', { connection: redisConnection });
@@ -60,11 +99,70 @@ function init() {
         metadataUpdaterQueue.resume();
         robinhoodScannerQueue.resume();
 
-        logger.info("Redis Queues Initialized (v13.0 - with worker queues)");
+        logger.info("Redis Queues Initialized (v24.0 - with connection validation)");
         return true;
     } catch (e) {
         logger.error("Redis Init Fail", { error: e.message });
+        isConnected = false;
         return false;
+    }
+}
+
+/**
+ * v24.0: Validate Redis connection with ping
+ * Throws error if connection fails within timeout
+ */
+async function validateConnection(timeoutMs = 5000) {
+    if (!redisConnection) {
+        throw new Error('Redis connection not initialized');
+    }
+
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            reject(new Error('Redis connection validation timeout'));
+        }, timeoutMs);
+
+        redisConnection.ping()
+            .then((result) => {
+                clearTimeout(timeout);
+                if (result === 'PONG') {
+                    isConnected = true;
+                    logger.info('Redis: Connection validated (PONG received)');
+                    resolve(true);
+                } else {
+                    reject(new Error(`Unexpected ping response: ${result}`));
+                }
+            })
+            .catch((err) => {
+                clearTimeout(timeout);
+                reject(err);
+            });
+    });
+}
+
+/**
+ * v24.0: Check if Redis is currently connected
+ */
+function isRedisConnected() {
+    return isConnected && redisConnection && redisConnection.status === 'ready';
+}
+
+/**
+ * v24.0: Health check for Redis connection
+ * Returns latency in ms or -1 if unhealthy
+ */
+async function healthCheck() {
+    if (!redisConnection) {
+        return { healthy: false, latency: -1, error: 'Not initialized' };
+    }
+
+    try {
+        const start = Date.now();
+        await redisConnection.ping();
+        const latency = Date.now() - start;
+        return { healthy: true, latency, status: redisConnection.status };
+    } catch (e) {
+        return { healthy: false, latency: -1, error: e.message };
     }
 }
 
@@ -383,6 +481,11 @@ module.exports = {
     getConnection: () => redisConnection,
     getDeployQueue: () => deployQueue,
     getSocialQueue: () => socialQueue,
+
+    // v24.0: Connection health utilities
+    isRedisConnected,
+    healthCheck,
+    validateConnection,
 
     // v13.0: New worker queues
     getHolderScannerQueue: () => holderScannerQueue,

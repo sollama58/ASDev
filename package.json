@@ -1,6 +1,6 @@
 {
   "name": "asdf-launcher",
-  "version": "13.0.0",
+  "version": "24.0.0",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
