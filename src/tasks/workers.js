@@ -706,7 +706,7 @@ function initMetadataUpdaterWorker(deps) {
         } catch (e) {
             logger.error('[Worker] Failed to schedule metadata updater job', { error: e.message });
         }
-    }, config.METADATA_UPDATE_INTERVAL);
+    }, config.METADATA_FULL_INTERVAL || 300000); // v25.25: Fixed config key name
 
     // Initial job after 5 seconds
     setTimeout(async () => {

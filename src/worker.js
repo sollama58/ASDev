@@ -101,8 +101,18 @@ async function startWorker() {
     logger.info(`Starting ASDev Worker ${config.VERSION}...`);
     logger.info(`Enabled tasks: ${enabledTasks.join(', ')}`);
 
+    // v25.25: Log memory usage at startup for debugging OOM issues
+    const memUsage = process.memoryUsage();
+    logger.info(`[Worker] Memory at startup: RSS=${Math.round(memUsage.rss / 1024 / 1024)}MB, Heap=${Math.round(memUsage.heapUsed / 1024 / 1024)}/${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`);
+
     // Initialize Redis first (needed for globalState and BullMQ)
-    redis.init();
+    // v25.25: FIX - await the Redis init to prevent race conditions
+    const redisInitSuccess = await redis.init();
+    if (!redisInitSuccess) {
+        logger.error('FATAL: Redis initialization failed - BullMQ job queues require Redis');
+        logger.error('Check REDIS_URL environment variable and Redis server availability');
+        process.exit(1);
+    }
 
     // Initialize PostgreSQL database
     await database.initDB();
@@ -205,6 +215,28 @@ async function startWorker() {
 
     logger.info(`Worker ${config.VERSION} running with ${enabledTasks.length} tasks`);
 
+    // v25.25: Periodic memory monitoring to detect leaks before OOM
+    const MEMORY_CHECK_INTERVAL = 60000; // Check every 60 seconds
+    const MEMORY_WARNING_THRESHOLD_MB = 400; // Warn if heap exceeds 400MB
+
+    setInterval(() => {
+        const mem = process.memoryUsage();
+        const heapMB = Math.round(mem.heapUsed / 1024 / 1024);
+        const rssMB = Math.round(mem.rss / 1024 / 1024);
+
+        if (heapMB > MEMORY_WARNING_THRESHOLD_MB) {
+            logger.warn(`[Worker] HIGH MEMORY: Heap=${heapMB}MB, RSS=${rssMB}MB - consider restarting`);
+
+            // Force garbage collection if available (requires --expose-gc flag)
+            if (global.gc) {
+                logger.info('[Worker] Forcing garbage collection...');
+                global.gc();
+            }
+        } else {
+            logger.info(`[Worker] Memory: Heap=${heapMB}MB, RSS=${rssMB}MB`);
+        }
+    }, MEMORY_CHECK_INTERVAL);
+
     // Keep process alive
     process.stdin.resume();
 }
@@ -225,6 +257,25 @@ const shutdown = async (signal) => {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// v25.25: Handle uncaught errors to prevent silent crashes (status 134)
+process.on('uncaughtException', (err) => {
+    logger.error('UNCAUGHT EXCEPTION - Worker crashing', {
+        error: err.message,
+        stack: err.stack
+    });
+    // Log memory state at crash time
+    const mem = process.memoryUsage();
+    logger.error(`Memory at crash: RSS=${Math.round(mem.rss / 1024 / 1024)}MB, Heap=${Math.round(mem.heapUsed / 1024 / 1024)}MB`);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('UNHANDLED REJECTION - Potential crash', {
+        reason: reason?.message || String(reason),
+        stack: reason?.stack
+    });
+});
 
 // Run worker
 startWorker().catch(err => {

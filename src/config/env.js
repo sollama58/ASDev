@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.25-VOLUME-WEIGHTED-POINTS",
+    VERSION: "v25.26-WORKER-STABILITY",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 
