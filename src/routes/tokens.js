@@ -449,10 +449,10 @@ function init(deps) {
                 heldMints.add(holding.mint);
 
                 const totalBalance = BigInt(holding.total_balance || '1');
-                const userBalance = BigInt(holding.balance);
+                const userBalance = BigInt(holding.balance || '0');
 
-                // Protect against division by zero
-                if (totalBalance === 0n) continue;
+                // Protect against division by zero or zero balance
+                if (totalBalance === 0n || userBalance === 0n) continue;
 
                 // Calculate proportional points
                 const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
@@ -479,10 +479,10 @@ function init(deps) {
             let robinhoodPoints = 0;
             for (const holding of robinhoodHoldings) {
                 const totalBalance = BigInt(holding.total_balance || '1');
-                const userBalance = BigInt(holding.balance);
+                const userBalance = BigInt(holding.balance || '0');
 
-                // Protect against division by zero
-                if (totalBalance === 0n) continue;
+                // Protect against division by zero or zero balance
+                if (totalBalance === 0n || userBalance === 0n) continue;
 
                 // Calculate base proportional points
                 const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
