@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.27-REDIS-OOM-FIX",
+    VERSION: "v25.27-POINT-CALC-SYNC",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 

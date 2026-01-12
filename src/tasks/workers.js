@@ -268,22 +268,58 @@ function chunkArray(array, size) {
     return result;
 }
 
+// v25.27: Volume weight range (matches holderScanner.js)
+const VOLUME_WEIGHT_MIN = 0.5;  // Lowest volume token gets 0.5x base points
+const VOLUME_WEIGHT_MAX = 2.0;  // Highest volume token gets 2.0x base points
+const MIN_VOLUME_USD = 100;     // Minimum 24hr volume for eligibility
+const BASE_POINTS_PER_TOKEN = 1000; // Base points distributed per token
+const TOP_HOLDERS_LIMIT = 250;  // Track top 250 holders per token
+
+/**
+ * v25.27: Calculate dynamic volume weight for a token
+ * Uses logarithmic scaling relative to the volume range of all eligible tokens
+ */
+function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
+    if (maxVolume <= minVolume || minVolume <= 0) return 1.0;
+    const logMin = Math.log10(minVolume);
+    const logMax = Math.log10(maxVolume);
+    const logVolume = Math.log10(Math.max(tokenVolume, minVolume));
+    const normalized = (logVolume - logMin) / (logMax - logMin);
+    return Math.max(VOLUME_WEIGHT_MIN, Math.min(VOLUME_WEIGHT_MAX, VOLUME_WEIGHT_MIN + (normalized * (VOLUME_WEIGHT_MAX - VOLUME_WEIGHT_MIN))));
+}
+
 /**
  * Initialize Holder Scanner Worker
- * Runs as a job-based worker that updates token holders and calculates global points
+ * v25.27: MAJOR FIX - Now uses volume-weighted proportional points (same as holderScanner.js and /check-holder API)
+ * - All tokens >$100 volume are eligible (not just top 10)
+ * - Points are proportional to holdings (not just position count)
+ * - Volume weighting: 0.5x to 2.0x multiplier based on token volume
  */
 function initHolderScannerWorker(deps) {
     const { connection, devKeypair, db } = deps;
 
     const worker = redis.createWorker('holderScannerQueue', async (job) => {
-        logger.info('[Worker] Starting holder scanner job...');
+        logger.info('[Worker] Starting holder scanner job (v25.27 - volume-weighted proportional points)...');
 
         try {
-            // 1. Fetch Top 10 tokens by volume (v13.0: PostgreSQL syntax)
-            const topTokens = await db.all('SELECT mint, "userPubkey" FROM tokens ORDER BY volume24h DESC LIMIT 10');
-            const top10Mints = topTokens.map(t => t.mint);
+            // 1. Get all tokens with >$100 volume (not just top 10)
+            const eligibleTokens = await db.all(
+                'SELECT mint, "userPubkey", volume24h FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
+                [MIN_VOLUME_USD]
+            );
+            const eligibleMints = eligibleTokens.map(t => t.mint);
 
-            // 2. Cache dev wallet PUMP holdings (legacy, kept for backwards compatibility)
+            // Calculate volume range for dynamic weighting
+            let platformMinVolume = MIN_VOLUME_USD;
+            let platformMaxVolume = MIN_VOLUME_USD;
+            if (eligibleTokens.length > 0) {
+                const volumes = eligibleTokens.map(t => parseFloat(t.volume24h) || MIN_VOLUME_USD);
+                platformMinVolume = Math.min(...volumes);
+                platformMaxVolume = Math.max(...volumes);
+            }
+            logger.info(`[Worker] Found ${eligibleTokens.length} eligible tokens (vol range: $${platformMinVolume.toFixed(0)} - $${platformMaxVolume.toFixed(0)})`);
+
+            // 2. Cache dev wallet PUMP holdings (legacy)
             let devPumpHoldings = 0;
             try {
                 const devPumpAta = await getAssociatedTokenAddress(
@@ -296,30 +332,26 @@ function initHolderScannerWorker(deps) {
             }
             await redis.setDevPumpHoldings(devPumpHoldings);
 
-            // 3. Calculate distribution pots based on SOL balance (v11.0+: SOL airdrops)
-            // BUG FIX: Previously used devPumpHoldings which was for PUMP token airdrops
-            // Now we use the actual SOL balance available for airdrop distribution
-            const SAFETY_RESERVE = 0.5; // SOL reserved for operations
+            // 3. Calculate distribution pots based on SOL balance
+            const SAFETY_RESERVE = 0.5;
             let solBalance = 0;
             try {
                 const balanceLamports = await connection.getBalance(devKeypair.publicKey);
-                solBalance = balanceLamports / 1e9; // Convert lamports to SOL
+                solBalance = balanceLamports / 1e9;
             } catch (e) {
                 logger.error('[Worker] Failed to fetch SOL balance', { error: e.message });
-                solBalance = 0;
             }
 
             const availableForAirdrop = Math.max(0, solBalance - SAFETY_RESERVE);
-            const totalDistributable = availableForAirdrop * 0.99; // 99% distributed, 1% buffer
+            const totalDistributable = availableForAirdrop * 0.99;
             const kothPot = totalDistributable * 0.10;
             const communityPot = totalDistributable * 0.90;
 
-            // 4. Identify KOTH Creator (v13.0: PostgreSQL syntax)
-            const kothToken = await db.get('SELECT "userPubkey" FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
-            const kothCreator = kothToken ? kothToken.userPubkey : null;
+            // 4. Identify KOTH Token and holders (not just creator)
+            const kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
 
-            // 5. Update holders for each top token
-            for (const token of topTokens) {
+            // 5. Update holders for ALL eligible tokens (not just top 10)
+            for (const token of eligibleTokens) {
                 try {
                     if (!token.mint) continue;
 
@@ -333,67 +365,50 @@ function initHolderScannerWorker(deps) {
 
                     try {
                         const accounts = await connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
-                            filters: [
-                                { memcmp: { offset: 0, bytes: token.mint } }
-                            ],
+                            filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
                             encoding: 'base64'
                         });
 
                         const parsedAccounts = accounts.map(acc => {
                             const data = Buffer.from(acc.account.data);
                             if (data.length < 72) return null;
-
                             const owner = new PublicKey(data.slice(32, 64)).toString();
                             const amount = new BN(data.slice(64, 72), 'le');
                             return { owner, amount };
                         })
-                            .filter(a => a !== null)
-                            .sort((a, b) => b.amount.cmp(a.amount));
+                        .filter(a => a !== null)
+                        .sort((a, b) => b.amount.cmp(a.amount));
 
                         const bondingCurvePDAStr = bondingCurvePDA.toString();
                         const threshold = new BN(1000000);
 
                         for (const acc of parsedAccounts) {
-                            if (holdersToInsert.length >= 100) break;
+                            if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
                             if (acc.amount.lte(threshold)) continue;
-
                             if (acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr) {
                                 holdersToInsert.push({
                                     mint: token.mint,
                                     owner: acc.owner,
-                                    balance: acc.amount.toString() // v25.24: Include balance to prevent null BigInt errors
+                                    balance: acc.amount.toString()
                                 });
                             }
                         }
                     } catch (scanErr) {
-                        logger.error(`[Worker] Failed to scan holders for ${token.mint}`, { error: scanErr.message });
+                        logger.debug(`[Worker] Failed to scan holders for ${token.mint.slice(0, 8)}`, { error: scanErr.message });
                     }
 
-                    // Update database - SCALABILITY FIX: Use batch insert instead of N+1 queries
+                    // Update database
                     await db.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
-
                     if (holdersToInsert.length > 0) {
-                        // v24.0 SECURITY FIX: Use parameterized queries to prevent SQL injection
-                        // v25.24: Include balance column to prevent null BigInt errors in point calculations
                         const BATCH_SIZE = 50;
                         const now = Date.now();
                         for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
                             const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
-                            // Build parameterized placeholders: ($1, $2, $3, $4, $5), ($6, $7, $8, $9, $10), ...
                             const placeholders = batch.map((_, idx) => {
                                 const baseIdx = idx * 5;
                                 return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5})`;
                             }).join(', ');
-
-                            // Flatten params array: [mint1, owner1, rank1, balance1, now, ...]
-                            const params = batch.flatMap((h, idx) => [
-                                h.mint,
-                                h.owner,
-                                i + idx + 1, // rank
-                                h.balance || '0', // v25.24: Ensure balance is never null
-                                now
-                            ]);
-
+                            const params = batch.flatMap((h, idx) => [h.mint, h.owner, i + idx + 1, h.balance || '0', now]);
                             await db.run(`
                                 INSERT INTO token_holders (mint, "holderPubkey", rank, balance, "lastUpdated")
                                 VALUES ${placeholders}
@@ -402,83 +417,132 @@ function initHolderScannerWorker(deps) {
                         }
                     }
                 } catch (e) {
-                    logger.error(`[Worker] Holder update loop error for ${token.mint}: ${e.message}`);
+                    logger.error(`[Worker] Holder update error for ${token.mint?.slice(0, 8)}: ${e.message}`);
                 }
-
-                await delay(500); // SCALABILITY FIX: Reduced from 2000ms to 500ms
+                await delay(500);
             }
 
             // 6. Fetch ASDF Top 100 holders from Redis
             const asdfTop100Holders = await redis.getAsdfTop100Holders();
 
-            // 7. Calculate global points
-            let rawPointsMap = new Map();
+            // 7. Calculate VOLUME-WEIGHTED PROPORTIONAL points (matching holderScanner.js)
+            let rawPointsMap = new Map(); // pubkey -> { basePoints, robinhoodPoints }
             let tempTotalPoints = 0;
 
-            if (top10Mints.length > 0) {
-                const placeholders = top10Mints.map((_, i) => `$${i + 1}`).join(',');
-                const rows = await db.all(
-                    `SELECT "holderPubkey", COUNT(*) as "positionCount" FROM token_holders WHERE mint IN (${placeholders}) GROUP BY "holderPubkey"`,
-                    top10Mints
+            // Platform tokens: proportional points with volume weighting
+            for (const token of eligibleTokens) {
+                if (!token.mint) continue;
+
+                const tokenVolume = parseFloat(token.volume24h) || MIN_VOLUME_USD;
+                const volumeWeight = calculateVolumeWeight(tokenVolume, platformMinVolume, platformMaxVolume);
+                const weightedPointsForToken = BASE_POINTS_PER_TOKEN * volumeWeight;
+
+                const holders = await db.all(
+                    'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
+                    [token.mint]
                 );
+                if (holders.length === 0) continue;
 
-                for (const row of rows) {
-                    rawPointsMap.set(row.holderPubkey, { holderPoints: parseInt(row.positionCount), creatorPoints: 0, robinhoodPoints: 0 });
-                }
+                let totalBalance = BigInt(0);
+                for (const h of holders) totalBalance += BigInt(h.balance || '0');
+                if (totalBalance === BigInt(0)) continue;
 
-                for (const token of topTokens) {
-                    if (token.userPubkey) {
-                        const entry = rawPointsMap.get(token.userPubkey) || { holderPoints: 0, creatorPoints: 0, robinhoodPoints: 0 };
-                        entry.creatorPoints += 1;
-                        rawPointsMap.set(token.userPubkey, entry);
-                    }
+                for (const holder of holders) {
+                    const holderBalance = BigInt(holder.balance || '0');
+                    if (holderBalance === BigInt(0)) continue;
+
+                    const proportionalPoints = Number((holderBalance * BigInt(Math.round(weightedPointsForToken * 1000))) / totalBalance) / 1000;
+                    const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0 };
+                    entry.basePoints += proportionalPoints;
+                    rawPointsMap.set(holder.holderPubkey, entry);
                 }
             }
 
-            // 8. Include Robinhood token holders
+            // 8. Include Robinhood token holders (with volume weighting and fee share scaling)
             try {
-                const robinhoodTokens = await db.all('SELECT mint FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 10');
-                const robinhoodMints = robinhoodTokens.map(t => t.mint).filter(m => m);
+                const robinhoodTokens = await db.all(
+                    'SELECT mint, "feeShareBps", volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
+                    [MIN_VOLUME_USD]
+                );
 
-                if (robinhoodMints.length > 0) {
-                    const rhPlaceholders = robinhoodMints.map((_, i) => `$${i + 1}`).join(',');
-                    const robinhoodRows = await db.all(
-                        `SELECT "holderPubkey", COUNT(*) as "positionCount" FROM robinhood_token_holders WHERE mint IN (${rhPlaceholders}) GROUP BY "holderPubkey"`,
-                        robinhoodMints
+                let rhMinVolume = MIN_VOLUME_USD, rhMaxVolume = MIN_VOLUME_USD;
+                if (robinhoodTokens.length > 0) {
+                    const rhVolumes = robinhoodTokens.map(t => parseFloat(t.volume24h) || MIN_VOLUME_USD);
+                    rhMinVolume = Math.min(...rhVolumes);
+                    rhMaxVolume = Math.max(...rhVolumes);
+                }
+                logger.info(`[Worker] Found ${robinhoodTokens.length} eligible Robinhood tokens (vol range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
+
+                for (const rhToken of robinhoodTokens) {
+                    if (!rhToken.mint) continue;
+
+                    const tokenVolume = parseFloat(rhToken.volume24h) || MIN_VOLUME_USD;
+                    const volumeWeight = calculateVolumeWeight(tokenVolume, rhMinVolume, rhMaxVolume);
+                    const weightedBasePoints = BASE_POINTS_PER_TOKEN * volumeWeight;
+                    const feeShareMultiplier = (rhToken.feeShareBps || 10000) / 10000;
+
+                    const holders = await db.all(
+                        'SELECT "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC',
+                        [rhToken.mint]
                     );
+                    if (holders.length === 0) continue;
 
-                    for (const row of robinhoodRows) {
-                        const entry = rawPointsMap.get(row.holderPubkey) || { holderPoints: 0, creatorPoints: 0, robinhoodPoints: 0 };
-                        entry.robinhoodPoints = parseInt(row.positionCount);
-                        rawPointsMap.set(row.holderPubkey, entry);
+                    let totalBalance = BigInt(0);
+                    for (const h of holders) totalBalance += BigInt(h.balance || '0');
+                    if (totalBalance === BigInt(0)) continue;
+
+                    for (const holder of holders) {
+                        const holderBalance = BigInt(holder.balance || '0');
+                        if (holderBalance === BigInt(0)) continue;
+
+                        const baseProportionalPoints = Number((holderBalance * BigInt(Math.round(weightedBasePoints * 1000))) / totalBalance) / 1000;
+                        const scaledPoints = baseProportionalPoints * feeShareMultiplier;
+
+                        const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0 };
+                        entry.robinhoodPoints += scaledPoints;
+                        rawPointsMap.set(holder.holderPubkey, entry);
                     }
-
-                    logger.info(`[Worker] Included ${robinhoodRows.length} unique holders from ${robinhoodMints.length} Robinhood tokens`);
                 }
             } catch (e) {
                 logger.debug('[Worker] Robinhood holder points calculation skipped', { error: e.message });
             }
 
-            // 9. Calculate final points
+            // 9. Calculate final points with ASDF multiplier
             const devPubkeyStr = devKeypair.publicKey.toString();
             for (const [pubkey, data] of rawPointsMap.entries()) {
                 if (pubkey === devPubkeyStr) continue;
-
                 const isAsdfTop100 = asdfTop100Holders.has(pubkey);
-                const basePoints = data.holderPoints + (data.creatorPoints * 2) + (data.robinhoodPoints || 0);
+                const basePoints = data.basePoints + data.robinhoodPoints;
                 const totalPoints = basePoints * (isAsdfTop100 ? 2 : 1);
-
-                if (totalPoints > 0) {
-                    tempTotalPoints += totalPoints;
-                }
+                if (totalPoints > 0) tempTotalPoints += totalPoints;
             }
 
             await redis.setTotalPoints(tempTotalPoints);
-            logger.info(`[Worker] Global Points: ${tempTotalPoints} | Community Pot: ${communityPot.toFixed(4)} SOL | KOTH Pot: ${kothPot.toFixed(4)} SOL | Available: ${availableForAirdrop.toFixed(4)} SOL`);
+            logger.info(`[Worker] Global Points: ${tempTotalPoints.toFixed(2)} | Community Pot: ${communityPot.toFixed(4)} SOL | KOTH Pot: ${kothPot.toFixed(4)} SOL`);
 
             // 10. Update expected airdrops in Redis
             await redis.clearUserExpectedAirdrops();
             await redis.clearUserPoints();
+
+            // Calculate KOTH holders' share (proportional, not just creator)
+            let kothHoldersMap = new Map();
+            if (kothToken && kothToken.mint) {
+                const kothHolders = await db.all(
+                    'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1',
+                    [kothToken.mint]
+                );
+                let kothTotalBalance = BigInt(0);
+                for (const h of kothHolders) kothTotalBalance += BigInt(h.balance || '0');
+
+                if (kothTotalBalance > BigInt(0)) {
+                    for (const holder of kothHolders) {
+                        const holderBalance = BigInt(holder.balance || '0');
+                        if (holderBalance === BigInt(0)) continue;
+                        const share = Number(holderBalance * BigInt(10000) / kothTotalBalance) / 10000;
+                        kothHoldersMap.set(holder.holderPubkey, share * kothPot);
+                    }
+                }
+            }
 
             const userExpectedAirdrops = new Map();
             const userPointsMap = new Map();
@@ -487,42 +551,41 @@ function initHolderScannerWorker(deps) {
                 if (pubkey === devPubkeyStr) continue;
 
                 const isAsdfTop100 = asdfTop100Holders.has(pubkey);
-                const points = (data.holderPoints + (data.creatorPoints * 2) + (data.robinhoodPoints || 0)) * (isAsdfTop100 ? 2 : 1);
+                const points = (data.basePoints + data.robinhoodPoints) * (isAsdfTop100 ? 2 : 1);
 
                 if (points > 0) {
                     userPointsMap.set(pubkey, points);
 
                     let expected = 0;
                     if (communityPot > 0 && tempTotalPoints > 0) {
-                        const share = points / tempTotalPoints;
-                        expected = share * communityPot;
+                        expected = (points / tempTotalPoints) * communityPot;
                     }
-
-                    if (pubkey === kothCreator) {
-                        expected += kothPot;
-                    }
-
+                    // Add KOTH bonus if applicable
+                    expected += kothHoldersMap.get(pubkey) || 0;
                     userExpectedAirdrops.set(pubkey, expected);
                 }
             }
 
-            // KOTH edge case
-            if (kothCreator && !userExpectedAirdrops.has(kothCreator) && kothCreator !== devPubkeyStr) {
-                userExpectedAirdrops.set(kothCreator, kothPot);
+            // KOTH edge case: holders with 0 community points still get KOTH share
+            for (const [pubkey, kothShare] of kothHoldersMap.entries()) {
+                if (pubkey === devPubkeyStr) continue;
+                if (!userExpectedAirdrops.has(pubkey) && kothShare > 0) {
+                    userExpectedAirdrops.set(pubkey, kothShare);
+                }
             }
 
             await redis.setAllUserExpectedAirdrops(userExpectedAirdrops);
             await redis.setAllUserPoints(userPointsMap);
             await redis.setLastBackendUpdate(Date.now());
 
-            logger.info('[Worker] Holder scanner job complete');
-            return { success: true, totalPoints: tempTotalPoints };
+            logger.info(`[Worker] Holder scanner complete - ${userPointsMap.size} users with points`);
+            return { success: true, totalPoints: tempTotalPoints, usersWithPoints: userPointsMap.size };
 
         } catch (e) {
-            logger.error('[Worker] Holder scanner error', { error: e.message });
+            logger.error('[Worker] Holder scanner error', { error: e.message, stack: e.stack });
             throw e;
         }
-    }, { concurrency: 2 }); // SCALABILITY FIX: Increased concurrency from 1 to 2
+    }, { concurrency: 1 }); // v25.27: Reduced to 1 to prevent overlap issues
 
     // Schedule recurring jobs
     setInterval(async () => {
