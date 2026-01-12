@@ -816,6 +816,19 @@ async function validateMintsBatch(mints, options = {}) {
                             await new Promise(r => setTimeout(r, 150));
                         }
 
+                        // v25.10: Try fetching from metadataUri as final fallback (for IGNITION-launched tokens with Imgur images)
+                        if (!tokenData.image && tokenData.metadataUri) {
+                            try {
+                                const metadataImage = await imageUtils.fetchImageFromMetadataUri(tokenData.metadataUri, 5000);
+                                if (metadataImage) {
+                                    tokenData.image = metadataImage;
+                                    logger.info(`[MintExtractor] Using metadataUri image for ${asset.id.slice(0, 8)}...: ${metadataImage.substring(0, 50)}`);
+                                }
+                            } catch (e) {
+                                logger.debug(`[MintExtractor] metadataUri fetch failed for ${asset.id.slice(0, 8)}...`);
+                            }
+                        }
+
                         logger.info(`[MintExtractor] Final token data for ${asset.id.slice(0, 8)}...: ticker=${tokenData.ticker}, image=${tokenData.image ? tokenData.image.slice(0, 50) + '...' : 'NULL'}`);
                         validTokens.push(tokenData);
                         processedMints.add(asset.id);

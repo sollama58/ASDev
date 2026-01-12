@@ -1428,20 +1428,26 @@ function init(deps) {
         }
 
         try {
-            // Get token from database
-            const token = await db.get('SELECT * FROM tokens WHERE mint = $1', [mint]);
+            // Get token from database (check both tables)
+            const regularToken = await db.get('SELECT * FROM tokens WHERE mint = $1', [mint]);
+            const robinhoodToken = await db.get('SELECT * FROM robinhood_tokens WHERE mint = $1', [mint]);
+            const token = regularToken || robinhoodToken;
+            const isRobinhood = !regularToken && !!robinhoodToken;
+
             if (!token) {
-                return res.status(404).json({ error: 'Token not found' });
+                return res.status(404).json({ error: 'Token not found in either table' });
             }
 
             logger.info(`[RefreshTokenImage] Processing ${mint}`, {
                 currentImage: token.image ? token.image.substring(0, 50) : 'NULL',
-                metadataUri: token.metadataUri ? token.metadataUri.substring(0, 60) : 'NULL'
+                metadataUri: token.metadataUri ? token.metadataUri.substring(0, 60) : 'NULL',
+                table: isRobinhood ? 'robinhood_tokens' : 'tokens'
             });
 
             let newImage = null;
 
             // Try metadataUri first (most reliable for our launched tokens)
+            // Note: robinhood_tokens don't have metadataUri, so this only works for tokens table
             if (token.metadataUri) {
                 logger.info(`[RefreshTokenImage] Fetching from metadataUri...`);
                 try {
@@ -1465,13 +1471,19 @@ function init(deps) {
             }
 
             if (newImage) {
-                await db.run('UPDATE tokens SET image = $1 WHERE mint = $2', [newImage, mint]);
-                logger.info(`[RefreshTokenImage] Updated image for ${mint}`);
+                // Update the correct table
+                if (isRobinhood) {
+                    await db.run('UPDATE robinhood_tokens SET image = $1 WHERE mint = $2', [newImage, mint]);
+                } else {
+                    await db.run('UPDATE tokens SET image = $1 WHERE mint = $2', [newImage, mint]);
+                }
+                logger.info(`[RefreshTokenImage] Updated image for ${mint} in ${isRobinhood ? 'robinhood_tokens' : 'tokens'}`);
                 return res.json({
                     success: true,
                     message: 'Image updated',
                     image: newImage,
-                    source: token.metadataUri ? 'metadataUri' : 'external'
+                    source: token.metadataUri ? 'metadataUri' : 'external',
+                    table: isRobinhood ? 'robinhood_tokens' : 'tokens'
                 });
             } else {
                 return res.json({
