@@ -73,7 +73,7 @@ async function main() {
 
     // KOTH info
     const kothToken = await db.get(
-        'SELECT mint, ticker, "marketCap", userPubkey FROM tokens ORDER BY "marketCap" DESC LIMIT 1'
+        'SELECT mint, ticker, "marketCap", "userPubkey" FROM tokens ORDER BY "marketCap" DESC LIMIT 1'
     );
 
     console.log('');

@@ -89,7 +89,7 @@ async function main() {
 
     // Get KOTH token info
     console.log('\n[5/6] Fetching KOTH (King of the Hill) info...');
-    const kothToken = await db.get('SELECT mint, ticker, "marketCap", userPubkey FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
+    const kothToken = await db.get('SELECT mint, ticker, "marketCap", "userPubkey" FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
 
     if (kothToken) {
         console.log(`      KOTH Token: ${kothToken.ticker || 'Unknown'}`);
