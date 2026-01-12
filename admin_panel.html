@@ -1801,40 +1801,52 @@
             log(`Looking up points for ${shortenPubkey(user)}...`);
 
             try {
-                // Use the check-holder endpoint which returns detailed point info
-                const data = await apiCall(`/api/tokens/check-holder?userPubkey=${user}`);
+                // v25.33: Use check-holder for summary, user-holdings for breakdown
+                const [checkData, holdingsData] = await Promise.all([
+                    apiCall(`/api/tokens/check-holder?userPubkey=${user}`),
+                    apiCall(`/api/tokens/user-holdings?userPubkey=${user}`)
+                ]);
 
                 let html = '<div class="space-y-2">';
 
-                // Summary
+                // Summary - v25.33: Use correct field name (points, not totalPoints)
                 html += `<div class="p-2 rounded bg-blue-900/30 border border-blue-700/50">`;
-                html += `<div class="text-sm font-bold text-blue-400">Total Points: ${formatNumber(data.totalPoints || 0)}</div>`;
+                html += `<div class="text-sm font-bold text-blue-400">Total Points: ${formatNumber(checkData.points || 0)}</div>`;
+                html += `<div class="text-xs text-gray-400 mt-1">`;
+                html += `Base: ${formatNumber(checkData.basePoints || 0)} | Robinhood: ${formatNumber(checkData.robinhoodPoints || 0)}`;
+                if (checkData.multiplier > 1) {
+                    html += ` | <span class="text-green-400">${checkData.multiplier}x ASDF</span>`;
+                }
+                html += `</div>`;
+                html += `<div class="text-xs text-purple-400 mt-1">Expected Airdrop: ${(checkData.expectedAirdrop || 0).toFixed(6)} SOL</div>`;
                 html += `</div>`;
 
-                // Platform tokens
-                if (data.platformTokens && data.platformTokens.length > 0) {
+                // Platform tokens from holdings breakdown
+                const platformTokens = (holdingsData.holdings || []).filter(h => h.source === 'launched' && h.isEligible);
+                if (platformTokens.length > 0) {
                     html += `<div class="mt-2">`;
-                    html += `<div class="text-xs text-orange-400 font-bold mb-1">Platform Tokens (${data.platformTokens.length}): ${formatNumber(data.platformPoints || 0)} pts</div>`;
+                    html += `<div class="text-xs text-orange-400 font-bold mb-1">Platform Tokens (${platformTokens.length}): ${formatNumber(checkData.basePoints || 0)} pts</div>`;
                     html += `<div class="text-xs text-gray-400 max-h-32 overflow-y-auto">`;
-                    for (const t of data.platformTokens.slice(0, 10)) {
-                        html += `<div class="py-1 border-b border-gray-700/50">${t.ticker || shortenPubkey(t.mint, 4)} - ${formatNumber(t.points || 0)} pts (${(t.volumeWeight || 1).toFixed(2)}x)</div>`;
+                    for (const t of platformTokens.slice(0, 10)) {
+                        html += `<div class="py-1 border-b border-gray-700/50">${t.ticker || shortenPubkey(t.mint, 4)} - ${formatNumber(t.basePoints || 0)} pts (${(t.volumeWeight || 1).toFixed(2)}x)</div>`;
                     }
-                    if (data.platformTokens.length > 10) {
-                        html += `<div class="text-gray-500">... and ${data.platformTokens.length - 10} more</div>`;
+                    if (platformTokens.length > 10) {
+                        html += `<div class="text-gray-500">... and ${platformTokens.length - 10} more</div>`;
                     }
                     html += `</div></div>`;
                 }
 
-                // Robinhood tokens
-                if (data.robinhoodTokens && data.robinhoodTokens.length > 0) {
+                // Robinhood tokens from holdings breakdown
+                const robinhoodTokens = (holdingsData.holdings || []).filter(h => h.source === 'robinhood' && h.isEligible);
+                if (robinhoodTokens.length > 0) {
                     html += `<div class="mt-2">`;
-                    html += `<div class="text-xs text-pink-400 font-bold mb-1">Robinhood Tokens (${data.robinhoodTokens.length}): ${formatNumber(data.robinhoodPoints || 0)} pts</div>`;
+                    html += `<div class="text-xs text-pink-400 font-bold mb-1">Robinhood Tokens (${robinhoodTokens.length}): ${formatNumber(checkData.robinhoodPoints || 0)} pts</div>`;
                     html += `<div class="text-xs text-gray-400 max-h-32 overflow-y-auto">`;
-                    for (const t of data.robinhoodTokens.slice(0, 10)) {
-                        html += `<div class="py-1 border-b border-gray-700/50">${t.ticker || shortenPubkey(t.mint, 4)} - ${formatNumber(t.points || 0)} pts (${(t.volumeWeight || 1).toFixed(2)}x)</div>`;
+                    for (const t of robinhoodTokens.slice(0, 10)) {
+                        html += `<div class="py-1 border-b border-gray-700/50">${t.ticker || shortenPubkey(t.mint, 4)} - ${formatNumber(t.basePoints || 0)} pts (${(t.volumeWeight || 1).toFixed(2)}x, ${t.feeSharePercent || 100}% share)</div>`;
                     }
-                    if (data.robinhoodTokens.length > 10) {
-                        html += `<div class="text-gray-500">... and ${data.robinhoodTokens.length - 10} more</div>`;
+                    if (robinhoodTokens.length > 10) {
+                        html += `<div class="text-gray-500">... and ${robinhoodTokens.length - 10} more</div>`;
                     }
                     html += `</div></div>`;
                 }
@@ -1842,7 +1854,7 @@
                 html += '</div>';
 
                 resultEl.innerHTML = html;
-                log(`Found ${data.totalPoints || 0} points for ${shortenPubkey(user)}`, 'success');
+                log(`Found ${checkData.points || 0} points for ${shortenPubkey(user)}`, 'success');
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`User point lookup failed: ${e.message}`, 'error');

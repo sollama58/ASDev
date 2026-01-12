@@ -235,85 +235,75 @@
         .close-btn { color: var(--text-muted); float: right; font-size: 24px; font-weight: bold; line-height: 1; }
         .close-btn:hover { color: var(--text-primary); cursor: pointer; }
 
-        /* Leaderboard Table - v25.31: Improved column alignment */
+        /* Leaderboard Table - v25.32: Clean, compact table design */
         .leader-table {
             width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
+            border-collapse: collapse;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 13px;
+            font-size: 12px;
         }
         .leader-table th {
             text-align: left;
-            padding: 10px 12px;
-            border-bottom: 2px solid var(--accent-orange);
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--accent-orange);
             color: var(--accent-orange);
             text-transform: uppercase;
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 0.8px;
-            background: rgba(234, 88, 12, 0.05);
-            white-space: nowrap;
-        }
-        .leader-table td {
-            padding: 12px;
-            border-bottom: 1px solid rgba(255,255,255,0.05);
-            vertical-align: middle;
-        }
-        .leader-table tr:hover { background: rgba(234, 88, 12, 0.08); }
-        .leader-table tr:last-child td { border-bottom: none; }
-        .leader-table tbody tr { transition: background 0.15s ease; }
-        /* v25.31: Fixed-layout tables need overflow handling */
-        .leader-table th {
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .leader-table td {
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        /* v25.31: Numeric cells should not wrap */
-        .leader-table td.text-right {
-            white-space: nowrap;
-        }
-
-        /* v25.4: Volume multiplier badge */
-        .vol-multiplier {
-            display: inline-flex;
-            align-items: center;
-            gap: 2px;
             font-size: 9px;
             font-weight: 600;
-            padding: 2px 6px;
-            border-radius: 4px;
-            margin-left: 4px;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+        .leader-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            vertical-align: middle;
+            white-space: nowrap;
+        }
+        .leader-table tr:hover { background: rgba(234, 88, 12, 0.06); }
+        .leader-table tr:last-child td { border-bottom: none; }
+        .leader-table tbody tr { transition: background 0.1s ease; }
+        /* Token name can wrap */
+        .leader-table .token-name {
+            white-space: normal;
+            max-width: 100px;
+            line-height: 1.2;
+        }
+
+        /* v25.32: Volume multiplier badge - compact */
+        .vol-multiplier {
+            display: inline-block;
+            font-size: 8px;
+            font-weight: 700;
+            padding: 1px 4px;
+            border-radius: 3px;
+            margin-left: 3px;
             vertical-align: middle;
         }
-        .vol-multiplier.high { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
-        .vol-multiplier.mid { background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.3); }
-        .vol-multiplier.low { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.2); }
+        .vol-multiplier.high { background: rgba(34, 197, 94, 0.25); color: #4ade80; }
+        .vol-multiplier.mid { background: rgba(234, 179, 8, 0.25); color: #facc15; }
+        .vol-multiplier.low { background: rgba(239, 68, 68, 0.2); color: #f87171; }
 
-        /* v25.4: Unified data cells */
+        /* v25.32: Unified data cells - more compact */
         .data-cell {
             display: flex;
             flex-direction: column;
             align-items: flex-end;
-            gap: 2px;
+            gap: 1px;
         }
-        .data-cell .value { font-weight: 600; font-size: 13px; }
+        .data-cell .value { font-weight: 600; font-size: 12px; }
         .data-cell .label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; }
 
         .token-img-sm {
-            width: 36px;
-            height: 36px;
-            border-radius: 8px;
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
             object-fit: cover;
             display: inline-block;
             vertical-align: middle;
-            margin-right: 10px;
+            margin-right: 8px;
             border: 1px solid var(--border-primary);
             background-color: var(--bg-primary);
+            flex-shrink: 0;
         }
 
         /* Metric Cards - v25.3: Improved alignment and overflow handling */
@@ -1267,22 +1257,15 @@
                     </button>
                 </div>
             </div>
-            <div class="overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0">
-                <table class="leader-table min-w-[500px] md:min-w-0" style="table-layout: fixed;">
-                    <colgroup>
-                        <col style="width: 50px;">
-                        <col style="width: auto;">
-                        <col style="width: 100px;">
-                        <col style="width: 130px;">
-                        <col style="width: 90px;">
-                    </colgroup>
+            <div class="overflow-x-auto">
+                <table class="leader-table w-full">
                     <thead>
                         <tr>
-                            <th class="text-center">#</th>
+                            <th style="width:40px" class="text-center">#</th>
                             <th>Token</th>
-                            <th class="text-right">Market Cap</th>
-                            <th class="text-right">Volume (24H)</th>
-                            <th class="text-right"></th>
+                            <th style="width:90px" class="text-right">MCap</th>
+                            <th style="width:110px" class="text-right">Vol 24H</th>
+                            <th style="width:70px"></th>
                         </tr>
                     </thead>
                     <tbody id="leaderboard-body"><tr><td colspan="5" class="text-center text-orange-400 py-4">Scanning Chain Data...</td></tr></tbody>
@@ -2618,37 +2601,24 @@
 
                 return `
                 <tr>
-                    <td class="text-center">
-                        <span class="text-orange-500 font-bold text-lg">${index + 1}</span>
-                    </td>
+                    <td class="text-center text-orange-500">${index + 1}</td>
                     <td>
-                        <div class="flex items-center gap-3">
-                            <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon" onerror="this.src='https://placehold.co/36x36/333/fff?text=?'">
-                            <div class="flex flex-col">
+                        <div class="flex items-center gap-2">
+                            <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="" onerror="this.src='https://placehold.co/28x28/333/fff?text=?'">
+                            <div>
                                 <div class="flex items-center gap-1">
-                                    ${statusDot}
-                                    <span class="text-white font-bold">${escapeHtml(item.ticker)}</span>
-                                    ${robinhoodMark}${creatorMark}${holderMark}
+                                    ${statusDot}<span class="text-white">${escapeHtml(item.ticker)}</span>${robinhoodMark}${holderMark}
                                 </div>
-                                <span class="text-[10px] text-gray-500 truncate max-w-[120px]">${escapeHtml(item.name)}</span>
+                                <div class="token-name text-[9px] text-gray-500">${escapeHtml(item.name)}</div>
                             </div>
                         </div>
                     </td>
+                    <td class="text-right text-green-400">${formatMcap(displayMcap)}</td>
+                    <td class="text-right"><span class="text-yellow-400">$${displayVol.toLocaleString()}</span>${volMultiplier}</td>
                     <td class="text-right">
-                        <span class="text-green-400 font-bold font-mono">${formatMcap(displayMcap)}</span>
-                    </td>
-                    <td class="text-right">
-                        <div class="flex flex-col items-end">
-                            <span class="text-yellow-400 font-bold font-mono">$${displayVol.toLocaleString()}</span>
-                            ${volMultiplier}
-                        </div>
-                    </td>
-                    <td class="text-right">
-                        <div class="flex gap-1 justify-end items-center">
-                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}', ${!!item.isRobinhood})" class="text-xs bg-gray-800 border border-gray-700 text-gray-300 w-8 h-8 rounded hover:bg-gray-700 hover:text-white transition flex items-center justify-center" title="View Holders">
-                                👥
-                            </button>
-                            <a href="${escapeHtml(tradeLink)}" target="_blank" class="text-xs bg-orange-600 text-white px-3 h-8 rounded hover:bg-orange-500 transition flex items-center justify-center font-bold">↗</a>
+                        <div class="flex gap-1 justify-end">
+                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}', ${!!item.isRobinhood})" class="text-[10px] text-gray-400 hover:text-white px-2 py-1" title="Holders">👥</button>
+                            <a href="${escapeHtml(tradeLink)}" target="_blank" class="text-[10px] bg-orange-600 text-white px-2 py-1 rounded hover:bg-orange-500">↗</a>
                         </div>
                     </td>
                 </tr>`;
@@ -2657,10 +2627,9 @@
             // Add "View All" row if there are more tokens
             if (hasMore) {
                 rows.push(`
-                <tr class="bg-orange-900/20 hover:bg-orange-900/40 cursor-pointer" onclick="toggleAllLaunchesModal()">
-                    <td colspan="5" class="text-center text-orange-400 py-3 font-mono">
-                        <span class="text-orange-300">+ ${allTokens.length - TOP_N} more tokens</span>
-                        <span class="ml-2 text-xs text-orange-500 underline">Click to view all</span>
+                <tr class="cursor-pointer hover:bg-orange-900/20" onclick="toggleAllLaunchesModal()">
+                    <td colspan="5" class="text-center text-orange-400 py-2 text-xs">
+                        + ${allTokens.length - TOP_N} more · <span class="underline">view all</span>
                     </td>
                 </tr>`);
             }
@@ -3221,25 +3190,15 @@
 
                 const tableHTML = `
                     ${thresholdInfo}
-                    <table class="w-full text-left font-mono text-xs leader-table" style="table-layout: fixed;">
-                        <colgroup>
-                            <col style="width: 40px;">
-                            <col style="width: auto;">
-                            <col style="width: 85px;">
-                            <col style="width: 85px;">
-                            <col style="width: 110px;">
-                            <col style="width: 65px;">
-                            <col style="width: 50px;">
-                        </colgroup>
-                        <thead class="text-orange-400 border-b border-orange-800">
+                    <table class="w-full leader-table">
+                        <thead>
                             <tr>
-                                <th class="p-2">#</th>
-                                <th class="p-2">Token</th>
-                                <th class="p-2">Source</th>
-                                <th class="p-2 text-right">MCAP</th>
-                                <th class="p-2 text-right">Vol&nbsp;(24H)</th>
-                                <th class="p-2 text-right">Eligible</th>
-                                <th class="p-2 text-center">Status</th>
+                                <th style="width:35px">#</th>
+                                <th>Token</th>
+                                <th style="width:70px">Source</th>
+                                <th style="width:75px" class="text-right">MCap</th>
+                                <th style="width:95px" class="text-right">Vol 24H</th>
+                                <th style="width:55px" class="text-center">OK?</th>
                             </tr>
                         </thead>
                         <tbody class="text-orange-200">
@@ -3270,27 +3229,21 @@
                                     : '<span class="text-[9px] bg-orange-900/50 text-orange-400 px-1 py-0.5 rounded no-break">PLATFORM</span>';
 
                                 return `
-                                <tr class="border-b border-orange-800/30 hover:bg-orange-900/20">
-                                    <td class="p-2">${index + 1}</td>
-                                    <td class="p-2">
+                                <tr>
+                                    <td>${index + 1}</td>
+                                    <td>
                                         <div class="flex items-center gap-2">
-                                            <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon" onerror="this.src='https://placehold.co/36x36/333/fff?text=?'">
-                                            <div class="flex flex-col">
-                                                <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="font-bold underline text-white ticker-symbol">${escapeHtml(item.ticker)}</a>
-                                                <span class="token-name text-[10px] text-gray-500">${escapeHtml(item.name)}</span>
+                                            <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="" onerror="this.src='https://placehold.co/28x28/333/fff?text=?'">
+                                            <div>
+                                                <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="text-white hover:underline">${escapeHtml(item.ticker)}</a>
+                                                <div class="token-name text-[9px] text-gray-500">${escapeHtml(item.name)}</div>
                                             </div>
                                         </div>
                                     </td>
-                                    <td class="p-2">${sourceBadge}</td>
-                                    <td class="p-2 text-right font-bold text-green-400 mcap-amount">${formatMcap(item.marketCap)}</td>
-                                    <td class="p-2 text-right">
-                                        <div class="flex flex-col items-end">
-                                            <span class="font-bold text-yellow-400">$${displayVol.toLocaleString()}</span>
-                                            ${volMultiplier}
-                                        </div>
-                                    </td>
-                                    <td class="p-2 text-right">${eligibilityBadge}</td>
-                                    <td class="p-2 text-center">${statusDot}</td>
+                                    <td>${sourceBadge}</td>
+                                    <td class="text-right text-green-400">${formatMcap(item.marketCap)}</td>
+                                    <td class="text-right"><span class="text-yellow-400">$${displayVol.toLocaleString()}</span>${volMultiplier}</td>
+                                    <td class="text-center">${item.isEligible ? statusDot : '<span class="text-gray-600">-</span>'}</td>
                                 </tr>
                                 `;
                             })).then(rows => rows.join(''))}
@@ -3327,44 +3280,33 @@
                     ? `<p class="text-purple-400/60 font-mono text-xs mb-2">Eligibility: Top 250 holders of tokens with >${data.eligibilityThreshold} USD 24hr volume</p>`
                     : '';
                 const tableHTML = `
-                    <p class="text-purple-300 font-mono text-sm mb-4">Total Global Points: <span class="text-white font-bold">${data.totalPoints.toLocaleString(undefined, {maximumFractionDigits: 2})}</span> | Total Eligible Users: <span class="text-white font-bold">${users.length}</span></p>
+                    <div class="text-purple-300 text-xs mb-3">
+                        <span class="text-white">${data.totalPoints.toLocaleString(undefined, {maximumFractionDigits: 0})}</span> pts ·
+                        <span class="text-white">${users.length}</span> users
+                    </div>
                     ${thresholdInfo}
-                    <p class="text-purple-400/60 font-mono text-xs mb-4">Points are proportional to holdings in Top 250 of each eligible token (1000 pts/token distributed)</p>
-                    <table class="w-full text-left font-mono text-xs leader-table" style="table-layout: fixed;">
-                        <colgroup>
-                            <col style="width: 40px;">
-                            <col style="width: auto;">
-                            <col style="width: 60px;">
-                            <col style="width: 65px;">
-                            <col style="width: 55px;">
-                            <col style="width: 80px;">
-                            <col style="width: 85px;">
-                        </colgroup>
-                        <thead class="text-purple-400 border-b border-purple-800">
+                    <table class="w-full leader-table">
+                        <thead style="border-color: #6b21a8;">
                             <tr>
-                                <th class="p-2">#</th>
-                                <th class="p-2">Wallet</th>
-                                <th class="p-2 text-right">Tokens</th>
-                                <th class="p-2 text-right">Created</th>
-                                <th class="p-2 text-right">Mult</th>
-                                <th class="p-2 text-right">Points</th>
-                                <th class="p-2 text-right">Est.&nbsp;SOL</th>
+                                <th style="width:35px;color:#a855f7">#</th>
+                                <th style="color:#a855f7">Wallet</th>
+                                <th style="width:50px;color:#a855f7" class="text-right">Tkns</th>
+                                <th style="width:45px;color:#a855f7" class="text-right">Mult</th>
+                                <th style="width:70px;color:#a855f7" class="text-right">Points</th>
+                                <th style="width:75px;color:#a855f7" class="text-right">Est SOL</th>
                             </tr>
                         </thead>
-                        <tbody class="text-purple-200">
+                        <tbody>
                             ${users.sort((a, b) => b.points - a.points).map((user, index) => {
-                                const multiplierBadge = user.isAsdfTop50
-                                    ? '<span class="px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold no-break">2X</span>'
-                                    : '<span class="px-2 py-0.5 bg-gray-500/20 border border-gray-500 rounded text-[9px] text-gray-400 font-bold no-break">1X</span>';
+                                const mult = user.isAsdfTop50 ? '<span class="text-green-400">2x</span>' : '<span class="text-gray-500">1x</span>';
                                 return `
-                                <tr class="border-b border-purple-800/30 hover:bg-purple-900/20">
-                                    <td class="p-2">${index + 1}</td>
-                                    <td class="p-2 text-white font-bold no-break">${escapeHtml(user.pubkey?.slice(0, 5) || '?????')}...</td>
-                                    <td class="p-2 text-right num-value">${user.positions}</td>
-                                    <td class="p-2 text-right text-blue-400 num-value">${user.created || 0}</td>
-                                    <td class="p-2 text-right">${multiplierBadge}</td>
-                                    <td class="p-2 text-right text-yellow-400 font-bold num-value">${user.points.toFixed(2)}</td>
-                                    <td class="p-2 text-right text-green-400 font-bold num-value">${parseFloat(user.expectedAirdrop).toFixed(4)}</td>
+                                <tr>
+                                    <td>${index + 1}</td>
+                                    <td class="text-white">${escapeHtml(user.pubkey?.slice(0, 6) || '?????')}...</td>
+                                    <td class="text-right">${user.positions}</td>
+                                    <td class="text-right">${mult}</td>
+                                    <td class="text-right text-yellow-400">${user.points.toFixed(1)}</td>
+                                    <td class="text-right text-green-400">${parseFloat(user.expectedAirdrop).toFixed(4)}</td>
                                 </tr>
                                 `;
                             }).join('')}
@@ -3443,61 +3385,37 @@
                     <p class="text-[10px] text-yellow-400/60 mt-2 text-center">Tokens need >${data.eligibilityThreshold}&nbsp;USD 24hr volume to be eligible</p>
                 </div>
 
-                <table class="w-full text-left font-mono text-xs leader-table" style="table-layout: fixed;">
-                    <colgroup>
-                        <col style="width: auto;">
-                        <col style="width: 55px;">
-                        <col style="width: 100px;">
-                        <col style="width: 90px;">
-                        <col style="width: 70px;">
-                    </colgroup>
-                    <thead class="text-yellow-400 border-b border-yellow-800">
+                <table class="w-full leader-table">
+                    <thead style="border-color: #a16207;">
                         <tr>
-                            <th class="p-2">Token</th>
-                            <th class="p-2 text-right">Rank</th>
-                            <th class="p-2 text-right">Vol&nbsp;24H</th>
-                            <th class="p-2 text-center">Status</th>
-                            <th class="p-2 text-right">Points</th>
+                            <th style="color:#eab308">Token</th>
+                            <th style="width:45px;color:#eab308" class="text-right">Rank</th>
+                            <th style="width:85px;color:#eab308" class="text-right">Vol 24H</th>
+                            <th style="width:60px;color:#eab308" class="text-right">Pts</th>
                         </tr>
                     </thead>
-                    <tbody class="text-yellow-200">
+                    <tbody>
             `;
 
             for (const h of holdings) {
                 const imgSrc = resolveTokenImage(h.image);
-                const eligibilityBadge = h.isEligible
-                    ? '<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded no-break">ELIGIBLE</span>'
-                    : '<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded no-break">NOT&nbsp;ELIGIBLE</span>';
-
-                const creatorBadge = h.isCreator
-                    ? '<span class="text-[9px] bg-blue-900/50 text-blue-400 px-1 py-0.5 rounded ml-1 no-break">CREATOR</span>'
-                    : '';
-
-                const robinhoodBadge = h.source === 'robinhood'
-                    ? `<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded ml-1 no-break">${h.feeSharePercent || 100}%&nbsp;FEE</span>`
-                    : '';
-
-                const pointsDisplay = h.isEligible
-                    ? `<span class="text-yellow-400 font-bold num-value">${h.basePoints.toFixed(2)}</span>`
-                    : '<span class="text-gray-500">0</span>';
+                const pts = h.isEligible ? `<span class="text-yellow-400">${h.basePoints.toFixed(1)}</span>` : '<span class="text-gray-600">-</span>';
+                const rhBadge = h.source === 'robinhood' ? '<span class="text-[8px] text-green-400 ml-1">RH</span>' : '';
 
                 html += `
-                    <tr class="border-b border-yellow-800/30 hover:bg-yellow-900/20">
-                        <td class="p-2">
+                    <tr>
+                        <td>
                             <div class="flex items-center gap-2">
-                                <img src="${imgSrc}" class="w-6 h-6 rounded border border-yellow-700/50 object-cover" alt="">
+                                <img src="${imgSrc}" class="token-img-sm" alt="" onerror="this.src='https://placehold.co/28x28/333/fff?text=?'">
                                 <div>
-                                    <a href="${PUMPFUN_URL_BASE}${escapeHtml(h.mint)}" target="_blank" class="text-white font-bold hover:underline ticker-symbol">${escapeHtml(h.ticker)}</a>
-                                    ${robinhoodBadge}
-                                    ${creatorBadge}
-                                    <div class="text-[10px] text-yellow-400/60 truncate max-w-[120px] token-name">${escapeHtml(h.name)}</div>
+                                    <a href="${PUMPFUN_URL_BASE}${escapeHtml(h.mint)}" target="_blank" class="text-white hover:underline">${escapeHtml(h.ticker)}</a>${rhBadge}
+                                    <div class="token-name text-[9px] text-gray-500">${escapeHtml(h.name)}</div>
                                 </div>
                             </div>
                         </td>
-                        <td class="p-2 text-right text-orange-400 no-break">#${h.rank}</td>
-                        <td class="p-2 text-right volume-amount">$${(h.volume24h || 0).toLocaleString()}</td>
-                        <td class="p-2 text-center">${eligibilityBadge}</td>
-                        <td class="p-2 text-right">${pointsDisplay}</td>
+                        <td class="text-right text-orange-400">#${h.rank}</td>
+                        <td class="text-right">$${(h.volume24h || 0).toLocaleString()}</td>
+                        <td class="text-right">${pts}</td>
                     </tr>
                 `;
             }
@@ -3587,55 +3505,28 @@
                     return;
                 }
                 ui.modalAirdropLogContent.innerHTML = `
-                    <table class="w-full text-left font-mono text-xs leader-table" style="table-layout: fixed;">
-                        <colgroup>
-                            <col style="width: 140px;">
-                            <col style="width: 80px;">
-                            <col style="width: 70px;">
-                            <col style="width: 60px;">
-                            <col style="width: 80px;">
-                            <col style="width: auto;">
-                        </colgroup>
-                        <thead class="text-purple-400 border-b border-purple-800">
+                    <table class="w-full leader-table">
+                        <thead style="border-color: #6b21a8;">
                             <tr>
-                                <th class="p-2">Date/Time</th>
-                                <th class="p-2">Amount</th>
-                                <th class="p-2">Currency</th>
-                                <th class="p-2">Users</th>
-                                <th class="p-2">Total&nbsp;Pts</th>
-                                <th class="p-2 text-right">TXs</th>
+                                <th style="color:#a855f7">Date</th>
+                                <th style="width:65px;color:#a855f7" class="text-right">Amount</th>
+                                <th style="width:45px;color:#a855f7" class="text-right">Users</th>
+                                <th style="width:auto;color:#a855f7" class="text-right">TXs</th>
                             </tr>
                         </thead>
-                        <tbody class="text-purple-200">
+                        <tbody>
                             ${logs.map(log => {
-                                // Parse details to check currency type (v11.0 compatibility)
-                                let currency = '$PUMP';
                                 let amountDisplay = parseFloat(log.amount).toFixed(2);
-                                try {
-                                    const details = JSON.parse(log.details || '{}');
-                                    if (details.currency === 'SOL') {
-                                        currency = 'SOL';
-                                        amountDisplay = parseFloat(log.amount).toFixed(2);
-                                    }
-                                } catch(e) {}
-
-                                const currencyBadge = currency === 'SOL'
-                                    ? '<span class="px-1.5 py-0.5 bg-green-500/20 border border-green-500 rounded text-[9px] text-green-400 font-bold no-break">SOL</span>'
-                                    : '<span class="px-1.5 py-0.5 bg-purple-500/20 border border-purple-500 rounded text-[9px] text-purple-400 font-bold no-break">$PUMP</span>';
-
+                                const dateStr = new Date(log.timestamp).toLocaleDateString();
                                 return `
-                                <tr class="border-b border-purple-800/30 hover:bg-purple-900/20">
-                                    <td class="p-2 no-break">${new Date(log.timestamp).toLocaleString()}</td>
-                                    <td class="p-2 font-bold text-green-400 num-value">${amountDisplay}</td>
-                                    <td class="p-2">${currencyBadge}</td>
-                                    <td class="p-2 num-value">${log.recipients}</td>
-                                    <td class="p-2 num-value">${log.totalPoints || '-'}</td>
-                                    <td class="p-2 text-right no-break">
-                                        ${log.signatures ? log.signatures.split(',').map((sig, i) =>
-                                            sig.startsWith('KOTH')
-                                            ? `<a href="https://solscan.io/tx/${sig.split(':')[1]}" target="_blank" class="tx-link text-fuchsia-400">[💊]</a>`
-                                            : `<a href="https://solscan.io/tx/${sig}" target="_blank" class="tx-link">[TX&nbsp;${i+1}]</a>`
-                                        ).join(' ') : 'Pending'}
+                                <tr>
+                                    <td>${dateStr}</td>
+                                    <td class="text-right text-green-400">${amountDisplay}</td>
+                                    <td class="text-right">${log.recipients}</td>
+                                    <td class="text-right">
+                                        ${log.signatures ? log.signatures.split(',').slice(0, 3).map((sig, i) =>
+                                            `<a href="https://solscan.io/tx/${sig.replace('KOTH:','')}" target="_blank" class="text-purple-400 hover:underline text-[10px]">[${i+1}]</a>`
+                                        ).join(' ') : '-'}
                                     </td>
                                 </tr>
                             `}).join('')}
@@ -3689,37 +3580,31 @@
             }
 
             container.innerHTML = `
-                <table class="leader-table" style="border-color: #166534; table-layout: fixed;">
-                    <colgroup>
-                        <col style="width: auto;">
-                        <col style="width: 90px;">
-                        <col style="width: 110px;">
-                        <col style="width: 80px;">
-                    </colgroup>
-                    <thead>
+                <table class="leader-table w-full">
+                    <thead style="border-color: #166534;">
                         <tr>
-                            <th class="p-2" style="color: #22c55e;">Token</th>
-                            <th class="p-2 text-right" style="color: #22c55e;">Fee&nbsp;Share</th>
-                            <th class="p-2 text-right" style="color: #22c55e;">Fees&nbsp;Collected</th>
-                            <th class="p-2 text-right" style="color: #22c55e;">Actions</th>
+                            <th style="color:#22c55e">Token</th>
+                            <th style="width:70px;color:#22c55e" class="text-right">Share</th>
+                            <th style="width:85px;color:#22c55e" class="text-right">Collected</th>
+                            <th style="width:50px;color:#22c55e"></th>
                         </tr>
                     </thead>
                     <tbody>
                         ${data.tokens.map((t, i) => `
-                            <tr class="hover:bg-green-900/20">
-                                <td class="p-2">
+                            <tr>
+                                <td>
                                     <div class="flex items-center gap-2">
-                                        <img src="${resolveTokenImage(t.image)}" class="token-img-sm" onerror="this.src='https://placehold.co/32x32/333/fff?text=?'" loading="lazy">
+                                        <img src="${resolveTokenImage(t.image)}" class="token-img-sm" onerror="this.src='https://placehold.co/28x28/333/fff?text=?'" loading="lazy">
                                         <div>
-                                            <span class="text-white font-bold ticker-symbol">${escapeHtml(t.ticker)}</span>
-                                            <span class="text-xs text-gray-500 block no-break">${t.mint ? t.mint.slice(0, 8) + '...' : 'Pending'}</span>
+                                            <span class="text-white">${escapeHtml(t.ticker)}</span>
+                                            <div class="text-[9px] text-gray-500">${t.mint ? t.mint.slice(0, 6) + '...' : '-'}</div>
                                         </div>
                                     </div>
                                 </td>
-                                <td class="p-2 text-right text-green-400 font-bold num-value">${t.feeSharePercent.toFixed(1)}%</td>
-                                <td class="p-2 text-right text-white sol-amount">${t.totalFeesCollected.toFixed(2)}&nbsp;SOL</td>
-                                <td class="p-2 text-right">
-                                    ${t.mint ? `<a href="${PUMPFUN_URL_BASE}${t.mint}" target="_blank" class="text-green-400 hover:text-white text-xs underline">View</a>` : '-'}
+                                <td class="text-right text-green-400">${t.feeSharePercent.toFixed(0)}%</td>
+                                <td class="text-right">${t.totalFeesCollected.toFixed(2)} SOL</td>
+                                <td class="text-right">
+                                    ${t.mint ? `<a href="${PUMPFUN_URL_BASE}${t.mint}" target="_blank" class="text-green-400 hover:underline text-[10px]">↗</a>` : ''}
                                 </td>
                             </tr>
                         `).join('')}

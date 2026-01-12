@@ -427,6 +427,8 @@ function init(deps) {
     // v22.0: SCALABILITY FIX - Refactored N+1 queries to use JOINs (2 queries instead of 2000+)
     // v23.0: Removed creator bonus
     // v25.25: Added volume weighting to match holderScanner point calculation
+    // v25.33: Refactored to read from user_points table (single source of truth)
+    // Points are calculated by the worker and stored in the database
     router.get('/check-holder', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
@@ -442,159 +444,53 @@ function init(deps) {
         }
 
         try {
-            const POINTS_PER_TOKEN = 1000;
+            // v25.33: Read from user_points table (single source of truth)
+            const userPoints = await db.get(`
+                SELECT
+                    pubkey,
+                    base_points,
+                    robinhood_points,
+                    multiplier,
+                    total_points,
+                    expected_airdrop_sol,
+                    positions_count,
+                    is_asdf_holder
+                FROM user_points
+                WHERE pubkey = $1
+            `, [userPubkey]);
 
-            // v25.25: Get volume range for all eligible platform tokens (for volume weighting)
-            const platformVolumeRange = await redis.smartCache('platform_volume_range', 60, async () => {
-                const result = await db.get(`
-                    SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol
-                    FROM tokens WHERE volume24h >= $1
-                `, [MIN_VOLUME_USD]);
-                return {
-                    minVolume: parseFloat(result?.min_vol) || MIN_VOLUME_USD,
-                    maxVolume: parseFloat(result?.max_vol) || MIN_VOLUME_USD
-                };
-            });
+            // If user not found in user_points, check if they have any holdings
+            if (!userPoints) {
+                // Quick check for any holdings (for isHolder flag)
+                const holdingsCount = await db.get(`
+                    SELECT COUNT(*) as count FROM token_holders
+                    WHERE "holderPubkey" = $1
+                `, [userPubkey]);
 
-            // v22.0: Single query to get user's holdings with pre-computed totals
-            // v25.25: Include volume24h for volume weighting calculation
-            // v25.28: Reduced TTL from 30s to 15s to save Redis memory
-            const userTokenHoldings = await redis.smartCache(`check_holder_v2_${userPubkey}`, 15, async () => {
-                const holdings = await db.all(`
-                    SELECT
-                        th."holderPubkey",
-                        th.mint,
-                        th.balance,
-                        t.volume24h,
-                        COALESCE(ttb.total_balance, 0) as total_balance
-                    FROM token_holders th
-                    INNER JOIN tokens t ON t.mint = th.mint AND t.volume24h >= $1
-                    LEFT JOIN token_total_balances ttb ON ttb.mint = th.mint
-                    WHERE th."holderPubkey" = $2
-                `, [MIN_VOLUME_USD, userPubkey]);
-
-                return { holdings };
-            });
-
-            let heldPositionsCount = 0;
-            let basePoints = 0;
-
-            const heldMints = new Set();
-
-            for (const holding of userTokenHoldings.holdings) {
-                heldPositionsCount++;
-                heldMints.add(holding.mint);
-
-                // v25.24: Use safe BigInt conversion to handle null/undefined values
-                const totalBalance = safeTotalBalance(holding.total_balance);
-                const userBalance = safeBalance(holding.balance);
-
-                // Skip zero balances (safeTotalBalance already prevents division by zero)
-                if (userBalance === 0n) continue;
-
-                // v25.30: Skip if total_balance is invalid (materialized view not refreshed)
-                // This prevents massive points when totalBalance is 1n fallback
-                if (totalBalance <= 1n && userBalance > 1n) {
-                    logger.debug(`[check-holder] Skipping ${holding.mint} - total_balance invalid`);
-                    continue;
-                }
-
-                // v25.25: Calculate volume weight for this token (0.5x to 2.0x)
-                const tokenVolume = parseFloat(holding.volume24h) || MIN_VOLUME_USD;
-                const volumeWeight = calculateVolumeWeight(tokenVolume, platformVolumeRange.minVolume, platformVolumeRange.maxVolume);
-                const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
-
-                // Calculate proportional points with volume weighting
-                const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
-
-                // v25.30: Sanity check - proportional points should never exceed weighted max
-                // Max possible is weightedPoints (if user owns 100% of supply)
-                const maxPossiblePoints = weightedPoints;
-                const sanitizedPts = Math.min(proportionalPts, maxPossiblePoints);
-                basePoints += sanitizedPts;
+                return res.json({
+                    isHolder: (holdingsCount?.count || 0) > 0,
+                    isAsdfTop50: false,
+                    points: 0,
+                    multiplier: 1,
+                    heldPositionsCount: holdingsCount?.count || 0,
+                    basePoints: 0,
+                    robinhoodPoints: 0,
+                    expectedAirdrop: 0,
+                    expectedAirdropCurrency: 'SOL'
+                });
             }
 
-            // v25.25: Get volume range for all eligible robinhood tokens
-            const robinhoodVolumeRange = await redis.smartCache('robinhood_volume_range', 60, async () => {
-                const result = await db.get(`
-                    SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol
-                    FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1
-                `, [MIN_VOLUME_USD]);
-                return {
-                    minVolume: parseFloat(result?.min_vol) || MIN_VOLUME_USD,
-                    maxVolume: parseFloat(result?.max_vol) || MIN_VOLUME_USD
-                };
-            });
-
-            // v22.0: Single query for Robinhood holdings with pre-computed totals
-            // v25.25: Include volume24h for volume weighting calculation
-            // v25.28: Reduced TTL from 30s to 15s to save Redis memory
-            const robinhoodHoldings = await redis.smartCache(`check_holder_rh_v2_${userPubkey}`, 15, async () => {
-                return await db.all(`
-                    SELECT
-                        rth."holderPubkey",
-                        rth.mint,
-                        rth.balance,
-                        rt."feeShareBps",
-                        rt.volume24h,
-                        COALESCE(rttb.total_balance, 0) as total_balance
-                    FROM robinhood_token_holders rth
-                    INNER JOIN robinhood_tokens rt ON rt.mint = rth.mint AND rt."isActive" = 1 AND rt.volume24h >= $1
-                    LEFT JOIN robinhood_token_total_balances rttb ON rttb.mint = rth.mint
-                    WHERE rth."holderPubkey" = $2
-                `, [MIN_VOLUME_USD, userPubkey]);
-            });
-
-            let robinhoodPoints = 0;
-            for (const holding of robinhoodHoldings) {
-                // v25.24: Use safe BigInt conversion to handle null/undefined values
-                const totalBalance = safeTotalBalance(holding.total_balance);
-                const userBalance = safeBalance(holding.balance);
-
-                // Skip zero balances
-                if (userBalance === 0n) continue;
-
-                // v25.30: Skip if total_balance is invalid (materialized view not refreshed)
-                if (totalBalance <= 1n && userBalance > 1n) {
-                    logger.debug(`[check-holder] Skipping robinhood ${holding.mint} - total_balance invalid`);
-                    continue;
-                }
-
-                // v25.25: Calculate volume weight for this robinhood token
-                const tokenVolume = parseFloat(holding.volume24h) || MIN_VOLUME_USD;
-                const volumeWeight = calculateVolumeWeight(tokenVolume, robinhoodVolumeRange.minVolume, robinhoodVolumeRange.maxVolume);
-                const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
-
-                // Calculate base proportional points with volume weighting
-                const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
-
-                // v25.30: Sanity check - cap at max possible points
-                const maxPossiblePoints = weightedPoints;
-                const sanitizedBasePts = Math.min(baseProportionalPts, maxPossiblePoints);
-
-                // Scale by fee share percentage (100% = 10000 bps = 1.0 multiplier)
-                const feeShareBps = holding.feeShareBps || 10000;
-                const feeShareMultiplier = feeShareBps / 10000;
-                robinhoodPoints += sanitizedBasePts * feeShareMultiplier;
-            }
-
-            // v13.0: Fetch from Redis for cross-process consistency
-            const isAsdfTop50 = await redis.isAsdfTop100Holder(userPubkey);
-            const multiplier = isAsdfTop50 ? 2 : 1;
-            const totalBasePoints = basePoints + robinhoodPoints;
-            const points = totalBasePoints * multiplier;
-            const expectedAirdrop = await redis.getUserExpectedAirdrop(userPubkey);
-
+            // Return data from user_points table
             res.json({
-                isHolder: heldPositionsCount > 0,
-                isAsdfTop50,
-                points: Math.round(points * 100) / 100, // Round to 2 decimal places
-                multiplier,
-                heldPositionsCount,
-                basePoints: Math.round(basePoints * 100) / 100,
-                robinhoodPoints: Math.round(robinhoodPoints * 100) / 100,
-                expectedAirdrop,
-                expectedAirdropCurrency: 'SOL' // v11.0: Now in SOL
+                isHolder: true,
+                isAsdfTop50: userPoints.is_asdf_holder || false,
+                points: Math.round((userPoints.total_points || 0) * 100) / 100,
+                multiplier: userPoints.multiplier || 1,
+                heldPositionsCount: userPoints.positions_count || 0,
+                basePoints: Math.round((userPoints.base_points || 0) * 100) / 100,
+                robinhoodPoints: Math.round((userPoints.robinhood_points || 0) * 100) / 100,
+                expectedAirdrop: userPoints.expected_airdrop_sol || 0,
+                expectedAirdropCurrency: 'SOL'
             });
         } catch (e) {
             logger.error('[check-holder] Error', { error: e.message, userPubkey });
@@ -605,8 +501,7 @@ function init(deps) {
     // v18.0: Get detailed holdings breakdown for a user
     // Returns each token the user holds, eligibility status, and points earned
     // v24.0: SCALABILITY FIX - Refactored N+1 queries to use JOINs (2 queries instead of 100s)
-    //        Added 30-second caching to reduce DB load
-    // v25.25: Added volume weighting to match holderScanner point calculation
+    // v25.33: Now uses user_points table for authoritative totals, but still shows per-token breakdown
     router.get('/user-holdings', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
@@ -617,10 +512,15 @@ function init(deps) {
         }
 
         try {
-            // v24.0: Cache user holdings for 30 seconds
+            // v25.33: Get authoritative totals from user_points table
+            const userPointsData = await db.get(`
+                SELECT base_points, robinhood_points, multiplier, total_points
+                FROM user_points WHERE pubkey = $1
+            `, [userPubkey]);
+
             // v25.28: Reduced TTL from 30s to 15s to save Redis memory
-            const cacheKey = `user_holdings_detail_v2_${userPubkey}`;
-            const result = await redis.smartCache(cacheKey, 15, async () => {
+            const cacheKey = `user_holdings_detail_v3_${userPubkey}`;
+            const holdingsData = await redis.smartCache(cacheKey, 15, async () => {
                 const POINTS_PER_TOKEN = 1000;
                 const holdings = [];
 
@@ -633,7 +533,6 @@ function init(deps) {
                 const platformMaxVol = parseFloat(platformVolumeRange?.max_vol) || MIN_VOLUME_USD;
 
                 // v24.0: Single optimized query with JOINs for launched tokens
-                // Replaces N+1 pattern (1 query for all tokens + 2 queries per token)
                 const launchedHoldings = await db.all(`
                     SELECT
                         t.mint,
@@ -661,18 +560,13 @@ function init(deps) {
                     const totalBalance = safeTotalBalance(row.total_balance);
                     const userBalance = safeBalance(row.balance);
                     if (userBalance === 0n) continue;
-
-                    // v25.30: Skip if total_balance is invalid
                     if (totalBalance <= 1n && userBalance > 1n) continue;
 
-                    // v25.25: Calculate volume-weighted proportional points
                     const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
                     const volumeWeight = calculateVolumeWeight(tokenVolume, platformMinVol, platformMaxVol);
                     const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
                     const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
-
-                    // v25.30: Sanity check - cap points at max possible
                     const sanitizedPts = Math.min(proportionalPts, weightedPoints);
 
                     holdings.push({
@@ -684,7 +578,7 @@ function init(deps) {
                         marketCap: row.marketCap || 0,
                         rank: row.rank,
                         isEligible,
-                        volumeWeight: Math.round(volumeWeight * 100) / 100, // v25.25: Show volume weight for transparency
+                        volumeWeight: Math.round(volumeWeight * 100) / 100,
                         basePoints: isEligible ? Math.round(sanitizedPts * 100) / 100 : 0,
                         totalPoints: isEligible ? Math.round(sanitizedPts * 100) / 100 : 0,
                         source: 'launched'
@@ -727,18 +621,14 @@ function init(deps) {
                     const totalBalance = safeTotalBalance(row.total_balance);
                     const userBalance = safeBalance(row.balance);
                     if (userBalance === 0n) continue;
-
-                    // v25.30: Skip if total_balance is invalid (materialized view not refreshed)
                     if (totalBalance <= 1n && userBalance > 1n) continue;
 
-                    // v25.25: Calculate volume-weighted proportional points scaled by fee share
                     const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
                     const volumeWeight = calculateVolumeWeight(tokenVolume, rhMinVol, rhMaxVol);
                     const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
                     const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
                     const feeShareBps = row.feeShareBps || 10000;
                     const feeShareMultiplier = feeShareBps / 10000;
-                    // v25.30: Sanity check - cap at max possible before fee share scaling
                     const sanitizedBasePts = Math.min(baseProportionalPts, weightedPoints);
                     const scaledPts = sanitizedBasePts * feeShareMultiplier;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
@@ -753,24 +643,31 @@ function init(deps) {
                         rank: row.rank,
                         isEligible,
                         feeSharePercent: (feeShareBps / 100),
-                        volumeWeight: Math.round(volumeWeight * 100) / 100, // v25.25: Show volume weight
+                        volumeWeight: Math.round(volumeWeight * 100) / 100,
                         basePoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
                         totalPoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
                         source: 'robinhood'
                     });
                 }
 
-                // Calculate total points
-                const totalPoints = holdings.reduce((sum, h) => sum + h.totalPoints, 0);
-
-                return {
-                    holdings: holdings.sort((a, b) => b.totalPoints - a.totalPoints),
-                    totalPoints: Math.round(totalPoints * 100) / 100,
-                    eligibilityThreshold: MIN_VOLUME_USD
-                };
+                return holdings.sort((a, b) => b.totalPoints - a.totalPoints);
             });
 
-            res.json(result);
+            // v25.33: Use authoritative total from user_points table if available
+            // Per-token breakdown is for display only; worker calculates the real total
+            const totalPoints = userPointsData
+                ? Math.round((userPointsData.total_points || 0) * 100) / 100
+                : Math.round(holdingsData.reduce((sum, h) => sum + h.totalPoints, 0) * 100) / 100;
+
+            res.json({
+                holdings: holdingsData,
+                totalPoints,
+                // v25.33: Include breakdown from user_points table for transparency
+                basePoints: userPointsData ? Math.round((userPointsData.base_points || 0) * 100) / 100 : undefined,
+                robinhoodPoints: userPointsData ? Math.round((userPointsData.robinhood_points || 0) * 100) / 100 : undefined,
+                multiplier: userPointsData?.multiplier || 1,
+                eligibilityThreshold: MIN_VOLUME_USD
+            });
         } catch (e) {
             logger.error('User holdings error', { error: e.message });
             res.status(500).json({ error: "DB Error" });
@@ -781,132 +678,45 @@ function init(deps) {
     // v11.0: Now returns expected SOL airdrop amounts
     // v14.0: Updated for proportional point system (Top 250 holders)
     // v18.0: Changed from top 10 to all tokens with >$100 volume
-    // v22.0: SCALABILITY FIX - Refactored N+1 queries to use aggregated JOINs (2 queries instead of 1000+)
-    //        Added 30-second caching to reduce DB load
+    // v25.33: Refactored to read from user_points table (single source of truth)
+    // Now a simple SELECT instead of complex aggregation - much faster and consistent
     router.get('/all-eligible-users', async (req, res) => {
         try {
-            // v22.0: Cache entire computation for 30 seconds - this endpoint is heavy
-            const cachedResult = await redis.smartCache('all_eligible_users_data', 30, async () => {
-                const POINTS_PER_TOKEN = 1000;
-                let userPointsMap = new Map();
-
-                // v22.0: Single aggregated query for all token holders with pre-computed totals
-                // This replaces hundreds of individual queries with 1 optimized query
-                const tokenHoldingsData = await db.all(`
-                    SELECT
-                        th."holderPubkey",
-                        th.mint,
-                        th.balance,
-                        t."userPubkey" as creator,
-                        totals.total_balance
-                    FROM token_holders th
-                    INNER JOIN tokens t ON t.mint = th.mint AND t.volume24h >= $1
-                    INNER JOIN (
-                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
-                        FROM token_holders
-                        GROUP BY mint
-                    ) totals ON totals.mint = th.mint
-                    WHERE CAST(th.balance AS BIGINT) > 0
-                `, [MIN_VOLUME_USD]);
-
-                // Process token holdings
-                for (const row of tokenHoldingsData) {
-                    const totalBalance = BigInt(row.total_balance || '1');
-                    const holderBalance = BigInt(row.balance || '0');
-
-                    if (totalBalance === 0n || holderBalance === 0n) continue;
-
-                    const proportionalPts = Number((holderBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
-
-                    const user = userPointsMap.get(row.holderPubkey) || {
-                        pubkey: row.holderPubkey,
-                        basePoints: 0,
-                        robinhoodPoints: 0,
-                        positions: 0
-                    };
-
-                    user.basePoints += proportionalPts;
-                    user.positions++;
-                    userPointsMap.set(row.holderPubkey, user);
-                }
-
-
-                // v22.0: Single aggregated query for Robinhood holdings
-                const robinhoodHoldingsData = await db.all(`
-                    SELECT
-                        rth."holderPubkey",
-                        rth.balance,
-                        rt."feeShareBps",
-                        totals.total_balance
-                    FROM robinhood_token_holders rth
-                    INNER JOIN robinhood_tokens rt ON rt.mint = rth.mint AND rt."isActive" = 1 AND rt.volume24h >= $1
-                    INNER JOIN (
-                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
-                        FROM robinhood_token_holders
-                        GROUP BY mint
-                    ) totals ON totals.mint = rth.mint
-                    WHERE CAST(rth.balance AS BIGINT) > 0
-                `, [MIN_VOLUME_USD]);
-
-                for (const row of robinhoodHoldingsData) {
-                    const totalBalance = BigInt(row.total_balance || '1');
-                    const holderBalance = BigInt(row.balance || '0');
-
-                    if (totalBalance === 0n || holderBalance === 0n) continue;
-
-                    const feeShareBps = row.feeShareBps || 10000;
-                    const feeShareMultiplier = feeShareBps / 10000;
-                    const baseProportionalPts = Number((holderBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
-                    const scaledPts = baseProportionalPts * feeShareMultiplier;
-
-                    const user = userPointsMap.get(row.holderPubkey) || {
-                        pubkey: row.holderPubkey,
-                        basePoints: 0,
-                        robinhoodPoints: 0,
-                        positions: 0
-                    };
-
-                    user.robinhoodPoints += scaledPts;
-                    userPointsMap.set(row.holderPubkey, user);
-                }
-
-                // Convert map to array for caching
-                return Array.from(userPointsMap.values());
-            });
-
-            // v13.0: Fetch from Redis for cross-process consistency
-            const asdfTop100Holders = await redis.getAsdfTop100Holders();
-            const allUserExpectedAirdrops = await redis.getAllUserExpectedAirdrops();
             const devPubkey = devKeypair.publicKey.toString();
 
-            const eligibleUsers = [];
-            let calculatedTotalPoints = 0;
+            // v25.33: Simple query from user_points table
+            const users = await db.all(`
+                SELECT
+                    pubkey,
+                    base_points,
+                    robinhood_points,
+                    multiplier,
+                    total_points,
+                    expected_airdrop_sol,
+                    positions_count,
+                    is_asdf_holder
+                FROM user_points
+                WHERE total_points > 0 AND pubkey != $1
+                ORDER BY total_points DESC
+            `, [devPubkey]);
 
-            for (const user of cachedResult) {
-                if (user.pubkey === devPubkey) continue;
-
-                const isAsdfTop50 = asdfTop100Holders.has(user.pubkey);
-                const multiplier = isAsdfTop50 ? 2 : 1;
-                const totalBasePoints = user.basePoints + user.robinhoodPoints;
-                const points = totalBasePoints * multiplier;
-                const expectedAirdrop = allUserExpectedAirdrops.get(user.pubkey) || 0;
-
-                if (points > 0) {
-                    eligibleUsers.push({
-                        pubkey: user.pubkey,
-                        points: Math.round(points * 100) / 100,
-                        positions: user.positions,
-                        isAsdfTop50,
-                        expectedAirdrop,
-                        expectedAirdropCurrency: 'SOL'
-                    });
-                    calculatedTotalPoints += points;
-                }
-            }
+            // Calculate total points
+            let totalPoints = 0;
+            const eligibleUsers = users.map(user => {
+                totalPoints += user.total_points || 0;
+                return {
+                    pubkey: user.pubkey,
+                    points: Math.round((user.total_points || 0) * 100) / 100,
+                    positions: user.positions_count || 0,
+                    isAsdfTop50: user.is_asdf_holder || false,
+                    expectedAirdrop: user.expected_airdrop_sol || 0,
+                    expectedAirdropCurrency: 'SOL'
+                };
+            });
 
             res.json({
                 users: eligibleUsers,
-                totalPoints: Math.round(calculatedTotalPoints * 100) / 100,
+                totalPoints: Math.round(totalPoints * 100) / 100,
                 currency: 'SOL',
                 eligibilityThreshold: MIN_VOLUME_USD
             });

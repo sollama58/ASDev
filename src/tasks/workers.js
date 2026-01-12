@@ -452,8 +452,10 @@ function initHolderScannerWorker(deps) {
                     if (holderBalance === BigInt(0)) continue;
 
                     const proportionalPoints = Number((holderBalance * BigInt(Math.round(weightedPointsForToken * 1000))) / totalBalance) / 1000;
-                    const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0 };
+                    // v25.33: Track positions count for user_points table
+                    const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0, positionsCount: 0 };
                     entry.basePoints += proportionalPoints;
+                    entry.positionsCount++;
                     rawPointsMap.set(holder.holderPubkey, entry);
                 }
             }
@@ -498,8 +500,10 @@ function initHolderScannerWorker(deps) {
                         const baseProportionalPoints = Number((holderBalance * BigInt(Math.round(weightedBasePoints * 1000))) / totalBalance) / 1000;
                         const scaledPoints = baseProportionalPoints * feeShareMultiplier;
 
-                        const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0 };
+                        // v25.33: Track positions count for user_points table
+                        const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0, positionsCount: 0 };
                         entry.robinhoodPoints += scaledPoints;
+                        entry.positionsCount++;
                         rawPointsMap.set(holder.holderPubkey, entry);
                     }
                 }
@@ -546,12 +550,14 @@ function initHolderScannerWorker(deps) {
 
             const userExpectedAirdrops = new Map();
             const userPointsMap = new Map();
+            const userPointsData = []; // v25.33: For database storage
 
             for (const [pubkey, data] of rawPointsMap.entries()) {
                 if (pubkey === devPubkeyStr) continue;
 
                 const isAsdfTop100 = asdfTop100Holders.has(pubkey);
-                const points = (data.basePoints + data.robinhoodPoints) * (isAsdfTop100 ? 2 : 1);
+                const multiplier = isAsdfTop100 ? 2 : 1;
+                const points = (data.basePoints + data.robinhoodPoints) * multiplier;
 
                 if (points > 0) {
                     userPointsMap.set(pubkey, points);
@@ -563,6 +569,18 @@ function initHolderScannerWorker(deps) {
                     // Add KOTH bonus if applicable
                     expected += kothHoldersMap.get(pubkey) || 0;
                     userExpectedAirdrops.set(pubkey, expected);
+
+                    // v25.33: Collect data for database upsert
+                    userPointsData.push({
+                        pubkey,
+                        basePoints: data.basePoints,
+                        robinhoodPoints: data.robinhoodPoints,
+                        multiplier,
+                        totalPoints: points,
+                        expectedAirdropSol: expected,
+                        positionsCount: data.positionsCount || 0,
+                        isAsdfHolder: isAsdfTop100
+                    });
                 }
             }
 
@@ -571,9 +589,68 @@ function initHolderScannerWorker(deps) {
                 if (pubkey === devPubkeyStr) continue;
                 if (!userExpectedAirdrops.has(pubkey) && kothShare > 0) {
                     userExpectedAirdrops.set(pubkey, kothShare);
+                    // v25.33: Add KOTH-only holders to database
+                    userPointsData.push({
+                        pubkey,
+                        basePoints: 0,
+                        robinhoodPoints: 0,
+                        multiplier: 1,
+                        totalPoints: 0,
+                        expectedAirdropSol: kothShare,
+                        positionsCount: 0,
+                        isAsdfHolder: false
+                    });
                 }
             }
 
+            // v25.33: Write to user_points table (single source of truth)
+            const now = Date.now();
+            try {
+                // Clear old points that are no longer active
+                await db.run('DELETE FROM user_points WHERE updated_at < $1 OR updated_at IS NULL', [now - 3600000]); // Remove stale entries older than 1 hour
+
+                // Batch upsert in chunks of 100 for performance
+                const BATCH_SIZE = 100;
+                for (let i = 0; i < userPointsData.length; i += BATCH_SIZE) {
+                    const batch = userPointsData.slice(i, i + BATCH_SIZE);
+                    const values = batch.map((_, idx) => {
+                        const base = idx * 9;
+                        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`;
+                    }).join(', ');
+
+                    const params = batch.flatMap(u => [
+                        u.pubkey,
+                        u.basePoints,
+                        u.robinhoodPoints,
+                        u.multiplier,
+                        u.totalPoints,
+                        u.expectedAirdropSol,
+                        u.positionsCount,
+                        u.isAsdfHolder,
+                        now
+                    ]);
+
+                    await db.run(`
+                        INSERT INTO user_points (pubkey, base_points, robinhood_points, multiplier, total_points, expected_airdrop_sol, positions_count, is_asdf_holder, updated_at)
+                        VALUES ${values}
+                        ON CONFLICT (pubkey) DO UPDATE SET
+                            base_points = EXCLUDED.base_points,
+                            robinhood_points = EXCLUDED.robinhood_points,
+                            multiplier = EXCLUDED.multiplier,
+                            total_points = EXCLUDED.total_points,
+                            expected_airdrop_sol = EXCLUDED.expected_airdrop_sol,
+                            positions_count = EXCLUDED.positions_count,
+                            is_asdf_holder = EXCLUDED.is_asdf_holder,
+                            updated_at = EXCLUDED.updated_at
+                    `, params);
+                }
+                logger.info(`[Worker] Wrote ${userPointsData.length} users to user_points table`);
+            } catch (e) {
+                logger.error('[Worker] Failed to write user_points table', { error: e.message });
+                // Don't throw - Redis is still updated as fallback
+            }
+
+            // Continue updating Redis for backwards compatibility (during migration)
             await redis.setAllUserExpectedAirdrops(userExpectedAirdrops);
             await redis.setAllUserPoints(userPointsMap);
             await redis.setLastBackendUpdate(Date.now());

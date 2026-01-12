@@ -407,6 +407,26 @@ async function createSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_token_holders_mint_only ON token_holders(mint)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_holders_mint_only ON robinhood_token_holders(mint)`);
 
+    // v25.33: User points table - single source of truth for all point displays
+    // Worker calculates points once, all endpoints read from this table
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_points (
+            pubkey TEXT PRIMARY KEY,
+            base_points REAL DEFAULT 0,
+            robinhood_points REAL DEFAULT 0,
+            multiplier INTEGER DEFAULT 1,
+            total_points REAL DEFAULT 0,
+            expected_airdrop_sol REAL DEFAULT 0,
+            positions_count INTEGER DEFAULT 0,
+            is_asdf_holder BOOLEAN DEFAULT FALSE,
+            updated_at BIGINT
+        )
+    `);
+
+    // Indexes for fast lookups and sorting
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_points_total ON user_points(total_points DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_points_updated ON user_points(updated_at DESC)`);
+
     logger.info('[PostgreSQL] Schema created successfully');
 }
 
