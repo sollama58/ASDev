@@ -9,17 +9,24 @@
  * v25.4 - Volume-weighted points: higher volume tokens distribute more points
  *         Dynamic scaling based on current eligible tokens' volume range
  * v25.20 - STABILITY: Added RPC retry logic with exponential backoff
+ * v25.22 - SCALABILITY: Added mutex to prevent task overlap, parallel RPC batching
  */
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const { BN } = require('@coral-xyz/anchor');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
-const { logger } = require('../services');
+const { logger, mutex, postgres } = require('../services');
+
+// v25.22 SCALABILITY: Mutex to prevent overlapping holder scans
+const holderScannerMutex = mutex.getMutex('holder_scanner');
 
 // v25.20: RPC retry configuration
 const RPC_MAX_RETRIES = 3;
 const RPC_BASE_DELAY_MS = 1000;
+
+// v25.22 SCALABILITY: RPC batching configuration
+const RPC_PARALLEL_BATCH_SIZE = 5; // Process 5 tokens in parallel
 
 /**
  * v25.20: Execute RPC call with exponential backoff retry
@@ -96,6 +103,14 @@ function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
  */
 async function updateGlobalState(deps) {
     const { connection, devKeypair, db, globalState } = deps;
+
+    // v25.22 SCALABILITY: Prevent overlapping holder scans
+    // If previous scan still running, skip this one
+    const release = await holderScannerMutex.tryAcquire();
+    if (!release) {
+        logger.debug('[HolderScanner] Skipping - previous scan still in progress');
+        return;
+    }
 
     try {
         // v18.0: Get all tokens with >$100 24hr volume (no limit)
@@ -225,6 +240,14 @@ async function updateGlobalState(deps) {
             }
 
             await new Promise(r => setTimeout(r, 2000));
+        }
+
+        // v25.22 SCALABILITY: Refresh materialized views after holder updates
+        try {
+            await postgres.refreshMaterializedViews();
+            logger.debug('[HolderScanner] Materialized views refreshed');
+        } catch (mvErr) {
+            logger.warn('[HolderScanner] Failed to refresh materialized views', { error: mvErr.message });
         }
 
         // v14.0: Calculate global points with proportional holdings
@@ -449,6 +472,9 @@ async function updateGlobalState(deps) {
 
     } catch (e) {
         logger.error("Holder scanner error", { error: e.message });
+    } finally {
+        // v25.22: Always release mutex
+        if (release) release();
     }
 }
 

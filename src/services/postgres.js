@@ -359,7 +359,51 @@ async function createSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_flywheel_logs_timestamp ON flywheel_logs(timestamp DESC)`);
 
+    // v25.22 SCALABILITY: Materialized views for pre-computed aggregations
+    // This eliminates expensive GROUP BY subqueries in /check-holder and /all-eligible-users
+    await pool.query(`
+        CREATE MATERIALIZED VIEW IF NOT EXISTS token_total_balances AS
+        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance, COUNT(*) as holder_count
+        FROM token_holders
+        GROUP BY mint
+    `);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_token_total_balances_mint ON token_total_balances(mint)`);
+
+    await pool.query(`
+        CREATE MATERIALIZED VIEW IF NOT EXISTS robinhood_token_total_balances AS
+        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance, COUNT(*) as holder_count
+        FROM robinhood_token_holders
+        GROUP BY mint
+    `);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_robinhood_total_balances_mint ON robinhood_token_total_balances(mint)`);
+
+    // v25.22: Index for faster mint lookups in GROUP BY queries
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_token_holders_mint_only ON token_holders(mint)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_holders_mint_only ON robinhood_token_holders(mint)`);
+
     logger.info('[PostgreSQL] Schema created successfully');
+}
+
+/**
+ * v25.22 SCALABILITY: Refresh materialized views
+ * Should be called after holder scanner updates
+ */
+async function refreshMaterializedViews() {
+    if (!pool) return;
+    try {
+        await pool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY token_total_balances');
+        await pool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY robinhood_token_total_balances');
+        logger.debug('[PostgreSQL] Materialized views refreshed');
+    } catch (e) {
+        // CONCURRENTLY requires unique index - fall back to regular refresh
+        try {
+            await pool.query('REFRESH MATERIALIZED VIEW token_total_balances');
+            await pool.query('REFRESH MATERIALIZED VIEW robinhood_token_total_balances');
+            logger.debug('[PostgreSQL] Materialized views refreshed (non-concurrent)');
+        } catch (err) {
+            logger.debug('[PostgreSQL] Materialized view refresh error', { error: err.message });
+        }
+    }
 }
 
 // ===========================================
@@ -586,6 +630,7 @@ module.exports = {
     logPurchase,
     saveTokenData,
     healthCheck,
+    refreshMaterializedViews, // v25.22 SCALABILITY
     // For backwards compatibility
     DATA_DIR: config.DISK_ROOT || './data',
     DB_PATH: 'PostgreSQL (Render)',

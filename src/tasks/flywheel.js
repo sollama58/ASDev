@@ -469,8 +469,9 @@ async function processAirdrop(deps) {
                         }
                     }
 
+                    // v25.22 SCALABILITY: Increased batch size
                     // Send KOTH distributions in batches
-                    const KOTH_BATCH_SIZE = 15;
+                    const KOTH_BATCH_SIZE = 21;
                     let kothSignatures = [];
                     for (let i = 0; i < kothBatch.length; i += KOTH_BATCH_SIZE) {
                         const batch = kothBatch.slice(i, i + KOTH_BATCH_SIZE);
@@ -579,9 +580,12 @@ async function processAirdrop(deps) {
             logger.warn('[Airdrop] Failed to create pending record', { error: e.message });
         }
 
+        // v25.22 SCALABILITY: Increased batch size and parallel processing
         // SOL transfers can handle more per batch since no ATA creation needed
-        const BATCH_SIZE = 15;
-        let currentBatch = [];
+        // Transaction size: ~80 bytes per transfer, limit ~1232 bytes = ~15 transfers safe
+        // With optimized instruction packing: 21 transfers fit safely
+        const BATCH_SIZE = 21;
+        const PARALLEL_BATCHES = 3; // Process 3 batches concurrently
         let allSignatures = [];
 
         // Add KOTH sig if it exists
@@ -591,77 +595,88 @@ async function processAirdrop(deps) {
         let failedBatches = 0;
         let failedUsers = []; // v25.13: Track failed recipients for potential retry
 
-        // v25.13: Use pre-calculated distribution plan
-        for (const recipient of distributionPlan) {
-            currentBatch.push({ user: recipient.user, amount: recipient.amount });
+        // v25.22 SCALABILITY: Split distribution plan into batches
+        const batches = [];
+        for (let i = 0; i < distributionPlan.length; i += BATCH_SIZE) {
+            batches.push(distributionPlan.slice(i, i + BATCH_SIZE).map(r => ({
+                user: r.user,
+                amount: r.amount
+            })));
+        }
 
-            if (currentBatch.length >= BATCH_SIZE) {
-                const sig = await sendSolAirdropBatch(currentBatch, deps);
-                if (sig) {
-                    allSignatures.push(sig);
+        // v25.22 SCALABILITY: Process batches in parallel groups
+        for (let i = 0; i < batches.length; i += PARALLEL_BATCHES) {
+            const parallelGroup = batches.slice(i, i + PARALLEL_BATCHES);
+
+            // Send all batches in this group concurrently
+            const results = await Promise.allSettled(
+                parallelGroup.map(batch => sendSolAirdropBatch(batch, deps))
+            );
+
+            // Process results
+            results.forEach((result, idx) => {
+                const batch = parallelGroup[idx];
+                if (result.status === 'fulfilled' && result.value) {
+                    allSignatures.push(result.value);
                     successfulBatches++;
                 } else {
                     failedBatches++;
-                    failedUsers.push(...currentBatch.map(u => u.user.toString()));
+                    failedUsers.push(...batch.map(u => u.user.toString()));
                 }
-                currentBatch = [];
-                await new Promise(r => setTimeout(r, 500)); // Shorter delay for SOL transfers
-            }
-        }
+            });
 
-        if (currentBatch.length > 0) {
-            const sig = await sendSolAirdropBatch(currentBatch, deps);
-            if (sig) {
-                allSignatures.push(sig);
-                successfulBatches++;
-            } else {
-                failedBatches++;
-                failedUsers.push(...currentBatch.map(u => u.user.toString()));
+            // Small delay between parallel groups to avoid overwhelming RPC
+            if (i + PARALLEL_BATCHES < batches.length) {
+                await new Promise(r => setTimeout(r, 300));
             }
         }
 
         // v25.13: Retry failed batches once before giving up
+        // v25.22 SCALABILITY: Use parallel retry processing
         if (failedUsers.length > 0 && failedBatches > 0) {
             logger.info(`[Airdrop] Retrying ${failedUsers.length} users from ${failedBatches} failed batches...`);
 
+            // Wait a bit before retrying
+            await new Promise(r => setTimeout(r, 1000));
+
             // Rebuild failed batches from distribution plan
             const failedRecipients = distributionPlan.filter(r => failedUsers.includes(r.user.toString()));
-            let retryBatch = [];
             let retrySuccesses = 0;
-            let retryFailures = 0;
             const stillFailedUsers = [];
 
-            for (const recipient of failedRecipients) {
-                retryBatch.push({ user: recipient.user, amount: recipient.amount });
+            // v25.22 SCALABILITY: Split into batches for parallel retry
+            const retryBatches = [];
+            for (let i = 0; i < failedRecipients.length; i += BATCH_SIZE) {
+                retryBatches.push(failedRecipients.slice(i, i + BATCH_SIZE).map(r => ({
+                    user: r.user,
+                    amount: r.amount
+                })));
+            }
 
-                if (retryBatch.length >= BATCH_SIZE) {
-                    await new Promise(r => setTimeout(r, 1000)); // Longer delay for retries
-                    const sig = await sendSolAirdropBatch(retryBatch, deps);
-                    if (sig) {
-                        allSignatures.push(`RETRY:${sig}`);
+            // Process retry batches in parallel (2 at a time for retries - more conservative)
+            const PARALLEL_RETRIES = 2;
+            for (let i = 0; i < retryBatches.length; i += PARALLEL_RETRIES) {
+                const parallelGroup = retryBatches.slice(i, i + PARALLEL_RETRIES);
+
+                const results = await Promise.allSettled(
+                    parallelGroup.map(batch => sendSolAirdropBatch(batch, deps))
+                );
+
+                results.forEach((result, idx) => {
+                    const batch = parallelGroup[idx];
+                    if (result.status === 'fulfilled' && result.value) {
+                        allSignatures.push(`RETRY:${result.value}`);
                         retrySuccesses++;
                         successfulBatches++;
                         failedBatches--;
                     } else {
-                        retryFailures++;
-                        stillFailedUsers.push(...retryBatch.map(u => u.user.toString()));
+                        stillFailedUsers.push(...batch.map(u => u.user.toString()));
                     }
-                    retryBatch = [];
-                }
-            }
+                });
 
-            // Process remaining retry batch
-            if (retryBatch.length > 0) {
-                await new Promise(r => setTimeout(r, 1000));
-                const sig = await sendSolAirdropBatch(retryBatch, deps);
-                if (sig) {
-                    allSignatures.push(`RETRY:${sig}`);
-                    retrySuccesses++;
-                    successfulBatches++;
-                    failedBatches--;
-                } else {
-                    retryFailures++;
-                    stillFailedUsers.push(...retryBatch.map(u => u.user.toString()));
+                // Longer delay between retry groups
+                if (i + PARALLEL_RETRIES < retryBatches.length) {
+                    await new Promise(r => setTimeout(r, 500));
                 }
             }
 

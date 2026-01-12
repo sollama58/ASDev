@@ -422,20 +422,17 @@ function init(deps) {
 
             // v22.0: Single query to get user's holdings with pre-computed totals using window functions
             // This replaces 2000+ individual queries with 1 optimized query
+            // v25.22 SCALABILITY: Use materialized view instead of subquery for O(1) lookup
             const userTokenHoldings = await redis.smartCache(`check_holder_${userPubkey}`, 30, async () => {
                 const holdings = await db.all(`
                     SELECT
                         th."holderPubkey",
                         th.mint,
                         th.balance,
-                        totals.total_balance
+                        COALESCE(ttb.total_balance, 0) as total_balance
                     FROM token_holders th
                     INNER JOIN tokens t ON t.mint = th.mint AND t.volume24h >= $1
-                    INNER JOIN (
-                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
-                        FROM token_holders
-                        GROUP BY mint
-                    ) totals ON totals.mint = th.mint
+                    LEFT JOIN token_total_balances ttb ON ttb.mint = th.mint
                     WHERE th."holderPubkey" = $2
                 `, [MIN_VOLUME_USD, userPubkey]);
 
@@ -463,6 +460,7 @@ function init(deps) {
             }
 
             // v22.0: Single query for Robinhood holdings with pre-computed totals
+            // v25.22 SCALABILITY: Use materialized view instead of subquery
             const robinhoodHoldings = await redis.smartCache(`check_holder_rh_${userPubkey}`, 30, async () => {
                 return await db.all(`
                     SELECT
@@ -470,14 +468,10 @@ function init(deps) {
                         rth.mint,
                         rth.balance,
                         rt."feeShareBps",
-                        totals.total_balance
+                        COALESCE(rttb.total_balance, 0) as total_balance
                     FROM robinhood_token_holders rth
                     INNER JOIN robinhood_tokens rt ON rt.mint = rth.mint AND rt."isActive" = 1 AND rt.volume24h >= $1
-                    INNER JOIN (
-                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
-                        FROM robinhood_token_holders
-                        GROUP BY mint
-                    ) totals ON totals.mint = rth.mint
+                    LEFT JOIN robinhood_token_total_balances rttb ON rttb.mint = rth.mint
                     WHERE rth."holderPubkey" = $2
                 `, [MIN_VOLUME_USD, userPubkey]);
             });
