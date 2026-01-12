@@ -1218,20 +1218,21 @@ function init(deps) {
      * POST /refresh-all-metadata
      * Batch refresh metadata for all tokens with missing images or Unknown tickers
      * Admin endpoint for fixing tokens that were registered without metadata
+     * v25.5: Also handles 'null' string values and tries metadataUri fallback
      */
     router.post('/refresh-all-metadata', async (req, res) => {
         try {
-            // Find all robinhood tokens with missing metadata
+            // v25.5: Find all robinhood tokens with missing metadata (including 'null' string)
             const robinhoodTokens = await db.all(`
                 SELECT * FROM robinhood_tokens
                 WHERE "isActive" = 1
-                AND (image IS NULL OR image = '' OR ticker = 'UNKNOWN' OR name = 'Unknown Token')
+                AND (image IS NULL OR image = '' OR image = 'null' OR ticker = 'UNKNOWN' OR name = 'Unknown Token')
             `);
 
-            // Find all regular tokens with missing metadata
+            // v25.5: Find all regular tokens with missing metadata (including 'null' string)
             const regularTokens = await db.all(`
                 SELECT * FROM tokens
-                WHERE image IS NULL OR image = '' OR ticker = 'UNKNOWN' OR name = 'Unknown'
+                WHERE image IS NULL OR image = '' OR image = 'null' OR ticker = 'UNKNOWN' OR name = 'Unknown'
             `);
 
             const totalTokens = robinhoodTokens.length + regularTokens.length;
@@ -1283,28 +1284,55 @@ function init(deps) {
             // Process regular tokens
             for (const token of regularTokens) {
                 try {
+                    let imageToUse = null;
+                    let tickerToUse = token.ticker;
+                    let nameToUse = token.name;
+                    let marketCapToUse = token.marketCap || 0;
+                    let volumeToUse = token.volume24h || 0;
+
+                    // v25.5: First try to fetch from external APIs (DexScreener, Helius)
                     const validTokens = await mintExtractor.validateMintsBatch([token.mint], { fetchMarketData: true });
                     if (validTokens.length > 0) {
                         const freshData = validTokens[0];
-                        if (freshData.image || freshData.ticker !== 'UNKNOWN') {
-                            // FIX: Use NULLIF to convert empty string to NULL, so COALESCE preserves existing image
-                            await db.run(`
-                                UPDATE tokens
-                                SET ticker = $1, name = $2, image = COALESCE(NULLIF($3, ''), image),
-                                    "marketCap" = $4, volume24h = $5
-                                WHERE mint = $6
-                            `, [
-                                freshData.ticker || token.ticker,
-                                freshData.name || token.name,
-                                freshData.image || null,
-                                freshData.marketCap || 0,
-                                freshData.volume24h || 0,
-                                token.mint
-                            ]);
-                            updated++;
-                            logger.info(`[BatchMetadataRefresh] Updated ${token.mint.slice(0, 8)}...: ${freshData.ticker}, image=${freshData.image ? 'YES' : 'NO'}`);
+                        if (freshData.image) imageToUse = freshData.image;
+                        if (freshData.ticker && freshData.ticker !== 'UNKNOWN') tickerToUse = freshData.ticker;
+                        if (freshData.name && freshData.name !== 'Unknown') nameToUse = freshData.name;
+                        if (freshData.marketCap) marketCapToUse = freshData.marketCap;
+                        if (freshData.volume24h) volumeToUse = freshData.volume24h;
+                    }
+
+                    // v25.5: If still no image, try fetching from metadataUri
+                    if (!imageToUse && token.metadataUri) {
+                        try {
+                            const metadataImage = await imageUtils.fetchImageFromMetadataUri(token.metadataUri, 3000);
+                            if (metadataImage) {
+                                imageToUse = metadataImage;
+                                logger.info(`[BatchMetadataRefresh] Got image from metadataUri for ${token.mint.slice(0, 8)}...`);
+                            }
+                        } catch (e) {
+                            // Silently fail
                         }
                     }
+
+                    // Update if we have any new data
+                    if (imageToUse || tickerToUse !== token.ticker || nameToUse !== token.name) {
+                        await db.run(`
+                            UPDATE tokens
+                            SET ticker = $1, name = $2, image = COALESCE(NULLIF($3, ''), image),
+                                "marketCap" = $4, volume24h = $5
+                            WHERE mint = $6
+                        `, [
+                            tickerToUse,
+                            nameToUse,
+                            imageToUse || null,
+                            marketCapToUse,
+                            volumeToUse,
+                            token.mint
+                        ]);
+                        updated++;
+                        logger.info(`[BatchMetadataRefresh] Updated ${token.mint.slice(0, 8)}...: ${tickerToUse}, image=${imageToUse ? 'YES' : 'NO'}`);
+                    }
+
                     await new Promise(r => setTimeout(r, 200)); // Rate limit
                 } catch (e) {
                     failed++;
