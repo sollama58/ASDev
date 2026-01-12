@@ -8,6 +8,7 @@
  * v18.0 - Changed from top 10 tokens to all tokens with >$100 24hr volume
  * v25.4 - Volume-weighted points: higher volume tokens distribute more points
  *         Dynamic scaling based on current eligible tokens' volume range
+ * v25.20 - STABILITY: Added RPC retry logic with exponential backoff
  */
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
@@ -15,6 +16,30 @@ const { BN } = require('@coral-xyz/anchor');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
 const { logger } = require('../services');
+
+// v25.20: RPC retry configuration
+const RPC_MAX_RETRIES = 3;
+const RPC_BASE_DELAY_MS = 1000;
+
+/**
+ * v25.20: Execute RPC call with exponential backoff retry
+ */
+async function withRetry(fn, context = 'RPC call') {
+    let lastError;
+    for (let attempt = 0; attempt < RPC_MAX_RETRIES; attempt++) {
+        try {
+            return await fn();
+        } catch (e) {
+            lastError = e;
+            const delay = RPC_BASE_DELAY_MS * Math.pow(2, attempt) + Math.random() * 500;
+            logger.debug(`[HolderScanner] ${context} failed (attempt ${attempt + 1}/${RPC_MAX_RETRIES}), retrying in ${delay.toFixed(0)}ms`, { error: e.message });
+            if (attempt < RPC_MAX_RETRIES - 1) {
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+    throw lastError;
+}
 
 // Constants for point calculation
 const TOP_HOLDERS_LIMIT = 250; // Track top 250 holders per eligible token
@@ -135,12 +160,16 @@ async function updateGlobalState(deps) {
                 const holdersToInsert = [];
 
                 try {
-                    const accounts = await connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
-                        filters: [
-                            { memcmp: { offset: 0, bytes: token.mint } }
-                        ],
-                        encoding: 'base64'
-                    });
+                    // v25.20: Use retry logic for RPC calls
+                    const accounts = await withRetry(
+                        () => connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
+                            filters: [
+                                { memcmp: { offset: 0, bytes: token.mint } }
+                            ],
+                            encoding: 'base64'
+                        }),
+                        `getProgramAccounts for ${token.mint.slice(0, 8)}`
+                    );
 
                     const parsedAccounts = accounts.map(acc => {
                         const data = Buffer.from(acc.account.data);
@@ -174,24 +203,22 @@ async function updateGlobalState(deps) {
                     logger.error(`Failed to scan holders for ${token.mint}`, { error: scanErr.message });
                 }
 
-                await db.run('BEGIN TRANSACTION');
+                // v25.20: PostgreSQL compatible - delete then insert (no explicit transaction needed for simple ops)
                 try {
-                    await db.run('DELETE FROM token_holders WHERE mint = ?', token.mint);
+                    await db.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
 
                     if (holdersToInsert.length > 0) {
                         let rank = 1;
                         for (const h of holdersToInsert) {
                             await db.run(
-                                'INSERT OR IGNORE INTO token_holders (mint, holderPubkey, rank, balance, lastUpdated) VALUES (?, ?, ?, ?, ?)',
+                                'INSERT INTO token_holders (mint, "holderPubkey", rank, balance, "lastUpdated") VALUES ($1, $2, $3, $4, $5) ON CONFLICT (mint, "holderPubkey") DO UPDATE SET rank = $3, balance = $4, "lastUpdated" = $5',
                                 [h.mint, h.owner, rank, h.balance, Date.now()]
                             );
                             rank++;
                         }
                     }
-                    await db.run('COMMIT');
                 } catch (err) {
-                    await db.run('ROLLBACK');
-                    throw err;
+                    logger.error(`[HolderScanner] DB update failed for ${token.mint}`, { error: err.message });
                 }
             } catch (e) {
                 logger.error(`Holder update loop error for ${token.mint}: ${e.message}`);

@@ -87,9 +87,12 @@ async function main() {
     logger.info(`Starting ASDev ${config.VERSION}...`);
 
     // v24.0: Initialize Redis first (needed for globalState) with connection validation
+    // v25.20: CRITICAL - Redis is required for BullMQ job queues. Fail startup if unavailable.
     const redisInitSuccess = await redis.init();
     if (!redisInitSuccess) {
-        logger.warn('Redis initialization failed - running with degraded caching');
+        logger.error('FATAL: Redis initialization failed - BullMQ job queues require Redis');
+        logger.error('Check REDIS_URL environment variable and Redis server availability');
+        process.exit(1);
     }
 
     // v13.0: Initialize PostgreSQL database
@@ -272,11 +275,19 @@ async function main() {
 }
 
 // v25.14 ROBUSTNESS: Graceful shutdown with task cleanup
+// v25.20: Added WebSocket cleanup
 const shutdown = async (signal) => {
     logger.info(`${signal} received, shutting down gracefully...`);
     try {
         // Stop all background tasks first
         await tasks.stopAll();
+
+        // v25.20: Close WebSocket connections
+        try {
+            websocket.close();
+        } catch (wsErr) {
+            logger.debug('WebSocket cleanup error', { error: wsErr.message });
+        }
 
         // Close database connection
         const db = database.getDB();

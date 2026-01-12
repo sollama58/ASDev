@@ -27,6 +27,44 @@ const airdropMutex = mutex.getMutex('flywheel_airdrop');
 // Import Robinhood scanner for fee claiming
 const robinhoodScanner = require('./robinhoodScanner');
 
+// v25.21: Cache for fee_sharing_config accounts to reduce RPC calls
+// Key: creatorPubkey string, Value: { config, timestamp }
+const feeSharingConfigCache = new Map();
+const CONFIG_CACHE_TTL_MS = 600000; // 10 minutes - configs rarely change
+
+/**
+ * v25.21: Get fee sharing config with caching
+ * Reduces RPC calls by caching parsed configs
+ */
+async function getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey) {
+    const cacheKey = creatorPubkey.toString();
+    const cached = feeSharingConfigCache.get(cacheKey);
+
+    // Return cached if fresh
+    if (cached && (Date.now() - cached.timestamp) < CONFIG_CACHE_TTL_MS) {
+        return cached.config;
+    }
+
+    // Fetch fresh config
+    try {
+        const configInfo = await connection.getAccountInfo(sharingConfigPDA);
+        if (configInfo && configInfo.data) {
+            const configData = robinhoodScanner.parseFeeSharingConfig(configInfo.data, sharingConfigPDA);
+            if (configData) {
+                feeSharingConfigCache.set(cacheKey, {
+                    config: configData,
+                    timestamp: Date.now()
+                });
+                return configData;
+            }
+        }
+    } catch (e) {
+        logger.debug(`[Robinhood] Failed to fetch config for ${cacheKey.slice(0, 8)}`, { error: e.message });
+    }
+
+    return null;
+}
+
 /**
  * Claim creator fees from bonding curve and AMM
  */
@@ -139,19 +177,17 @@ async function claimRobinhoodFees(deps) {
 
                 // v25.19 FIX: Read the fee_sharing_config account to get all shareholders
                 // The distribute_creator_fees instruction requires ALL shareholders as accounts
+                // v25.21: Use cached config to reduce RPC calls
                 try {
                     // Check if there are fees to distribute first
                     const bcInfo = await connection.getAccountInfo(bcVault);
                     const pendingLamports = bcInfo ? bcInfo.lamports - 5000 : 0; // Subtract rent-exempt minimum
 
                     if (pendingLamports > 0) {
-                        // Read the fee_sharing_config account to get all shareholders
-                        const configInfo = await connection.getAccountInfo(sharingConfigPDA);
+                        // v25.21: Use cached fee_sharing_config to reduce RPC calls
+                        const configData = await getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey);
 
-                        if (configInfo && configInfo.data) {
-                            const configData = robinhoodScanner.parseFeeSharingConfig(configInfo.data, sharingConfigPDA);
-
-                            if (configData && configData.shareholders && configData.shareholders.length > 0) {
+                        if (configData && configData.shareholders && configData.shareholders.length > 0) {
                                 const tx = new Transaction();
                                 solana.addPriorityFee(tx);
 
@@ -217,9 +253,8 @@ async function claimRobinhoodFees(deps) {
                                         shareholders: configData.shareholders.length
                                     });
                                 }
-                            } else {
-                                logger.debug(`[Robinhood] No valid fee sharing config found for ${token.ticker || token.creatorPubkey}`);
-                            }
+                        } else {
+                            logger.debug(`[Robinhood] No valid fee sharing config found for ${token.ticker || token.creatorPubkey}`);
                         }
                     }
                 } catch (e) {

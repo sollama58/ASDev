@@ -285,11 +285,37 @@ function getClientCount() {
     return wss ? wss.clients.size : 0;
 }
 
+/**
+ * v25.20: Close WebSocket server gracefully
+ */
+function close() {
+    if (broadcastInterval) {
+        clearInterval(broadcastInterval);
+        broadcastInterval = null;
+    }
+
+    if (wss) {
+        // Close all client connections
+        wss.clients.forEach(client => {
+            try {
+                client.close(1000, 'Server shutting down');
+            } catch (e) {
+                // Ignore close errors
+            }
+        });
+
+        wss.close();
+        wss = null;
+        logger.info('[WebSocket] Server closed');
+    }
+}
+
 module.exports = {
     init,
     broadcast,
     startBroadcasting,
     broadcastLaunch,
     broadcastAirdrop,
-    getClientCount
+    getClientCount,
+    close
 };

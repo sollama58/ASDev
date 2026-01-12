@@ -2,8 +2,12 @@
  * Mutex Service
  * Provides async-safe locking mechanisms for preventing race conditions
  * v13.0 - Added for race condition fixes
+ * v25.21 - Added configurable timeout to tryAcquire and auto-release safety
  */
 const logger = require('./logger');
+
+// v25.21: Default lock timeout (5 minutes) - prevents deadlocks if process crashes while holding lock
+const DEFAULT_LOCK_TIMEOUT_MS = 300000;
 
 /**
  * Simple async mutex implementation using Redis for distributed locking
@@ -15,6 +19,7 @@ class AsyncMutex {
         this.redis = redis;
         this._localLock = false;
         this._lockPromise = null;
+        this._localLockTimeout = null;
     }
 
     /**
@@ -73,33 +78,56 @@ class AsyncMutex {
     /**
      * Try to acquire lock without waiting
      * Returns release function if successful, null otherwise
+     * v25.21: Added configurable timeout with auto-release safety
+     * @param {number} lockTimeoutMs - How long the lock can be held before auto-release (default 5 min)
      */
-    async tryAcquire() {
+    async tryAcquire(lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS) {
         const lockKey = `mutex:${this.name}`;
 
         if (this.redis) {
             const lockId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
-            const result = await this.redis.set(lockKey, lockId, 'NX', 'PX', 60000);
+            const result = await this.redis.set(lockKey, lockId, 'NX', 'PX', lockTimeoutMs);
 
             if (result === 'OK') {
+                logger.debug(`[Mutex] Acquired Redis lock: ${this.name} (timeout: ${lockTimeoutMs}ms)`);
                 return async () => {
                     const currentValue = await this.redis.get(lockKey);
                     if (currentValue === lockId) {
                         await this.redis.del(lockKey);
+                        logger.debug(`[Mutex] Released Redis lock: ${this.name}`);
                     }
                 };
             }
             return null;
         }
 
-        // In-memory fallback
+        // In-memory fallback with auto-release timeout
         if (this._localLock) {
             return null;
         }
 
         this._localLock = true;
+
+        // v25.21: Auto-release after timeout to prevent deadlocks
+        if (this._localLockTimeout) {
+            clearTimeout(this._localLockTimeout);
+        }
+        this._localLockTimeout = setTimeout(() => {
+            if (this._localLock) {
+                logger.warn(`[Mutex] Auto-releasing stale lock: ${this.name} after ${lockTimeoutMs}ms`);
+                this._localLock = false;
+            }
+        }, lockTimeoutMs);
+
+        logger.debug(`[Mutex] Acquired local lock: ${this.name} (timeout: ${lockTimeoutMs}ms)`);
+
         return () => {
             this._localLock = false;
+            if (this._localLockTimeout) {
+                clearTimeout(this._localLockTimeout);
+                this._localLockTimeout = null;
+            }
+            logger.debug(`[Mutex] Released local lock: ${this.name}`);
         };
     }
 
