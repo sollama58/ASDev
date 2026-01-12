@@ -324,7 +324,7 @@ function init(deps) {
                 robinhoodPendingFees: ((cachedHealth.robinhoodPendingFees || 0) / LAMPORTS_PER_SOL).toFixed(4),
                 lastClaimTime: cachedHealth.stats.lastClaimTimestamp || 0,
                 lastClaimAmount: (cachedHealth.stats.lastClaimAmountLamports / LAMPORTS_PER_SOL).toFixed(4),
-                nextCheckTime: cachedHealth.stats.nextCheckTimestamp || (Date.now() + 5*60*1000),
+                nextCheckTime: cachedHealth.stats.nextCheckTimestamp || (Date.now() + 1*60*1000),
                 totalVolume: cachedHealth.totalVolume,
                 // v11.0: Legacy PUMP airdrop total (for backwards compatibility)
                 totalAirdropped: cachedHealth.totalAirdropped,

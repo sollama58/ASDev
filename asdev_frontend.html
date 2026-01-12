@@ -1212,24 +1212,25 @@
             </div>
         </div>
 
-        <!-- Fee Tracker -->
+        <!-- v25.4: Rewards Claim Tracker (formerly Buyback & Fee Tracker) -->
         <div class="panel bg-orange-950/30 border border-orange-900 mb-6 md:mb-8">
             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-orange-900/50 pb-2 mb-4 gap-2">
-                <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest">BUYBACK & FEE TRACKER</h3>
+                <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest">REWARDS CLAIM TRACKER</h3>
                 <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1">VIEW LOGS</button>
             </div>
-            <!-- v25.2: Removed no-break from labels - allow natural text wrapping on data boxes -->
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 text-center">
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Pending Fees</div>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Total Pending</div>
                     <div class="text-base md:text-xl text-white font-bold font-mono mt-1 sol-amount"><span id="track-balance">0.0000</span> SOL</div>
-                    <div class="text-[9px] md:text-[10px] text-gray-500 mt-1 hidden sm:block">
-                        <span class="text-orange-400">P:</span> <span id="track-platform-fees">0.0000</span> |
-                        <span class="text-green-400">R:</span> <span id="track-robinhood-fees">0.0000</span>
+                    <div class="text-[9px] md:text-[10px] text-gray-500 mt-1">
+                        <span class="text-orange-400">Platform:</span> <span id="track-platform-fees">0.0000</span>
+                    </div>
+                    <div class="text-[9px] md:text-[10px] text-gray-500">
+                        <span class="text-green-400">Robinhood:</span> <span id="track-robinhood-fees">0.0000</span>
                     </div>
                 </div>
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Last Claim</div>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Last Claimed</div>
                     <div class="text-base md:text-xl text-green-400 font-bold font-mono mt-1 sol-amount"><span id="track-last-amt">0.0000</span> SOL</div>
                 </div>
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
@@ -1237,8 +1238,9 @@
                     <div class="text-xs md:text-sm text-white font-mono mt-2" id="track-last-time">Never</div>
                 </div>
                 <div class="bg-black/30 p-3 md:p-4 rounded border border-orange-900/50">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Next Check</div>
+                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Next Claim</div>
                     <div class="text-base md:text-xl text-yellow-400 font-bold font-mono mt-1" id="track-next-check">--:--</div>
+                    <div class="text-[9px] md:text-[10px] text-gray-500 mt-1">auto every 1 min</div>
                 </div>
 
                 <!-- Dynamic Conservation Notice -->
@@ -1501,7 +1503,7 @@
 <div id="log-modal" class="modal">
     <div class="modal-content">
         <span class="close-btn" onclick="closeLogModal()">&times;</span>
-        <h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Flywheel & Buyback Logs</h3>
+        <h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Rewards Claim Logs</h3>
         <div id="modal-log-content" class="max-h-[60vh] overflow-y-auto pr-2 flex flex-col gap-2"></div>
     </div>
 </div>
@@ -1519,7 +1521,7 @@
         <span class="close-btn" onclick="closeStatusModal()">&times;</span>
         <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2 font-normal">System Status Diagnostics</h3>
         <div id="status-details-list" class="font-mono text-sm space-y-2"></div>
-        <p class="text-xs text-yellow-500 mt-4">If services are offline, automatic processes (like airdrops and buybacks) may be delayed or halted.</p>
+        <p class="text-xs text-yellow-500 mt-4">If services are offline, automatic processes (like airdrops and fee claims) may be delayed or halted.</p>
     </div>
 </div>
 
@@ -1583,7 +1585,7 @@
 </div>
 
 <!-- v25.2: Updated about modal with non-bold headings -->
-<div id="about-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAboutModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Fee & Buyback Mechanics</h3>
+<div id="about-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAboutModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Fee Claim & Rewards Mechanics</h3>
     <div id="about-content-static">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8 font-sans text-sm">
             <div>

@@ -1,12 +1,13 @@
 /**
  * Flywheel Task
- * Fee collection, buyback, and SOL airdrop distribution
+ * Fee collection and SOL airdrop distribution (Rewards Claim system)
  *
  * v11.0 - Changed from PUMP token airdrops to direct SOL airdrops
  * v13.0 - KOTH bonus now distributed to all holders of king token (not just creator)
  * v14.0 - Updated to work with proportional point system (Top 250 holders)
  * v17.0 - Separated fee collection (1 min, >0.05 SOL) from airdrop (15 min, >1 SOL)
  * v23.0 - Refresh fee share BPS before airdrop to handle dynamic reward distribution changes
+ * v25.4 - Fixed next check time countdown to update after fee collection
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -727,9 +728,10 @@ async function runPurchaseAndFees(deps) {
 /**
  * Run fee collection only (called every 1 minute)
  * v17.0: Separated from airdrop processing for more frequent fee collection
+ * v25.4: Added logging to frontend logs for visibility
  */
 async function runFeeCollection(deps) {
-    const { connection, devKeypair, db, globalState } = deps;
+    const { connection, devKeypair, db, globalState, logPurchase } = deps;
 
     // RACE CONDITION FIX: Use mutex for atomic locking
     const release = await buybackMutex.tryAcquire();
@@ -794,6 +796,15 @@ async function runFeeCollection(deps) {
                     await solana.sendTxWithRetry(feeTx, [devKeypair]);
                     logger.info(`[FeeCollection] Distributed ${((transfer9_5 + transfer0_5) / LAMPORTS_PER_SOL).toFixed(4)} SOL to platform (5%)`);
                 }
+
+                // v25.4: Log to frontend
+                if (logPurchase) {
+                    await logPurchase('FEE_CLAIM', {
+                        status: 'SUCCESS',
+                        feesClaimedSol: (claimedAmount / LAMPORTS_PER_SOL).toFixed(4),
+                        platformFeeSol: ((claimedAmount * 0.05) / LAMPORTS_PER_SOL).toFixed(4)
+                    });
+                }
             }
         } else {
             logger.debug(`[FeeCollection] Below threshold: ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL pending, need ${config.FEE_THRESHOLD_SOL || 0.05} SOL`);
@@ -802,6 +813,10 @@ async function runFeeCollection(deps) {
         logger.error('[FeeCollection] Error', { error: e.message });
     } finally {
         await release();
+        // v25.4: Update next check time for frontend countdown
+        if (deps.updateNextCheckTime) {
+            await deps.updateNextCheckTime();
+        }
     }
 }
 

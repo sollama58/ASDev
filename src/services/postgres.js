@@ -450,7 +450,8 @@ async function recordClaim(amount) {
 
 async function updateNextCheckTime() {
     const db = getDB();
-    const nextCheck = Date.now() + (5 * 60 * 1000);
+    // v25.4: Updated to 1 minute to match FEE_COLLECTION_INTERVAL
+    const nextCheck = Date.now() + (1 * 60 * 1000);
     await db.run('UPDATE stats SET value = $1 WHERE key = $2', [nextCheck, 'nextCheckTimestamp']);
     return nextCheck;
 }
