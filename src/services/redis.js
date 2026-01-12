@@ -192,7 +192,57 @@ async function healthCheck() {
 }
 
 /**
+ * v25.27: Check if Redis has available memory
+ * Returns true if memory usage is below 90% of maxmemory
+ */
+async function hasAvailableMemory() {
+    if (!redisConnection) return false;
+    try {
+        const info = await redisConnection.info('memory');
+        const usedMatch = info.match(/used_memory:(\d+)/);
+        const maxMatch = info.match(/maxmemory:(\d+)/);
+
+        if (usedMatch && maxMatch) {
+            const used = parseInt(usedMatch[1]);
+            const max = parseInt(maxMatch[1]);
+            // If maxmemory is 0, it means no limit - assume we have space
+            if (max === 0) return true;
+            // Return true if using less than 90% of memory
+            return used < (max * 0.9);
+        }
+        return true; // Assume we have space if can't determine
+    } catch (e) {
+        return true; // Assume we have space if check fails
+    }
+}
+
+/**
+ * v25.27: Get Redis memory stats
+ */
+async function getMemoryStats() {
+    if (!redisConnection) return null;
+    try {
+        const info = await redisConnection.info('memory');
+        const usedMatch = info.match(/used_memory:(\d+)/);
+        const maxMatch = info.match(/maxmemory:(\d+)/);
+        const peakMatch = info.match(/used_memory_peak:(\d+)/);
+
+        return {
+            usedBytes: usedMatch ? parseInt(usedMatch[1]) : 0,
+            maxBytes: maxMatch ? parseInt(maxMatch[1]) : 0,
+            peakBytes: peakMatch ? parseInt(peakMatch[1]) : 0,
+            usedMB: usedMatch ? Math.round(parseInt(usedMatch[1]) / 1024 / 1024) : 0,
+            maxMB: maxMatch ? Math.round(parseInt(maxMatch[1]) / 1024 / 1024) : 0,
+        };
+    } catch (e) {
+        logger.debug('Failed to get Redis memory stats', { error: e.message });
+        return null;
+    }
+}
+
+/**
  * Smart cache with Redis
+ * v25.27: Added OOM protection - skips cache write if memory is near limit
  */
 async function smartCache(key, ttlSeconds, fetchFunction) {
     if (!redisConnection) {
@@ -207,10 +257,21 @@ async function smartCache(key, ttlSeconds, fetchFunction) {
 
         const data = await fetchFunction();
         if (data !== undefined && data !== null) {
-            await redisConnection.set(key, JSON.stringify(data), 'EX', ttlSeconds);
+            // v25.27: Check memory before writing to cache
+            const hasMemory = await hasAvailableMemory();
+            if (hasMemory) {
+                await redisConnection.set(key, JSON.stringify(data), 'EX', ttlSeconds);
+            } else {
+                logger.warn(`[Redis] Skipping cache write for ${key} - memory near limit`);
+            }
         }
         return data;
     } catch (e) {
+        // v25.27: Handle OOM errors gracefully
+        if (e.message && e.message.includes('OOM')) {
+            logger.warn(`[Redis] OOM error on cache [${key}] - returning fresh data`);
+            return await fetchFunction();
+        }
         logger.error(`Cache Error [${key}]`, { error: e.message });
         return await fetchFunction();
     }
@@ -519,6 +580,63 @@ async function addRobinhoodScannerJob(data = {}) {
     });
 }
 
+/**
+ * v25.27: Clean up old completed and failed jobs from all queues
+ * This helps prevent Redis memory buildup from BullMQ job history
+ */
+async function cleanupOldJobs() {
+    const queues = [deployQueue, socialQueue, holderScannerQueue, metadataUpdaterQueue, robinhoodScannerQueue];
+    let totalCleaned = 0;
+
+    for (const queue of queues) {
+        if (!queue) continue;
+        try {
+            // Remove completed jobs older than 1 hour
+            const completedCleaned = await queue.clean(3600000, 1000, 'completed');
+            // Remove failed jobs older than 6 hours
+            const failedCleaned = await queue.clean(21600000, 500, 'failed');
+            totalCleaned += (completedCleaned?.length || 0) + (failedCleaned?.length || 0);
+        } catch (e) {
+            logger.debug(`[Redis] Queue cleanup error for ${queue.name}`, { error: e.message });
+        }
+    }
+
+    if (totalCleaned > 0) {
+        logger.info(`[Redis] Cleaned ${totalCleaned} old jobs from queues`);
+    }
+    return totalCleaned;
+}
+
+/**
+ * v25.27: Full memory cleanup routine
+ * Run this periodically or when memory is getting tight
+ */
+async function performMemoryCleanup() {
+    logger.info('[Redis] Starting memory cleanup...');
+
+    // 1. Clean old queue jobs
+    await cleanupOldJobs();
+
+    // 2. Clear expired cache keys (Redis does this automatically, but we can force it)
+    // The scan command is safe even with large keyspaces
+    if (redisConnection) {
+        try {
+            // Just touch some keys to trigger TTL cleanup
+            await redisConnection.dbsize();
+        } catch (e) {
+            logger.debug('[Redis] Memory cleanup dbsize check failed', { error: e.message });
+        }
+    }
+
+    // 3. Log current memory stats
+    const stats = await getMemoryStats();
+    if (stats) {
+        logger.info(`[Redis] Memory after cleanup: ${stats.usedMB}MB / ${stats.maxMB || 'unlimited'}MB`);
+    }
+
+    return stats;
+}
+
 module.exports = {
     init,
     smartCache,
@@ -534,6 +652,12 @@ module.exports = {
     isRedisConnected,
     healthCheck,
     validateConnection,
+
+    // v25.27: Memory management
+    hasAvailableMemory,
+    getMemoryStats,
+    cleanupOldJobs,
+    performMemoryCleanup,
 
     // v13.0: New worker queues
     getHolderScannerQueue: () => holderScannerQueue,

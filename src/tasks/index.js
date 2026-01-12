@@ -21,8 +21,11 @@ const activeWorkers = [];
  * Start all background tasks
  * v13.0: Uses worker queues for heavy tasks
  * v25.14: Track intervals for graceful shutdown
+ * v25.27: Added Redis memory cleanup interval
  */
 function startAll(deps) {
+    const { redis } = require('../services');
+
     // v13.0: Use worker-based architecture for heavy tasks
     // These run as BullMQ workers with Redis-backed queues
     const holderWorker = workers.initHolderScannerWorker(deps);
@@ -49,7 +52,30 @@ function startAll(deps) {
     if (deployWorker) activeWorkers.push(deployWorker);
     if (socialWorker) activeWorkers.push(socialWorker);
 
-    logger.info("All background tasks started (v13.0 - Worker Architecture)");
+    // v25.27: Redis memory cleanup every 10 minutes
+    const redisCleanupInterval = setInterval(async () => {
+        try {
+            const stats = await redis.getMemoryStats();
+            if (stats && stats.maxBytes > 0) {
+                const usagePercent = (stats.usedBytes / stats.maxBytes) * 100;
+                if (usagePercent > 80) {
+                    logger.warn(`[Tasks] Redis memory at ${usagePercent.toFixed(1)}% - running cleanup`);
+                    await redis.performMemoryCleanup();
+                } else {
+                    // Just clean old jobs even if memory is OK
+                    await redis.cleanupOldJobs();
+                }
+            } else {
+                // No memory limit, just clean old jobs
+                await redis.cleanupOldJobs();
+            }
+        } catch (e) {
+            logger.debug('[Tasks] Redis cleanup error', { error: e.message });
+        }
+    }, 600000); // 10 minutes
+    registerInterval(redisCleanupInterval);
+
+    logger.info("All background tasks started (v25.27 - with Redis memory management)");
 }
 
 /**
