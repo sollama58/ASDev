@@ -10,6 +10,9 @@ const axios = require('axios');
 const config = require('../config/env');
 const { logger, imageUtils } = require('../services');
 
+// Delay helper
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // Debug mode - set to true for verbose logging
 const DEBUG_METADATA = true;
 
@@ -70,8 +73,6 @@ async function fetchHeliusMarketDataBatch(mints) {
     }
     return results;
 }
-
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function chunkArray(array, size) {
     const result = [];
@@ -330,9 +331,66 @@ async function updateMetadata(deps) {
     logger.info(`[MetadataUpdater] Complete: ${totalUpdated}/${tokens.length} tokens updated, ${imagesUpdated} images fetched`);
 }
 
+/**
+ * v25.4: Fill in missing images from metadataUri
+ * This is a fallback mechanism for tokens that don't have images from DexScreener/Helius
+ */
+async function fillMissingImagesFromMetadata(deps) {
+    const { db } = deps;
+
+    try {
+        // Get tokens with missing images but have metadataUri
+        const tokensWithMissingImages = await db.all(`
+            SELECT mint, "metadataUri" FROM tokens
+            WHERE (image IS NULL OR image = '' OR image = 'null')
+            AND "metadataUri" IS NOT NULL AND "metadataUri" != ''
+            LIMIT 20
+        `);
+
+        if (tokensWithMissingImages.length === 0) {
+            return;
+        }
+
+        logger.info(`[MetadataUpdater] Fetching images from metadataUri for ${tokensWithMissingImages.length} tokens...`);
+
+        let imagesUpdated = 0;
+        for (const token of tokensWithMissingImages) {
+            try {
+                const image = await imageUtils.fetchImageFromMetadataUri(token.metadataUri, 3000);
+                if (image) {
+                    await db.run(
+                        'UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
+                        [image, token.mint]
+                    );
+                    imagesUpdated++;
+                    if (DEBUG_METADATA) {
+                        logger.debug(`[MetadataUpdater] Fetched image from metadataUri for ${token.mint.slice(0, 8)}...`);
+                    }
+                }
+            } catch (e) {
+                // Silently fail for individual tokens
+            }
+
+            // Small delay to avoid hammering IPFS gateways
+            await delay(500);
+        }
+
+        if (imagesUpdated > 0) {
+            logger.info(`[MetadataUpdater] Fetched ${imagesUpdated} images from metadataUri`);
+        }
+    } catch (e) {
+        logger.warn(`[MetadataUpdater] Error filling missing images: ${e.message}`);
+    }
+}
+
 function start(deps) {
     setTimeout(() => updateMetadata(deps), 5000);
     setInterval(() => updateMetadata(deps), config.METADATA_UPDATE_INTERVAL);
+
+    // v25.4: Also run periodic missing image fill (every 5 minutes)
+    setTimeout(() => fillMissingImagesFromMetadata(deps), 30000);
+    setInterval(() => fillMissingImagesFromMetadata(deps), 5 * 60 * 1000);
+
     logger.info("Metadata updater started (No IPFS)");
 }
 
@@ -341,5 +399,6 @@ module.exports = {
     start,
     fetchGeckoTerminalMetadata,
     fetchGeckoTerminalBatch,
-    fetchHeliusMarketDataBatch
+    fetchHeliusMarketDataBatch,
+    fillMissingImagesFromMetadata
 };

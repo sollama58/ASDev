@@ -12,7 +12,7 @@ const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 const { PublicKey } = require('@solana/web3.js');
 const { isValidPubkey } = require('./solana');
-const { redis, mintExtractor, logger, circuitBreaker } = require('../services');
+const { redis, mintExtractor, logger, circuitBreaker, imageUtils } = require('../services');
 const config = require('../config/env');
 
 const router = express.Router();
@@ -78,20 +78,39 @@ function init(deps) {
                 return { rows, total };
             });
 
-            const allLaunches = rows.map(r => ({
-                mint: r.mint,
-                userPubkey: r.userPubkey,
-                name: r.name,
-                ticker: r.ticker,
-                image: r.image,
-                metadataUri: r.metadataUri,
-                marketCap: r.marketCap || 0,
-                volume: r.volume24h,
-                complete: !!r.complete,
-                // v18.0: Eligibility based on volume threshold
-                isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD,
-                // v25.0: Include source to differentiate token types
-                source: r.source || 'platform'
+            // v25.4: Process tokens and fetch fallback images for those missing images
+            const allLaunches = await Promise.all(rows.map(async (r) => {
+                // Check if image is missing/null and try to fetch from metadataUri
+                let image = r.image;
+                if ((!image || image === '' || image === 'null') && r.metadataUri) {
+                    try {
+                        const fallbackImage = await imageUtils.fetchImageFromMetadataUri(r.metadataUri, 2000);
+                        if (fallbackImage) {
+                            image = fallbackImage;
+                            // Update the database with the fetched image (async, don't wait)
+                            db.run('UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
+                                [fallbackImage, r.mint]).catch(() => {});
+                        }
+                    } catch (e) {
+                        // Silently fail - use whatever we have
+                    }
+                }
+
+                return {
+                    mint: r.mint,
+                    userPubkey: r.userPubkey,
+                    name: r.name,
+                    ticker: r.ticker,
+                    image: image,
+                    metadataUri: r.metadataUri,
+                    marketCap: r.marketCap || 0,
+                    volume: r.volume24h,
+                    complete: !!r.complete,
+                    // v18.0: Eligibility based on volume threshold
+                    isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD,
+                    // v25.0: Include source to differentiate token types
+                    source: r.source || 'platform'
+                };
             }));
             res.json({
                 tokens: allLaunches,
@@ -111,8 +130,9 @@ function init(deps) {
             const result = await redis.smartCache('koth_data', 15, async () => {
                 // Select token with highest market cap
                 // Ensure we only select valid tokens (non-null marketCap)
+                // v25.4: Also fetch metadataUri for image fallback
                 const koth = await db.get(`
-                    SELECT mint, "userPubkey", name, ticker, image, "marketCap", volume24h
+                    SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h
                     FROM tokens
                     WHERE "marketCap" > 0
                     ORDER BY "marketCap" DESC
@@ -120,6 +140,22 @@ function init(deps) {
                 `);
 
                 if (koth) {
+                    // v25.4: Fetch image from metadataUri if missing
+                    let image = koth.image;
+                    if ((!image || image === '' || image === 'null') && koth.metadataUri) {
+                        try {
+                            const fallbackImage = await imageUtils.fetchImageFromMetadataUri(koth.metadataUri, 2000);
+                            if (fallbackImage) {
+                                image = fallbackImage;
+                                // Update the database (async, don't wait)
+                                db.run('UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
+                                    [fallbackImage, koth.mint]).catch(() => {});
+                            }
+                        } catch (e) {
+                            // Silently fail
+                        }
+                    }
+
                     return {
                         found: true,
                         token: {
@@ -127,7 +163,7 @@ function init(deps) {
                             creator: koth.userPubkey,
                             name: koth.name,
                             ticker: koth.ticker,
-                            image: koth.image,
+                            image: image,
                             marketCap: koth.marketCap,
                             volume: koth.volume24h
                         }
@@ -202,22 +238,42 @@ function init(deps) {
                 userHoldings = new Set(cachedHoldings);
             }
 
-            const leaderboard = rows.map(r => ({
-                mint: r.mint,
-                creator: r.creator,
-                name: r.name,
-                ticker: r.ticker,
-                image: r.image,
-                metadataUri: r.metadataUri,
-                price: ((r.marketCap || 0) / 1000000000).toFixed(6),
-                marketCap: r.marketCap || 0,
-                volume: r.volume24h,
-                isUserTopHolder: userHoldings.has(r.mint),
-                complete: !!r.complete,
-                isRobinhood: r.source === 'robinhood',
-                // v18.0: Eligibility based on volume threshold ($100 minimum)
-                isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD
+            // v25.4: Process tokens and fetch fallback images for those missing images
+            const leaderboard = await Promise.all(rows.map(async (r) => {
+                // Check if image is missing/null and try to fetch from metadataUri
+                let image = r.image;
+                if ((!image || image === '' || image === 'null') && r.metadataUri) {
+                    try {
+                        const fallbackImage = await imageUtils.fetchImageFromMetadataUri(r.metadataUri, 2000);
+                        if (fallbackImage) {
+                            image = fallbackImage;
+                            // Update the database with the fetched image (async, don't wait)
+                            db.run('UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
+                                [fallbackImage, r.mint]).catch(() => {});
+                        }
+                    } catch (e) {
+                        // Silently fail - use whatever we have
+                    }
+                }
+
+                return {
+                    mint: r.mint,
+                    creator: r.creator,
+                    name: r.name,
+                    ticker: r.ticker,
+                    image: image,
+                    metadataUri: r.metadataUri,
+                    price: ((r.marketCap || 0) / 1000000000).toFixed(6),
+                    marketCap: r.marketCap || 0,
+                    volume: r.volume24h,
+                    isUserTopHolder: userHoldings.has(r.mint),
+                    complete: !!r.complete,
+                    isRobinhood: r.source === 'robinhood',
+                    // v18.0: Eligibility based on volume threshold ($100 minimum)
+                    isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD
+                };
             }));
+
             res.json({
                 tokens: leaderboard,
                 lastUpdate: globalState.lastBackendUpdate,

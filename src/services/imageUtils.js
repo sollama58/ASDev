@@ -92,8 +92,87 @@ function extractHeliusBatchImage(asset) {
     return cleanHeliusImageUrl(rawUrl);
 }
 
+/**
+ * v25.4: Fetch image from metadataUri as a fallback
+ * Fetches the JSON metadata and extracts the image field
+ *
+ * @param {string} metadataUri - The URI to the token metadata JSON
+ * @param {number} timeout - Request timeout in ms (default 5000)
+ * @returns {Promise<string|null>} Image URL or null
+ */
+async function fetchImageFromMetadataUri(metadataUri, timeout = 5000) {
+    if (!metadataUri || typeof metadataUri !== 'string') {
+        return null;
+    }
+
+    try {
+        // Handle IPFS URIs
+        let fetchUrl = metadataUri;
+        if (metadataUri.startsWith('ipfs://')) {
+            fetchUrl = metadataUri.replace('ipfs://', 'https://ipfs.io/ipfs/');
+        }
+        // Convert Pinata gateway to more reliable IPFS gateway
+        if (fetchUrl.includes('gateway.pinata.cloud')) {
+            fetchUrl = fetchUrl.replace('gateway.pinata.cloud', 'ipfs.io');
+        }
+
+        const axios = require('axios');
+        const response = await axios.get(fetchUrl, {
+            timeout,
+            headers: {
+                'Accept': 'application/json',
+                'User-Agent': 'ASDF-Launcher/1.0'
+            }
+        });
+
+        const metadata = response.data;
+        if (metadata && metadata.image) {
+            // Clean the image URL if needed
+            let imageUrl = metadata.image;
+            if (imageUrl.startsWith('ipfs://')) {
+                imageUrl = imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
+            }
+            return imageUrl;
+        }
+
+        return null;
+    } catch (e) {
+        // Silently fail - this is a fallback mechanism
+        return null;
+    }
+}
+
+/**
+ * v25.4: Get the best available image for a token
+ * Tries multiple sources in order:
+ * 1. Direct image URL from database
+ * 2. Fetch from metadataUri
+ *
+ * @param {Object} token - Token object with image and metadataUri fields
+ * @param {number} timeout - Request timeout for metadata fetch
+ * @returns {Promise<string|null>} Best available image URL or null
+ */
+async function getBestImage(token, timeout = 3000) {
+    // If we have a valid image already, use it
+    if (token.image && token.image !== '' && token.image !== 'null' && token.image !== 'undefined') {
+        return token.image;
+    }
+
+    // Try fetching from metadataUri as fallback
+    if (token.metadataUri) {
+        const metadataImage = await fetchImageFromMetadataUri(token.metadataUri, timeout);
+        if (metadataImage) {
+            return metadataImage;
+        }
+    }
+
+    return null;
+}
+
 module.exports = {
     cleanHeliusImageUrl,
     extractHeliusImage,
-    extractHeliusBatchImage
+    extractHeliusBatchImage,
+    fetchImageFromMetadataUri,
+    getBestImage
 };
