@@ -243,6 +243,11 @@ async function main() {
     if (serverMode === 'api-only') {
         logger.info('[Server] Running in API-only mode - background tasks disabled');
         logger.info('[Server] Use a separate worker server (SERVER_MODE=worker node src/worker.js) for background tasks');
+        // v25.4: Still initialize deploy and social workers in API-only mode
+        // These are essential for processing deployment requests
+        tasks.workers.initDeployWorker(deps);
+        tasks.workers.initSocialWorker(deps);
+        logger.info('[Server] Deploy and social workers initialized for API-only mode');
     } else {
         // Start background tasks
         tasks.startAll(deps);

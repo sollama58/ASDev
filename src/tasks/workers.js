@@ -2,6 +2,7 @@
  * Workers Module
  * Deploy, social, and background task workers
  * v13.0 - Added holder scanner, metadata updater, and Robinhood scanner workers
+ * v25.4 - Added worker event handlers for debugging job processing issues
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
@@ -181,7 +182,36 @@ function initDeployWorker(deps) {
         }
     }, { concurrency: 1 });
 
-    logger.info("Deploy worker initialized");
+    // v25.4: Add error handlers for debugging worker issues
+    if (worker) {
+        worker.on('completed', (job, result) => {
+            logger.info(`[DeployWorker] Job ${job.id} completed`, {
+                ticker: job.data.ticker,
+                mint: result?.mint
+            });
+        });
+
+        worker.on('failed', (job, err) => {
+            logger.error(`[DeployWorker] Job ${job?.id} failed`, {
+                ticker: job?.data?.ticker,
+                error: err.message,
+                stack: err.stack
+            });
+        });
+
+        worker.on('error', (err) => {
+            logger.error('[DeployWorker] Worker error', { error: err.message });
+        });
+
+        worker.on('active', (job) => {
+            logger.info(`[DeployWorker] Job ${job.id} is now active`, { ticker: job.data.ticker });
+        });
+
+        logger.info("Deploy worker initialized with event handlers");
+    } else {
+        logger.error("Deploy worker failed to initialize - Redis may not be connected");
+    }
+
     return worker;
 }
 

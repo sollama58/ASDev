@@ -193,17 +193,40 @@ async function smartCache(key, ttlSeconds, fetchFunction) {
 
 /**
  * Create a worker for a queue
+ * v25.4: Added better error handling and connection logging
+ * BullMQ requires workers to use a duplicate connection (not shared with queues)
  */
 function createWorker(queueName, processor, options = {}) {
     if (!redisConnection) {
-        logger.error("Cannot create worker: Redis not initialized");
+        logger.error(`Cannot create worker for ${queueName}: Redis not initialized`);
         return null;
     }
 
-    return new Worker(queueName, processor, {
-        connection: redisConnection,
-        ...options
-    });
+    if (!isConnected) {
+        logger.warn(`Creating worker for ${queueName} but Redis connection status is not confirmed`);
+    }
+
+    try {
+        // v25.4: BullMQ workers should use a duplicate connection
+        // This is required because workers block connections
+        const workerConnection = redisConnection.duplicate();
+
+        const worker = new Worker(queueName, processor, {
+            connection: workerConnection,
+            ...options
+        });
+
+        // Add stalled job check handler
+        worker.on('stalled', (jobId) => {
+            logger.warn(`[${queueName}] Job ${jobId} has stalled`);
+        });
+
+        logger.info(`[Redis] Worker created for queue: ${queueName} (using duplicate connection)`);
+        return worker;
+    } catch (e) {
+        logger.error(`[Redis] Failed to create worker for ${queueName}`, { error: e.message });
+        return null;
+    }
 }
 
 /**
