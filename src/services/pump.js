@@ -198,24 +198,29 @@ function buildDistributeFeesData() {
 
 /**
  * Get creator vaults for a fee sharing shareholder
- * When we are a shareholder, we need to derive vaults based on the sharing_config PDA
- * which becomes the new "creator" for that token
+ *
+ * IMPORTANT: Fees accumulate in the ORIGINAL CREATOR's vault, not a fee_sharing_config vault.
+ * The fee_sharing_config PDA only stores the shareholder configuration.
+ * When distribute_creator_fees is called, it reads the config and distributes from the creator vault.
+ *
+ * v25.16 FIX: Derive vaults from the original creator, not the sharing config PDA
  *
  * @param {PublicKey} originalCreator - The original token creator
- * @returns {Object} Vault addresses for the sharing config
+ * @returns {Object} Vault addresses for the original creator
  */
 function getShareholderFeeVaults(originalCreator) {
-    // The sharing_config PDA becomes the new coin_creator
+    // Get the sharing config PDA (needed for claim instructions)
     const sharingConfigPDA = getFeeSharingConfigPDA(originalCreator);
 
-    // Derive vaults using the sharing config as the creator
+    // v25.16 FIX: Fees accumulate in the ORIGINAL CREATOR's vault
+    // NOT in a vault derived from the sharing config PDA
     const [bcVault] = PublicKey.findProgramAddressSync(
-        [Buffer.from("creator-vault"), sharingConfigPDA.toBuffer()],
+        [Buffer.from("creator-vault"), originalCreator.toBuffer()],
         PROGRAMS.PUMP
     );
 
     const [ammVaultAuth] = PublicKey.findProgramAddressSync(
-        [Buffer.from("creator_vault"), sharingConfigPDA.toBuffer()],
+        [Buffer.from("creator_vault"), originalCreator.toBuffer()],
         PROGRAMS.PUMP_AMM
     );
 
