@@ -492,6 +492,13 @@ function init(deps) {
                 // Skip zero balances (safeTotalBalance already prevents division by zero)
                 if (userBalance === 0n) continue;
 
+                // v25.30: Skip if total_balance is invalid (materialized view not refreshed)
+                // This prevents massive points when totalBalance is 1n fallback
+                if (totalBalance <= 1n && userBalance > 1n) {
+                    logger.debug(`[check-holder] Skipping ${holding.mint} - total_balance invalid`);
+                    continue;
+                }
+
                 // v25.25: Calculate volume weight for this token (0.5x to 2.0x)
                 const tokenVolume = parseFloat(holding.volume24h) || MIN_VOLUME_USD;
                 const volumeWeight = calculateVolumeWeight(tokenVolume, platformVolumeRange.minVolume, platformVolumeRange.maxVolume);
@@ -499,7 +506,12 @@ function init(deps) {
 
                 // Calculate proportional points with volume weighting
                 const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
-                basePoints += proportionalPts;
+
+                // v25.30: Sanity check - proportional points should never exceed weighted max
+                // Max possible is weightedPoints (if user owns 100% of supply)
+                const maxPossiblePoints = weightedPoints;
+                const sanitizedPts = Math.min(proportionalPts, maxPossiblePoints);
+                basePoints += sanitizedPts;
             }
 
             // v25.25: Get volume range for all eligible robinhood tokens
@@ -542,6 +554,12 @@ function init(deps) {
                 // Skip zero balances
                 if (userBalance === 0n) continue;
 
+                // v25.30: Skip if total_balance is invalid (materialized view not refreshed)
+                if (totalBalance <= 1n && userBalance > 1n) {
+                    logger.debug(`[check-holder] Skipping robinhood ${holding.mint} - total_balance invalid`);
+                    continue;
+                }
+
                 // v25.25: Calculate volume weight for this robinhood token
                 const tokenVolume = parseFloat(holding.volume24h) || MIN_VOLUME_USD;
                 const volumeWeight = calculateVolumeWeight(tokenVolume, robinhoodVolumeRange.minVolume, robinhoodVolumeRange.maxVolume);
@@ -549,10 +567,15 @@ function init(deps) {
 
                 // Calculate base proportional points with volume weighting
                 const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
+
+                // v25.30: Sanity check - cap at max possible points
+                const maxPossiblePoints = weightedPoints;
+                const sanitizedBasePts = Math.min(baseProportionalPts, maxPossiblePoints);
+
                 // Scale by fee share percentage (100% = 10000 bps = 1.0 multiplier)
                 const feeShareBps = holding.feeShareBps || 10000;
                 const feeShareMultiplier = feeShareBps / 10000;
-                robinhoodPoints += baseProportionalPts * feeShareMultiplier;
+                robinhoodPoints += sanitizedBasePts * feeShareMultiplier;
             }
 
             // v13.0: Fetch from Redis for cross-process consistency
@@ -639,12 +662,18 @@ function init(deps) {
                     const userBalance = safeBalance(row.balance);
                     if (userBalance === 0n) continue;
 
+                    // v25.30: Skip if total_balance is invalid
+                    if (totalBalance <= 1n && userBalance > 1n) continue;
+
                     // v25.25: Calculate volume-weighted proportional points
                     const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
                     const volumeWeight = calculateVolumeWeight(tokenVolume, platformMinVol, platformMaxVol);
                     const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
                     const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
+
+                    // v25.30: Sanity check - cap points at max possible
+                    const sanitizedPts = Math.min(proportionalPts, weightedPoints);
 
                     holdings.push({
                         mint: row.mint,
@@ -656,8 +685,8 @@ function init(deps) {
                         rank: row.rank,
                         isEligible,
                         volumeWeight: Math.round(volumeWeight * 100) / 100, // v25.25: Show volume weight for transparency
-                        basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
-                        totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
+                        basePoints: isEligible ? Math.round(sanitizedPts * 100) / 100 : 0,
+                        totalPoints: isEligible ? Math.round(sanitizedPts * 100) / 100 : 0,
                         source: 'launched'
                     });
                 }
@@ -699,6 +728,9 @@ function init(deps) {
                     const userBalance = safeBalance(row.balance);
                     if (userBalance === 0n) continue;
 
+                    // v25.30: Skip if total_balance is invalid (materialized view not refreshed)
+                    if (totalBalance <= 1n && userBalance > 1n) continue;
+
                     // v25.25: Calculate volume-weighted proportional points scaled by fee share
                     const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
                     const volumeWeight = calculateVolumeWeight(tokenVolume, rhMinVol, rhMaxVol);
@@ -706,7 +738,9 @@ function init(deps) {
                     const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
                     const feeShareBps = row.feeShareBps || 10000;
                     const feeShareMultiplier = feeShareBps / 10000;
-                    const scaledPts = baseProportionalPts * feeShareMultiplier;
+                    // v25.30: Sanity check - cap at max possible before fee share scaling
+                    const sanitizedBasePts = Math.min(baseProportionalPts, weightedPoints);
+                    const scaledPts = sanitizedBasePts * feeShareMultiplier;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
 
                     holdings.push({
