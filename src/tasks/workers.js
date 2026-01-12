@@ -358,7 +358,11 @@ function initHolderScannerWorker(deps) {
                             if (acc.amount.lte(threshold)) continue;
 
                             if (acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr) {
-                                holdersToInsert.push({ mint: token.mint, owner: acc.owner });
+                                holdersToInsert.push({
+                                    mint: token.mint,
+                                    owner: acc.owner,
+                                    balance: acc.amount.toString() // v25.24: Include balance to prevent null BigInt errors
+                                });
                             }
                         }
                     } catch (scanErr) {
@@ -370,28 +374,30 @@ function initHolderScannerWorker(deps) {
 
                     if (holdersToInsert.length > 0) {
                         // v24.0 SECURITY FIX: Use parameterized queries to prevent SQL injection
+                        // v25.24: Include balance column to prevent null BigInt errors in point calculations
                         const BATCH_SIZE = 50;
                         const now = Date.now();
                         for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
                             const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
-                            // Build parameterized placeholders: ($1, $2, $3, $4), ($5, $6, $7, $8), ...
+                            // Build parameterized placeholders: ($1, $2, $3, $4, $5), ($6, $7, $8, $9, $10), ...
                             const placeholders = batch.map((_, idx) => {
-                                const baseIdx = idx * 4;
-                                return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4})`;
+                                const baseIdx = idx * 5;
+                                return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5})`;
                             }).join(', ');
 
-                            // Flatten params array: [mint1, owner1, rank1, now, mint2, owner2, rank2, now, ...]
+                            // Flatten params array: [mint1, owner1, rank1, balance1, now, ...]
                             const params = batch.flatMap((h, idx) => [
                                 h.mint,
                                 h.owner,
                                 i + idx + 1, // rank
+                                h.balance || '0', // v25.24: Ensure balance is never null
                                 now
                             ]);
 
                             await db.run(`
-                                INSERT INTO token_holders (mint, "holderPubkey", rank, "lastUpdated")
+                                INSERT INTO token_holders (mint, "holderPubkey", rank, balance, "lastUpdated")
                                 VALUES ${placeholders}
-                                ON CONFLICT DO NOTHING
+                                ON CONFLICT (mint, "holderPubkey") DO UPDATE SET rank = EXCLUDED.rank, balance = EXCLUDED.balance, "lastUpdated" = EXCLUDED."lastUpdated"
                             `, params);
                         }
                     }

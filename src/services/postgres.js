@@ -339,6 +339,21 @@ async function createSchema() {
         END $$;
     `);
 
+    // v25.24: Migration - Fix null balance values that cause BigInt conversion errors
+    // Set default for balance column and fix any existing null values
+    await pool.query(`
+        UPDATE token_holders SET balance = '0' WHERE balance IS NULL;
+    `);
+    await pool.query(`
+        UPDATE robinhood_token_holders SET balance = '0' WHERE balance IS NULL;
+    `);
+    await pool.query(`
+        ALTER TABLE token_holders ALTER COLUMN balance SET DEFAULT '0';
+    `);
+    await pool.query(`
+        ALTER TABLE robinhood_token_holders ALTER COLUMN balance SET DEFAULT '0';
+    `);
+
     // Create indexes for robinhood tables
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_tokens_active ON robinhood_tokens("isActive")`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_holders_mint ON robinhood_token_holders(mint)`);

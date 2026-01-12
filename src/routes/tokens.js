@@ -14,6 +14,7 @@ const rateLimit = require('express-rate-limit');
 const { PublicKey } = require('@solana/web3.js');
 const { isValidPubkey } = require('./solana');
 const { redis, mintExtractor, logger, circuitBreaker, imageUtils, signatureVerifier } = require('../services');
+const { safeBalance, safeTotalBalance } = require('../utils');
 const config = require('../config/env');
 
 const router = express.Router();
@@ -448,11 +449,12 @@ function init(deps) {
                 heldPositionsCount++;
                 heldMints.add(holding.mint);
 
-                const totalBalance = BigInt(holding.total_balance || '1');
-                const userBalance = BigInt(holding.balance || '0');
+                // v25.24: Use safe BigInt conversion to handle null/undefined values
+                const totalBalance = safeTotalBalance(holding.total_balance);
+                const userBalance = safeBalance(holding.balance);
 
-                // Protect against division by zero or zero balance
-                if (totalBalance === 0n || userBalance === 0n) continue;
+                // Skip zero balances (safeTotalBalance already prevents division by zero)
+                if (userBalance === 0n) continue;
 
                 // Calculate proportional points
                 const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
@@ -478,11 +480,12 @@ function init(deps) {
 
             let robinhoodPoints = 0;
             for (const holding of robinhoodHoldings) {
-                const totalBalance = BigInt(holding.total_balance || '1');
-                const userBalance = BigInt(holding.balance || '0');
+                // v25.24: Use safe BigInt conversion to handle null/undefined values
+                const totalBalance = safeTotalBalance(holding.total_balance);
+                const userBalance = safeBalance(holding.balance);
 
-                // Protect against division by zero or zero balance
-                if (totalBalance === 0n || userBalance === 0n) continue;
+                // Skip zero balances
+                if (userBalance === 0n) continue;
 
                 // Calculate base proportional points
                 const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
