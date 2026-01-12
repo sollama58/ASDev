@@ -258,6 +258,22 @@ async function createSchema() {
         )
     `);
 
+    // v25.18: User airdrop history table for tracking individual user distributions
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_airdrop_history (
+            id SERIAL PRIMARY KEY,
+            "userPubkey" TEXT NOT NULL,
+            "airdropId" TEXT,
+            amount REAL NOT NULL,
+            points REAL DEFAULT 0,
+            timestamp BIGINT NOT NULL
+        )
+    `);
+
+    // Index for fast user lookups
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_airdrop_history_pubkey ON user_airdrop_history("userPubkey")`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_airdrop_history_timestamp ON user_airdrop_history(timestamp DESC)`);
+
     // ASDF holders table
     await pool.query(`
         CREATE TABLE IF NOT EXISTS asdf_holders (

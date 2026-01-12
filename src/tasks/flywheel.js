@@ -637,6 +637,37 @@ async function processAirdrop(deps) {
             [totalDistributedSol, totalRecipients, totalPoints, allSignatures.join(','), details, new Date().toISOString()]
         );
 
+        // v25.18: Log individual user airdrop distributions for shareable stats
+        const airdropTimestamp = Date.now();
+        try {
+            // Batch insert user distributions (only for successful distributions)
+            const successfulRecipients = distributionPlan.filter(r => !failedUsers.includes(r.user.toString()));
+            if (successfulRecipients.length > 0) {
+                // Build batch insert with multiple VALUES (5 params per row)
+                const values = successfulRecipients.map((r, i) => {
+                    const base = i * 5;
+                    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
+                }).join(', ');
+
+                const params = successfulRecipients.flatMap(r => [
+                    r.user.toString(),
+                    airdropId,
+                    r.amount / LAMPORTS_PER_SOL, // Store in SOL
+                    r.points,
+                    airdropTimestamp
+                ]);
+
+                await db.run(
+                    `INSERT INTO user_airdrop_history ("userPubkey", "airdropId", amount, points, timestamp) VALUES ${values}`,
+                    params
+                );
+                logger.debug(`[Airdrop] Logged ${successfulRecipients.length} user distributions to history`);
+            }
+        } catch (historyErr) {
+            logger.warn('[Airdrop] Failed to log user airdrop history', { error: historyErr.message });
+            // Don't fail the airdrop for history logging errors
+        }
+
         // v25.13: Mark airdrop as completed for finally block
         airdropCompleted = airdropSucceeded;
 

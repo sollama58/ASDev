@@ -1124,6 +1124,7 @@
                     <button onclick="toggleUserHoldingsModal()" class="text-yellow-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1" title="View your token holdings and points breakdown">MY HOLDINGS</button>
                     <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1">ELIGIBLE</button>
                     <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1">HISTORY</button>
+                    <button onclick="openAirdropStatsModal()" class="text-green-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1" title="View and share your lifetime airdrop stats">SHARE STATS</button>
                 </div>
             </div>
             <!-- v25.2: Mobile: 2x2 grid, Desktop: 4 columns - allow text wrapping -->
@@ -1755,6 +1756,58 @@
                 <p class="text-orange-400 text-xs uppercase mb-1">Minimum Requirements</p>
                 <p class="text-xs text-gray-300">Token must have <span class="text-yellow-400">>$100 24hr volume</span> for holders to earn points</p>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- v25.18: Shareable Airdrop Stats Modal -->
+<div id="airdrop-stats-modal" class="modal">
+    <div class="modal-content border-green-600" style="max-width: 500px;">
+        <span class="close-btn text-green-400" onclick="closeAirdropStatsModal()">&times;</span>
+        <h3 class="text-green-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-green-800/50 pb-2 font-normal">Your Airdrop Stats</h3>
+
+        <div id="airdrop-stats-loading" class="text-center py-8">
+            <i data-lucide="loader" class="w-8 h-8 text-green-400 mx-auto animate-spin"></i>
+            <p class="text-gray-400 mt-2 text-sm">Loading your stats...</p>
+        </div>
+
+        <div id="airdrop-stats-content" class="hidden">
+            <!-- Canvas for shareable graphic -->
+            <div class="flex justify-center mb-4">
+                <canvas id="airdrop-stats-canvas" width="480" height="320" class="rounded-lg border border-green-800" style="max-width: 100%; height: auto;"></canvas>
+            </div>
+
+            <!-- Stats Summary -->
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-green-900/30 p-3 rounded border border-green-800/50 text-center">
+                    <p class="text-green-400 text-xs uppercase mb-1">Total SOL Received</p>
+                    <p id="stats-total-sol" class="text-xl text-white font-bold font-mono">0.0000</p>
+                </div>
+                <div class="bg-green-900/30 p-3 rounded border border-green-800/50 text-center">
+                    <p class="text-green-400 text-xs uppercase mb-1">Airdrops Received</p>
+                    <p id="stats-airdrop-count" class="text-xl text-white font-bold font-mono">0</p>
+                </div>
+                <div class="bg-purple-900/30 p-3 rounded border border-purple-800/50 text-center">
+                    <p class="text-purple-400 text-xs uppercase mb-1">Global Rank</p>
+                    <p id="stats-rank" class="text-xl text-white font-bold font-mono">#-</p>
+                </div>
+                <div class="bg-purple-900/30 p-3 rounded border border-purple-800/50 text-center">
+                    <p class="text-purple-400 text-xs uppercase mb-1">Member Since</p>
+                    <p id="stats-member-since" class="text-sm text-white font-mono">-</p>
+                </div>
+            </div>
+
+            <!-- Share Buttons -->
+            <div class="flex gap-2">
+                <button onclick="downloadAirdropStats()" class="flex-1 bg-green-600 hover:bg-green-500 text-white py-2 px-4 rounded font-mono text-sm transition flex items-center justify-center gap-2">
+                    <i data-lucide="download" width="16"></i> DOWNLOAD
+                </button>
+                <button onclick="copyAirdropStatsToClipboard()" class="flex-1 bg-purple-600 hover:bg-purple-500 text-white py-2 px-4 rounded font-mono text-sm transition flex items-center justify-center gap-2">
+                    <i data-lucide="copy" width="16"></i> COPY
+                </button>
+            </div>
+
+            <p id="stats-no-data" class="hidden text-center text-yellow-400 text-sm py-4">No airdrop history found. Keep holding eligible tokens to earn airdrops!</p>
         </div>
     </div>
 </div>
@@ -3992,6 +4045,175 @@
         document.getElementById('verify-token-btn').classList.remove('hidden');
         hideRegisterStatus();
     });
+
+    // ========== v25.18: SHAREABLE AIRDROP STATS ==========
+    let airdropStatsData = null;
+
+    const openAirdropStatsModal = async () => {
+        if (!userPubkey) {
+            showStatus('Please connect your wallet first', 'error');
+            return;
+        }
+
+        const modal = document.getElementById('airdrop-stats-modal');
+        const loading = document.getElementById('airdrop-stats-loading');
+        const content = document.getElementById('airdrop-stats-content');
+        const noData = document.getElementById('stats-no-data');
+
+        modal.style.display = 'block';
+        loading.classList.remove('hidden');
+        content.classList.add('hidden');
+        noData.classList.add('hidden');
+        lucide.createIcons();
+
+        try {
+            const res = await fetchWithRetry(`${BACKEND_URL}/api/user-airdrop-stats/${userPubkey}`);
+            const data = await res.json();
+
+            if (!res.ok) throw new Error(data.error || 'Failed to fetch stats');
+
+            airdropStatsData = data;
+
+            // Update display
+            document.getElementById('stats-total-sol').textContent = parseFloat(data.totalSolReceived).toFixed(4);
+            document.getElementById('stats-airdrop-count').textContent = data.airdropCount;
+            document.getElementById('stats-rank').textContent = data.airdropCount > 0 ? `#${data.rank}` : '-';
+            document.getElementById('stats-member-since').textContent = data.firstAirdrop
+                ? new Date(data.firstAirdrop).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                : '-';
+
+            // Generate canvas graphic
+            generateAirdropStatsCanvas(data);
+
+            loading.classList.add('hidden');
+            content.classList.remove('hidden');
+
+            if (data.airdropCount === 0) {
+                noData.classList.remove('hidden');
+            }
+
+            lucide.createIcons();
+        } catch (e) {
+            console.error('Failed to load airdrop stats:', e);
+            loading.innerHTML = `<p class="text-red-400 text-sm">Failed to load stats: ${e.message}</p>`;
+        }
+    };
+    window.openAirdropStatsModal = openAirdropStatsModal;
+
+    const closeAirdropStatsModal = () => {
+        document.getElementById('airdrop-stats-modal').style.display = 'none';
+    };
+    window.closeAirdropStatsModal = closeAirdropStatsModal;
+
+    const generateAirdropStatsCanvas = (data) => {
+        const canvas = document.getElementById('airdrop-stats-canvas');
+        const ctx = canvas.getContext('2d');
+        const width = canvas.width;
+        const height = canvas.height;
+
+        // Background gradient
+        const gradient = ctx.createLinearGradient(0, 0, 0, height);
+        gradient.addColorStop(0, '#0a0a0f');
+        gradient.addColorStop(1, '#12121a');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+
+        // Border
+        ctx.strokeStyle = '#22c55e';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(2, 2, width - 4, height - 4);
+
+        // Header - IGNITION branding
+        ctx.fillStyle = '#f59e0b';
+        ctx.font = 'bold 28px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('IGNITION', width / 2, 45);
+
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '12px Inter, sans-serif';
+        ctx.fillText('LIFETIME AIRDROP STATS', width / 2, 65);
+
+        // Wallet address
+        ctx.fillStyle = '#22c55e';
+        ctx.font = '14px JetBrains Mono, monospace';
+        ctx.fillText(data.wallet, width / 2, 95);
+
+        // Main stat - Total SOL
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 48px JetBrains Mono, monospace';
+        ctx.fillText(parseFloat(data.totalSolReceived).toFixed(4), width / 2, 160);
+
+        ctx.fillStyle = '#22c55e';
+        ctx.font = 'bold 18px Inter, sans-serif';
+        ctx.fillText('SOL EARNED', width / 2, 185);
+
+        // Stats row
+        const statY = 235;
+        const statWidth = width / 3;
+
+        // Airdrops count
+        ctx.fillStyle = '#a855f7';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('AIRDROPS', statWidth * 0.5, statY);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 24px JetBrains Mono, monospace';
+        ctx.fillText(data.airdropCount.toString(), statWidth * 0.5, statY + 28);
+
+        // Global rank
+        ctx.fillStyle = '#a855f7';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.fillText('RANK', statWidth * 1.5, statY);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 24px JetBrains Mono, monospace';
+        ctx.fillText(data.airdropCount > 0 ? `#${data.rank}` : '-', statWidth * 1.5, statY + 28);
+
+        // Total participants
+        ctx.fillStyle = '#a855f7';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.fillText('OF TOTAL', statWidth * 2.5, statY);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 24px JetBrains Mono, monospace';
+        ctx.fillText(data.totalParticipants.toString(), statWidth * 2.5, statY + 28);
+
+        // Footer
+        ctx.fillStyle = '#6b7280';
+        ctx.font = '11px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('pump.fun/coin/ignition • ' + new Date().toLocaleDateString(), width / 2, height - 15);
+    };
+
+    const downloadAirdropStats = () => {
+        const canvas = document.getElementById('airdrop-stats-canvas');
+        const link = document.createElement('a');
+        link.download = `ignition-airdrop-stats-${Date.now()}.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        showStatus('Image downloaded!', 'success');
+    };
+    window.downloadAirdropStats = downloadAirdropStats;
+
+    const copyAirdropStatsToClipboard = async () => {
+        const canvas = document.getElementById('airdrop-stats-canvas');
+        try {
+            canvas.toBlob(async (blob) => {
+                try {
+                    await navigator.clipboard.write([
+                        new ClipboardItem({ 'image/png': blob })
+                    ]);
+                    showStatus('Image copied to clipboard!', 'success');
+                } catch (e) {
+                    // Fallback for browsers that don't support clipboard image
+                    console.error('Clipboard write failed:', e);
+                    showStatus('Copy failed - try downloading instead', 'error');
+                }
+            }, 'image/png');
+        } catch (e) {
+            console.error('Canvas to blob failed:', e);
+            showStatus('Copy failed - try downloading instead', 'error');
+        }
+    };
+    window.copyAirdropStatsToClipboard = copyAirdropStatsToClipboard;
 </script>
 
 </body>

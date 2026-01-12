@@ -788,6 +788,78 @@ function init(deps) {
         }
     });
 
+    // v25.18: Get user's lifetime airdrop stats for shareable graphic
+    router.get('/user-airdrop-stats/:pubkey', async (req, res) => {
+        try {
+            const { pubkey } = req.params;
+
+            // Validate pubkey
+            if (!isValidPubkey(pubkey)) {
+                return res.status(400).json({ error: "Invalid wallet address" });
+            }
+
+            // Get lifetime stats
+            const statsQuery = await db.get(`
+                SELECT
+                    COUNT(*) as "airdropCount",
+                    COALESCE(SUM(amount), 0) as "totalSolReceived",
+                    MIN(timestamp) as "firstAirdrop",
+                    MAX(timestamp) as "lastAirdrop"
+                FROM user_airdrop_history
+                WHERE "userPubkey" = $1
+            `, [pubkey]);
+
+            // Get recent airdrops (last 5)
+            const recentAirdrops = await db.all(`
+                SELECT amount, points, timestamp, "airdropId"
+                FROM user_airdrop_history
+                WHERE "userPubkey" = $1
+                ORDER BY timestamp DESC
+                LIMIT 5
+            `, [pubkey]);
+
+            // Get global ranking (by total SOL received)
+            const rankQuery = await db.get(`
+                SELECT COUNT(*) + 1 as rank
+                FROM (
+                    SELECT "userPubkey", SUM(amount) as total
+                    FROM user_airdrop_history
+                    GROUP BY "userPubkey"
+                    HAVING SUM(amount) > (
+                        SELECT COALESCE(SUM(amount), 0)
+                        FROM user_airdrop_history
+                        WHERE "userPubkey" = $1
+                    )
+                ) as higher_earners
+            `, [pubkey]);
+
+            // Get total unique participants for ranking context
+            const totalParticipants = await db.get(`
+                SELECT COUNT(DISTINCT "userPubkey") as count FROM user_airdrop_history
+            `);
+
+            res.json({
+                wallet: pubkey.substring(0, 4) + '...' + pubkey.substring(pubkey.length - 4),
+                walletFull: pubkey,
+                totalSolReceived: parseFloat(statsQuery?.totalSolReceived || 0).toFixed(6),
+                airdropCount: parseInt(statsQuery?.airdropCount || 0),
+                firstAirdrop: statsQuery?.firstAirdrop || null,
+                lastAirdrop: statsQuery?.lastAirdrop || null,
+                rank: parseInt(rankQuery?.rank || 0),
+                totalParticipants: parseInt(totalParticipants?.count || 0),
+                recentAirdrops: recentAirdrops.map(a => ({
+                    amount: parseFloat(a.amount).toFixed(6),
+                    points: a.points,
+                    timestamp: a.timestamp,
+                    airdropId: a.airdropId
+                }))
+            });
+        } catch (e) {
+            logger.error('[user-airdrop-stats] Error', { error: e.message, pubkey: req.params.pubkey });
+            res.status(500).json({ error: "Failed to fetch airdrop stats" });
+        }
+    });
+
     // ========== ROBINHOOD BOT ENDPOINTS (v12.0) ==========
 
     // Get all Robinhood tokens (external tokens sharing fees with us)
