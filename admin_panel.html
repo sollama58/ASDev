@@ -442,6 +442,23 @@
                             // Batch refresh result will appear here
                         </div>
                     </div>
+
+                    <!-- Single Token Image Refresh -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Single Token Image Refresh</h3>
+                        </div>
+                        <p class="text-xs text-gray-400 mb-3">
+                            Refresh image for a specific token from its metadataUri (IPFS).
+                        </p>
+                        <div class="flex gap-2 mb-3">
+                            <input type="text" id="single-token-mint" class="input-field flex-1" placeholder="Token mint address...">
+                            <button onclick="refreshSingleTokenImage()" class="btn btn-primary">Refresh Image</button>
+                        </div>
+                        <div id="single-token-result" class="result-box text-yellow-400">
+                            // Result will appear here
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -1091,6 +1108,47 @@
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Batch refresh error: ${e.message}`, 'error');
+            }
+        }
+
+        // ===== SINGLE TOKEN IMAGE REFRESH =====
+        async function refreshSingleTokenImage() {
+            const mint = document.getElementById('single-token-mint').value.trim();
+            const resultEl = document.getElementById('single-token-result');
+
+            if (!mint) {
+                resultEl.innerHTML = '<span class="text-red-400">Please enter a token mint address</span>';
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Fetching image from metadataUri...</span>';
+            log(`Refreshing image for ${mint}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/refresh-token-image`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    },
+                    body: JSON.stringify({ mint })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Image updated!</span>\n\n` +
+                        `Source: ${data.source}\n` +
+                        `Image: <a href="${data.image}" target="_blank" class="text-blue-400 underline">${data.image.substring(0, 60)}...</a>`;
+                    log(`Image updated for ${mint} from ${data.source}`, 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-yellow-400">⚠ ${data.message}</span>\n` +
+                        (data.metadataUri ? `metadataUri: ${data.metadataUri}` : 'No metadataUri stored');
+                    log(`Could not find image for ${mint}`, 'warn');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Single token refresh error: ${e.message}`, 'error');
             }
         }
 

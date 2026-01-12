@@ -1290,6 +1290,13 @@ function init(deps) {
                     let marketCapToUse = token.marketCap || 0;
                     let volumeToUse = token.volume24h || 0;
 
+                    // v25.6: Log current state for debugging
+                    logger.info(`[BatchMetadataRefresh] Processing ${token.mint.slice(0, 12)}...`, {
+                        currentImage: token.image ? token.image.substring(0, 40) : 'NULL',
+                        hasMetadataUri: !!token.metadataUri,
+                        metadataUri: token.metadataUri ? token.metadataUri.substring(0, 50) : 'NULL'
+                    });
+
                     // v25.5: First try to fetch from external APIs (DexScreener, Helius)
                     const validTokens = await mintExtractor.validateMintsBatch([token.mint], { fetchMarketData: true });
                     if (validTokens.length > 0) {
@@ -1299,22 +1306,33 @@ function init(deps) {
                         if (freshData.name && freshData.name !== 'Unknown') nameToUse = freshData.name;
                         if (freshData.marketCap) marketCapToUse = freshData.marketCap;
                         if (freshData.volume24h) volumeToUse = freshData.volume24h;
+                        logger.debug(`[BatchMetadataRefresh] External API result for ${token.mint.slice(0, 8)}`, {
+                            gotImage: !!freshData.image,
+                            ticker: freshData.ticker,
+                            name: freshData.name
+                        });
                     }
 
-                    // v25.5: If still no image, try fetching from metadataUri
+                    // v25.6: ALWAYS try metadataUri if we don't have an image yet
+                    // This is the primary fallback for tokens launched via our platform
                     if (!imageToUse && token.metadataUri) {
+                        logger.info(`[BatchMetadataRefresh] Trying metadataUri fallback for ${token.mint.slice(0, 8)}...`);
                         try {
-                            const metadataImage = await imageUtils.fetchImageFromMetadataUri(token.metadataUri, 3000);
+                            const metadataImage = await imageUtils.fetchImageFromMetadataUri(token.metadataUri, 5000);
                             if (metadataImage) {
                                 imageToUse = metadataImage;
-                                logger.info(`[BatchMetadataRefresh] Got image from metadataUri for ${token.mint.slice(0, 8)}...`);
+                                logger.info(`[BatchMetadataRefresh] SUCCESS: Got image from metadataUri for ${token.mint.slice(0, 8)}`, {
+                                    image: metadataImage.substring(0, 60)
+                                });
+                            } else {
+                                logger.warn(`[BatchMetadataRefresh] metadataUri returned no image for ${token.mint.slice(0, 8)}`);
                             }
                         } catch (e) {
-                            // Silently fail
+                            logger.warn(`[BatchMetadataRefresh] metadataUri fetch failed for ${token.mint.slice(0, 8)}`, { error: e.message });
                         }
                     }
 
-                    // Update if we have any new data
+                    // Update if we have any new data (including new image)
                     if (imageToUse || tickerToUse !== token.ticker || nameToUse !== token.name) {
                         await db.run(`
                             UPDATE tokens
@@ -1354,6 +1372,77 @@ function init(deps) {
                 success: false,
                 error: 'Failed to refresh metadata'
             });
+        }
+    });
+
+    /**
+     * POST /refresh-token-image
+     * v25.6: Refresh a single token's image from its metadataUri
+     * Admin endpoint for fixing individual tokens
+     */
+    router.post('/refresh-token-image', async (req, res) => {
+        const { mint } = req.body;
+
+        if (!mint || !isValidPubkey(mint)) {
+            return res.status(400).json({ error: 'Invalid mint address' });
+        }
+
+        try {
+            // Get token from database
+            const token = await db.get('SELECT * FROM tokens WHERE mint = $1', [mint]);
+            if (!token) {
+                return res.status(404).json({ error: 'Token not found' });
+            }
+
+            logger.info(`[RefreshTokenImage] Processing ${mint}`, {
+                currentImage: token.image ? token.image.substring(0, 50) : 'NULL',
+                metadataUri: token.metadataUri ? token.metadataUri.substring(0, 60) : 'NULL'
+            });
+
+            let newImage = null;
+
+            // Try metadataUri first (most reliable for our launched tokens)
+            if (token.metadataUri) {
+                logger.info(`[RefreshTokenImage] Fetching from metadataUri...`);
+                try {
+                    newImage = await imageUtils.fetchImageFromMetadataUri(token.metadataUri, 5000);
+                    if (newImage) {
+                        logger.info(`[RefreshTokenImage] Got image from metadataUri: ${newImage.substring(0, 60)}`);
+                    }
+                } catch (e) {
+                    logger.warn(`[RefreshTokenImage] metadataUri fetch failed: ${e.message}`);
+                }
+            }
+
+            // Fallback to external APIs
+            if (!newImage) {
+                logger.info(`[RefreshTokenImage] Trying external APIs...`);
+                const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
+                if (validTokens.length > 0 && validTokens[0].image) {
+                    newImage = validTokens[0].image;
+                    logger.info(`[RefreshTokenImage] Got image from external API: ${newImage.substring(0, 60)}`);
+                }
+            }
+
+            if (newImage) {
+                await db.run('UPDATE tokens SET image = $1 WHERE mint = $2', [newImage, mint]);
+                logger.info(`[RefreshTokenImage] Updated image for ${mint}`);
+                return res.json({
+                    success: true,
+                    message: 'Image updated',
+                    image: newImage,
+                    source: token.metadataUri ? 'metadataUri' : 'external'
+                });
+            } else {
+                return res.json({
+                    success: false,
+                    message: 'Could not find image from any source',
+                    metadataUri: token.metadataUri || null
+                });
+            }
+        } catch (e) {
+            logger.error(`[RefreshTokenImage] Error: ${e.message}`);
+            res.status(500).json({ error: 'Failed to refresh image' });
         }
     });
 

@@ -14,7 +14,8 @@
       "Bash(git clean:*)",
       "Bash(ls -la \"c:\\\\VS\\\\IGNITION\\\\ASDev\\\\src\"\" 2>/dev/null || ls -la \"c:VSIGNITIONASDev\"\")",
       "Bash(tree:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(node:*)"
     ]
   }
 }
