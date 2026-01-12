@@ -161,7 +161,13 @@ function init(deps) {
             const cachedHealth = await redis.smartCache('health_data', 10, async () => {
                 const stats = await getStats();
                 const launches = await getTotalLaunches();
-                const logs = await db.all('SELECT * FROM logs ORDER BY timestamp DESC LIMIT 50');
+                // v25.12: Added try-catch for logs query to prevent health endpoint failure
+                let logs = [];
+                try {
+                    logs = await db.all('SELECT * FROM logs ORDER BY timestamp DESC LIMIT 50') || [];
+                } catch (e) {
+                    logger.debug('[Health] Failed to fetch logs', { error: e.message });
+                }
 
                 const volRes = await db.get('SELECT SUM(volume24h) as total FROM tokens');
                 const totalVolume = volRes?.total || 0;
@@ -307,7 +313,7 @@ function init(deps) {
                 pumpHoldings: cachedHealth.pumpHoldings,
                 totalPoints: globalState.totalPoints,
                 totalLaunches: cachedHealth.launches,
-                recentLogs: cachedHealth.logs.map(l => {
+                recentLogs: (cachedHealth.logs || []).map(l => {
                     try {
                         const parsed = typeof l.data === 'string' ? JSON.parse(l.data) : (l.data || {});
                         return { ...parsed, type: l.type, timestamp: l.timestamp };

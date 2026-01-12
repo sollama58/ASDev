@@ -818,9 +818,25 @@ async function runFeeCollection(deps) {
             }
         } else {
             logger.debug(`[FeeCollection] Below threshold: ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL pending, need ${config.FEE_THRESHOLD_SOL || 0.05} SOL`);
+            // v25.12: Log skip events to frontend so users know system is working
+            if (logPurchase && totalPendingFees.toNumber() > 0) {
+                await logPurchase('FEE_CHECK', {
+                    status: 'PENDING',
+                    pendingSol: (totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
+                    thresholdSol: (config.FEE_THRESHOLD_SOL || 0.05).toFixed(2),
+                    reason: 'Below threshold'
+                });
+            }
         }
     } catch (e) {
         logger.error('[FeeCollection] Error', { error: e.message });
+        // v25.12: Log errors to frontend
+        if (logPurchase) {
+            await logPurchase('FEE_CHECK', {
+                status: 'ERROR',
+                reason: e.message
+            }).catch(() => {}); // Don't throw if logging fails
+        }
     } finally {
         await release();
         // v25.4: Update next check time for frontend countdown

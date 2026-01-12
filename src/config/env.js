@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.12-TIMER-SYNC-ROBINHOOD",
+    VERSION: "v25.13-TIMER-OPTIMIZATION",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 
@@ -40,11 +40,12 @@ const config = {
     AIRDROP_MIN_VOLUME_USD: 100, // v18.0: Minimum 24hr volume for airdrop eligibility
 
     // Update Intervals (ms)
-    FEE_COLLECTION_INTERVAL: 300000, // v25.11: Fee collection every 5 minutes
-    AIRDROP_INTERVAL: 300000, // v25.11: Airdrop processing every 5 minutes
-    HOLDER_UPDATE_INTERVAL: parseInt(process.env.HOLDER_UPDATE_INTERVAL) || 120000,
-    METADATA_UPDATE_INTERVAL: parseInt(process.env.METADATA_UPDATE_INTERVAL) || 60000,
-    ASDF_UPDATE_INTERVAL: 300000,
+    FEE_COLLECTION_INTERVAL: 150000, // v25.13: Rewards claim every 2.5 minutes
+    AIRDROP_INTERVAL: 900000, // v25.13: Airdrop processing every 15 minutes
+    HOLDER_UPDATE_INTERVAL: parseInt(process.env.HOLDER_UPDATE_INTERVAL) || 300000, // v25.13: 5 minutes
+    METADATA_PRICE_INTERVAL: 60000, // v25.13: Price updates for top tokens every 1 minute
+    METADATA_FULL_INTERVAL: 300000, // v25.13: Full price updates for all tokens every 5 minutes
+    ASDF_UPDATE_INTERVAL: 300000, // v25.13: 5 minutes
 
     // Pinata (IPFS)
     PINATA_JWT: process.env.PINATA_JWT?.trim() || null,

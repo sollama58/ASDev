@@ -447,6 +447,7 @@
         .badge-skipped { background: rgba(245, 158, 11, 0.15); color: var(--accent-orange); }
         .badge-success { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); }
         .badge-error { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
+        .badge-pending { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
 
         .status-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border-primary); }
         .status-item:last-child { border-bottom: none; }
@@ -1684,7 +1685,7 @@
     </div>
 </div>
 
-<!-- v25.11: Updated Robinhood info modal with comprehensive information -->
+<!-- v25.12: Updated Robinhood info modal - manual registration required -->
 <div id="robinhood-info-modal" class="modal">
     <div class="modal-content border-green-600">
         <span class="close-btn text-green-400" onclick="closeRobinhoodInfoModal()">&times;</span>
@@ -1692,7 +1693,7 @@
         <div class="font-sans text-sm text-green-200 space-y-4">
             <div class="bg-green-900/30 p-4 rounded border border-green-700/50">
                 <p class="text-green-400 text-xs uppercase mb-2">What is Robinhood?</p>
-                <p class="text-xs text-gray-300">Robinhood is our partnership program for external token creators. When creators share their PumpFun trading fees with IGNITION, their token joins our ecosystem and their holders become eligible for SOL airdrops.</p>
+                <p class="text-xs text-gray-300">Robinhood is our partnership program for external token creators. When creators share their PumpFun trading fees with IGNITION and register their token, it joins our ecosystem and their holders become eligible for SOL airdrops.</p>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
@@ -1706,14 +1707,15 @@
                 </div>
             </div>
 
-            <div>
-                <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">How It Works</h4>
-                <ul class="list-disc list-inside text-gray-400 space-y-1">
-                    <li>Token creators add IGNITION's wallet as a fee recipient on PumpFun</li>
-                    <li>Our bot automatically detects the fee sharing configuration</li>
-                    <li>The token is added to our Robinhood network</li>
-                    <li>Holders of that token start earning points toward airdrops</li>
-                </ul>
+            <div class="bg-yellow-900/30 p-4 rounded border border-yellow-700/50">
+                <p class="text-yellow-400 text-xs uppercase mb-2">For Token Creators - How to Join</p>
+                <ol class="list-decimal list-inside text-gray-300 space-y-2 text-xs">
+                    <li><span class="text-white">Set up fee sharing on PumpFun:</span> Go to your Creator Dashboard and add IGNITION's wallet as a fee recipient</li>
+                    <li><span class="text-white">Register your token:</span> Use the <span class="text-green-400">"Register Token"</span> button on our platform to submit your token's mint address</li>
+                    <li><span class="text-white">Verification:</span> Our system verifies that fee sharing is properly configured</li>
+                    <li><span class="text-white">Activation:</span> Once verified, your token is added and holders start earning points</li>
+                </ol>
+                <p class="text-yellow-300/70 text-xs mt-3 italic">Note: Manual registration is required - tokens are not automatically detected.</p>
             </div>
 
             <div>
@@ -1728,13 +1730,12 @@
             </div>
 
             <div>
-                <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">For Token Creators</h4>
+                <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">Why Manual Registration?</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
-                    <li>Go to <span class="text-white">PumpFun Creator Dashboard</span></li>
-                    <li>Add IGNITION wallet as fee recipient (any %)</li>
-                    <li>Your token is automatically detected and added</li>
-                    <li>Your holders gain instant airdrop eligibility</li>
-                    <li>Higher volume = more rewards for your community</li>
+                    <li>Ensures only legitimate projects join the network</li>
+                    <li>Prevents spam tokens from diluting rewards</li>
+                    <li>Allows creators to choose when to activate rewards</li>
+                    <li>Verifies fee sharing is correctly configured before activation</li>
                 </ul>
             </div>
 
@@ -2239,8 +2240,8 @@
     lucide.createIcons();
 
     // v25.3: Airdrop Countdown Timer
-    // v25.11: Now syncs with backend's nextAirdropTime and persists across page loads
-    let AIRDROP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes default, updated from backend
+    // v25.13: Airdrop runs every 15 minutes, syncs with backend
+    let AIRDROP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes default, updated from backend
 
     // v25.11: Load persisted timer from sessionStorage if available
     const getPersistedAirdropTime = () => {
@@ -2777,8 +2778,8 @@
         }
     };
 
-    // v25.11: Improved rewards claim tracker countdown with auto-recovery
-    const FEE_COLLECTION_INTERVAL_MS = 300000; // 5 minutes - matches backend config
+    // v25.13: Improved rewards claim tracker countdown with auto-recovery
+    const FEE_COLLECTION_INTERVAL_MS = 150000; // 2.5 minutes - matches backend config
     registerInterval(setInterval(() => {
         if (nextCheckTime > 0) {
             const now = Date.now();
@@ -3283,8 +3284,9 @@
                 const formatKey = (str) => str.replace(/([A-Z])/g, ' $1').trim();
                 let statusBadge = '';
                 if (log.status) {
-                    let badgeClass = 'badge-skipped'; 
+                    let badgeClass = 'badge-skipped';
                     if (log.status === 'SUCCESS') badgeClass = 'badge-success';
+                    else if (log.status === 'PENDING') badgeClass = 'badge-pending';
                     else if (log.status.includes('FAIL') || log.status.includes('ERROR')) badgeClass = 'badge-error';
                     statusBadge = `<span class="status-badge ${badgeClass}">${log.status}</span>`;
                 }

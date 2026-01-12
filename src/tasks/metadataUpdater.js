@@ -1,10 +1,11 @@
 /**
  * Metadata Updater Task
- * Updates token metadata (market data) from multiple sources
- * NO IPFS SCRAPING - Prevents Rate Limits
+ * Updates token prices/market data from multiple sources
  *
  * v19.0 - Enhanced debugging and improved DexScreener integration
  * v20.0 - Added GeckoTerminal as fallback for images
+ * v25.13 - Tiered updates: Top 10 every 1 min, all tokens every 5 min
+ *        - Images/metadata only fetched on token creation or admin request
  */
 const axios = require('axios');
 const config = require('../config/env');
@@ -14,7 +15,7 @@ const { logger, imageUtils } = require('../services');
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Debug mode - set to true for verbose logging
-const DEBUG_METADATA = true;
+const DEBUG_METADATA = false;
 
 /**
  * Batch fetch market data from Helius DAS API (fallback when DexScreener has no data)
@@ -52,7 +53,6 @@ async function fetchHeliusMarketDataBatch(mints) {
             if (asset?.id) {
                 const data = {
                     marketCap: asset?.token_info?.price_info?.total_price || 0,
-                    // v19.0: Also extract image from Helius (v21.0: Clean CDN-wrapped URLs)
                     image: imageUtils.extractHeliusBatchImage(asset),
                     name: asset?.content?.metadata?.name || null,
                     ticker: asset?.content?.metadata?.symbol || null
@@ -150,6 +150,201 @@ async function fetchGeckoTerminalBatch(mints) {
     return results;
 }
 
+/**
+ * v25.13: Update prices for specific tokens (no image/metadata updates)
+ * Used for frequent top token updates
+ * @param {Object} deps - Dependencies
+ * @param {Array} tokens - Array of token objects with mint field
+ */
+async function updatePricesOnly(deps, tokens) {
+    const { db } = deps;
+
+    if (tokens.length === 0) return;
+
+    const mints = tokens.map(t => t.mint).join(',');
+    let updated = 0;
+
+    try {
+        const dexRes = await axios.get(
+            `https://api.dexscreener.com/latest/dex/tokens/${mints}`,
+            { timeout: 8000 }
+        );
+
+        const pairs = dexRes.data?.pairs || [];
+        const updates = new Map();
+
+        for (const pair of pairs) {
+            const mint = pair.baseToken?.address;
+            if (!mint) continue;
+
+            const existing = updates.get(mint);
+            if (!existing || (pair.liquidity?.usd > existing.liquidity)) {
+                updates.set(mint, {
+                    marketCap: pair.fdv || pair.marketCap || 0,
+                    volume24h: pair.volume?.h24 || 0,
+                    priceUsd: parseFloat(pair.priceUsd) || 0,
+                    liquidity: pair.liquidity?.usd || 0
+                });
+            }
+        }
+
+        for (const t of tokens) {
+            const data = updates.get(t.mint);
+            if (data) {
+                await db.run(
+                    `UPDATE tokens SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4 WHERE mint = $5`,
+                    [data.volume24h, data.marketCap, data.priceUsd, Date.now(), t.mint]
+                );
+                updated++;
+            }
+        }
+    } catch (e) {
+        if (e.response && e.response.status === 429) {
+            logger.warn(`[MetadataUpdater] DexScreener Rate Limit (429)`);
+        } else {
+            logger.debug(`[MetadataUpdater] Price update error: ${e.message}`);
+        }
+    }
+
+    return updated;
+}
+
+/**
+ * v25.13: Update prices for top 10 leaderboard tokens + King of the Hill
+ * Runs every 1 minute
+ */
+async function updateTopTokenPrices(deps) {
+    const { db, globalState } = deps;
+
+    try {
+        // Get top 10 tokens by market cap (leaderboard)
+        const topTokens = await db.all(`
+            SELECT mint, ticker FROM tokens
+            WHERE "marketCap" > 0
+            ORDER BY "marketCap" DESC
+            LIMIT 10
+        `);
+
+        // Also get King of the Hill token if different
+        const kothMint = globalState?.kothMint;
+        let tokens = [...topTokens];
+
+        if (kothMint && !tokens.find(t => t.mint === kothMint)) {
+            const kothToken = await db.get('SELECT mint, ticker FROM tokens WHERE mint = $1', [kothMint]);
+            if (kothToken) {
+                tokens.push(kothToken);
+            }
+        }
+
+        if (tokens.length === 0) {
+            return;
+        }
+
+        const updated = await updatePricesOnly(deps, tokens);
+        if (DEBUG_METADATA) {
+            logger.debug(`[MetadataUpdater] Top tokens: ${updated}/${tokens.length} prices updated`);
+        }
+    } catch (e) {
+        logger.debug(`[MetadataUpdater] Top token price update error: ${e.message}`);
+    }
+}
+
+/**
+ * v25.13: Full price update for all tokens (no metadata/images)
+ * Runs every 5 minutes
+ */
+async function updateAllTokenPrices(deps) {
+    const { db, globalState } = deps;
+
+    const tokens = await db.all('SELECT mint, ticker FROM tokens');
+
+    if (tokens.length === 0) {
+        return;
+    }
+
+    logger.info(`[MetadataUpdater] Full price update: ${tokens.length} tokens`);
+
+    const chunks = chunkArray(tokens, 30);
+    let totalUpdated = 0;
+
+    for (const chunk of chunks) {
+        const mints = chunk.map(t => t.mint).join(',');
+
+        try {
+            const dexRes = await axios.get(
+                `https://api.dexscreener.com/latest/dex/tokens/${mints}`,
+                { timeout: 8000 }
+            );
+
+            const pairs = dexRes.data?.pairs || [];
+            const updates = new Map();
+
+            for (const pair of pairs) {
+                const mint = pair.baseToken?.address;
+                if (!mint) continue;
+
+                const existing = updates.get(mint);
+                if (!existing || (pair.liquidity?.usd > existing.liquidity)) {
+                    updates.set(mint, {
+                        marketCap: pair.fdv || pair.marketCap || 0,
+                        volume24h: pair.volume?.h24 || 0,
+                        priceUsd: parseFloat(pair.priceUsd) || 0,
+                        liquidity: pair.liquidity?.usd || 0
+                    });
+                }
+            }
+
+            // Update tokens from DexScreener
+            const misses = [];
+            for (const t of chunk) {
+                const data = updates.get(t.mint);
+                if (data) {
+                    await db.run(
+                        `UPDATE tokens SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4 WHERE mint = $5`,
+                        [data.volume24h, data.marketCap, data.priceUsd, Date.now(), t.mint]
+                    );
+                    totalUpdated++;
+                } else {
+                    misses.push(t.mint);
+                }
+            }
+
+            // Fallback to Helius for DexScreener misses
+            if (misses.length > 0) {
+                const heliusData = await fetchHeliusMarketDataBatch(misses);
+                for (const mint of misses) {
+                    const data = heliusData.get(mint);
+                    if (data && data.marketCap > 0) {
+                        await db.run(
+                            `UPDATE tokens SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
+                            [data.marketCap, Date.now(), mint]
+                        );
+                        totalUpdated++;
+                    }
+                }
+            }
+
+            await delay(1500);
+
+        } catch (e) {
+            if (e.response && e.response.status === 429) {
+                logger.warn(`[MetadataUpdater] DexScreener Rate Limit (429). Pausing 30 seconds...`);
+                await delay(30000);
+            } else {
+                logger.warn(`[MetadataUpdater] DexScreener Batch Error: ${e.message}`);
+            }
+        }
+    }
+
+    globalState.lastBackendUpdate = Date.now();
+    logger.info(`[MetadataUpdater] Full price update complete: ${totalUpdated}/${tokens.length} tokens`);
+}
+
+/**
+ * LEGACY: Full metadata update (images + prices)
+ * Only used by admin panel "Trigger Metadata Update" button
+ * @param {Object} deps - Dependencies
+ */
 async function updateMetadata(deps) {
     const { db, globalState } = deps;
 
@@ -193,7 +388,6 @@ async function updateMetadata(deps) {
 
                 // Logic: Keep best pair (highest liquidity)
                 if (!existing || (pair.liquidity?.usd > existing.liquidity)) {
-                    // v19.0: Try multiple image sources from DexScreener
                     const imageUrl = pair.info?.imageUrl ||
                                     pair.info?.header ||
                                     pair.baseToken?.info?.imageUrl ||
@@ -228,7 +422,6 @@ async function updateMetadata(deps) {
 
                 if (data) {
                     // Update market data
-                    // v25.4: Only update image if token doesn't already have one (preserve Imgur URLs)
                     const shouldUpdateImage = data.imageUrl && (!t.image || t.image === '' || t.image === 'null');
                     if (shouldUpdateImage) {
                         await db.run(
@@ -248,7 +441,7 @@ async function updateMetadata(deps) {
                 }
             }
 
-            // Batch fetch Helius data for all DexScreener misses (1 call instead of N)
+            // Batch fetch Helius data for all DexScreener misses
             const stillMissingImages = [];
             if (misses.length > 0) {
                 if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] ${misses.length} tokens missed DexScreener, trying Helius...`);
@@ -257,12 +450,9 @@ async function updateMetadata(deps) {
                 for (const mint of misses) {
                     const data = heliusData.get(mint);
                     const token = chunk.find(t => t.mint === mint);
-                    // v25.4: Check if token already has an image (preserve Imgur URLs)
                     const tokenHasImage = token && token.image && token.image !== '' && token.image !== 'null';
 
                     if (data) {
-                        // v19.0: Update image and market cap from Helius fallback
-                        // v25.4: Only update image if token doesn't already have one
                         if (data.image && data.marketCap > 0 && !tokenHasImage) {
                             await db.run(
                                 `UPDATE tokens SET "marketCap" = $1, image = $2, "lastUpdated" = $3 WHERE mint = $4`,
@@ -274,7 +464,6 @@ async function updateMetadata(deps) {
                                 `UPDATE tokens SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
                                 [data.marketCap, Date.now(), mint]
                             );
-                            // Track tokens that got market cap but no image
                             if (!tokenHasImage) {
                                 stillMissingImages.push(mint);
                             }
@@ -287,7 +476,6 @@ async function updateMetadata(deps) {
                         }
                         totalUpdated++;
                     } else {
-                        // No data from Helius either - add to GeckoTerminal fallback list
                         if (!tokenHasImage) {
                             stillMissingImages.push(mint);
                         }
@@ -295,7 +483,7 @@ async function updateMetadata(deps) {
                 }
             }
 
-            // v20.0: Try GeckoTerminal for tokens still missing images
+            // Try GeckoTerminal for tokens still missing images
             if (stillMissingImages.length > 0) {
                 if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] ${stillMissingImages.length} tokens still missing images, trying GeckoTerminal...`);
 
@@ -332,8 +520,9 @@ async function updateMetadata(deps) {
 }
 
 /**
- * v25.4: Fill in missing images from metadataUri
+ * Fill in missing images from metadataUri
  * This is a fallback mechanism for tokens that don't have images from DexScreener/Helius
+ * Only runs on admin request via updateMetadata
  */
 async function fillMissingImagesFromMetadata(deps) {
     const { db } = deps;
@@ -383,19 +572,32 @@ async function fillMissingImagesFromMetadata(deps) {
     }
 }
 
+/**
+ * v25.13: Start the tiered metadata updater
+ * - Top 10 + KOTH prices: every 1 minute
+ * - All token prices: every 5 minutes
+ * - Images/metadata: only on token creation or admin request
+ */
 function start(deps) {
-    setTimeout(() => updateMetadata(deps), 5000);
-    setInterval(() => updateMetadata(deps), config.METADATA_UPDATE_INTERVAL);
+    const priceInterval = config.METADATA_PRICE_INTERVAL || 60000; // 1 minute
+    const fullInterval = config.METADATA_FULL_INTERVAL || 300000; // 5 minutes
 
-    // v25.4: Also run periodic missing image fill (every 5 minutes)
-    setTimeout(() => fillMissingImagesFromMetadata(deps), 30000);
-    setInterval(() => fillMissingImagesFromMetadata(deps), 5 * 60 * 1000);
+    // Initial runs with staggered delays
+    setTimeout(() => updateTopTokenPrices(deps), 5000);
+    setTimeout(() => updateAllTokenPrices(deps), 15000);
 
-    logger.info("Metadata updater started (No IPFS)");
+    // Set up intervals
+    setInterval(() => updateTopTokenPrices(deps), priceInterval);
+    setInterval(() => updateAllTokenPrices(deps), fullInterval);
+
+    logger.info(`[MetadataUpdater] Started - Top tokens: ${priceInterval/1000}s, All tokens: ${fullInterval/1000}s`);
 }
 
 module.exports = {
     updateMetadata,
+    updateTopTokenPrices,
+    updateAllTokenPrices,
+    updatePricesOnly,
     start,
     fetchGeckoTerminalMetadata,
     fetchGeckoTerminalBatch,
