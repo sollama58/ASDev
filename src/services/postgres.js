@@ -218,7 +218,8 @@ async function createSchema() {
         'nextCheckTimestamp',
         'nextAirdropTimestamp', // v25.7: Track next airdrop time for frontend countdown
         'lifetimeCreatorFeesLamports',
-        'lifetimeRobinhoodFeesLamports'
+        'lifetimeRobinhoodFeesLamports',
+        'pendingAmmFeesLamports' // v25.23: Track pending AMM fees that can't be claimed yet
     ];
 
     for (const key of statsKeys) {
@@ -326,6 +327,16 @@ async function createSchema() {
             "updatedAt" BIGINT,
             UNIQUE(mint, "holderPubkey")
         )
+    `);
+
+    // v25.23: Migration - Add pendingAmmFees column for AMM fee monitoring
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'robinhood_tokens' AND column_name = 'pendingAmmFees') THEN
+                ALTER TABLE robinhood_tokens ADD COLUMN "pendingAmmFees" REAL DEFAULT 0;
+            END IF;
+        END $$;
     `);
 
     // Create indexes for robinhood tables

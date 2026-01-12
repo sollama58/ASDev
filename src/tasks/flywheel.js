@@ -8,6 +8,7 @@
  * v17.0 - Separated fee collection (1 min, >0.05 SOL) from airdrop (15 min, >1 SOL)
  * v23.0 - Refresh fee share BPS before airdrop to handle dynamic reward distribution changes
  * v25.4 - Fixed next check time countdown to update after fee collection
+ * v25.23 - AMM fee monitoring with alerts, optimized batch size (25 transfers)
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -31,6 +32,21 @@ const robinhoodScanner = require('./robinhoodScanner');
 // Key: creatorPubkey string, Value: { config, timestamp }
 const feeSharingConfigCache = new Map();
 const CONFIG_CACHE_TTL_MS = 600000; // 10 minutes - configs rarely change
+
+// v25.23: AMM fee monitoring configuration
+// Track pending AMM fees and alert when they accumulate above threshold
+const AMM_FEE_ALERT_THRESHOLD_SOL = 0.5; // Alert when pending AMM fees exceed 0.5 SOL
+const AMM_FEE_MONITOR_INTERVAL_MS = 300000; // Check every 5 minutes
+let lastAmmFeeAlert = 0; // Prevent alert spam
+let totalPendingAmmFees = 0; // Track for monitoring
+
+// v25.23: Optimized batch sizes
+// SOL transfers: ~40 bytes instruction + ~32 bytes per account = ~72 bytes per transfer
+// Transaction limit: ~1232 bytes, with overhead ~200 bytes = ~1032 bytes available
+// Safe calculation: 1032 / 72 ≈ 14 transfers (conservative) to 1032 / 40 ≈ 25 (optimistic)
+// Testing shows 25 transfers work reliably with priority fees
+const AIRDROP_BATCH_SIZE = 25; // Increased from 21 for better throughput
+const KOTH_BATCH_SIZE = 25; // Increased from 21 for consistency
 
 /**
  * v25.21: Get fee sharing config with caching
@@ -263,17 +279,30 @@ async function claimRobinhoodFees(deps) {
 
                 // Also check AMM vault for graduated tokens
                 // Note: AMM fee distribution has a different instruction structure
+                // v25.23: Enhanced monitoring with database tracking and alerts
                 try {
                     const ammVaultAtaKey = await ammVaultAta;
                     const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
+                    const ammFeeLamports = parseInt(bal.value.amount) || 0;
 
-                    if (new BN(bal.value.amount).gt(new BN(0))) {
-                        // TODO: Implement AMM fee distribution when PumpFun documents the instruction
-                        // For now, just log that there are pending AMM fees
-                        logger.debug(`[Robinhood] Pending AMM fees for ${token.ticker}: ${(parseInt(bal.value.amount) / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+                    if (ammFeeLamports > 0) {
+                        const ammFeeSol = ammFeeLamports / LAMPORTS_PER_SOL;
+                        const ourShare = ammFeeSol * (token.feeShareBps / 10000);
+
+                        // Track total pending AMM fees
+                        totalPendingAmmFees += ammFeeLamports;
+
+                        // Log with more detail for monitoring
+                        logger.info(`[Robinhood/AMM] Pending fees for ${token.ticker}: ${ammFeeSol.toFixed(6)} SOL (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+
+                        // Update database with pending AMM fees for this token
+                        await db.run(
+                            'UPDATE robinhood_tokens SET "pendingAmmFees" = $1 WHERE mint = $2',
+                            [ammFeeSol, token.mint]
+                        ).catch(() => {}); // Don't fail if column doesn't exist yet
                     }
                 } catch (e) {
-                    // Silent fail for AMM check
+                    logger.debug(`[Robinhood/AMM] Check failed for ${token.ticker}`, { error: e.message });
                 }
 
                 await new Promise(r => setTimeout(r, 500)); // Rate limiting between tokens
@@ -286,7 +315,27 @@ async function claimRobinhoodFees(deps) {
         logger.error('[Robinhood] Claim fees error', { error: e.message });
     }
 
-    return { totalClaimed, claimedTokens };
+    // v25.23: AMM fee monitoring - alert if pending fees exceed threshold
+    const pendingAmmSol = totalPendingAmmFees / LAMPORTS_PER_SOL;
+    if (pendingAmmSol > AMM_FEE_ALERT_THRESHOLD_SOL) {
+        const now = Date.now();
+        // Only alert every 5 minutes to prevent spam
+        if (now - lastAmmFeeAlert > AMM_FEE_MONITOR_INTERVAL_MS) {
+            lastAmmFeeAlert = now;
+            logger.warn(`[Robinhood/AMM] ALERT: ${pendingAmmSol.toFixed(4)} SOL in pending AMM fees cannot be claimed (awaiting Pump.fun AMM distribution instruction documentation)`);
+
+            // Store total pending AMM fees in stats for dashboard visibility
+            await db.run(
+                'INSERT INTO stats (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
+                ['pendingAmmFeesLamports', totalPendingAmmFees]
+            ).catch(() => {});
+        }
+    }
+
+    // Reset for next cycle
+    totalPendingAmmFees = 0;
+
+    return { totalClaimed, claimedTokens, pendingAmmSol };
 }
 
 /**
@@ -471,7 +520,7 @@ async function processAirdrop(deps) {
 
                     // v25.22 SCALABILITY: Increased batch size
                     // Send KOTH distributions in batches
-                    const KOTH_BATCH_SIZE = 21;
+                    // v25.23: Use optimized batch size constant
                     let kothSignatures = [];
                     for (let i = 0; i < kothBatch.length; i += KOTH_BATCH_SIZE) {
                         const batch = kothBatch.slice(i, i + KOTH_BATCH_SIZE);
@@ -584,7 +633,7 @@ async function processAirdrop(deps) {
         // SOL transfers can handle more per batch since no ATA creation needed
         // Transaction size: ~80 bytes per transfer, limit ~1232 bytes = ~15 transfers safe
         // With optimized instruction packing: 21 transfers fit safely
-        const BATCH_SIZE = 21;
+        // v25.23: Use optimized batch size constant (AIRDROP_BATCH_SIZE = 25)
         const PARALLEL_BATCHES = 3; // Process 3 batches concurrently
         let allSignatures = [];
 
@@ -596,9 +645,10 @@ async function processAirdrop(deps) {
         let failedUsers = []; // v25.13: Track failed recipients for potential retry
 
         // v25.22 SCALABILITY: Split distribution plan into batches
+        // v25.23: Using optimized AIRDROP_BATCH_SIZE (25 transfers)
         const batches = [];
-        for (let i = 0; i < distributionPlan.length; i += BATCH_SIZE) {
-            batches.push(distributionPlan.slice(i, i + BATCH_SIZE).map(r => ({
+        for (let i = 0; i < distributionPlan.length; i += AIRDROP_BATCH_SIZE) {
+            batches.push(distributionPlan.slice(i, i + AIRDROP_BATCH_SIZE).map(r => ({
                 user: r.user,
                 amount: r.amount
             })));
@@ -645,9 +695,10 @@ async function processAirdrop(deps) {
             const stillFailedUsers = [];
 
             // v25.22 SCALABILITY: Split into batches for parallel retry
+            // v25.23: Using optimized AIRDROP_BATCH_SIZE (25 transfers)
             const retryBatches = [];
-            for (let i = 0; i < failedRecipients.length; i += BATCH_SIZE) {
-                retryBatches.push(failedRecipients.slice(i, i + BATCH_SIZE).map(r => ({
+            for (let i = 0; i < failedRecipients.length; i += AIRDROP_BATCH_SIZE) {
+                retryBatches.push(failedRecipients.slice(i, i + AIRDROP_BATCH_SIZE).map(r => ({
                     user: r.user,
                     amount: r.amount
                 })));
