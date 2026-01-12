@@ -522,6 +522,16 @@ async function processAirdrop(deps) {
     } finally {
         // RACE CONDITION FIX: Release mutex
         await release();
+
+        // v25.7: Update next airdrop timestamp for frontend countdown synchronization
+        const airdropInterval = config.AIRDROP_INTERVAL || 900000;
+        const nextAirdropTime = Date.now() + airdropInterval;
+        try {
+            await db.run('UPDATE stats SET value = $1 WHERE key = $2', [nextAirdropTime, 'nextAirdropTimestamp']);
+            logger.debug(`[Flywheel] Next airdrop scheduled for ${new Date(nextAirdropTime).toISOString()}`);
+        } catch (e) {
+            logger.warn('[Flywheel] Failed to update nextAirdropTimestamp', { error: e.message });
+        }
     }
 }
 

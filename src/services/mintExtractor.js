@@ -675,7 +675,8 @@ async function fetchGeckoTerminalImage(mint) {
         );
         const tokenData = response.data?.data?.attributes;
         if (tokenData?.image_url) {
-            return tokenData.image_url;
+            // v25.8: Normalize the image URL
+            return imageUtils.normalizeImageUrl(tokenData.image_url);
         }
     } catch (e) {
         // Silent fail - GeckoTerminal may not have all tokens
@@ -703,7 +704,8 @@ async function fetchDexScreenerData(mint) {
                 // Also get name/ticker from DexScreener as backup
                 dexName: pair.baseToken?.name || null,
                 dexTicker: pair.baseToken?.symbol || null,
-                dexImage: pair.info?.imageUrl || null,
+                // v25.8: Normalize the image URL
+                dexImage: pair.info?.imageUrl ? imageUtils.normalizeImageUrl(pair.info.imageUrl) : null,
             };
         }
     } catch (e) {
@@ -893,7 +895,8 @@ async function validateMintsBatch(mints, options = {}) {
                     const pumpResponse = await axios.get(pumpMetaUrl, { timeout: 5000 });
                     if (pumpResponse.data) {
                         const pumpData = pumpResponse.data;
-                        let image = pumpData.image_uri || pumpData.image || null;
+                        // v25.8: Normalize the image URL from pump.fun
+                        let image = imageUtils.normalizeImageUrl(pumpData.image_uri || pumpData.image);
 
                         // v25.7: Try GeckoTerminal if Pump.fun doesn't have image
                         if (!image) {

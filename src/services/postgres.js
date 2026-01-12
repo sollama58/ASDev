@@ -206,6 +206,7 @@ async function createSchema() {
         'lastClaimTimestamp',
         'lastClaimAmountLamports',
         'nextCheckTimestamp',
+        'nextAirdropTimestamp', // v25.7: Track next airdrop time for frontend countdown
         'lifetimeCreatorFeesLamports',
         'lifetimeRobinhoodFeesLamports'
     ];

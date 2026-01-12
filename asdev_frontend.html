@@ -1795,15 +1795,82 @@
 
     const resolveTokenImage = (url) => {
         const fallback = 'https://placehold.co/32x32/333/fff?text=?';
+
         // v25.4: Handle null/empty/undefined and "null" string
         if (!url || url === 'null' || url === 'undefined' || url.trim() === '') return fallback;
+
         let cleanUrl = url.trim();
+
+        // v25.8: Handle data URLs directly (base64 encoded images)
+        if (cleanUrl.startsWith('data:image/')) {
+            return cleanUrl; // Data URLs don't need proxy
+        }
+
+        // v25.8: Handle Helius CDN-wrapped URLs
+        // Pattern: https://cdn.helius-rpc.com/cdn-cgi/image/<options>/<actual-url>
+        if (cleanUrl.includes('cdn.helius-rpc.com/cdn-cgi/image/')) {
+            const httpIndex = cleanUrl.indexOf('http', cleanUrl.indexOf('cdn-cgi/image/') + 14);
+            if (httpIndex !== -1) {
+                cleanUrl = cleanUrl.substring(httpIndex);
+            }
+        }
+
+        // v25.8: Handle IPFS protocol
         if (cleanUrl.startsWith('ipfs://')) {
             cleanUrl = cleanUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
         }
-        if (cleanUrl.includes('gateway.pinata.cloud')) {
-            cleanUrl = cleanUrl.replace('gateway.pinata.cloud', 'ipfs.io');
+
+        // v25.8: Handle Arweave protocol
+        if (cleanUrl.startsWith('ar://')) {
+            cleanUrl = cleanUrl.replace('ar://', 'https://arweave.net/');
         }
+
+        // v25.9: Normalize Imgur URLs to direct image format
+        // Handles: imgur.com/abc123, imgur.com/a/abc123, imgur.com/gallery/abc123
+        if (cleanUrl.includes('imgur.com')) {
+            // Extract the image ID from various Imgur URL formats
+            let imgurMatch = cleanUrl.match(/imgur\.com\/(?:a\/|gallery\/)?([a-zA-Z0-9]+)(?:\.[a-zA-Z]+)?/);
+            if (imgurMatch && imgurMatch[1]) {
+                const imgId = imgurMatch[1];
+                // Skip if it's already an i.imgur.com direct link with extension
+                if (!cleanUrl.includes('i.imgur.com') || !cleanUrl.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
+                    cleanUrl = `https://i.imgur.com/${imgId}.png`;
+                }
+            }
+        }
+
+        // v25.8: Normalize various IPFS gateways to ipfs.io for reliability
+        const ipfsGateways = [
+            'gateway.pinata.cloud',
+            'cloudflare-ipfs.com',
+            'dweb.link',
+            'nftstorage.link',
+            'ipfs.infura.io',
+            'ipfs.fleek.co',
+            'gateway.ipfs.io'
+        ];
+        for (const gateway of ipfsGateways) {
+            if (cleanUrl.includes(gateway)) {
+                cleanUrl = cleanUrl.replace(gateway, 'ipfs.io');
+                break;
+            }
+        }
+
+        // v25.8: Handle relative IPFS paths (just the CID)
+        // CIDs typically start with Qm (v0) or bafy (v1)
+        if (/^(Qm[a-zA-Z0-9]{44}|bafy[a-zA-Z0-9]{50,})/.test(cleanUrl)) {
+            cleanUrl = `https://ipfs.io/ipfs/${cleanUrl}`;
+        }
+
+        // v25.8: Validate URL format before proxying
+        try {
+            new URL(cleanUrl);
+        } catch (e) {
+            console.warn('[resolveTokenImage] Invalid URL:', cleanUrl);
+            return fallback;
+        }
+
+        // Use wsrv.nl proxy for resizing and format conversion
         return `https://wsrv.nl/?url=${encodeURIComponent(cleanUrl)}&w=64&output=webp&q=80&default=${encodeURIComponent(fallback)}`;
     };
 
@@ -1927,8 +1994,13 @@
             // Airdrop distributed
             console.log('[WS] Airdrop distributed:', msg.data);
             showStatus(`Airdrop: ${msg.data.amount.toFixed(4)} SOL distributed to ${msg.data.recipients} holders!`, 'success');
-            // Reset countdown
-            lastAirdropTime = Date.now();
+            // v25.7: Reset countdown - sync with backend's next airdrop time if provided
+            if (msg.data.nextAirdropTime) {
+                syncAirdropTimer(msg.data.nextAirdropTime, msg.data.airdropIntervalMs);
+            } else {
+                // Fallback: reset to now + interval
+                nextAirdropTime = Date.now() + AIRDROP_INTERVAL_MS;
+            }
         }
     };
 
@@ -2135,18 +2207,18 @@
     lucide.createIcons();
 
     // v25.3: Airdrop Countdown Timer
-    const AIRDROP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
-    let lastAirdropTime = Date.now();
+    // v25.7: Now syncs with backend's nextAirdropTime
+    let AIRDROP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes default, updated from backend
+    let nextAirdropTime = Date.now() + AIRDROP_INTERVAL_MS; // Will be synced from backend
     let countdownInterval = null;
 
     const updateCountdown = () => {
         const now = Date.now();
-        const nextAirdrop = lastAirdropTime + AIRDROP_INTERVAL_MS;
-        let remaining = Math.max(0, nextAirdrop - now);
+        let remaining = Math.max(0, nextAirdropTime - now);
 
-        // If countdown reached 0, reset for next cycle
+        // If countdown reached 0, estimate next cycle (backend will sync on next health check)
         if (remaining <= 0) {
-            lastAirdropTime = now;
+            nextAirdropTime = now + AIRDROP_INTERVAL_MS;
             remaining = AIRDROP_INTERVAL_MS;
         }
 
@@ -2163,6 +2235,16 @@
         if (countdownInterval) clearInterval(countdownInterval);
         updateCountdown();
         countdownInterval = setInterval(updateCountdown, 1000);
+    };
+
+    // v25.7: Sync airdrop timer with backend
+    const syncAirdropTimer = (backendNextAirdropTime, intervalMs) => {
+        if (backendNextAirdropTime && backendNextAirdropTime > Date.now()) {
+            nextAirdropTime = backendNextAirdropTime;
+        }
+        if (intervalMs) {
+            AIRDROP_INTERVAL_MS = intervalMs;
+        }
     };
 
     // Update countdown pool amount when airdrop balance updates
@@ -2546,6 +2628,10 @@
                 if (data.nextCheckTime) {
                     nextCheckTime = data.nextCheckTime;
                 }
+                // v25.7: Sync airdrop countdown timer with backend
+                if (data.nextAirdropTime) {
+                    syncAirdropTimer(data.nextAirdropTime, data.airdropIntervalMs);
+                }
                 // v11.0: Display SOL airdrop pool instead of PUMP holdings
                 // v14.0: Also display actual wallet balance
                 // v25.3: Also update countdown banner pool amount
@@ -2602,18 +2688,36 @@
         }
     };
 
+    // v25.7: Improved rewards claim tracker countdown with auto-recovery
+    const FEE_COLLECTION_INTERVAL_MS = 60000; // 1 minute - matches backend config
     registerInterval(setInterval(() => {
         if (nextCheckTime > 0) {
             const now = Date.now();
-            const diff = nextCheckTime - now;
+            let diff = nextCheckTime - now;
+
+            // If timer is more than 2 minutes past due, auto-reset to estimate next check
+            // This prevents permanent "Wait..." state when backend doesn't update
+            if (diff < -120000) {
+                // Estimate next check based on when it should have occurred
+                const missedCycles = Math.floor(Math.abs(diff) / FEE_COLLECTION_INTERVAL_MS);
+                nextCheckTime = nextCheckTime + ((missedCycles + 1) * FEE_COLLECTION_INTERVAL_MS);
+                diff = nextCheckTime - now;
+            }
+
             if (diff > 0) {
                 const min = Math.floor(diff / 60000);
                 const sec = Math.floor((diff % 60000) / 1000);
                 ui.trackNextCheck.innerText = `${min}:${sec < 10 ? '0' + sec : sec}`;
+            } else if (diff > -30000) {
+                // Within 30 seconds of expected time - show "Checking..."
+                ui.trackNextCheck.innerText = "Checking...";
             } else {
-                if (diff > -10000) ui.trackNextCheck.innerText = "Checking...";
-                else ui.trackNextCheck.innerText = "Wait...";
+                // Between 30s and 2min past due - show "Pending..."
+                ui.trackNextCheck.innerText = "Pending...";
             }
+        } else {
+            // No nextCheckTime set yet - waiting for backend
+            ui.trackNextCheck.innerText = "Syncing...";
         }
     }, 1000));
 

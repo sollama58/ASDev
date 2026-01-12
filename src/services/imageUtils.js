@@ -3,7 +3,99 @@
  * Helper functions for processing image URLs from various sources
  *
  * v1.0 - Clean Helius CDN-wrapped URLs to extract actual image URLs
+ * v25.8 - Added comprehensive URL normalization for all image formats
+ * v25.9 - Added Imgur URL normalization
  */
+
+/**
+ * v25.8: Normalize and clean any image URL to a standard format
+ * v25.9: Added Imgur URL support
+ * Handles: IPFS, Arweave, Helius CDN, Imgur, various gateways, data URLs, etc.
+ *
+ * @param {string|null} url - The URL to normalize
+ * @returns {string|null} Normalized URL or null if invalid
+ */
+function normalizeImageUrl(url) {
+    if (!url || typeof url !== 'string') {
+        return null;
+    }
+
+    let cleanUrl = url.trim();
+
+    // Handle null/undefined strings
+    if (cleanUrl === '' || cleanUrl === 'null' || cleanUrl === 'undefined') {
+        return null;
+    }
+
+    // Data URLs are valid as-is
+    if (cleanUrl.startsWith('data:image/')) {
+        return cleanUrl;
+    }
+
+    // Handle Helius CDN-wrapped URLs first
+    if (cleanUrl.includes('cdn.helius-rpc.com/cdn-cgi/image/')) {
+        const httpIndex = cleanUrl.indexOf('http', cleanUrl.indexOf('cdn-cgi/image/') + 14);
+        if (httpIndex !== -1) {
+            cleanUrl = cleanUrl.substring(httpIndex);
+        }
+    }
+
+    // Handle IPFS protocol
+    if (cleanUrl.startsWith('ipfs://')) {
+        cleanUrl = cleanUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
+    }
+
+    // Handle Arweave protocol
+    if (cleanUrl.startsWith('ar://')) {
+        cleanUrl = cleanUrl.replace('ar://', 'https://arweave.net/');
+    }
+
+    // v25.9: Normalize Imgur URLs to direct image format
+    // Handles: imgur.com/abc123, imgur.com/a/abc123, imgur.com/gallery/abc123
+    if (cleanUrl.includes('imgur.com')) {
+        // Extract the image ID from various Imgur URL formats
+        const imgurMatch = cleanUrl.match(/imgur\.com\/(?:a\/|gallery\/)?([a-zA-Z0-9]+)(?:\.[a-zA-Z]+)?/);
+        if (imgurMatch && imgurMatch[1]) {
+            const imgId = imgurMatch[1];
+            // Skip if it's already an i.imgur.com direct link with extension
+            if (!cleanUrl.includes('i.imgur.com') || !/\.(jpg|jpeg|png|gif|webp)$/i.test(cleanUrl)) {
+                cleanUrl = `https://i.imgur.com/${imgId}.png`;
+            }
+        }
+    }
+
+    // Normalize various IPFS gateways to ipfs.io
+    const ipfsGateways = [
+        'gateway.pinata.cloud',
+        'cloudflare-ipfs.com',
+        'dweb.link',
+        'nftstorage.link',
+        'ipfs.infura.io',
+        'ipfs.fleek.co',
+        'gateway.ipfs.io',
+        'cf-ipfs.com'
+    ];
+    for (const gateway of ipfsGateways) {
+        if (cleanUrl.includes(gateway)) {
+            cleanUrl = cleanUrl.replace(gateway, 'ipfs.io');
+            break;
+        }
+    }
+
+    // Handle bare IPFS CIDs (Qm... for v0, bafy... for v1)
+    if (/^(Qm[a-zA-Z0-9]{44}|bafy[a-zA-Z0-9]{50,})/.test(cleanUrl)) {
+        cleanUrl = `https://ipfs.io/ipfs/${cleanUrl}`;
+    }
+
+    // Validate URL format
+    try {
+        new URL(cleanUrl);
+    } catch (e) {
+        return null;
+    }
+
+    return cleanUrl;
+}
 
 /**
  * Clean a Helius CDN-wrapped URL to extract the actual image URL
@@ -94,6 +186,7 @@ function extractHeliusBatchImage(asset) {
 
 /**
  * v25.4: Fetch image from metadataUri as a fallback
+ * v25.8: Now uses normalizeImageUrl for comprehensive URL handling
  * Fetches the JSON metadata and extracts the image field
  *
  * @param {string} metadataUri - The URI to the token metadata JSON
@@ -106,14 +199,10 @@ async function fetchImageFromMetadataUri(metadataUri, timeout = 5000) {
     }
 
     try {
-        // Handle IPFS URIs
-        let fetchUrl = metadataUri;
-        if (metadataUri.startsWith('ipfs://')) {
-            fetchUrl = metadataUri.replace('ipfs://', 'https://ipfs.io/ipfs/');
-        }
-        // Convert Pinata gateway to more reliable IPFS gateway
-        if (fetchUrl.includes('gateway.pinata.cloud')) {
-            fetchUrl = fetchUrl.replace('gateway.pinata.cloud', 'ipfs.io');
+        // v25.8: Use normalizeImageUrl for the metadata URI itself
+        let fetchUrl = normalizeImageUrl(metadataUri);
+        if (!fetchUrl) {
+            return null;
         }
 
         const axios = require('axios');
@@ -127,12 +216,8 @@ async function fetchImageFromMetadataUri(metadataUri, timeout = 5000) {
 
         const metadata = response.data;
         if (metadata && metadata.image) {
-            // Clean the image URL if needed
-            let imageUrl = metadata.image;
-            if (imageUrl.startsWith('ipfs://')) {
-                imageUrl = imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
-            }
-            return imageUrl;
+            // v25.8: Use normalizeImageUrl for comprehensive image URL handling
+            return normalizeImageUrl(metadata.image);
         }
 
         return null;
@@ -144,8 +229,9 @@ async function fetchImageFromMetadataUri(metadataUri, timeout = 5000) {
 
 /**
  * v25.4: Get the best available image for a token
+ * v25.8: Now normalizes all image URLs for consistency
  * Tries multiple sources in order:
- * 1. Direct image URL from database
+ * 1. Direct image URL from database (normalized)
  * 2. Fetch from metadataUri
  *
  * @param {Object} token - Token object with image and metadataUri fields
@@ -153,9 +239,12 @@ async function fetchImageFromMetadataUri(metadataUri, timeout = 5000) {
  * @returns {Promise<string|null>} Best available image URL or null
  */
 async function getBestImage(token, timeout = 3000) {
-    // If we have a valid image already, use it
+    // If we have a valid image already, normalize and use it
     if (token.image && token.image !== '' && token.image !== 'null' && token.image !== 'undefined') {
-        return token.image;
+        const normalized = normalizeImageUrl(token.image);
+        if (normalized) {
+            return normalized;
+        }
     }
 
     // Try fetching from metadataUri as fallback
@@ -170,6 +259,7 @@ async function getBestImage(token, timeout = 3000) {
 }
 
 module.exports = {
+    normalizeImageUrl,
     cleanHeliusImageUrl,
     extractHeliusImage,
     extractHeliusBatchImage,

@@ -325,6 +325,9 @@ function init(deps) {
                 lastClaimTime: cachedHealth.stats.lastClaimTimestamp || 0,
                 lastClaimAmount: (cachedHealth.stats.lastClaimAmountLamports / LAMPORTS_PER_SOL).toFixed(4),
                 nextCheckTime: cachedHealth.stats.nextCheckTimestamp || (Date.now() + 1*60*1000),
+                // v25.7: Next airdrop timestamp for frontend countdown synchronization
+                nextAirdropTime: cachedHealth.stats.nextAirdropTimestamp || (Date.now() + (config.AIRDROP_INTERVAL || 900000)),
+                airdropIntervalMs: config.AIRDROP_INTERVAL || 900000,
                 totalVolume: cachedHealth.totalVolume,
                 // v11.0: Legacy PUMP airdrop total (for backwards compatibility)
                 totalAirdropped: cachedHealth.totalAirdropped,

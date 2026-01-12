@@ -171,6 +171,7 @@ async function initDB() {
             'lastClaimTimestamp',
             'lastClaimAmountLamports',
             'nextCheckTimestamp',
+            'nextAirdropTimestamp', // v25.7: Track next airdrop time for frontend countdown
             'lifetimeCreatorFeesLamports', // Ensure this is also initialized
             'lifetimeRobinhoodFeesLamports' // v12.0: Track fees from Robinhood partnerships
         ];

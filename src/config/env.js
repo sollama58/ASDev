@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.7-GECKO-IMAGE-FALLBACK",
+    VERSION: "v25.9-IMGUR-SUPPORT",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 
