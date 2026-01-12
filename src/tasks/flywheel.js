@@ -443,6 +443,11 @@ async function processAirdrop(deps) {
         // Basic Threshold Check - need at least MIN_AIRDROP_POOL SOL after reserve
         if (availableForAirdrop < MIN_AIRDROP_POOL) {
             logger.info(`[Airdrop] Below threshold: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available, need ${config.AIRDROP_THRESHOLD_SOL || 1.0} SOL`);
+            // v25.29: Still update timestamp so countdown stays synchronized
+            // This ensures frontend shows accurate next attempt time
+            const airdropInterval = config.AIRDROP_INTERVAL || 900000;
+            const nextAirdropTime = Date.now() + airdropInterval;
+            await db.run('UPDATE stats SET value = $1 WHERE key = $2', [nextAirdropTime, 'nextAirdropTimestamp']).catch(() => {});
             return; // Lock will be released in finally block
         }
 
@@ -567,6 +572,10 @@ async function processAirdrop(deps) {
 
         if (totalPoints === 0 || userPoints.length === 0) {
             logger.warn('[Airdrop] No eligible users found (totalPoints=0 or no users with points). Skipping distribution.');
+            // v25.29: Still update timestamp so countdown stays synchronized
+            const airdropInterval = config.AIRDROP_INTERVAL || 900000;
+            const nextAirdropTime = Date.now() + airdropInterval;
+            await db.run('UPDATE stats SET value = $1 WHERE key = $2', [nextAirdropTime, 'nextAirdropTimestamp']).catch(() => {});
             return; // Lock will be released in finally block
         }
 
@@ -1173,15 +1182,40 @@ async function runFeeCollection(deps) {
 /**
  * Start the flywheel intervals
  * v17.0: Separate intervals for fee collection (1 min) and airdrop (15 min)
+ * v25.29: Initialize nextAirdropTimestamp on startup for accurate frontend countdown
  */
-function start(deps) {
+async function start(deps) {
+    const { db } = deps;
+
+    // v25.29: Initialize nextAirdropTimestamp on startup
+    // This ensures frontend countdown is accurate even after server restart
+    const airdropInterval = config.AIRDROP_INTERVAL || 900000;
+    const nextAirdropTime = Date.now() + airdropInterval;
+    try {
+        // Check if timestamp exists and is in the past
+        const existing = await db.get('SELECT value FROM stats WHERE key = $1', ['nextAirdropTimestamp']);
+        const existingTime = existing?.value ? parseInt(existing.value) : 0;
+
+        if (!existingTime || existingTime < Date.now()) {
+            // Initialize or reset expired timestamp
+            await db.run(
+                'INSERT INTO stats (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
+                ['nextAirdropTimestamp', nextAirdropTime]
+            );
+            logger.info(`[Flywheel] Initialized nextAirdropTimestamp: ${new Date(nextAirdropTime).toISOString()}`);
+        } else {
+            logger.info(`[Flywheel] Using existing nextAirdropTimestamp: ${new Date(existingTime).toISOString()}`);
+        }
+    } catch (e) {
+        logger.warn('[Flywheel] Failed to initialize nextAirdropTimestamp', { error: e.message });
+    }
+
     // Fee collection every 1 minute
     const feeInterval = config.FEE_COLLECTION_INTERVAL || 60000;
     setInterval(() => runFeeCollection(deps), feeInterval);
     logger.info(`Fee collection started (${feeInterval / 1000}s interval, >${config.FEE_THRESHOLD_SOL || 0.05} SOL threshold)`);
 
     // Airdrop processing every 15 minutes
-    const airdropInterval = config.AIRDROP_INTERVAL || 900000;
     setInterval(() => processAirdrop(deps), airdropInterval);
     logger.info(`Airdrop distribution started (${airdropInterval / 60000}min interval, >${config.AIRDROP_THRESHOLD_SOL || 1.0} SOL threshold)`);
 

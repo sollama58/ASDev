@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.28-REDIS-MEMORY-OPT",
+    VERSION: "v25.29-AIRDROP-TIMER-SYNC",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 
