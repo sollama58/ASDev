@@ -165,6 +165,15 @@ function init(deps) {
             // Record the fee
             await addFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL);
 
+            // v25.4: Debug logging for image URL tracking
+            const imageToSend = sanitized.imageUrl || sanitized.image;
+            logger.info('[Deploy] Image URL debug', {
+                rawImageUrl: req.body.imageUrl ? req.body.imageUrl.substring(0, 80) : 'NULL',
+                sanitizedImageUrl: sanitized.imageUrl ? sanitized.imageUrl.substring(0, 80) : 'NULL',
+                sanitizedImage: sanitized.image ? String(sanitized.image).substring(0, 80) : 'NULL',
+                imageToSend: imageToSend ? imageToSend.substring(0, 80) : 'NULL'
+            });
+
             // Add job with sanitized data
             const job = await redis.addDeployJob({
                 name: sanitized.name,
@@ -172,13 +181,13 @@ function init(deps) {
                 description: sanitized.description,
                 twitter: sanitized.twitter,
                 website: sanitized.website,
-                image: sanitized.imageUrl || sanitized.image, // Pass the direct URL
+                image: imageToSend, // Pass the direct URL
                 userPubkey,
                 isMayhemMode,
                 metadataUri
             });
 
-            logger.info('[Deploy] Job queued', { jobId: job.id, userPubkey, name: sanitized.name });
+            logger.info('[Deploy] Job queued', { jobId: job.id, userPubkey, name: sanitized.name, hasImage: !!imageToSend });
             res.json({ success: true, jobId: job.id, message: "Queued" });
         } catch (err) {
             logger.error("Deploy API Error", { error: err.message, stack: err.stack });

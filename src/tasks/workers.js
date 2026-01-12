@@ -20,9 +20,17 @@ function initDeployWorker(deps) {
 
     const worker = redis.createWorker('deployQueue', async (job) => {
         logger.info(`STARTING JOB ${job.id}: ${job.data.ticker}`);
-        
+
         // Image here is now the URL passed from deploy route, NOT base64
         const { name, ticker, description, twitter: twitterHandle, website, image, userPubkey, isMayhemMode, metadataUri } = job.data;
+
+        // v25.4: Debug logging for image URL tracking
+        logger.info(`[Deploy] Job ${job.id} image debug`, {
+            ticker,
+            imageReceived: !!image,
+            imageValue: image ? image.substring(0, 80) : 'NULL/UNDEFINED',
+            imageType: typeof image
+        });
 
         try {
             if (!metadataUri) throw new Error("Metadata URI missing");
@@ -572,9 +580,12 @@ function initMetadataUpdaterWorker(deps) {
                     const misses = [];
                     for (const t of chunk) {
                         const data = updates.get(t.mint);
+                        // v25.4: Check if token already has an image (preserve Imgur URLs)
+                        const tokenHasImage = t.image && t.image !== '' && t.image !== 'null';
 
                         if (data) {
-                            if (data.imageUrl) {
+                            // v25.4: Only update image if token doesn't already have one
+                            if (data.imageUrl && !tokenHasImage) {
                                 await db.run(
                                     `UPDATE tokens SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4, image = $5 WHERE mint = $6`,
                                     [data.volume24h, data.marketCap, data.priceUsd, Date.now(), data.imageUrl, t.mint]
@@ -609,9 +620,13 @@ function initMetadataUpdaterWorker(deps) {
                                     const marketCap = asset?.token_info?.price_info?.total_price || 0;
                                     // v21.0: Clean CDN-wrapped URLs
                                     const image = imageUtils.extractHeliusBatchImage(asset);
+                                    // v25.4: Check if token already has an image (preserve Imgur URLs)
+                                    const token = chunk.find(t => t.mint === asset.id);
+                                    const tokenHasImage = token && token.image && token.image !== '' && token.image !== 'null';
 
                                     // Update with both marketCap and image if available
-                                    if (image && marketCap > 0) {
+                                    // v25.4: Only update image if token doesn't already have one
+                                    if (image && marketCap > 0 && !tokenHasImage) {
                                         await db.run(
                                             `UPDATE tokens SET "marketCap" = $1, image = $2, "lastUpdated" = $3 WHERE mint = $4`,
                                             [marketCap, image, Date.now(), asset.id]
@@ -621,7 +636,7 @@ function initMetadataUpdaterWorker(deps) {
                                             `UPDATE tokens SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
                                             [marketCap, Date.now(), asset.id]
                                         );
-                                    } else if (image) {
+                                    } else if (image && !tokenHasImage) {
                                         await db.run(
                                             `UPDATE tokens SET image = $1, "lastUpdated" = $2 WHERE mint = $3`,
                                             [image, Date.now(), asset.id]

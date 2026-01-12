@@ -493,6 +493,16 @@ async function saveTokenData(pubkey, mint, metadata) {
         throw new Error("metadata.ticker and metadata.name are required");
     }
 
+    // v25.4: Debug logging for image URL tracking
+    const imageValue = metadata.image || '';
+    logger.info("[PostgreSQL] saveTokenData image debug", {
+        mint: mint.substring(0, 12),
+        ticker: metadata.ticker,
+        imageProvided: !!metadata.image,
+        imageValue: imageValue ? imageValue.substring(0, 80) : 'EMPTY_STRING',
+        imageType: typeof metadata.image
+    });
+
     try {
         const result = await db.run(`
             INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp)
@@ -508,9 +518,9 @@ async function saveTokenData(pubkey, mint, metadata) {
                 "isMayhemMode" = EXCLUDED."isMayhemMode"
         `, [pubkey, mint, metadata.ticker, metadata.name, metadata.description || '',
             metadata.twitter || '', metadata.website || '', metadata.metadataUri || '',
-            metadata.image || '', metadata.isMayhemMode ? 1 : 0, Date.now()]);
+            imageValue, metadata.isMayhemMode ? 1 : 0, Date.now()]);
 
-        logger.info("[PostgreSQL] Token saved successfully", { mint, ticker: metadata.ticker, changes: result.changes });
+        logger.info("[PostgreSQL] Token saved successfully", { mint, ticker: metadata.ticker, hasImage: !!imageValue, changes: result.changes });
         return result;
     } catch (e) {
         logger.error("[PostgreSQL] Save Token Error", { error: e.message, mint, ticker: metadata?.ticker });

@@ -235,21 +235,49 @@
         .close-btn { color: var(--text-muted); float: right; font-size: 24px; font-weight: bold; line-height: 1; }
         .close-btn:hover { color: var(--text-primary); cursor: pointer; }
 
-        /* Leaderboard Table */
-        .leader-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+        /* Leaderboard Table - v25.4: Improved styling */
+        .leader-table { width: 100%; border-collapse: separate; border-spacing: 0; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
         .leader-table th {
             text-align: left;
-            padding: 12px 10px;
-            border-bottom: 1px solid var(--border-primary);
-            color: var(--text-muted);
+            padding: 10px 12px;
+            border-bottom: 2px solid var(--accent-orange);
+            color: var(--accent-orange);
             text-transform: uppercase;
-            font-size: 11px;
-            font-weight: 500;
-            letter-spacing: 0.5px;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.8px;
+            background: rgba(234, 88, 12, 0.05);
         }
-        .leader-table td { padding: 14px 10px; border-bottom: 1px solid var(--border-primary); vertical-align: middle; }
-        .leader-table tr:hover { background: var(--bg-hover); }
+        .leader-table td { padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: middle; }
+        .leader-table tr:hover { background: rgba(234, 88, 12, 0.08); }
         .leader-table tr:last-child td { border-bottom: none; }
+        .leader-table tbody tr { transition: background 0.15s ease; }
+
+        /* v25.4: Volume multiplier badge */
+        .vol-multiplier {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            font-size: 9px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 4px;
+            vertical-align: middle;
+        }
+        .vol-multiplier.high { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+        .vol-multiplier.mid { background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.3); }
+        .vol-multiplier.low { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.2); }
+
+        /* v25.4: Unified data cells */
+        .data-cell {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+        }
+        .data-cell .value { font-weight: 600; font-size: 13px; }
+        .data-cell .label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; }
 
         .token-img-sm {
             width: 36px;
@@ -1197,14 +1225,14 @@
                 </div>
             </div>
             <div class="overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0">
-                <table class="leader-table min-w-[400px] md:min-w-0">
+                <table class="leader-table min-w-[500px] md:min-w-0">
                     <thead>
                         <tr>
-                            <th class="w-8 md:w-12">#</th>
+                            <th class="w-10 text-center">#</th>
                             <th>Token</th>
-                            <th class="text-right hidden sm:table-cell">MCAP</th>
-                            <th class="text-right">Vol (24H)</th>
-                            <th class="text-right w-16 md:w-auto">Action</th>
+                            <th class="text-right w-24">Market Cap</th>
+                            <th class="text-right w-32">Volume (24H)</th>
+                            <th class="text-right w-20"></th>
                         </tr>
                     </thead>
                     <tbody id="leaderboard-body"><tr><td colspan="5" class="text-center text-orange-400 py-4">Scanning Chain Data...</td></tr></tbody>
@@ -1767,7 +1795,8 @@
 
     const resolveTokenImage = (url) => {
         const fallback = 'https://placehold.co/32x32/333/fff?text=?';
-        if (!url) return fallback;
+        // v25.4: Handle null/empty/undefined and "null" string
+        if (!url || url === 'null' || url === 'undefined' || url.trim() === '') return fallback;
         let cleanUrl = url.trim();
         if (cleanUrl.startsWith('ipfs://')) {
             cleanUrl = cleanUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
@@ -1904,22 +1933,92 @@
     };
 
     // Helper functions to update UI from WebSocket data
+    // v25.4: Updated to match main updateLeaderboard styling with volume multipliers
     const updateLeaderboardFromWS = (tokens) => {
-        if (!ui.leaderTbody || tokens.length === 0) return;
+        if (!ui.leaderboardBody || tokens.length === 0) return;
+
+        const TOP_N = 10;
+        const displayTokens = tokens.slice(0, TOP_N);
+        const hasMore = tokens.length > TOP_N;
+
+        // Calculate volume range for multiplier display (only eligible tokens)
+        const eligibleTokens = tokens.filter(t => t.isEligible && parseFloat(t.volume || t.volume24h) >= 100);
+        const volumes = eligibleTokens.map(t => parseFloat(t.volume || t.volume24h) || 100);
+        const minVol = volumes.length > 0 ? Math.min(...volumes) : 100;
+        const maxVol = volumes.length > 0 ? Math.max(...volumes) : 100;
 
         let html = '';
-        tokens.slice(0, 10).forEach((t, i) => {
-            const bondedBadge = t.isBonded ? '<span class="bonded-badge">BONDED</span>' : '';
-            html += `<tr class="hover:bg-gray-900/40 cursor-pointer" onclick="window.open('${PUMPFUN_URL_BASE}${escapeHtml(t.mint)}', '_blank')">
-                <td class="text-gray-500 text-center font-mono">${i + 1}</td>
-                <td><img src="${resolveTokenImage(t.image)}" loading="lazy" width="28" height="28" class="rounded" onerror="this.src='https://placehold.co/28x28/333/fff?text=?';"></td>
-                <td class="font-mono truncate max-w-24">${escapeHtml(t.ticker || '?')}</td>
-                <td class="text-green-400 text-right font-mono">${formatMcap(t.marketCap)}</td>
-                <td class="text-yellow-400 text-right font-mono">${formatMcap(t.volume24h || 0)}</td>
-                <td class="text-center">${bondedBadge}</td>
+        displayTokens.forEach((t, i) => {
+            const displayVol = parseFloat(t.volume || t.volume24h) || 0;
+            const imgSrc = resolveTokenImage(t.image);
+
+            // Calculate volume multiplier for eligible tokens
+            let volMultiplier = '';
+            if (t.isEligible && displayVol >= 100) {
+                const mult = calculateVolumeMultiplier(displayVol, minVol, maxVol);
+                const multClass = mult >= 1.5 ? 'high' : (mult >= 1.0 ? 'mid' : 'low');
+                volMultiplier = `<span class="vol-multiplier ${multClass}" title="Points multiplier based on volume">${mult.toFixed(2)}x</span>`;
+            }
+
+            // Status dot
+            const statusDot = t.complete || t.isBonded
+                ? `<span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" title="Bonded"></span>`
+                : `<span class="inline-block w-2 h-2 rounded-full bg-yellow-500 mr-1" title="Pre-bond"></span>`;
+
+            const holderMark = t.isUserTopHolder ? `<span class="text-amber-400 text-[10px] ml-1" title="Top Holder">👑</span>` : '';
+            const creatorMark = (userPubkey && t.creator && userPubkey === t.creator) ? `<span class="text-purple-400 text-[10px] ml-1" title="Creator">🛠️</span>` : '';
+            const robinhoodMark = t.isRobinhood ? `<span class="text-green-400 text-[10px] ml-1" title="Robinhood Partner">🏹</span>` : '';
+
+            html += `
+            <tr>
+                <td class="text-center">
+                    <span class="text-orange-500 font-bold text-lg">${i + 1}</span>
+                </td>
+                <td>
+                    <div class="flex items-center gap-3">
+                        <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon" onerror="this.src='https://placehold.co/36x36/333/fff?text=?'">
+                        <div class="flex flex-col">
+                            <div class="flex items-center gap-1">
+                                ${statusDot}
+                                <span class="text-white font-bold">${escapeHtml(t.ticker || '?')}</span>
+                                ${robinhoodMark}${creatorMark}${holderMark}
+                            </div>
+                            <span class="text-[10px] text-gray-500 truncate max-w-[120px]">${escapeHtml(t.name || '')}</span>
+                        </div>
+                    </div>
+                </td>
+                <td class="text-right">
+                    <span class="text-green-400 font-bold font-mono">${formatMcap(t.marketCap)}</span>
+                </td>
+                <td class="text-right">
+                    <div class="flex flex-col items-end">
+                        <span class="text-yellow-400 font-bold font-mono">$${displayVol.toLocaleString()}</span>
+                        ${volMultiplier}
+                    </div>
+                </td>
+                <td class="text-right">
+                    <div class="flex gap-1 justify-end items-center">
+                        <button onclick="event.stopPropagation(); viewTokenHolders('${escapeHtml(t.mint)}', '${escapeHtml(t.ticker || '?')}', ${!!t.isRobinhood})" class="text-xs bg-gray-800 border border-gray-700 text-gray-300 w-8 h-8 rounded hover:bg-gray-700 hover:text-white transition flex items-center justify-center" title="View Holders">
+                            👥
+                        </button>
+                        <a href="${PUMPFUN_URL_BASE}${escapeHtml(t.mint)}" target="_blank" class="text-xs bg-orange-600 text-white px-3 h-8 rounded hover:bg-orange-500 transition flex items-center justify-center font-bold">↗</a>
+                    </div>
+                </td>
             </tr>`;
         });
-        ui.leaderTbody.innerHTML = sanitize(html);
+
+        // Add "View All" row if there are more tokens
+        if (hasMore) {
+            html += `
+            <tr class="bg-orange-900/20 hover:bg-orange-900/40 cursor-pointer" onclick="toggleAllLaunchesModal()">
+                <td colspan="5" class="text-center text-orange-400 py-3 font-mono">
+                    <span class="text-orange-300">+ ${tokens.length - TOP_N} more tokens</span>
+                    <span class="ml-2 text-xs text-orange-500 underline">Click to view all</span>
+                </td>
+            </tr>`;
+        }
+
+        ui.leaderboardBody.innerHTML = sanitize(html);
     };
 
     const updateKOTHFromWS = (koth) => {
@@ -2105,6 +2204,16 @@
         } catch (e) {}
     };
 
+    // v25.4: Calculate volume multiplier for display (matches backend formula)
+    const calculateVolumeMultiplier = (volume, minVol, maxVol) => {
+        if (maxVol <= minVol || minVol <= 0) return 1.0;
+        const logMin = Math.log10(minVol);
+        const logMax = Math.log10(maxVol);
+        const logVol = Math.log10(Math.max(volume, minVol));
+        const normalized = (logVol - logMin) / (logMax - logMin);
+        return 0.5 + (normalized * 1.5); // 0.5x to 2.0x range
+    };
+
     const updateLeaderboard = async () => {
         try {
             const endpoint = `${BACKEND_URL}/api/leaderboard${userPubkey ? '?userPubkey='+userPubkey : ''}`;
@@ -2130,57 +2239,78 @@
             const tokens = allTokens.slice(0, TOP_N);
             const hasMore = allTokens.length > TOP_N;
 
+            // v25.4: Calculate volume range for multiplier display (only eligible tokens)
+            const eligibleTokens = allTokens.filter(t => t.isEligible && parseFloat(t.volume) >= 100);
+            const volumes = eligibleTokens.map(t => parseFloat(t.volume) || 100);
+            const minVol = volumes.length > 0 ? Math.min(...volumes) : 100;
+            const maxVol = volumes.length > 0 ? Math.max(...volumes) : 100;
+
             const rows = tokens.map((item, index) => {
-                let displayMcap = item.marketCap; 
+                let displayMcap = item.marketCap;
                 let displayVol = parseFloat(item.volume);
                 let tradeLink = `${PUMPFUN_URL_BASE}${item.mint}`;
-                let badge = `<span class="badge-bonding" title="Bonding in Progress">PRE-BOND</span>`; 
-
-                if (item.complete) {
-                    badge = `<span class="badge-bonded" title="Bonding Curve Complete">BONDED</span>`;
-                }
 
                 let imgSrc = resolveTokenImage(item.image);
-                
-                const holderMark = item.isUserTopHolder 
-                    ? `<span class="holder-check" title="You are a Top Holder">👑 TOP HOLDER</span>` 
+
+                // v25.4: Calculate and display volume multiplier for eligible tokens
+                let volMultiplier = '';
+                if (item.isEligible && displayVol >= 100) {
+                    const mult = calculateVolumeMultiplier(displayVol, minVol, maxVol);
+                    const multClass = mult >= 1.5 ? 'high' : (mult >= 1.0 ? 'mid' : 'low');
+                    volMultiplier = `<span class="vol-multiplier ${multClass}" title="Points multiplier based on volume">${mult.toFixed(2)}x</span>`;
+                }
+
+                // Simplified status indicator
+                const statusDot = item.complete
+                    ? `<span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" title="Bonded"></span>`
+                    : `<span class="inline-block w-2 h-2 rounded-full bg-yellow-500 mr-1" title="Pre-bond"></span>`;
+
+                const holderMark = item.isUserTopHolder
+                    ? `<span class="text-amber-400 text-[10px] ml-1" title="You are a Top Holder">👑</span>`
                     : '';
-                
+
                 const creatorMark = (userPubkey && item.creator && userPubkey === item.creator)
-                    ? `<span class="badge-creator" title="You created this token">🛠️ CREATOR</span>`
+                    ? `<span class="text-purple-400 text-[10px] ml-1" title="You created this token">🛠️</span>`
                     : '';
 
                 // v13.0: Robinhood badge for fee-sharing external tokens
                 const robinhoodMark = item.isRobinhood
-                    ? `<span class="badge-robinhood" title="External Token (Fee Share Partner)">🏹 ROBINHOOD</span>`
+                    ? `<span class="text-green-400 text-[10px] ml-1" title="Robinhood Partner">🏹</span>`
                     : '';
-
-                // v18.0: Eligibility badge based on $100 volume threshold
-                const eligibilityMark = item.isEligible
-                    ? `<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded border border-green-700/50 no-break" title="Eligible for airdrop (>$100 volume)">ELIGIBLE</span>`
-                    : `<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded border border-red-800/30 no-break" title="Not eligible (needs >$100 24hr volume)">NOT&nbsp;ELIGIBLE</span>`;
 
                 return `
                 <tr>
-                    <td class="text-orange-500 font-bold">${index + 1}</td>
-                    <td>
-                        <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
-                        <span class="text-white font-bold ticker-symbol">${escapeHtml(item.ticker)}</span>
-                        ${eligibilityMark}
-                        ${robinhoodMark}
-                        ${creatorMark}
-                        ${holderMark}
-                        ${badge}
-                        <div class="text-[10px] text-orange-300 mt-1 truncate max-w-[150px] token-name">${escapeHtml(item.name)}</div>
+                    <td class="text-center">
+                        <span class="text-orange-500 font-bold text-lg">${index + 1}</span>
                     </td>
-                    <td class="text-right text-green-400 font-bold font-mono mcap-amount">${formatMcap(displayMcap)}</td>
-                    <td class="text-right text-white font-bold volume-amount">$${displayVol.toLocaleString()}</td>
+                    <td>
+                        <div class="flex items-center gap-3">
+                            <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon" onerror="this.src='https://placehold.co/36x36/333/fff?text=?'">
+                            <div class="flex flex-col">
+                                <div class="flex items-center gap-1">
+                                    ${statusDot}
+                                    <span class="text-white font-bold">${escapeHtml(item.ticker)}</span>
+                                    ${robinhoodMark}${creatorMark}${holderMark}
+                                </div>
+                                <span class="text-[10px] text-gray-500 truncate max-w-[120px]">${escapeHtml(item.name)}</span>
+                            </div>
+                        </div>
+                    </td>
                     <td class="text-right">
-                        <div class="flex gap-2 justify-end items-center">
-                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}', ${!!item.isRobinhood})" class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-1 rounded hover:bg-blue-800 hover:text-white transition" title="View Top 50 Holders">
+                        <span class="text-green-400 font-bold font-mono">${formatMcap(displayMcap)}</span>
+                    </td>
+                    <td class="text-right">
+                        <div class="flex flex-col items-end">
+                            <span class="text-yellow-400 font-bold font-mono">$${displayVol.toLocaleString()}</span>
+                            ${volMultiplier}
+                        </div>
+                    </td>
+                    <td class="text-right">
+                        <div class="flex gap-1 justify-end items-center">
+                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}', ${!!item.isRobinhood})" class="text-xs bg-gray-800 border border-gray-700 text-gray-300 w-8 h-8 rounded hover:bg-gray-700 hover:text-white transition flex items-center justify-center" title="View Holders">
                                 👥
                             </button>
-                            <a href="${escapeHtml(tradeLink)}" target="_blank" class="text-xs bg-orange-900/50 border border-orange-700 text-orange-300 px-2 py-1 rounded hover:bg-orange-800 hover:text-white transition">TRADE</a>
+                            <a href="${escapeHtml(tradeLink)}" target="_blank" class="text-xs bg-orange-600 text-white px-3 h-8 rounded hover:bg-orange-500 transition flex items-center justify-center font-bold">↗</a>
                         </div>
                     </td>
                 </tr>`;
@@ -2688,6 +2818,13 @@
                 const thresholdInfo = data.eligibilityThreshold
                     ? `<p class="text-orange-400/70 text-xs mb-3">Showing all tokens in database. Tokens need >${data.eligibilityThreshold} USD 24hr volume to be eligible for airdrops.</p>`
                     : '';
+
+                // v25.4: Calculate volume range for multiplier display
+                const eligibleTokens = tokens.filter(t => t.isEligible && parseFloat(t.volume) >= 100);
+                const volumes = eligibleTokens.map(t => parseFloat(t.volume) || 100);
+                const minVol = volumes.length > 0 ? Math.min(...volumes) : 100;
+                const maxVol = volumes.length > 0 ? Math.max(...volumes) : 100;
+
                 const tableHTML = `
                     ${thresholdInfo}
                     <table class="w-full text-left font-mono text-xs leader-table">
@@ -2696,11 +2833,20 @@
                         </thead>
                         <tbody class="text-orange-200">
                             ${await Promise.all(tokens.map(async (item, index) => {
-                                const badge = item.complete ?
-                                    '<span class="badge-bonded text-xs" style="background-color:#22c55e;">BONDED</span>' :
-                                    '<span class="badge-bonding text-xs" style="background-color:#eab308;">PRE-BOND</span>';
+                                const statusDot = item.complete
+                                    ? '<span class="inline-block w-2 h-2 rounded-full bg-green-500" title="Bonded"></span>'
+                                    : '<span class="inline-block w-2 h-2 rounded-full bg-yellow-500" title="Pre-bond"></span>';
 
                                 let imgSrc = resolveTokenImage(item.image);
+                                const displayVol = parseFloat(item.volume) || 0;
+
+                                // v25.4: Volume multiplier for eligible tokens
+                                let volMultiplier = '';
+                                if (item.isEligible && displayVol >= 100) {
+                                    const mult = calculateVolumeMultiplier(displayVol, minVol, maxVol);
+                                    const multClass = mult >= 1.5 ? 'high' : (mult >= 1.0 ? 'mid' : 'low');
+                                    volMultiplier = `<span class="vol-multiplier ${multClass}">${mult.toFixed(2)}x</span>`;
+                                }
 
                                 // v18.0: Eligibility badge
                                 const eligibilityBadge = item.isEligible
@@ -2716,14 +2862,24 @@
                                 <tr class="border-b border-orange-800/30 hover:bg-orange-900/20">
                                     <td class="p-2">${index + 1}</td>
                                     <td class="p-2">
-                                        <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon">
-                                        <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="font-bold underline text-white ticker-symbol">${escapeHtml(item.ticker)}</a> <span class="token-name">(${escapeHtml(item.name)})</span>
+                                        <div class="flex items-center gap-2">
+                                            <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="icon" onerror="this.src='https://placehold.co/36x36/333/fff?text=?'">
+                                            <div class="flex flex-col">
+                                                <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="font-bold underline text-white ticker-symbol">${escapeHtml(item.ticker)}</a>
+                                                <span class="token-name text-[10px] text-gray-500">${escapeHtml(item.name)}</span>
+                                            </div>
+                                        </div>
                                     </td>
                                     <td class="p-2">${sourceBadge}</td>
                                     <td class="p-2 text-right font-bold text-green-400 mcap-amount">${formatMcap(item.marketCap)}</td>
-                                    <td class="p-2 text-right font-bold volume-amount">$${(parseFloat(item.volume) || 0).toLocaleString()}</td>
+                                    <td class="p-2 text-right">
+                                        <div class="flex flex-col items-end">
+                                            <span class="font-bold text-yellow-400">$${displayVol.toLocaleString()}</span>
+                                            ${volMultiplier}
+                                        </div>
+                                    </td>
                                     <td class="p-2 text-right">${eligibilityBadge}</td>
-                                    <td class="p-2 text-right">${badge}</td>
+                                    <td class="p-2 text-center">${statusDot}</td>
                                 </tr>
                                 `;
                             })).then(rows => rows.join(''))}

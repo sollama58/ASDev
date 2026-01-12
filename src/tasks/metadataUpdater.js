@@ -227,12 +227,14 @@ async function updateMetadata(deps) {
 
                 if (data) {
                     // Update market data
-                    if (data.imageUrl) {
+                    // v25.4: Only update image if token doesn't already have one (preserve Imgur URLs)
+                    const shouldUpdateImage = data.imageUrl && (!t.image || t.image === '' || t.image === 'null');
+                    if (shouldUpdateImage) {
                         await db.run(
                             `UPDATE tokens SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4, image = $5 WHERE mint = $6`,
                             [data.volume24h, data.marketCap, data.priceUsd, Date.now(), data.imageUrl, t.mint]
                         );
-                        if (!t.image || t.image === '') imagesUpdated++;
+                        imagesUpdated++;
                     } else {
                         await db.run(
                             `UPDATE tokens SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4 WHERE mint = $5`,
@@ -253,9 +255,14 @@ async function updateMetadata(deps) {
                 const heliusData = await fetchHeliusMarketDataBatch(misses);
                 for (const mint of misses) {
                     const data = heliusData.get(mint);
+                    const token = chunk.find(t => t.mint === mint);
+                    // v25.4: Check if token already has an image (preserve Imgur URLs)
+                    const tokenHasImage = token && token.image && token.image !== '' && token.image !== 'null';
+
                     if (data) {
                         // v19.0: Update image and market cap from Helius fallback
-                        if (data.image && data.marketCap > 0) {
+                        // v25.4: Only update image if token doesn't already have one
+                        if (data.image && data.marketCap > 0 && !tokenHasImage) {
                             await db.run(
                                 `UPDATE tokens SET "marketCap" = $1, image = $2, "lastUpdated" = $3 WHERE mint = $4`,
                                 [data.marketCap, data.image, Date.now(), mint]
@@ -267,11 +274,10 @@ async function updateMetadata(deps) {
                                 [data.marketCap, Date.now(), mint]
                             );
                             // Track tokens that got market cap but no image
-                            const token = chunk.find(t => t.mint === mint);
-                            if (token && (!token.image || token.image === '')) {
+                            if (!tokenHasImage) {
                                 stillMissingImages.push(mint);
                             }
-                        } else if (data.image) {
+                        } else if (data.image && !tokenHasImage) {
                             await db.run(
                                 `UPDATE tokens SET image = $1, "lastUpdated" = $2 WHERE mint = $3`,
                                 [data.image, Date.now(), mint]
@@ -281,8 +287,7 @@ async function updateMetadata(deps) {
                         totalUpdated++;
                     } else {
                         // No data from Helius either - add to GeckoTerminal fallback list
-                        const token = chunk.find(t => t.mint === mint);
-                        if (token && (!token.image || token.image === '')) {
+                        if (!tokenHasImage) {
                             stillMissingImages.push(mint);
                         }
                     }
