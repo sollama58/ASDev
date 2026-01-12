@@ -28,14 +28,15 @@ const GLOBAL_STATE_KEYS = {
     USER_POINTS_MAP: 'globalState:userPointsMap',
 };
 
-// SCALABILITY FIX: TTLs for global state keys (in seconds)
+// v25.28: Reduced TTLs to save Redis memory
+// These are refreshed by holder scanner jobs, so short TTLs are fine
 const GLOBAL_STATE_TTL = {
-    LAST_BACKEND_UPDATE: 300,       // 5 minutes - refreshed frequently
-    ASDF_TOP100_HOLDERS: 600,       // 10 minutes - updated every 2 mins
-    TOTAL_POINTS: 600,              // 10 minutes
-    DEV_PUMP_HOLDINGS: 600,         // 10 minutes
-    USER_EXPECTED_AIRDROPS: 600,    // 10 minutes
-    USER_POINTS_MAP: 600,           // 10 minutes
+    LAST_BACKEND_UPDATE: 180,       // 3 minutes - refreshed frequently
+    ASDF_TOP100_HOLDERS: 300,       // 5 minutes - updated every 2 mins
+    TOTAL_POINTS: 300,              // 5 minutes
+    DEV_PUMP_HOLDINGS: 300,         // 5 minutes
+    USER_EXPECTED_AIRDROPS: 300,    // 5 minutes - critical for airdrop display
+    USER_POINTS_MAP: 300,           // 5 minutes - critical for points display
 };
 
 /**
@@ -543,45 +544,49 @@ async function getGlobalStateSnapshot() {
 
 /**
  * Add job to holder scanner queue
+ * v25.28: Reduced job retention from 100/50 to 5/3 to save Redis memory
  */
 async function addHolderScannerJob(data = {}) {
     if (!holderScannerQueue) {
         throw new Error("Holder scanner queue not initialized");
     }
     return holderScannerQueue.add('scanHolders', data, {
-        removeOnComplete: 100,
-        removeOnFail: 50,
+        removeOnComplete: 5,
+        removeOnFail: 3,
     });
 }
 
 /**
  * Add job to metadata updater queue
+ * v25.28: Reduced job retention from 100/50 to 5/3 to save Redis memory
  */
 async function addMetadataUpdaterJob(data = {}) {
     if (!metadataUpdaterQueue) {
         throw new Error("Metadata updater queue not initialized");
     }
     return metadataUpdaterQueue.add('updateMetadata', data, {
-        removeOnComplete: 100,
-        removeOnFail: 50,
+        removeOnComplete: 5,
+        removeOnFail: 3,
     });
 }
 
 /**
  * Add job to Robinhood scanner queue
+ * v25.28: Reduced job retention from 100/50 to 5/3 to save Redis memory
  */
 async function addRobinhoodScannerJob(data = {}) {
     if (!robinhoodScannerQueue) {
         throw new Error("Robinhood scanner queue not initialized");
     }
     return robinhoodScannerQueue.add('scanRobinhood', data, {
-        removeOnComplete: 100,
-        removeOnFail: 50,
+        removeOnComplete: 5,
+        removeOnFail: 3,
     });
 }
 
 /**
  * v25.27: Clean up old completed and failed jobs from all queues
+ * v25.28: More aggressive cleanup - 10 min for completed, 1 hour for failed
  * This helps prevent Redis memory buildup from BullMQ job history
  */
 async function cleanupOldJobs() {
@@ -591,10 +596,10 @@ async function cleanupOldJobs() {
     for (const queue of queues) {
         if (!queue) continue;
         try {
-            // Remove completed jobs older than 1 hour
-            const completedCleaned = await queue.clean(3600000, 1000, 'completed');
-            // Remove failed jobs older than 6 hours
-            const failedCleaned = await queue.clean(21600000, 500, 'failed');
+            // v25.28: More aggressive - remove completed jobs older than 10 minutes
+            const completedCleaned = await queue.clean(600000, 1000, 'completed');
+            // v25.28: More aggressive - remove failed jobs older than 1 hour
+            const failedCleaned = await queue.clean(3600000, 500, 'failed');
             totalCleaned += (completedCleaned?.length || 0) + (failedCleaned?.length || 0);
         } catch (e) {
             logger.debug(`[Redis] Queue cleanup error for ${queue.name}`, { error: e.message });

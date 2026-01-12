@@ -233,10 +233,11 @@ function init(deps) {
 
             // Batch query for user holder status (check both holder tables)
             // This is user-specific so we cache it separately with shorter TTL
+            // v25.28: Reduced TTL from 30s to 15s to save Redis memory
             let userHoldings = new Set();
             if (userPubkey && rows.length > 0) {
                 const userCacheKey = `user_holdings_${userPubkey}`;
-                const cachedHoldings = await redis.smartCache(userCacheKey, 30, async () => {
+                const cachedHoldings = await redis.smartCache(userCacheKey, 15, async () => {
                     const mints = rows.map(r => r.mint);
                     const placeholders = mints.map((_, i) => `$${i + 2}`).join(',');
 
@@ -457,7 +458,8 @@ function init(deps) {
 
             // v22.0: Single query to get user's holdings with pre-computed totals
             // v25.25: Include volume24h for volume weighting calculation
-            const userTokenHoldings = await redis.smartCache(`check_holder_v2_${userPubkey}`, 30, async () => {
+            // v25.28: Reduced TTL from 30s to 15s to save Redis memory
+            const userTokenHoldings = await redis.smartCache(`check_holder_v2_${userPubkey}`, 15, async () => {
                 const holdings = await db.all(`
                     SELECT
                         th."holderPubkey",
@@ -514,7 +516,8 @@ function init(deps) {
 
             // v22.0: Single query for Robinhood holdings with pre-computed totals
             // v25.25: Include volume24h for volume weighting calculation
-            const robinhoodHoldings = await redis.smartCache(`check_holder_rh_v2_${userPubkey}`, 30, async () => {
+            // v25.28: Reduced TTL from 30s to 15s to save Redis memory
+            const robinhoodHoldings = await redis.smartCache(`check_holder_rh_v2_${userPubkey}`, 15, async () => {
                 return await db.all(`
                     SELECT
                         rth."holderPubkey",
@@ -592,8 +595,9 @@ function init(deps) {
 
         try {
             // v24.0: Cache user holdings for 30 seconds
+            // v25.28: Reduced TTL from 30s to 15s to save Redis memory
             const cacheKey = `user_holdings_detail_v2_${userPubkey}`;
-            const result = await redis.smartCache(cacheKey, 30, async () => {
+            const result = await redis.smartCache(cacheKey, 15, async () => {
                 const POINTS_PER_TOKEN = 1000;
                 const holdings = [];
 
