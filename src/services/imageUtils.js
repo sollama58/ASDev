@@ -5,12 +5,14 @@
  * v1.0 - Clean Helius CDN-wrapped URLs to extract actual image URLs
  * v25.8 - Added comprehensive URL normalization for all image formats
  * v25.9 - Added Imgur URL normalization
+ * v25.10 - Added GeckoTerminal asset URL support
  */
 
 /**
  * v25.8: Normalize and clean any image URL to a standard format
  * v25.9: Added Imgur URL support
- * Handles: IPFS, Arweave, Helius CDN, Imgur, various gateways, data URLs, etc.
+ * v25.10: Added GeckoTerminal asset URL support
+ * Handles: IPFS, Arweave, Helius CDN, Imgur, GeckoTerminal, various gateways, data URLs, etc.
  *
  * @param {string|null} url - The URL to normalize
  * @returns {string|null} Normalized URL or null if invalid
@@ -63,6 +65,10 @@ function normalizeImageUrl(url) {
             }
         }
     }
+
+    // v25.10: GeckoTerminal asset URLs are valid as-is
+    // Format: https://assets.geckoterminal.com/<asset-id>
+    // These don't need transformation, just pass through
 
     // Normalize various IPFS gateways to ipfs.io
     const ipfsGateways = [

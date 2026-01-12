@@ -1839,6 +1839,10 @@
             }
         }
 
+        // v25.10: GeckoTerminal asset URLs are valid as-is
+        // Format: https://assets.geckoterminal.com/<asset-id>
+        // These don't need transformation, just pass through
+
         // v25.8: Normalize various IPFS gateways to ipfs.io for reliability
         const ipfsGateways = [
             'gateway.pinata.cloud',
