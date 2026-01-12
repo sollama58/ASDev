@@ -22,6 +22,27 @@ const router = express.Router();
 // v18.0: Minimum 24hr volume for airdrop eligibility
 const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
 
+// v25.25: Volume weight range for point calculation (must match holderScanner.js)
+const VOLUME_WEIGHT_MIN = 0.5;  // Lowest volume token gets 0.5x base points
+const VOLUME_WEIGHT_MAX = 2.0;  // Highest volume token gets 2.0x base points
+
+/**
+ * v25.25: Calculate dynamic volume weight for a token
+ * Uses logarithmic scaling relative to the volume range of all eligible tokens
+ * This MUST match the calculation in holderScanner.js for consistent point display
+ */
+function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
+    if (maxVolume <= minVolume || minVolume <= 0) {
+        return 1.0;
+    }
+    const logMin = Math.log10(minVolume);
+    const logMax = Math.log10(maxVolume);
+    const logVolume = Math.log10(Math.max(tokenVolume, minVolume));
+    const normalized = (logVolume - logMin) / (logMax - logMin);
+    const weight = VOLUME_WEIGHT_MIN + (normalized * (VOLUME_WEIGHT_MAX - VOLUME_WEIGHT_MIN));
+    return Math.max(VOLUME_WEIGHT_MIN, Math.min(VOLUME_WEIGHT_MAX, weight));
+}
+
 // v24.0 SECURITY: Rate limiter for token registration (expensive on-chain operations)
 const tokenRegistrationLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
@@ -404,6 +425,7 @@ function init(deps) {
     // v18.0: Changed from top 10 to all tokens with >$100 volume
     // v22.0: SCALABILITY FIX - Refactored N+1 queries to use JOINs (2 queries instead of 2000+)
     // v23.0: Removed creator bonus
+    // v25.25: Added volume weighting to match holderScanner point calculation
     router.get('/check-holder', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
@@ -421,15 +443,27 @@ function init(deps) {
         try {
             const POINTS_PER_TOKEN = 1000;
 
-            // v22.0: Single query to get user's holdings with pre-computed totals using window functions
-            // This replaces 2000+ individual queries with 1 optimized query
-            // v25.22 SCALABILITY: Use materialized view instead of subquery for O(1) lookup
-            const userTokenHoldings = await redis.smartCache(`check_holder_${userPubkey}`, 30, async () => {
+            // v25.25: Get volume range for all eligible platform tokens (for volume weighting)
+            const platformVolumeRange = await redis.smartCache('platform_volume_range', 60, async () => {
+                const result = await db.get(`
+                    SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol
+                    FROM tokens WHERE volume24h >= $1
+                `, [MIN_VOLUME_USD]);
+                return {
+                    minVolume: parseFloat(result?.min_vol) || MIN_VOLUME_USD,
+                    maxVolume: parseFloat(result?.max_vol) || MIN_VOLUME_USD
+                };
+            });
+
+            // v22.0: Single query to get user's holdings with pre-computed totals
+            // v25.25: Include volume24h for volume weighting calculation
+            const userTokenHoldings = await redis.smartCache(`check_holder_v2_${userPubkey}`, 30, async () => {
                 const holdings = await db.all(`
                     SELECT
                         th."holderPubkey",
                         th.mint,
                         th.balance,
+                        t.volume24h,
                         COALESCE(ttb.total_balance, 0) as total_balance
                     FROM token_holders th
                     INNER JOIN tokens t ON t.mint = th.mint AND t.volume24h >= $1
@@ -456,20 +490,38 @@ function init(deps) {
                 // Skip zero balances (safeTotalBalance already prevents division by zero)
                 if (userBalance === 0n) continue;
 
-                // Calculate proportional points
-                const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                // v25.25: Calculate volume weight for this token (0.5x to 2.0x)
+                const tokenVolume = parseFloat(holding.volume24h) || MIN_VOLUME_USD;
+                const volumeWeight = calculateVolumeWeight(tokenVolume, platformVolumeRange.minVolume, platformVolumeRange.maxVolume);
+                const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
+
+                // Calculate proportional points with volume weighting
+                const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
                 basePoints += proportionalPts;
             }
 
+            // v25.25: Get volume range for all eligible robinhood tokens
+            const robinhoodVolumeRange = await redis.smartCache('robinhood_volume_range', 60, async () => {
+                const result = await db.get(`
+                    SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol
+                    FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1
+                `, [MIN_VOLUME_USD]);
+                return {
+                    minVolume: parseFloat(result?.min_vol) || MIN_VOLUME_USD,
+                    maxVolume: parseFloat(result?.max_vol) || MIN_VOLUME_USD
+                };
+            });
+
             // v22.0: Single query for Robinhood holdings with pre-computed totals
-            // v25.22 SCALABILITY: Use materialized view instead of subquery
-            const robinhoodHoldings = await redis.smartCache(`check_holder_rh_${userPubkey}`, 30, async () => {
+            // v25.25: Include volume24h for volume weighting calculation
+            const robinhoodHoldings = await redis.smartCache(`check_holder_rh_v2_${userPubkey}`, 30, async () => {
                 return await db.all(`
                     SELECT
                         rth."holderPubkey",
                         rth.mint,
                         rth.balance,
                         rt."feeShareBps",
+                        rt.volume24h,
                         COALESCE(rttb.total_balance, 0) as total_balance
                     FROM robinhood_token_holders rth
                     INNER JOIN robinhood_tokens rt ON rt.mint = rth.mint AND rt."isActive" = 1 AND rt.volume24h >= $1
@@ -487,8 +539,13 @@ function init(deps) {
                 // Skip zero balances
                 if (userBalance === 0n) continue;
 
-                // Calculate base proportional points
-                const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                // v25.25: Calculate volume weight for this robinhood token
+                const tokenVolume = parseFloat(holding.volume24h) || MIN_VOLUME_USD;
+                const volumeWeight = calculateVolumeWeight(tokenVolume, robinhoodVolumeRange.minVolume, robinhoodVolumeRange.maxVolume);
+                const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
+
+                // Calculate base proportional points with volume weighting
+                const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
                 // Scale by fee share percentage (100% = 10000 bps = 1.0 multiplier)
                 const feeShareBps = holding.feeShareBps || 10000;
                 const feeShareMultiplier = feeShareBps / 10000;
@@ -523,6 +580,7 @@ function init(deps) {
     // Returns each token the user holds, eligibility status, and points earned
     // v24.0: SCALABILITY FIX - Refactored N+1 queries to use JOINs (2 queries instead of 100s)
     //        Added 30-second caching to reduce DB load
+    // v25.25: Added volume weighting to match holderScanner point calculation
     router.get('/user-holdings', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
@@ -534,10 +592,18 @@ function init(deps) {
 
         try {
             // v24.0: Cache user holdings for 30 seconds
-            const cacheKey = `user_holdings_detail_${userPubkey}`;
+            const cacheKey = `user_holdings_detail_v2_${userPubkey}`;
             const result = await redis.smartCache(cacheKey, 30, async () => {
                 const POINTS_PER_TOKEN = 1000;
                 const holdings = [];
+
+                // v25.25: Get volume ranges for weighting calculation
+                const platformVolumeRange = await db.get(`
+                    SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol
+                    FROM tokens WHERE volume24h >= $1
+                `, [MIN_VOLUME_USD]);
+                const platformMinVol = parseFloat(platformVolumeRange?.min_vol) || MIN_VOLUME_USD;
+                const platformMaxVol = parseFloat(platformVolumeRange?.max_vol) || MIN_VOLUME_USD;
 
                 // v24.0: Single optimized query with JOINs for launched tokens
                 // Replaces N+1 pattern (1 query for all tokens + 2 queries per token)
@@ -565,12 +631,15 @@ function init(deps) {
                 `, [userPubkey]);
 
                 for (const row of launchedHoldings) {
-                    const totalBalance = BigInt(row.total_balance || '1');
-                    const userBalance = BigInt(row.balance || '0');
-                    if (userBalance === BigInt(0)) continue;
+                    const totalBalance = safeTotalBalance(row.total_balance);
+                    const userBalance = safeBalance(row.balance);
+                    if (userBalance === 0n) continue;
 
-                    // Calculate proportional points
-                    const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                    // v25.25: Calculate volume-weighted proportional points
+                    const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
+                    const volumeWeight = calculateVolumeWeight(tokenVolume, platformMinVol, platformMaxVol);
+                    const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
+                    const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
 
                     holdings.push({
@@ -582,11 +651,20 @@ function init(deps) {
                         marketCap: row.marketCap || 0,
                         rank: row.rank,
                         isEligible,
+                        volumeWeight: Math.round(volumeWeight * 100) / 100, // v25.25: Show volume weight for transparency
                         basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
                         totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
                         source: 'launched'
                     });
                 }
+
+                // v25.25: Get volume range for robinhood tokens
+                const robinhoodVolumeRange = await db.get(`
+                    SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol
+                    FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1
+                `, [MIN_VOLUME_USD]);
+                const rhMinVol = parseFloat(robinhoodVolumeRange?.min_vol) || MIN_VOLUME_USD;
+                const rhMaxVol = parseFloat(robinhoodVolumeRange?.max_vol) || MIN_VOLUME_USD;
 
                 // v24.0: Single optimized query with JOINs for Robinhood tokens
                 const robinhoodHoldings = await db.all(`
@@ -613,12 +691,15 @@ function init(deps) {
                 `, [userPubkey]);
 
                 for (const row of robinhoodHoldings) {
-                    const totalBalance = BigInt(row.total_balance || '1');
-                    const userBalance = BigInt(row.balance || '0');
-                    if (userBalance === BigInt(0)) continue;
+                    const totalBalance = safeTotalBalance(row.total_balance);
+                    const userBalance = safeBalance(row.balance);
+                    if (userBalance === 0n) continue;
 
-                    // Calculate proportional points scaled by fee share
-                    const baseProportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                    // v25.25: Calculate volume-weighted proportional points scaled by fee share
+                    const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
+                    const volumeWeight = calculateVolumeWeight(tokenVolume, rhMinVol, rhMaxVol);
+                    const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
+                    const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
                     const feeShareBps = row.feeShareBps || 10000;
                     const feeShareMultiplier = feeShareBps / 10000;
                     const scaledPts = baseProportionalPts * feeShareMultiplier;
@@ -634,6 +715,7 @@ function init(deps) {
                         rank: row.rank,
                         isEligible,
                         feeSharePercent: (feeShareBps / 100),
+                        volumeWeight: Math.round(volumeWeight * 100) / 100, // v25.25: Show volume weight
                         basePoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
                         totalPoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
                         source: 'robinhood'
