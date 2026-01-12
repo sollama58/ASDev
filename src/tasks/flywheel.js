@@ -127,8 +127,8 @@ async function claimRobinhoodFees(deps) {
     const claimedTokens = [];
 
     try {
-        // Get all active Robinhood tokens
-        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1');
+        // Get all active Robinhood tokens (v25.14 SCALABILITY: Limit to 500 tokens)
+        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 500');
 
         for (const token of tokens) {
             try {
@@ -248,7 +248,8 @@ async function refreshAllFeeShares(deps) {
     const { connection, devKeypair, db } = deps;
 
     try {
-        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1');
+        // v25.14 SCALABILITY: Limit to 500 tokens to prevent memory issues
+        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 500');
 
         if (tokens.length === 0) {
             return { total: 0, updated: 0, deactivated: 0 };
@@ -322,6 +323,10 @@ async function processAirdrop(deps) {
         return;
     }
 
+    // v25.13: Track success at function scope for finally block
+    let airdropCompleted = false;
+    let airdropId = null;
+
     try {
         // Get current SOL balance available for airdrop
         const solBalance = await connection.getBalance(devKeypair.publicKey);
@@ -345,6 +350,12 @@ async function processAirdrop(deps) {
         // This ensures points reflect current on-chain reward percentages
         logger.info('[Airdrop] Refreshing fee share percentages before distribution...');
         await refreshAllFeeShares(deps);
+
+        // v25.13: Verify Redis is connected before proceeding
+        if (!redis.isRedisConnected()) {
+            logger.error('[Airdrop] ABORTED: Redis not connected - cannot fetch user points safely');
+            return;
+        }
 
         // Total Amount to be distributed (99% of available pool)
         const totalDistributable = Math.floor(availableForAirdrop * 0.99);
@@ -439,10 +450,57 @@ async function processAirdrop(deps) {
             .filter(user => user.points > 0);
 
         if (totalPoints === 0 || userPoints.length === 0) {
-             return; // Lock will be released in finally block
+            logger.warn('[Airdrop] No eligible users found (totalPoints=0 or no users with points). Skipping distribution.');
+            return; // Lock will be released in finally block
         }
 
-        logger.info(`Distributing ${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL to ${userPoints.length} users (Community Pool)`);
+        // v25.13: Pre-calculate total distribution to validate against available balance
+        let plannedDistribution = 0;
+        const distributionPlan = [];
+        for (const user of userPoints) {
+            const share = Math.floor((communityAmount * user.points) / totalPoints);
+            if (share > 0) {
+                plannedDistribution += share;
+                distributionPlan.push({ user: user.pubkey, amount: share, points: user.points });
+            }
+        }
+
+        // Validate we're not trying to send more than available
+        const totalPlannedWithKoth = plannedDistribution + kothAmount;
+        if (totalPlannedWithKoth > availableForAirdrop) {
+            logger.error(`[Airdrop] ABORTED: Planned distribution (${totalPlannedWithKoth / LAMPORTS_PER_SOL} SOL) exceeds available (${availableForAirdrop / LAMPORTS_PER_SOL} SOL)`);
+            return;
+        }
+
+        // v25.13: Re-check balance right before distribution (in case fees were taken by another process)
+        const currentBalance = await connection.getBalance(devKeypair.publicKey);
+        const currentAvailable = currentBalance - SAFETY_RESERVE;
+        if (totalPlannedWithKoth > currentAvailable) {
+            logger.error(`[Airdrop] ABORTED: Balance changed during preparation. Planned: ${totalPlannedWithKoth / LAMPORTS_PER_SOL} SOL, Now available: ${currentAvailable / LAMPORTS_PER_SOL} SOL`);
+            return;
+        }
+
+        logger.info(`Distributing ${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL to ${distributionPlan.length} users (Community Pool)`);
+
+        // v25.13: Generate unique airdrop ID for idempotency protection
+        airdropId = `airdrop_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+        // v25.13: Create pending airdrop record before distribution starts
+        // This allows recovery if server crashes mid-airdrop
+        try {
+            await db.run(
+                `INSERT INTO stats (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
+                ['pending_airdrop', JSON.stringify({
+                    id: airdropId,
+                    startedAt: Date.now(),
+                    plannedAmount: totalPlannedWithKoth / LAMPORTS_PER_SOL,
+                    recipientCount: distributionPlan.length,
+                    kothAmount: kothAmount / LAMPORTS_PER_SOL
+                })]
+            );
+        } catch (e) {
+            logger.warn('[Airdrop] Failed to create pending record', { error: e.message });
+        }
 
         // SOL transfers can handle more per batch since no ATA creation needed
         const BATCH_SIZE = 15;
@@ -454,13 +512,11 @@ async function processAirdrop(deps) {
 
         let successfulBatches = 0;
         let failedBatches = 0;
+        let failedUsers = []; // v25.13: Track failed recipients for potential retry
 
-        for (const user of userPoints) {
-            // Calculate share in lamports
-            const share = Math.floor((communityAmount * user.points) / totalPoints);
-            if (share <= 0) continue;
-
-            currentBatch.push({ user: user.pubkey, amount: share });
+        // v25.13: Use pre-calculated distribution plan
+        for (const recipient of distributionPlan) {
+            currentBatch.push({ user: recipient.user, amount: recipient.amount });
 
             if (currentBatch.length >= BATCH_SIZE) {
                 const sig = await sendSolAirdropBatch(currentBatch, deps);
@@ -469,6 +525,7 @@ async function processAirdrop(deps) {
                     successfulBatches++;
                 } else {
                     failedBatches++;
+                    failedUsers.push(...currentBatch.map(u => u.user.toString()));
                 }
                 currentBatch = [];
                 await new Promise(r => setTimeout(r, 500)); // Shorter delay for SOL transfers
@@ -482,8 +539,70 @@ async function processAirdrop(deps) {
                 successfulBatches++;
             } else {
                 failedBatches++;
+                failedUsers.push(...currentBatch.map(u => u.user.toString()));
             }
         }
+
+        // v25.13: Retry failed batches once before giving up
+        if (failedUsers.length > 0 && failedBatches > 0) {
+            logger.info(`[Airdrop] Retrying ${failedUsers.length} users from ${failedBatches} failed batches...`);
+
+            // Rebuild failed batches from distribution plan
+            const failedRecipients = distributionPlan.filter(r => failedUsers.includes(r.user.toString()));
+            let retryBatch = [];
+            let retrySuccesses = 0;
+            let retryFailures = 0;
+            const stillFailedUsers = [];
+
+            for (const recipient of failedRecipients) {
+                retryBatch.push({ user: recipient.user, amount: recipient.amount });
+
+                if (retryBatch.length >= BATCH_SIZE) {
+                    await new Promise(r => setTimeout(r, 1000)); // Longer delay for retries
+                    const sig = await sendSolAirdropBatch(retryBatch, deps);
+                    if (sig) {
+                        allSignatures.push(`RETRY:${sig}`);
+                        retrySuccesses++;
+                        successfulBatches++;
+                        failedBatches--;
+                    } else {
+                        retryFailures++;
+                        stillFailedUsers.push(...retryBatch.map(u => u.user.toString()));
+                    }
+                    retryBatch = [];
+                }
+            }
+
+            // Process remaining retry batch
+            if (retryBatch.length > 0) {
+                await new Promise(r => setTimeout(r, 1000));
+                const sig = await sendSolAirdropBatch(retryBatch, deps);
+                if (sig) {
+                    allSignatures.push(`RETRY:${sig}`);
+                    retrySuccesses++;
+                    successfulBatches++;
+                    failedBatches--;
+                } else {
+                    retryFailures++;
+                    stillFailedUsers.push(...retryBatch.map(u => u.user.toString()));
+                }
+            }
+
+            if (retrySuccesses > 0) {
+                logger.info(`[Airdrop] Retry recovered ${retrySuccesses} batches`);
+            }
+            if (stillFailedUsers.length > 0) {
+                logger.error(`[Airdrop] PERMANENT FAILURES: ${stillFailedUsers.length} users could not receive airdrop: ${stillFailedUsers.slice(0, 5).join(', ')}${stillFailedUsers.length > 5 ? '...' : ''}`);
+                // Update failedUsers to only contain permanently failed users
+                failedUsers.length = 0;
+                failedUsers.push(...stillFailedUsers);
+            } else {
+                failedUsers.length = 0; // All retries succeeded
+            }
+        }
+
+        // Mark airdrop as successful (used for timestamp update logic)
+        const airdropSucceeded = successfulBatches > 0 || failedBatches === 0;
 
         logger.info(`SOL Airdrop Complete. Success: ${successfulBatches}, Failed: ${failedBatches}`);
 
@@ -498,37 +617,62 @@ async function processAirdrop(deps) {
         ))?.count || 0 : 0;
 
         const details = JSON.stringify({
+            id: airdropId, // v25.13: Include airdrop ID for tracking
             success: successfulBatches,
             failed: failedBatches,
+            failedUsers: failedUsers.length > 0 ? failedUsers.slice(0, 20) : [], // v25.13: Track failed users (max 20)
             kothWinner: kothToken?.ticker || 'None',
             kothAmount: kothAmountSol,
             kothHolders: kothAmount > 0 ? kothHolderCount : 0, // v13.0: Number of KOTH holders who received
-            currency: 'SOL' // Mark as SOL airdrop for backwards compatibility
+            currency: 'SOL', // Mark as SOL airdrop for backwards compatibility
+            airdropSucceeded // v25.13: Track overall success status
         });
 
         // v13.0: Recipients now includes KOTH holders instead of just creator
-        const totalRecipients = userPoints.length + (kothAmount > 0 ? kothHolderCount : 0);
+        // v25.13: Use distributionPlan.length for accurate recipient count
+        const totalRecipients = distributionPlan.length + (kothAmount > 0 ? kothHolderCount : 0);
 
         await db.run(
             'INSERT INTO airdrop_logs (amount, recipients, "totalPoints", signatures, details, timestamp) VALUES ($1, $2, $3, $4, $5, $6)',
             [totalDistributedSol, totalRecipients, totalPoints, allSignatures.join(','), details, new Date().toISOString()]
         );
 
+        // v25.13: Mark airdrop as completed for finally block
+        airdropCompleted = airdropSucceeded;
+
         // Clear status after run
         globalState.conservationStatus = null;
 
     } catch (e) {
-        logger.error("SOL Airdrop Failed", { error: e.message });
+        logger.error("SOL Airdrop Failed", { error: e.message, airdropId });
     } finally {
         // RACE CONDITION FIX: Release mutex
         await release();
 
-        // v25.7: Update next airdrop timestamp for frontend countdown synchronization
+        // v25.13: Clear pending airdrop record
+        if (airdropId) {
+            try {
+                await db.run('DELETE FROM stats WHERE key = $1', ['pending_airdrop']);
+            } catch (e) {
+                logger.debug('[Airdrop] Failed to clear pending record', { error: e.message });
+            }
+        }
+
+        // v25.13: Only update next airdrop timestamp if airdrop completed successfully
+        // This prevents misleading countdowns when airdrop failed
         const airdropInterval = config.AIRDROP_INTERVAL || 900000;
         const nextAirdropTime = Date.now() + airdropInterval;
         try {
-            await db.run('UPDATE stats SET value = $1 WHERE key = $2', [nextAirdropTime, 'nextAirdropTimestamp']);
-            logger.debug(`[Flywheel] Next airdrop scheduled for ${new Date(nextAirdropTime).toISOString()}`);
+            if (airdropCompleted) {
+                await db.run('UPDATE stats SET value = $1 WHERE key = $2', [nextAirdropTime, 'nextAirdropTimestamp']);
+                logger.debug(`[Flywheel] Next airdrop scheduled for ${new Date(nextAirdropTime).toISOString()}`);
+            } else if (airdropId) {
+                // Airdrop was attempted but failed - schedule retry sooner (5 minutes)
+                const retryTime = Date.now() + 300000;
+                await db.run('UPDATE stats SET value = $1 WHERE key = $2', [retryTime, 'nextAirdropTimestamp']);
+                logger.warn(`[Flywheel] Airdrop failed - scheduling retry in 5 minutes`);
+            }
+            // If airdropId is null, airdrop wasn't triggered (threshold not met) - don't update timestamp
         } catch (e) {
             logger.warn('[Flywheel] Failed to update nextAirdropTimestamp', { error: e.message });
         }
@@ -758,13 +902,19 @@ async function runFeeCollection(deps) {
         try {
             const bcInfo = await connection.getAccountInfo(bcVault);
             if (bcInfo) totalPendingFees = totalPendingFees.add(new BN(bcInfo.lamports));
-        } catch (e) {}
+        } catch (e) {
+            // v25.14 ROBUSTNESS: Log RPC errors instead of silently ignoring
+            logger.debug('[FeeCollection] BC vault check failed', { error: e.message });
+        }
 
         try {
             const ammVaultAtaKey = await ammVaultAta;
             const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
             totalPendingFees = totalPendingFees.add(new BN(bal.value.amount));
-        } catch (e) {}
+        } catch (e) {
+            // v25.14 ROBUSTNESS: Log RPC errors instead of silently ignoring
+            logger.debug('[FeeCollection] AMM vault check failed', { error: e.message });
+        }
 
         // v17.0: Fee threshold is 0.05 SOL
         const threshold = new BN((config.FEE_THRESHOLD_SOL || 0.05) * LAMPORTS_PER_SOL);

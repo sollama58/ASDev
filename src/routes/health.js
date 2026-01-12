@@ -219,7 +219,8 @@ function init(deps) {
                 let robinhoodPendingFees = 0;
                 let robinhoodPendingDetails = [];
                 try {
-                    const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1');
+                    // v25.14 SCALABILITY: Limit to 200 tokens for health check to avoid timeout
+                    const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 200');
 
                     // v24.0: Process tokens in parallel batches for better responsiveness
                     const BATCH_SIZE = 10;
@@ -480,15 +481,19 @@ function init(deps) {
             let heliusMeta = null;
             if (config.HELIUS_API_KEY) {
                 try {
+                    // v25.14 SECURITY: Move API key from URL to header
                     const heliusRes = await axios.post(
-                        `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+                        'https://mainnet.helius-rpc.com/',
                         {
                             jsonrpc: '2.0',
                             id: '1',
                             method: 'getAsset',
                             params: { id: mint, displayOptions: { showFungible: true } }
                         },
-                        { timeout: 5000 }
+                        {
+                            timeout: 5000,
+                            headers: { 'Authorization': `Bearer ${config.HELIUS_API_KEY}` }
+                        }
                     );
                     const asset = heliusRes.data?.result;
                     if (asset) {

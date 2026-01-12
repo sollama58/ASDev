@@ -32,8 +32,9 @@ async function fetchHeliusMarketDataBatch(mints) {
     try {
         if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] Helius: Fetching ${mints.length} assets...`);
 
+        // v25.14 SECURITY: Move API key from URL to header
         const response = await axios.post(
-            `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+            'https://mainnet.helius-rpc.com/',
             {
                 jsonrpc: '2.0',
                 id: '1',
@@ -43,7 +44,10 @@ async function fetchHeliusMarketDataBatch(mints) {
                     displayOptions: { showFungible: true }
                 }
             },
-            { timeout: 10000 }
+            {
+                timeout: 10000,
+                headers: { 'Authorization': `Bearer ${config.HELIUS_API_KEY}` }
+            }
         );
         const assets = response.data?.result || [];
 

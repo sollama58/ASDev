@@ -245,7 +245,7 @@ async function reverifyRobinhoodTokens(deps) {
     }
 
     try {
-        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL');
+        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 500');
 
         if (tokens.length === 0) {
             return;
@@ -323,7 +323,7 @@ async function updateRobinhoodTokenMetadata(deps) {
     const { db } = deps;
 
     try {
-        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL');
+        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 500');
 
         for (const token of tokens) {
             try {
@@ -415,7 +415,7 @@ async function updateRobinhoodHolders(deps) {
     const { connection, db } = deps;
 
     try {
-        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL');
+        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 500');
 
         for (const token of tokens) {
             try {
@@ -501,7 +501,8 @@ async function getRobinhoodPendingFees(deps) {
     const tokenFees = [];
 
     try {
-        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1');
+        // v25.14 SCALABILITY: Limit to 500 tokens
+        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 500');
 
         for (const token of tokens) {
             try {

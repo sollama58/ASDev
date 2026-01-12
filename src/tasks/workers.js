@@ -622,15 +622,19 @@ function initMetadataUpdaterWorker(deps) {
                     // Batch fetch Helius data for all DexScreener misses (1 call instead of N)
                     if (misses.length > 0 && config.HELIUS_API_KEY) {
                         try {
+                            // v25.14 SECURITY: Move API key from URL to header
                             const heliusRes = await axios.post(
-                                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+                                'https://mainnet.helius-rpc.com/',
                                 {
                                     jsonrpc: '2.0',
                                     id: '1',
                                     method: 'getAssetBatch',
                                     params: { ids: misses, displayOptions: { showFungible: true } }
                                 },
-                                { timeout: 10000 }
+                                {
+                                    timeout: 10000,
+                                    headers: { 'Authorization': `Bearer ${config.HELIUS_API_KEY}` }
+                                }
                             );
                             const assets = heliusRes.data?.result || [];
                             for (const asset of assets) {

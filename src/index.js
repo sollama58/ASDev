@@ -271,13 +271,20 @@ async function main() {
     });
 }
 
-// Graceful shutdown
+// v25.14 ROBUSTNESS: Graceful shutdown with task cleanup
 const shutdown = async (signal) => {
     logger.info(`${signal} received, shutting down gracefully...`);
     try {
+        // Stop all background tasks first
+        await tasks.stopAll();
+
+        // Close database connection
         const db = database.getDB();
         if (db) await db.close();
+
+        // Disconnect Redis
         redis.getConnection()?.disconnect();
+
         logger.info('Cleanup complete, exiting');
     } catch (e) {
         logger.error('Shutdown error', { error: e.message });
