@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.29-AIRDROP-TIMER-SYNC",
+    VERSION: "v25.30-TOKEN-REG-NOSIG",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 

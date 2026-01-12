@@ -1082,18 +1082,16 @@ function init(deps) {
      * v24.0: Added rate limiting (10 registrations per hour per IP)
      * v25.22 SECURITY: Added signature verification - submitter must prove wallet ownership
      *
-     * Required body fields for signature verification:
-     * - signerPubkey: The wallet public key signing this request
-     * - signedMessage: The message that was signed (format: "register-token:timestamp:nonce")
-     * - signature: Base58 encoded Ed25519 signature
+     * v25.29: Removed signature requirement - anyone can register tokens that share fees with platform
+     * The on-chain verification (verifyFeeRecipient) is sufficient security since only tokens
+     * that share fees with our platform wallet can be registered.
      */
-    router.post('/register-token', tokenRegistrationLimiter, signatureVerifier.requireSignature('register-token'), async (req, res) => {
+    router.post('/register-token', tokenRegistrationLimiter, async (req, res) => {
         try {
             const { mint, submitterPubkey, originalCreator } = req.body;
 
-            // v25.22 SECURITY: Use verified pubkey from signature verification
-            // This ensures the submitter actually controls the wallet
-            const verifiedSubmitter = req.verifiedPubkey || submitterPubkey;
+            // v25.29: No signature verification needed - on-chain fee sharing is the gate
+            const verifiedSubmitter = submitterPubkey;
 
             // Validate inputs
             if (!mint) {
