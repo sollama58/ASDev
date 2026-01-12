@@ -305,6 +305,7 @@
             <button class="tab-btn" onclick="switchTab('tokens')">Token Management</button>
             <button class="tab-btn" onclick="switchTab('registration')">Registration Debug</button>
             <button class="tab-btn" onclick="switchTab('airdrop')">Airdrop Debug</button>
+            <button class="tab-btn" onclick="switchTab('points')">Points</button>
             <button class="tab-btn" onclick="switchTab('database')">Database</button>
             <button class="tab-btn" onclick="switchTab('logs')">Live Logs</button>
             <button class="tab-btn" onclick="switchTab('tools')">Tools</button>
@@ -608,6 +609,136 @@
                                     <div id="pool-koth" class="text-lg font-bold text-purple-300">-- SOL</div>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Points Tab -->
+            <div id="tab-points" class="tab-content hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Point Statistics Overview -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">Point Statistics Overview</h3>
+                            <button onclick="fetchPointStats()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="point-stats-loading" class="text-gray-400 text-sm hidden">Loading...</div>
+                        <div id="point-stats-content">
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                <div class="bg-blue-900/30 border border-blue-700/50 rounded p-3 text-center">
+                                    <div class="text-xs text-blue-400">Total Points</div>
+                                    <div id="points-total" class="text-xl font-bold text-blue-300">--</div>
+                                </div>
+                                <div class="bg-green-900/30 border border-green-700/50 rounded p-3 text-center">
+                                    <div class="text-xs text-green-400">Users with Points</div>
+                                    <div id="points-user-count" class="text-xl font-bold text-green-300">--</div>
+                                </div>
+                                <div class="bg-orange-900/30 border border-orange-700/50 rounded p-3 text-center">
+                                    <div class="text-xs text-orange-400">Platform Tokens</div>
+                                    <div id="points-platform-tokens" class="text-xl font-bold text-orange-300">--</div>
+                                </div>
+                                <div class="bg-pink-900/30 border border-pink-700/50 rounded p-3 text-center">
+                                    <div class="text-xs text-pink-400">Robinhood Tokens</div>
+                                    <div id="points-robinhood-tokens" class="text-xl font-bold text-pink-300">--</div>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="bg-purple-900/30 border border-purple-700/50 rounded p-3 text-center">
+                                    <div class="text-xs text-purple-400">Expected Airdrop Pool</div>
+                                    <div id="points-expected-airdrop" class="text-lg font-bold text-purple-300">-- SOL</div>
+                                </div>
+                                <div class="bg-cyan-900/30 border border-cyan-700/50 rounded p-3 text-center">
+                                    <div class="text-xs text-cyan-400">Users Expecting Airdrop</div>
+                                    <div id="points-airdrop-users" class="text-lg font-bold text-cyan-300">--</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Reset Points Control -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Reset Points</h3>
+                        </div>
+                        <p class="text-xs text-gray-400 mb-4">
+                            This will clear ALL cached point data and recalculate from scratch based on current holder data.
+                        </p>
+                        <div class="bg-red-900/20 border border-red-700/50 rounded p-3 mb-4">
+                            <p class="text-xs text-red-400">
+                                <strong>Warning:</strong> This is a destructive operation. All cached points will be cleared and recalculated.
+                            </p>
+                        </div>
+                        <button onclick="resetAllPoints()" class="btn btn-danger w-full mb-3">
+                            Reset All Points
+                        </button>
+                        <div id="reset-points-result" class="result-box text-yellow-400">
+                            // Reset result will appear here
+                        </div>
+                    </div>
+
+                    <!-- Point Breakdown by Source -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Points Breakdown</h3>
+                        </div>
+                        <div class="space-y-4">
+                            <div class="bg-gray-800/50 rounded p-4">
+                                <h4 class="text-sm font-bold text-orange-400 mb-2">How Points Are Calculated</h4>
+                                <div class="text-xs text-gray-300 space-y-2">
+                                    <p><span class="text-blue-400">Base Points:</span> 1000 points per eligible token held</p>
+                                    <p><span class="text-green-400">Volume Weight:</span> 0.5x - 2.0x multiplier based on 24hr token volume</p>
+                                    <p><span class="text-purple-400">Formula:</span> Points = 1000 * volumeWeight (per token)</p>
+                                </div>
+                            </div>
+                            <div class="bg-gray-800/50 rounded p-4">
+                                <h4 class="text-sm font-bold text-orange-400 mb-2">Volume Weight Scale</h4>
+                                <div class="text-xs text-gray-300 space-y-1">
+                                    <p><span class="text-red-400">Low Volume:</span> 0.5x multiplier (500 points)</p>
+                                    <p><span class="text-yellow-400">Medium Volume:</span> 1.0x multiplier (1000 points)</p>
+                                    <p><span class="text-green-400">High Volume:</span> 2.0x multiplier (2000 points)</p>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-2">Volume weight is calculated using logarithmic scale between min and max volume across all tokens.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- User Point Lookup -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">User Point Lookup</h3>
+                        </div>
+                        <div class="flex gap-2 mb-4">
+                            <input type="text" id="point-lookup-user" class="input-field flex-1" placeholder="User wallet address...">
+                            <button onclick="lookupUserPoints()" class="btn btn-primary">Lookup</button>
+                        </div>
+                        <div id="point-lookup-result" class="result-box">
+                            // User points will appear here
+                        </div>
+                    </div>
+
+                    <!-- Top Point Holders -->
+                    <div class="panel lg:col-span-3">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">Top Point Holders</h3>
+                            <button onclick="fetchTopPointHolders()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="top-points-holders" class="max-h-80 overflow-y-auto">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Wallet</th>
+                                        <th>Total Points</th>
+                                        <th>Platform Tokens</th>
+                                        <th>Robinhood Tokens</th>
+                                        <th>Expected Airdrop</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="top-points-table-body">
+                                    <tr><td colspan="6" class="text-center text-gray-500">Click refresh to load data</td></tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -1581,6 +1712,169 @@
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Airdrop error: ${e.message}`, 'error');
+            }
+        }
+
+        // ===== POINTS MANAGEMENT =====
+        async function fetchPointStats() {
+            const loadingEl = document.getElementById('point-stats-loading');
+            loadingEl.classList.remove('hidden');
+            log('Fetching point statistics...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/point-stats`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+                loadingEl.classList.add('hidden');
+
+                if (data.success) {
+                    document.getElementById('points-total').textContent = formatNumber(data.totalPoints || 0);
+                    document.getElementById('points-user-count').textContent = data.usersWithPoints || 0;
+                    document.getElementById('points-platform-tokens').textContent = data.platformTokenCount || 0;
+                    document.getElementById('points-robinhood-tokens').textContent = data.robinhoodTokenCount || 0;
+                    document.getElementById('points-expected-airdrop').textContent = (data.totalExpectedAirdropSol || 0).toFixed(4) + ' SOL';
+                    document.getElementById('points-airdrop-users').textContent = data.usersWithAirdrops || 0;
+                    log('Point statistics loaded', 'success');
+                } else {
+                    log(`Point stats error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                loadingEl.classList.add('hidden');
+                log(`Point stats fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function resetAllPoints() {
+            if (!confirm('WARNING: This will clear ALL cached point data and recalculate from scratch.\n\nThis operation cannot be undone. Continue?')) {
+                return;
+            }
+
+            const resultEl = document.getElementById('reset-points-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Resetting points... This may take a moment...</span>';
+            log('Resetting all points...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/reset-points`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">Points reset successfully!</span>\n\n` +
+                        `Cleared ${data.cleared?.userPoints || 0} user point entries\n` +
+                        `Cleared ${data.cleared?.userAirdrops || 0} airdrop entries\n` +
+                        `Global state recalculation: ${data.recalculation?.status || 'triggered'}`;
+                    log('Points reset completed successfully', 'success');
+
+                    // Refresh the stats
+                    setTimeout(() => fetchPointStats(), 2000);
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">Reset failed: ${data.error}</span>`;
+                    log(`Points reset failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Points reset error: ${e.message}`, 'error');
+            }
+        }
+
+        async function lookupUserPoints() {
+            const user = document.getElementById('point-lookup-user').value.trim();
+            if (!user) {
+                log('Please enter a user wallet address', 'warning');
+                return;
+            }
+
+            const resultEl = document.getElementById('point-lookup-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Looking up user points...</span>';
+            log(`Looking up points for ${shortenPubkey(user)}...`);
+
+            try {
+                // Use the check-holder endpoint which returns detailed point info
+                const data = await apiCall(`/api/tokens/check-holder?userPubkey=${user}`);
+
+                let html = '<div class="space-y-2">';
+
+                // Summary
+                html += `<div class="p-2 rounded bg-blue-900/30 border border-blue-700/50">`;
+                html += `<div class="text-sm font-bold text-blue-400">Total Points: ${formatNumber(data.totalPoints || 0)}</div>`;
+                html += `</div>`;
+
+                // Platform tokens
+                if (data.platformTokens && data.platformTokens.length > 0) {
+                    html += `<div class="mt-2">`;
+                    html += `<div class="text-xs text-orange-400 font-bold mb-1">Platform Tokens (${data.platformTokens.length}): ${formatNumber(data.platformPoints || 0)} pts</div>`;
+                    html += `<div class="text-xs text-gray-400 max-h-32 overflow-y-auto">`;
+                    for (const t of data.platformTokens.slice(0, 10)) {
+                        html += `<div class="py-1 border-b border-gray-700/50">${t.ticker || shortenPubkey(t.mint, 4)} - ${formatNumber(t.points || 0)} pts (${(t.volumeWeight || 1).toFixed(2)}x)</div>`;
+                    }
+                    if (data.platformTokens.length > 10) {
+                        html += `<div class="text-gray-500">... and ${data.platformTokens.length - 10} more</div>`;
+                    }
+                    html += `</div></div>`;
+                }
+
+                // Robinhood tokens
+                if (data.robinhoodTokens && data.robinhoodTokens.length > 0) {
+                    html += `<div class="mt-2">`;
+                    html += `<div class="text-xs text-pink-400 font-bold mb-1">Robinhood Tokens (${data.robinhoodTokens.length}): ${formatNumber(data.robinhoodPoints || 0)} pts</div>`;
+                    html += `<div class="text-xs text-gray-400 max-h-32 overflow-y-auto">`;
+                    for (const t of data.robinhoodTokens.slice(0, 10)) {
+                        html += `<div class="py-1 border-b border-gray-700/50">${t.ticker || shortenPubkey(t.mint, 4)} - ${formatNumber(t.points || 0)} pts (${(t.volumeWeight || 1).toFixed(2)}x)</div>`;
+                    }
+                    if (data.robinhoodTokens.length > 10) {
+                        html += `<div class="text-gray-500">... and ${data.robinhoodTokens.length - 10} more</div>`;
+                    }
+                    html += `</div></div>`;
+                }
+
+                html += '</div>';
+
+                resultEl.innerHTML = html;
+                log(`Found ${data.totalPoints || 0} points for ${shortenPubkey(user)}`, 'success');
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`User point lookup failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchTopPointHolders() {
+            const tbody = document.getElementById('top-points-table-body');
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-gray-500">Loading...</td></tr>';
+            log('Fetching top point holders...');
+
+            try {
+                const data = await apiCall('/api/all-eligible-users');
+
+                if (data.users && data.users.length > 0) {
+                    tbody.innerHTML = data.users.slice(0, 30).map((u, i) => `
+                        <tr onclick="document.getElementById('point-lookup-user').value='${u.pubkey}'; lookupUserPoints();" style="cursor: pointer;">
+                            <td class="text-orange-500">${i + 1}</td>
+                            <td class="text-white">${shortenPubkey(u.pubkey)}</td>
+                            <td class="text-blue-400 font-bold">${formatNumber(u.points || 0)}</td>
+                            <td class="text-orange-400">${u.platformTokenCount || '--'}</td>
+                            <td class="text-pink-400">${u.robinhoodTokenCount || '--'}</td>
+                            <td class="text-green-400">${(u.expectedAirdrop || 0).toFixed(6)} SOL</td>
+                        </tr>
+                    `).join('');
+                    log(`Loaded ${data.users.length} top point holders`, 'success');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-gray-500">No users with points found</td></tr>';
+                }
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
+                log(`Top point holders fetch failed: ${e.message}`, 'error');
             }
         }
 

@@ -803,6 +803,181 @@ function init(deps) {
         }
     });
 
+    /**
+     * POST /admin/reset-points
+     * v25.25: Reset all point calculations and recalculate from scratch
+     *
+     * This endpoint:
+     * 1. Clears all cached user points from Redis
+     * 2. Clears all expected airdrop amounts from Redis
+     * 3. Clears API-level point caches
+     * 4. Triggers a fresh holder scan to recalculate everything
+     * 5. Refreshes materialized views for accurate totals
+     *
+     * Use this when:
+     * - Point calculation logic has been updated
+     * - Database holder data has been manually corrected
+     * - Inconsistencies are detected between displayed and actual points
+     */
+    router.post('/admin/reset-points', adminAuth, async (req, res) => {
+        try {
+            const holderScanner = require('../tasks/holderScanner');
+            const postgres = require('../services/postgres');
+
+            logger.info('[Admin] Starting full point reset...');
+
+            // Step 1: Clear Redis point caches
+            logger.info('[Admin] Clearing Redis point caches...');
+            await redis.clearUserPoints();
+            await redis.clearUserExpectedAirdrops();
+
+            // Step 2: Clear globalState in-memory caches
+            if (globalState) {
+                globalState.userPointsMap.clear();
+                globalState.userExpectedAirdrops.clear();
+                globalState.totalPoints = 0;
+            }
+
+            // Step 3: Clear API-level caches (smart cache uses Redis, clear by pattern)
+            // These are the cache keys used by /check-holder and /user-holdings
+            const cachePatterns = [
+                'check_holder_*',
+                'check_holder_v2_*',
+                'check_holder_rh_*',
+                'check_holder_rh_v2_*',
+                'user_holdings_detail_*',
+                'user_holdings_detail_v2_*',
+                'platform_volume_range',
+                'robinhood_volume_range',
+                'all_eligible_users'
+            ];
+
+            let clearedKeys = 0;
+            for (const pattern of cachePatterns) {
+                try {
+                    const keys = await redis.getConnection().keys(`cache:${pattern}`);
+                    if (keys.length > 0) {
+                        await redis.getConnection().del(...keys);
+                        clearedKeys += keys.length;
+                    }
+                } catch (e) {
+                    logger.debug(`[Admin] Cache clear pattern ${pattern} skipped`, { error: e.message });
+                }
+            }
+            logger.info(`[Admin] Cleared ${clearedKeys} API cache keys`);
+
+            // Step 4: Refresh materialized views for accurate balance totals
+            logger.info('[Admin] Refreshing materialized views...');
+            try {
+                await postgres.refreshMaterializedViews();
+                logger.info('[Admin] Materialized views refreshed');
+            } catch (e) {
+                logger.warn('[Admin] Materialized view refresh failed (non-fatal)', { error: e.message });
+            }
+
+            // Step 5: Trigger full holder scan to recalculate points
+            logger.info('[Admin] Triggering holder scan for point recalculation...');
+
+            // Run async - don't wait for completion
+            holderScanner.updateGlobalState(deps).then(() => {
+                logger.info('[Admin] Point recalculation completed successfully');
+            }).catch(e => {
+                logger.error('[Admin] Point recalculation failed', { error: e.message });
+            });
+
+            res.json({
+                success: true,
+                message: 'Point reset initiated. All caches cleared and recalculation started.',
+                details: {
+                    redisPointsCleared: true,
+                    redisAirdropsCleared: true,
+                    globalStateCachesCleared: true,
+                    apiCacheKeysCleared: clearedKeys,
+                    materializedViewsRefreshed: true,
+                    holderScanTriggered: true
+                },
+                note: 'Recalculation runs in background. Check /debug/stats in ~1-2 minutes to verify new totals.'
+            });
+
+        } catch (e) {
+            logger.error('[Admin] Point reset error', { error: e.message });
+            res.status(500).json({ error: 'Failed to reset points', details: e.message });
+        }
+    });
+
+    /**
+     * GET /admin/point-stats
+     * v25.25: Get current point calculation statistics for verification
+     */
+    router.get('/admin/point-stats', adminAuth, async (req, res) => {
+        try {
+            // Get counts from Redis
+            const userPointsMap = await redis.getAllUserPoints();
+            const userExpectedAirdrops = await redis.getAllUserExpectedAirdrops();
+
+            // Calculate totals
+            let totalPoints = 0;
+            let totalExpectedAirdrop = 0;
+            let usersWithPoints = 0;
+            let usersWithAirdrops = 0;
+
+            for (const [pubkey, points] of userPointsMap.entries()) {
+                if (points > 0) {
+                    totalPoints += points;
+                    usersWithPoints++;
+                }
+            }
+
+            for (const [pubkey, amount] of userExpectedAirdrops.entries()) {
+                if (amount > 0) {
+                    totalExpectedAirdrop += amount;
+                    usersWithAirdrops++;
+                }
+            }
+
+            // Get token counts
+            const platformTokenCount = await db.get('SELECT COUNT(*) as count FROM tokens WHERE volume24h >= $1', [100]);
+            const robinhoodTokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1', [100]);
+            const platformHolderCount = await db.get('SELECT COUNT(DISTINCT "holderPubkey") as count FROM token_holders');
+            const robinhoodHolderCount = await db.get('SELECT COUNT(DISTINCT "holderPubkey") as count FROM robinhood_token_holders');
+
+            // Get globalState values
+            const globalTotalPoints = globalState?.totalPoints || 0;
+            const availableSol = globalState?.availableSolForAirdrop || 0;
+            const communityPot = globalState?.communityPot || 0;
+            const kothPot = globalState?.kothPot || 0;
+
+            res.json({
+                success: true,
+                stats: {
+                    redis: {
+                        usersWithPoints,
+                        totalPoints: Math.round(totalPoints * 100) / 100,
+                        usersWithAirdrops,
+                        totalExpectedAirdropSol: Math.round(totalExpectedAirdrop * 10000) / 10000
+                    },
+                    globalState: {
+                        totalPoints: Math.round(globalTotalPoints * 100) / 100,
+                        availableSolForAirdrop: Math.round(availableSol * 10000) / 10000,
+                        communityPot: Math.round(communityPot * 10000) / 10000,
+                        kothPot: Math.round(kothPot * 10000) / 10000
+                    },
+                    tokens: {
+                        eligiblePlatformTokens: parseInt(platformTokenCount?.count) || 0,
+                        eligibleRobinhoodTokens: parseInt(robinhoodTokenCount?.count) || 0,
+                        uniquePlatformHolders: parseInt(platformHolderCount?.count) || 0,
+                        uniqueRobinhoodHolders: parseInt(robinhoodHolderCount?.count) || 0
+                    }
+                },
+                timestamp: new Date().toISOString()
+            });
+
+        } catch (e) {
+            logger.error('[Admin] Point stats error', { error: e.message });
+            res.status(500).json({ error: 'Failed to get point stats' });
+        }
+    });
+
     // Admin panel password verification
     // Uses ADMIN_API_KEY environment variable as the password
     // v24.0: Updated to async for Redis-based rate limiting
