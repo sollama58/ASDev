@@ -1149,14 +1149,33 @@ function init(deps) {
 
             const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
 
-            if (validTokens.length === 0) {
+            // Start with external API data or empty object
+            const freshData = validTokens.length > 0 ? validTokens[0] : {};
+
+            // v25.6: If no image from external APIs, try metadataUri fallback
+            // This is critical for tokens launched via our platform
+            if (!freshData.image && regularToken && regularToken.metadataUri) {
+                logger.info(`[MetadataRefresh] No image from external APIs, trying metadataUri...`);
+                try {
+                    const metadataImage = await imageUtils.fetchImageFromMetadataUri(regularToken.metadataUri, 5000);
+                    if (metadataImage) {
+                        freshData.image = metadataImage;
+                        logger.info(`[MetadataRefresh] Got image from metadataUri: ${metadataImage.substring(0, 60)}`);
+                    }
+                } catch (e) {
+                    logger.warn(`[MetadataRefresh] metadataUri fetch failed: ${e.message}`);
+                }
+            }
+
+            // If we still have no data at all, return error
+            if (!freshData.ticker && !freshData.name && !freshData.image) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Could not fetch metadata from any source'
+                    error: 'Could not fetch metadata from any source',
+                    metadataUri: regularToken?.metadataUri || null
                 });
             }
 
-            const freshData = validTokens[0];
             logger.info(`[MetadataRefresh] Got fresh data: ticker=${freshData.ticker}, name=${freshData.name}, image=${freshData.image ? 'YES' : 'NO'}`);
 
             // Update the appropriate table
@@ -1192,16 +1211,22 @@ function init(deps) {
                 ]);
             }
 
+            // v25.6: Re-fetch the token to show the final state after update
+            const updatedToken = robinhoodToken
+                ? await db.get('SELECT * FROM robinhood_tokens WHERE mint = $1', [mint])
+                : await db.get('SELECT * FROM tokens WHERE mint = $1', [mint]);
+
             res.json({
                 success: true,
                 message: 'Metadata refreshed successfully',
                 token: {
                     mint,
-                    ticker: freshData.ticker,
-                    name: freshData.name,
-                    image: freshData.image,
-                    marketCap: freshData.marketCap,
-                    volume24h: freshData.volume24h
+                    ticker: freshData.ticker || updatedToken?.ticker,
+                    name: freshData.name || updatedToken?.name,
+                    image: updatedToken?.image || freshData.image, // Show final DB value
+                    marketCap: freshData.marketCap || updatedToken?.marketCap,
+                    volume24h: freshData.volume24h || updatedToken?.volume24h,
+                    metadataUri: updatedToken?.metadataUri || null
                 }
             });
 
