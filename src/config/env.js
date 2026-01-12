@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.6-WS-IMAGE-FALLBACK",
+    VERSION: "v25.7-GECKO-IMAGE-FALLBACK",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 

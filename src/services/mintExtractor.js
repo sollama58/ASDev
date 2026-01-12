@@ -659,6 +659,31 @@ async function scanCreatorVaultsForMints(options) {
 }
 
 /**
+ * Fetch token image from GeckoTerminal API
+ * GeckoTerminal often has images for new tokens before DexScreener
+ * @param {string} mint - Token mint address
+ * @returns {string|null} - Image URL or null
+ */
+async function fetchGeckoTerminalImage(mint) {
+    try {
+        const response = await axios.get(
+            `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}`,
+            {
+                timeout: 5000,
+                headers: { 'Accept': 'application/json' }
+            }
+        );
+        const tokenData = response.data?.data?.attributes;
+        if (tokenData?.image_url) {
+            return tokenData.image_url;
+        }
+    } catch (e) {
+        // Silent fail - GeckoTerminal may not have all tokens
+    }
+    return null;
+}
+
+/**
  * Fetch token market data from DexScreener
  * @param {string} mint - Token mint address
  * @returns {Object|null} - Market data or null
@@ -779,6 +804,16 @@ async function validateMintsBatch(mints, options = {}) {
                             await new Promise(r => setTimeout(r, 150));
                         }
 
+                        // v25.7: Try GeckoTerminal as fallback if still no image
+                        if (!tokenData.image) {
+                            const geckoImage = await fetchGeckoTerminalImage(asset.id);
+                            if (geckoImage) {
+                                tokenData.image = geckoImage;
+                                logger.info(`[MintExtractor] Using GeckoTerminal image for ${asset.id.slice(0, 8)}...`);
+                            }
+                            await new Promise(r => setTimeout(r, 150));
+                        }
+
                         logger.info(`[MintExtractor] Final token data for ${asset.id.slice(0, 8)}...: ticker=${tokenData.ticker}, image=${tokenData.image ? tokenData.image.slice(0, 50) + '...' : 'NULL'}`);
                         validTokens.push(tokenData);
                         processedMints.add(asset.id);
@@ -805,12 +840,23 @@ async function validateMintsBatch(mints, options = {}) {
                 const dexData = await fetchDexScreenerData(mint);
                 if (dexData && (dexData.dexName || dexData.dexTicker)) {
                     // DexScreener has this token - it's valid
+                    let image = dexData.dexImage || null;
+
+                    // v25.7: Try GeckoTerminal if DexScreener doesn't have image
+                    if (!image) {
+                        const geckoImage = await fetchGeckoTerminalImage(mint);
+                        if (geckoImage) {
+                            image = geckoImage;
+                            logger.info(`[MintExtractor] Using GeckoTerminal image for ${mint.slice(0, 8)}... (DexScreener path)`);
+                        }
+                    }
+
                     const tokenData = {
                         mint,
                         name: dexData.dexName || 'Unknown',
                         ticker: dexData.dexTicker || 'UNKNOWN',
                         description: '',
-                        image: dexData.dexImage || null,
+                        image,
                         metadataUri: null,
                         twitter: '',
                         website: '',
@@ -822,7 +868,7 @@ async function validateMintsBatch(mints, options = {}) {
 
                     validTokens.push(tokenData);
                     processedMints.add(mint);
-                    logger.debug(`[MintExtractor] Found ${tokenData.ticker} via DexScreener (not in Helius)`);
+                    logger.debug(`[MintExtractor] Found ${tokenData.ticker} via DexScreener (not in Helius), image=${image ? 'YES' : 'NO'}`);
                 }
 
                 await new Promise(r => setTimeout(r, 150));
@@ -847,13 +893,24 @@ async function validateMintsBatch(mints, options = {}) {
                     const pumpResponse = await axios.get(pumpMetaUrl, { timeout: 5000 });
                     if (pumpResponse.data) {
                         const pumpData = pumpResponse.data;
-                        logger.info(`[MintExtractor] Found ${mint.slice(0, 8)}... via pump.fun API: name=${pumpData.name}, symbol=${pumpData.symbol}, image=${pumpData.image_uri ? 'YES' : 'NO'}`);
+                        let image = pumpData.image_uri || pumpData.image || null;
+
+                        // v25.7: Try GeckoTerminal if Pump.fun doesn't have image
+                        if (!image) {
+                            const geckoImage = await fetchGeckoTerminalImage(mint);
+                            if (geckoImage) {
+                                image = geckoImage;
+                                logger.info(`[MintExtractor] Using GeckoTerminal image for ${mint.slice(0, 8)}... (pump.fun path)`);
+                            }
+                        }
+
+                        logger.info(`[MintExtractor] Found ${mint.slice(0, 8)}... via pump.fun API: name=${pumpData.name}, symbol=${pumpData.symbol}, image=${image ? 'YES' : 'NO'}`);
                         validTokens.push({
                             mint,
                             name: pumpData.name || 'Unknown Token',
                             ticker: pumpData.symbol || 'UNKNOWN',
                             description: pumpData.description || '',
-                            image: pumpData.image_uri || pumpData.image || null,
+                            image,
                             metadataUri: pumpData.metadata_uri || null,
                             twitter: pumpData.twitter || '',
                             website: pumpData.website || '',
@@ -867,6 +924,14 @@ async function validateMintsBatch(mints, options = {}) {
                     }
                 } catch (e) {
                     logger.debug(`[MintExtractor] pump.fun API failed for ${mint.slice(0, 8)}...: ${e.message}`);
+                }
+
+                // v25.7: Try GeckoTerminal as last resort before giving up
+                const geckoImage = await fetchGeckoTerminalImage(mint);
+                if (geckoImage) {
+                    logger.info(`[MintExtractor] Found image via GeckoTerminal for ${mint.slice(0, 8)}... (last resort)`);
+                    // We have an image from GeckoTerminal but no other metadata - still skip
+                    // as we need at least name/ticker for a valid token entry
                 }
 
                 // Don't add minimal fallback data - if we can't find metadata, skip the token
@@ -1597,6 +1662,7 @@ module.exports = {
     // Validation & Market Data
     validateMintsBatch,
     fetchDexScreenerData,
+    fetchGeckoTerminalImage,
 
     // Fee recipient verification
     verifyFeeRecipient,
