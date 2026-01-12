@@ -91,6 +91,7 @@ const config = {
     TWITTER_API_SECRET: process.env.TWITTER_API_SECRET,
     TWITTER_ACCESS_TOKEN: process.env.TWITTER_ACCESS_TOKEN,
     TWITTER_ACCESS_SECRET: process.env.TWITTER_ACCESS_SECRET,
+    TWITTER_USERNAME: process.env.TWITTER_USERNAME, // v25.22: Fallback for tweet URLs
 
     // UI
     HEADER_IMAGE_URL: process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO",

@@ -168,28 +168,32 @@ function sanitizeUrl(url) {
 }
 
 /**
- * Sanitize a Twitter handle
+ * Sanitize a Twitter handle and return as full URL
+ * v25.22 FIX: Returns full URL format for Pump.fun metadata compatibility
  */
 function sanitizeTwitterHandle(handle) {
     if (typeof handle !== 'string' || !handle.trim()) {
         return null;
     }
 
-    // Remove @ if present and validate
-    let sanitized = handle.trim().replace(/^@/, '');
+    let sanitized = handle.trim();
+
+    // If it's already a full URL, extract the handle
+    const urlMatch = sanitized.match(/(?:twitter\.com|x\.com)\/([A-Za-z0-9_]{1,15})/i);
+    if (urlMatch) {
+        sanitized = urlMatch[1];
+    } else {
+        // Remove @ if present
+        sanitized = sanitized.replace(/^@/, '');
+    }
 
     // Twitter handles: 1-15 characters, alphanumeric and underscore only
     if (!/^[A-Za-z0-9_]{1,15}$/.test(sanitized)) {
-        // If it's a full URL, extract the handle
-        const urlMatch = sanitized.match(/(?:twitter\.com|x\.com)\/([A-Za-z0-9_]{1,15})/i);
-        if (urlMatch) {
-            sanitized = urlMatch[1];
-        } else {
-            return null;
-        }
+        return null;
     }
 
-    return sanitized;
+    // v25.22 FIX: Return as full URL for Pump.fun metadata compatibility
+    return `https://x.com/${sanitized}`;
 }
 
 /**

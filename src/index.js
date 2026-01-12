@@ -100,8 +100,8 @@ async function main() {
     const db = database.getDB();
     logger.info('[Database] PostgreSQL initialized with connection pooling');
 
-    // Initialize Twitter
-    twitter.init();
+    // Initialize Twitter (v25.22: Now async to fetch username)
+    await twitter.init();
 
     // Initialize Solana connection
     const connection = new Connection(config.RPC_URL, "confirmed");

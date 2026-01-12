@@ -1082,7 +1082,12 @@
                     <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
                 </div>
                 <div class="text-center md:text-left">
-                    <h1 class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1>
+                    <div class="flex items-center gap-2 justify-center md:justify-start">
+                        <h1 class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white tracking-wide leading-tight">IGNITION</h1>
+                        <button onclick="toggleMainAboutModal()" class="p-1.5 md:p-2 rounded-full bg-orange-900/50 border border-orange-700 hover:bg-orange-800 transition text-orange-400 hover:text-white" title="About IGNITION">
+                            <i data-lucide="help-circle" class="w-4 h-4 md:w-5 md:h-5"></i>
+                        </button>
+                    </div>
                     <p class="text-orange-400 text-xs md:text-sm font-mono uppercase tracking-widest mt-1 md:mt-2">Pumpfun Airdrop Platform</p>
                 </div>
             </div>
@@ -1633,12 +1638,13 @@
             <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
                 <p class="text-fuchsia-400 text-xs uppercase mb-1">King of the Pill (KOTH)</p>
                 <p class="text-xs text-gray-300"><span class="text-white">10%</span> of every airdrop goes to holders of the highest market cap token, proportional to their holdings.</p>
+                <p class="text-xs text-gray-400 mt-1">Requirements: Token must have <span class="text-yellow-400">≥10 holders</span> and <span class="text-green-400">≥$1,000 market cap</span> to qualify for KOTH bonus.</p>
             </div>
         </div>
     </div>
 </div>
 
-<!-- v25.2: Updated about modal with non-bold headings -->
+<!-- v25.22: Updated about modal -->
 <div id="about-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAboutModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Fee Claim & Rewards Mechanics</h3>
     <div id="about-content-static">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8 font-sans text-sm">
@@ -1673,6 +1679,7 @@
                 <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
                     <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">King of the Pill</p>
                     <p class="text-xs text-gray-300"><span class="text-white">10% of the entire airdrop pool</span> is distributed to all holders of the highest market cap token, proportional to their holdings.</p>
+                    <p class="text-[10px] text-gray-400 mt-1">Requires: ≥10 holders & ≥$1,000 market cap</p>
                 </div>
             </div>
         </div>
@@ -1850,8 +1857,104 @@
     </div>
 </div>
 
+<!-- v25.22: Main About Modal - Comprehensive System Overview -->
+<div id="main-about-modal" class="modal">
+    <div class="modal-content border-orange-600" style="max-width: 700px;">
+        <span class="close-btn text-orange-400" onclick="closeMainAboutModal()">&times;</span>
+        <h3 class="text-orange-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-800/50 pb-2 font-normal flex items-center gap-2">
+            <i data-lucide="info" class="w-5 h-5"></i> About IGNITION
+        </h3>
+
+        <div class="font-sans text-sm space-y-4">
+            <!-- What is IGNITION -->
+            <div class="bg-orange-900/30 p-4 rounded border border-orange-700/50">
+                <p class="text-orange-400 text-xs uppercase mb-2 font-bold">What is IGNITION?</p>
+                <p class="text-gray-300 text-sm">IGNITION is a Solana token launcher and automated airdrop platform for Pump.fun. Launch tokens for just 0.02 SOL and earn SOL airdrops by holding tokens in our ecosystem.</p>
+            </div>
+
+            <!-- How It Works - 3 Steps -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 text-center">
+                    <div class="text-2xl mb-2">🚀</div>
+                    <p class="text-purple-400 text-xs uppercase font-bold mb-1">1. Launch</p>
+                    <p class="text-[11px] text-gray-400">Deploy tokens to Pump.fun for 0.02 SOL</p>
+                </div>
+                <div class="bg-green-900/30 p-3 rounded border border-green-700/50 text-center">
+                    <div class="text-2xl mb-2">♻️</div>
+                    <p class="text-green-400 text-xs uppercase font-bold mb-1">2. Flywheel</p>
+                    <p class="text-[11px] text-gray-400">Trading fees collected every 2.5 min</p>
+                </div>
+                <div class="bg-cyan-900/30 p-3 rounded border border-cyan-700/50 text-center">
+                    <div class="text-2xl mb-2">🪂</div>
+                    <p class="text-cyan-400 text-xs uppercase font-bold mb-1">3. Airdrop</p>
+                    <p class="text-[11px] text-gray-400">SOL distributed every 15 min</p>
+                </div>
+            </div>
+
+            <!-- Earning Points -->
+            <div class="bg-yellow-900/30 p-4 rounded border border-yellow-700/50">
+                <p class="text-yellow-400 text-xs uppercase mb-2 font-bold">How to Earn Points</p>
+                <ul class="text-xs text-gray-300 space-y-1.5">
+                    <li class="flex items-start gap-2"><span class="text-yellow-400">•</span><span><span class="text-white font-medium">Hold tokens</span> - Be in top 250 holders of tokens with >$100 daily volume</span></li>
+                    <li class="flex items-start gap-2"><span class="text-green-400">•</span><span><span class="text-white font-medium">Robinhood partners</span> - Hold external tokens that share fees with us</span></li>
+                    <li class="flex items-start gap-2"><span class="text-purple-400">•</span><span><span class="text-white font-medium">ASDF multiplier</span> - Top 100 $ASDF holders get 2x total points</span></li>
+                    <li class="flex items-start gap-2"><span class="text-fuchsia-400">•</span><span><span class="text-white font-medium">King of the Pill</span> - 10% bonus pool for highest market cap token holders</span></li>
+                </ul>
+            </div>
+
+            <!-- Token Registration -->
+            <div class="bg-blue-900/30 p-4 rounded border border-blue-700/50">
+                <p class="text-blue-400 text-xs uppercase mb-2 font-bold">Robinhood Bot - Share Fees from Existing Tokens</p>
+                <p class="text-xs text-gray-300 mb-2">Have a Pump.fun token? Share creator fees with IGNITION and your holders earn airdrop points!</p>
+                <ol class="text-xs text-gray-400 space-y-1 list-decimal list-inside">
+                    <li>Go to Pump.fun Creator Dashboard</li>
+                    <li>Add our wallet as a fee recipient</li>
+                    <li>Click "Register Token" tab above</li>
+                    <li>Submit your token's mint address</li>
+                </ol>
+            </div>
+
+            <!-- Airdrop Distribution -->
+            <div class="grid grid-cols-2 gap-3">
+                <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
+                    <p class="text-gray-400 text-[10px] uppercase mb-1">Fee Collection</p>
+                    <p class="text-white font-mono text-lg">Every 2.5 min</p>
+                    <p class="text-[10px] text-gray-500">When >0.05 SOL pending</p>
+                </div>
+                <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
+                    <p class="text-gray-400 text-[10px] uppercase mb-1">SOL Airdrops</p>
+                    <p class="text-white font-mono text-lg">Every 15 min</p>
+                    <p class="text-[10px] text-gray-500">When >1.0 SOL in pool</p>
+                </div>
+            </div>
+
+            <!-- Fee Distribution -->
+            <div class="bg-gray-800/30 p-3 rounded border border-gray-700/50">
+                <p class="text-gray-400 text-xs uppercase mb-2 font-bold">Fee Distribution</p>
+                <div class="flex items-center gap-2 text-xs">
+                    <span class="bg-purple-600 px-2 py-1 rounded text-white font-bold">95%</span>
+                    <span class="text-gray-300">Airdrop Pool</span>
+                    <span class="text-gray-600">|</span>
+                    <span class="bg-red-600 px-2 py-1 rounded text-white font-bold">4.5%</span>
+                    <span class="text-gray-300">Burns</span>
+                    <span class="text-gray-600">|</span>
+                    <span class="bg-gray-600 px-2 py-1 rounded text-white font-bold">0.5%</span>
+                    <span class="text-gray-300">Reserves</span>
+                </div>
+            </div>
+
+            <!-- Quick Links -->
+            <div class="flex flex-wrap gap-2 pt-2 border-t border-gray-800">
+                <button onclick="closeMainAboutModal(); toggleAboutModal();" class="text-xs text-orange-400 hover:text-white border border-orange-800 hover:bg-orange-900/50 px-3 py-1.5 rounded transition">Fee Mechanics</button>
+                <button onclick="closeMainAboutModal(); toggleAirdropInfoModal();" class="text-xs text-purple-400 hover:text-white border border-purple-800 hover:bg-purple-900/50 px-3 py-1.5 rounded transition">Points System</button>
+                <button onclick="closeMainAboutModal(); toggleRobinhoodInfoModal();" class="text-xs text-green-400 hover:text-white border border-green-800 hover:bg-green-900/50 px-3 py-1.5 rounded transition">Robinhood Partners</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
-    const FRONTEND_VERSION = "v25.4";
+    const FRONTEND_VERSION = "v25.22";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const WS_URL = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
     // Wallet address is fetched from backend API to ensure consistency
@@ -2302,7 +2405,8 @@
         consUsers: document.getElementById('cons-users'),
         consNeed: document.getElementById('cons-need'),
         consHave: document.getElementById('cons-have'),
-        consMissing: document.getElementById('cons-missing')
+        consMissing: document.getElementById('cons-missing'),
+        mainAboutModal: document.getElementById('main-about-modal')
     };
 
     lucide.createIcons();
@@ -3221,6 +3325,12 @@
     window.toggleAirdropInfoModal = toggleAirdropInfoModal;
     const closeAirdropInfoModal = () => { ui.airdropInfoModal.style.display = 'none'; };
     window.closeAirdropInfoModal = closeAirdropInfoModal;
+
+    // v25.22: Main About Modal - comprehensive system overview
+    const toggleMainAboutModal = () => { ui.mainAboutModal.style.display = 'block'; lucide.createIcons(); };
+    window.toggleMainAboutModal = toggleMainAboutModal;
+    const closeMainAboutModal = () => { ui.mainAboutModal.style.display = 'none'; };
+    window.closeMainAboutModal = closeMainAboutModal;
 
     // v18.0: User Holdings Modal - shows each token, eligibility, and points
     const toggleUserHoldingsModal = async () => {

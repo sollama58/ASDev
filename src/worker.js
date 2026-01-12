@@ -110,8 +110,9 @@ async function startWorker() {
     logger.info('[Worker] PostgreSQL initialized with connection pooling');
 
     // Initialize Twitter (needed for social worker)
+    // v25.22: Now async to fetch username for proper tweet URLs
     if (enabledTasks.includes('social')) {
-        twitter.init();
+        await twitter.init();
     }
 
     // Initialize Solana connection

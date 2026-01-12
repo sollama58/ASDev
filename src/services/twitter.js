@@ -1,16 +1,18 @@
 /**
  * Twitter Service
  * Twitter API v2 integration for posting tweets
+ * v25.22 FIX: Cache authenticated username for proper tweet URLs
  */
 const { TwitterApi } = require('twitter-api-v2');
 const logger = require('./logger');
 
 let twitterClient = null;
+let authenticatedUsername = null; // v25.22: Cache the bot's Twitter username
 
 /**
- * Initialize Twitter client
+ * Initialize Twitter client and fetch authenticated user's username
  */
-function init() {
+async function init() {
     if (!process.env.TWITTER_APP_KEY) {
         logger.warn("Twitter credentials not configured");
         return false;
@@ -23,7 +25,22 @@ function init() {
             accessToken: process.env.TWITTER_ACCESS_TOKEN,
             accessSecret: process.env.TWITTER_ACCESS_SECRET,
         });
-        logger.info("Twitter client initialized");
+
+        // v25.22 FIX: Fetch and cache the authenticated user's username
+        // This is used to construct proper tweet URLs
+        try {
+            const me = await twitterClient.v2.me();
+            authenticatedUsername = me.data.username;
+            logger.info(`Twitter client initialized for @${authenticatedUsername}`);
+        } catch (meErr) {
+            // Fallback to env var if API call fails
+            authenticatedUsername = process.env.TWITTER_USERNAME || null;
+            logger.warn("Could not fetch Twitter username from API, using fallback", {
+                fallback: authenticatedUsername,
+                error: meErr.message
+            });
+        }
+
         return true;
     } catch (e) {
         logger.error("Twitter init failed", { error: e.message });
@@ -54,7 +71,12 @@ https://pump.fun/coin/${mint}
 #Solana #Memecoin #Ignition`;
 
         const { data } = await rwClient.v2.tweet(tweetText);
-        const tweetUrl = `https://x.com/user/status/${data.id}`;
+
+        // v25.22 FIX: Use cached username instead of literal "user"
+        // Falls back to generic x.com/i/status URL if username not available
+        const tweetUrl = authenticatedUsername
+            ? `https://x.com/${authenticatedUsername}/status/${data.id}`
+            : `https://x.com/i/status/${data.id}`;
 
         logger.info(`Tweet Posted: ${tweetUrl}`);
         return tweetUrl;
