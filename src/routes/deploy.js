@@ -8,7 +8,7 @@
 const express = require('express');
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const config = require('../config/env');
-const { pinata, vanity, redis, logger, sanitizer } = require('../services');
+const { pinata, vanity, redis, logger, sanitizer, imageUtils } = require('../services');
 const { isValidPubkey } = require('./solana');
 
 const router = express.Router();
@@ -91,14 +91,23 @@ function init(deps) {
                 return res.status(400).json({ error: "Invalid image URL. Please use Imgur (i.imgur.com)." });
             }
 
+            // v25.15: Normalize image URL before storing in metadata
+            // This converts imgur.com/xxx -> i.imgur.com/xxx.png
+            const normalizedImageUrl = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+
             const DESCRIPTION_FOOTER = " Launched via Ignition.";
             const finalDescription = description + DESCRIPTION_FOOTER;
 
             // v25.1: No server-side moderation - Imgur handles it
-            // Just upload metadata with the Imgur image URL
-            const result = await pinata.uploadMetadata(name, ticker, finalDescription, twitter, website, imageUrl);
+            // Just upload metadata with the normalized Imgur image URL
+            const result = await pinata.uploadMetadata(name, ticker, finalDescription, twitter, website, normalizedImageUrl);
 
-            logger.info('[Deploy] Metadata prepared', { name, ticker, imageUrl: imageUrl.substring(0, 50) });
+            logger.info('[Deploy] Metadata prepared', {
+                name,
+                ticker,
+                originalImage: imageUrl.substring(0, 50),
+                normalizedImage: normalizedImageUrl.substring(0, 50)
+            });
 
             res.json({ success: true, ...result });
         } catch (err) {
@@ -165,13 +174,16 @@ function init(deps) {
             // Record the fee
             await addFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL);
 
-            // v25.4: Debug logging for image URL tracking
-            const imageToSend = sanitized.imageUrl || sanitized.image;
+            // v25.15: Normalize image URL before passing to worker
+            // This handles imgur.com/xxx -> i.imgur.com/xxx.png conversion
+            const rawImageUrl = sanitized.imageUrl || sanitized.image;
+            const imageToSend = rawImageUrl ? (imageUtils.normalizeImageUrl(rawImageUrl) || rawImageUrl) : null;
+
             logger.info('[Deploy] Image URL debug', {
                 rawImageUrl: req.body.imageUrl ? req.body.imageUrl.substring(0, 80) : 'NULL',
                 sanitizedImageUrl: sanitized.imageUrl ? sanitized.imageUrl.substring(0, 80) : 'NULL',
-                sanitizedImage: sanitized.image ? String(sanitized.image).substring(0, 80) : 'NULL',
-                imageToSend: imageToSend ? imageToSend.substring(0, 80) : 'NULL'
+                normalizedImage: imageToSend ? imageToSend.substring(0, 80) : 'NULL',
+                wasNormalized: rawImageUrl !== imageToSend
             });
 
             // Add job with sanitized data

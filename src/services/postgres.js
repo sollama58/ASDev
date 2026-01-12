@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('../config/env');
 const logger = require('./logger');
+const imageUtils = require('./imageUtils');
 
 // Connection pool instance
 let pool = null;
@@ -494,14 +495,17 @@ async function saveTokenData(pubkey, mint, metadata) {
         throw new Error("metadata.ticker and metadata.name are required");
     }
 
-    // v25.4: Debug logging for image URL tracking
-    const imageValue = metadata.image || '';
+    // v25.15: Normalize image URL before saving (handles Imgur, IPFS, etc.)
+    const rawImage = metadata.image || '';
+    const imageValue = rawImage ? (imageUtils.normalizeImageUrl(rawImage) || rawImage) : '';
+
     logger.info("[PostgreSQL] saveTokenData image debug", {
         mint: mint.substring(0, 12),
         ticker: metadata.ticker,
         imageProvided: !!metadata.image,
-        imageValue: imageValue ? imageValue.substring(0, 80) : 'EMPTY_STRING',
-        imageType: typeof metadata.image
+        rawImage: rawImage ? rawImage.substring(0, 80) : 'EMPTY_STRING',
+        normalizedImage: imageValue ? imageValue.substring(0, 80) : 'EMPTY_STRING',
+        wasNormalized: rawImage !== imageValue
     });
 
     try {
