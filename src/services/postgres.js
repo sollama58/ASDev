@@ -44,6 +44,7 @@ async function smartCache(key, ttlSeconds, fetchFunction) {
 
 /**
  * v24.0: Build SSL configuration based on environment
+ * v25.22 SECURITY: Default to certificate verification in production when CA cert available
  * Supports: disabled, require (no verify), verify-ca, verify-full
  */
 function buildSslConfig() {
@@ -52,8 +53,14 @@ function buildSslConfig() {
         return config.DB_SSL_ENABLED ? { rejectUnauthorized: false } : false;
     }
 
-    // In production, default to SSL enabled
-    const sslMode = config.DB_SSL_MODE || 'require';
+    // v25.22: In production, default to verify-full if CA cert is available, otherwise require
+    let sslMode = config.DB_SSL_MODE || 'require';
+
+    // v25.22 SECURITY: Auto-upgrade to verify-full if CA certificate is available
+    if (sslMode === 'require' && (config.DB_SSL_CA || config.DB_SSL_CA_PATH)) {
+        logger.info('[PostgreSQL] CA certificate available - upgrading to verify-full mode');
+        sslMode = 'verify-full';
+    }
 
     switch (sslMode) {
         case 'disable':
@@ -62,7 +69,8 @@ function buildSslConfig() {
 
         case 'require':
             // SSL required but no certificate verification (common for managed DBs like Render)
-            logger.info('[PostgreSQL] SSL mode: require (no cert verification)');
+            // v25.22: Log warning about MITM vulnerability
+            logger.warn('[PostgreSQL] SSL mode: require (no cert verification) - vulnerable to MITM attacks. Set DB_SSL_CA or DB_SSL_CA_PATH for full security.');
             return { rejectUnauthorized: false };
 
         case 'verify-ca':
@@ -74,7 +82,7 @@ function buildSslConfig() {
             if (config.DB_SSL_CA_PATH) {
                 try {
                     sslConfig.ca = fs.readFileSync(path.resolve(config.DB_SSL_CA_PATH), 'utf8');
-                    logger.info('[PostgreSQL] SSL mode: verify-full (CA cert loaded)');
+                    logger.info('[PostgreSQL] SSL mode: verify-full (CA cert loaded from file)');
                 } catch (e) {
                     logger.error('[PostgreSQL] Failed to load CA certificate', { error: e.message });
                     throw new Error('SSL CA certificate required but could not be loaded');
@@ -84,13 +92,14 @@ function buildSslConfig() {
                 sslConfig.ca = config.DB_SSL_CA;
                 logger.info('[PostgreSQL] SSL mode: verify-full (CA cert from env)');
             } else {
-                logger.warn('[PostgreSQL] SSL verify mode enabled but no CA certificate provided');
+                // v25.22: In production verify mode without CA, use system CA store
+                logger.info('[PostgreSQL] SSL mode: verify-full (using system CA store)');
             }
 
             return sslConfig;
 
         default:
-            logger.info('[PostgreSQL] SSL mode: require (default)');
+            logger.warn('[PostgreSQL] SSL mode: require (default) - vulnerable to MITM attacks');
             return { rejectUnauthorized: false };
     }
 }

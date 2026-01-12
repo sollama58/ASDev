@@ -6,6 +6,7 @@
  * v20.0 - Added GeckoTerminal as fallback for images
  * v25.13 - Tiered updates: Top 10 every 1 min, all tokens every 5 min
  *        - Images/metadata only fetched on token creation or admin request
+ * v25.22 - SECURITY: Added price bounds validation to prevent oracle manipulation
  */
 const axios = require('axios');
 const config = require('../config/env');
@@ -16,6 +17,26 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Debug mode - set to true for verbose logging
 const DEBUG_METADATA = false;
+
+// v25.22 SECURITY: Price sanity bounds - prevent oracle manipulation attacks
+const MAX_PRICE_USD = 1000000; // $1M per token max
+const MAX_MARKET_CAP_USD = 100000000000; // $100B max market cap
+const MAX_VOLUME_USD = 10000000000; // $10B max 24h volume
+
+/**
+ * v25.22 SECURITY: Validate and sanitize price/market data
+ * Returns 0 for invalid values (NaN, Infinity, negative, or exceeds bounds)
+ */
+function validateNumericValue(value, maxBound, fieldName = 'value') {
+    const num = parseFloat(value) || 0;
+    if (!Number.isFinite(num) || num < 0 || num > maxBound) {
+        if (num !== 0) {
+            logger.debug(`[MetadataUpdater] Invalid ${fieldName} rejected: ${value}`);
+        }
+        return 0;
+    }
+    return num;
+}
 
 /**
  * Batch fetch market data from Helius DAS API (fallback when DexScreener has no data)
@@ -183,11 +204,12 @@ async function updatePricesOnly(deps, tokens) {
 
             const existing = updates.get(mint);
             if (!existing || (pair.liquidity?.usd > existing.liquidity)) {
+                // v25.22 SECURITY: Validate all numeric values from external API
                 updates.set(mint, {
-                    marketCap: pair.fdv || pair.marketCap || 0,
-                    volume24h: pair.volume?.h24 || 0,
-                    priceUsd: parseFloat(pair.priceUsd) || 0,
-                    liquidity: pair.liquidity?.usd || 0
+                    marketCap: validateNumericValue(pair.fdv || pair.marketCap, MAX_MARKET_CAP_USD, 'marketCap'),
+                    volume24h: validateNumericValue(pair.volume?.h24, MAX_VOLUME_USD, 'volume24h'),
+                    priceUsd: validateNumericValue(pair.priceUsd, MAX_PRICE_USD, 'priceUsd'),
+                    liquidity: validateNumericValue(pair.liquidity?.usd, MAX_MARKET_CAP_USD, 'liquidity')
                 });
             }
         }
@@ -289,11 +311,12 @@ async function updateAllTokenPrices(deps) {
 
                 const existing = updates.get(mint);
                 if (!existing || (pair.liquidity?.usd > existing.liquidity)) {
+                    // v25.22 SECURITY: Validate all numeric values from external API
                     updates.set(mint, {
-                        marketCap: pair.fdv || pair.marketCap || 0,
-                        volume24h: pair.volume?.h24 || 0,
-                        priceUsd: parseFloat(pair.priceUsd) || 0,
-                        liquidity: pair.liquidity?.usd || 0
+                        marketCap: validateNumericValue(pair.fdv || pair.marketCap, MAX_MARKET_CAP_USD, 'marketCap'),
+                        volume24h: validateNumericValue(pair.volume?.h24, MAX_VOLUME_USD, 'volume24h'),
+                        priceUsd: validateNumericValue(pair.priceUsd, MAX_PRICE_USD, 'priceUsd'),
+                        liquidity: validateNumericValue(pair.liquidity?.usd, MAX_MARKET_CAP_USD, 'liquidity')
                     });
                 }
             }
@@ -397,11 +420,12 @@ async function updateMetadata(deps) {
                                     pair.baseToken?.info?.imageUrl ||
                                     null;
 
+                    // v25.22 SECURITY: Validate all numeric values from external API
                     updates.set(mint, {
-                        marketCap: pair.fdv || pair.marketCap || 0,
-                        volume24h: pair.volume?.h24 || 0,
-                        priceUsd: parseFloat(pair.priceUsd) || 0,
-                        liquidity: pair.liquidity?.usd || 0,
+                        marketCap: validateNumericValue(pair.fdv || pair.marketCap, MAX_MARKET_CAP_USD, 'marketCap'),
+                        volume24h: validateNumericValue(pair.volume?.h24, MAX_VOLUME_USD, 'volume24h'),
+                        priceUsd: validateNumericValue(pair.priceUsd, MAX_PRICE_USD, 'priceUsd'),
+                        liquidity: validateNumericValue(pair.liquidity?.usd, MAX_MARKET_CAP_USD, 'liquidity'),
                         imageUrl: imageUrl,
                         name: pair.baseToken?.name || null,
                         ticker: pair.baseToken?.symbol || null

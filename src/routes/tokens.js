@@ -6,13 +6,14 @@
  * v15.0 - Added developer token registration endpoint
  * v18.0 - Changed from top 10 to volume threshold eligibility
  * v24.0 - Added rate limiting for token registration, input sanitization
+ * v25.22 - SECURITY: Added signature verification for token registration
  */
 const express = require('express');
 const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 const { PublicKey } = require('@solana/web3.js');
 const { isValidPubkey } = require('./solana');
-const { redis, mintExtractor, logger, circuitBreaker, imageUtils } = require('../services');
+const { redis, mintExtractor, logger, circuitBreaker, imageUtils, signatureVerifier } = require('../services');
 const config = require('../config/env');
 
 const router = express.Router();
@@ -321,12 +322,18 @@ function init(deps) {
 
     // Proxy for token price data (uses DexScreener API)
     // v24.0: Added caching (10s TTL) and circuit breaker for external API resilience
+    // v25.22 SECURITY: Added price bounds validation to prevent oracle manipulation
     router.get('/pump-proxy/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
             if (!isValidPubkey(mint)) {
                 return res.status(400).json({ error: "Invalid mint address" });
             }
+
+            // v25.22 SECURITY: Price sanity bounds - reject obviously invalid values
+            // Max reasonable price for a Pump.fun token (prevents overflow/manipulation)
+            const MAX_PRICE_USD = 1000000; // $1M per token max
+            const MAX_PRICE_NATIVE = 100000; // 100K SOL per token max
 
             // v24.0: Cache price data for 10 seconds to reduce external API calls
             const cacheKey = `pump_proxy_${mint}`;
@@ -341,9 +348,23 @@ function init(deps) {
                         const pairs = response.data?.pairs || [];
                         if (pairs.length > 0) {
                             const pair = pairs[0];
+                            let priceUsd = parseFloat(pair.priceUsd) || 0;
+                            let priceNative = parseFloat(pair.priceNative) || 0;
+
+                            // v25.22 SECURITY: Validate price bounds
+                            // Reject NaN, Infinity, negative values, and suspiciously high values
+                            if (!Number.isFinite(priceUsd) || priceUsd < 0 || priceUsd > MAX_PRICE_USD) {
+                                logger.warn('[pump-proxy] Invalid priceUsd rejected', { mint: mint.slice(0, 8), priceUsd });
+                                priceUsd = 0;
+                            }
+                            if (!Number.isFinite(priceNative) || priceNative < 0 || priceNative > MAX_PRICE_NATIVE) {
+                                logger.warn('[pump-proxy] Invalid priceNative rejected', { mint: mint.slice(0, 8), priceNative });
+                                priceNative = 0;
+                            }
+
                             return {
-                                priceUsd: parseFloat(pair.priceUsd) || 0,
-                                priceNative: parseFloat(pair.priceNative) || 0,
+                                priceUsd,
+                                priceNative,
                                 cached: false
                             };
                         }
@@ -976,10 +997,20 @@ function init(deps) {
      * with us can be registered.
      *
      * v24.0: Added rate limiting (10 registrations per hour per IP)
+     * v25.22 SECURITY: Added signature verification - submitter must prove wallet ownership
+     *
+     * Required body fields for signature verification:
+     * - signerPubkey: The wallet public key signing this request
+     * - signedMessage: The message that was signed (format: "register-token:timestamp:nonce")
+     * - signature: Base58 encoded Ed25519 signature
      */
-    router.post('/register-token', tokenRegistrationLimiter, async (req, res) => {
+    router.post('/register-token', tokenRegistrationLimiter, signatureVerifier.requireSignature('register-token'), async (req, res) => {
         try {
             const { mint, submitterPubkey, originalCreator } = req.body;
+
+            // v25.22 SECURITY: Use verified pubkey from signature verification
+            // This ensures the submitter actually controls the wallet
+            const verifiedSubmitter = req.verifiedPubkey || submitterPubkey;
 
             // Validate inputs
             if (!mint) {
@@ -1063,8 +1094,9 @@ function init(deps) {
 
             if (isDirectCreator) {
                 // Direct creator - insert into tokens table
-                const registeredBy = submitterPubkey && isValidPubkey(submitterPubkey)
-                    ? submitterPubkey
+                // v25.22: Use verified submitter from signature verification
+                const registeredBy = verifiedSubmitter && isValidPubkey(verifiedSubmitter)
+                    ? verifiedSubmitter
                     : 'platform_registered';
 
                 await db.run(`
@@ -1092,9 +1124,9 @@ function init(deps) {
             } else {
                 // Fee shareholder - insert into robinhood_tokens table
                 // Use the original creator from verification (needed for fee vault derivation)
-                // Fall back to submitter if originalCreator not available
+                // v25.22: Fall back to verified submitter if originalCreator not available
                 const creatorPubkey = verification.originalCreator
-                    || (submitterPubkey && isValidPubkey(submitterPubkey) ? submitterPubkey : null)
+                    || (verifiedSubmitter && isValidPubkey(verifiedSubmitter) ? verifiedSubmitter : null)
                     || 'unknown_creator';
 
                 await db.run(`

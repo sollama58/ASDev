@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.20-STABILITY-FIXES",
+    VERSION: "v25.22-SECURITY-FIXES",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 

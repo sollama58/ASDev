@@ -6,6 +6,7 @@
  * v24.0 - Added circuitBreaker for external API resilience
  * v25.1 - Removed cloudflareImages (using Imgur for user uploads)
  * v25.4 - Added websocket for real-time frontend updates
+ * v25.22 - Added signatureVerifier for cryptographic request authentication
  */
 const logger = require('./logger');
 const postgres = require('./postgres');
@@ -23,6 +24,7 @@ const imageUtils = require('./imageUtils');
 const circuitBreaker = require('./circuitBreaker');
 const sanitizer = require('./sanitizer');
 const websocket = require('./websocket');
+const signatureVerifier = require('./signatureVerifier');
 
 // v13.0: Use PostgreSQL as the database layer
 const database = postgres;
@@ -45,4 +47,5 @@ module.exports = {
     circuitBreaker,
     sanitizer,
     websocket,
+    signatureVerifier,
 };

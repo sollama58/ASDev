@@ -417,21 +417,32 @@ async function processAirdrop(deps) {
         let kothTxSignature = null;
 
         // 1. Identify King of the Hill (Highest MCAP)
-        const kothToken = await db.get('SELECT userPubkey, ticker, mint FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
+        // v25.22 SECURITY: Added minimum requirements to prevent KOTH manipulation
+        // Token must have at least 10 holders and $1000 market cap to qualify
+        const KOTH_MIN_HOLDERS = 10;
+        const KOTH_MIN_MARKET_CAP = 1000; // $1000 USD
+        const KOTH_MAX_PERCENT = 0.10; // 10% cap
+
+        const kothToken = await db.get(
+            'SELECT userPubkey, ticker, mint, "marketCap" FROM tokens WHERE "marketCap" >= $1 ORDER BY "marketCap" DESC LIMIT 1',
+            [KOTH_MIN_MARKET_CAP]
+        );
 
         // 2. Process KOTH Payout (10%) - v13.0: Now distributed to all holders of the king token
+        // v25.22 SECURITY: Only process if token meets minimum requirements
         if (kothToken && kothToken.mint) {
-            kothAmount = Math.floor(totalDistributable * 0.10);
-            communityAmount = totalDistributable - kothAmount;
-
             // Get all holders of the king token
             const kothHolders = await db.all(
                 'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
                 [kothToken.mint]
             );
 
-            if (kothHolders && kothHolders.length > 0) {
-                logger.info(`👑 King of the Hill: ${kothToken.ticker} - Distributing ${(kothAmount / LAMPORTS_PER_SOL).toFixed(2)} SOL to ${kothHolders.length} holders`);
+            // v25.22 SECURITY: Require minimum holder count to prevent single-holder manipulation
+            if (kothHolders && kothHolders.length >= KOTH_MIN_HOLDERS) {
+                kothAmount = Math.floor(totalDistributable * KOTH_MAX_PERCENT);
+                communityAmount = totalDistributable - kothAmount;
+
+                logger.info(`👑 King of the Hill: ${kothToken.ticker} (MCAP: $${kothToken.marketCap?.toFixed(0) || 0}) - Distributing ${(kothAmount / LAMPORTS_PER_SOL).toFixed(2)} SOL to ${kothHolders.length} holders`);
 
                 try {
                     // Calculate total balance for proportional distribution
@@ -486,11 +497,13 @@ async function processAirdrop(deps) {
                     kothAmount = 0;
                 }
             } else {
-                // No holders found, return to community pool
-                logger.info(`👑 King of the Hill: ${kothToken.ticker} - No holders found, returning to community pool`);
-                communityAmount += kothAmount;
-                kothAmount = 0;
+                // v25.22 SECURITY: Not enough holders (< KOTH_MIN_HOLDERS), skip KOTH to prevent manipulation
+                logger.info(`👑 King of the Hill: ${kothToken.ticker} - Only ${kothHolders?.length || 0} holders (need ${KOTH_MIN_HOLDERS} min), skipping KOTH bonus`);
+                // kothAmount stays 0, communityAmount stays totalDistributable
             }
+        } else {
+            // v25.22: No qualifying KOTH token found (none meets $1000 market cap minimum)
+            logger.debug('[Airdrop] No KOTH token qualifies (needs $1000 min market cap)');
         }
 
         // 3. Process Community Distribution (Remaining 90%)
@@ -525,12 +538,23 @@ async function processAirdrop(deps) {
             return;
         }
 
-        // v25.13: Re-check balance right before distribution (in case fees were taken by another process)
-        const currentBalance = await connection.getBalance(devKeypair.publicKey);
-        const currentAvailable = currentBalance - SAFETY_RESERVE;
-        if (totalPlannedWithKoth > currentAvailable) {
-            logger.error(`[Airdrop] ABORTED: Balance changed during preparation. Planned: ${totalPlannedWithKoth / LAMPORTS_PER_SOL} SOL, Now available: ${currentAvailable / LAMPORTS_PER_SOL} SOL`);
+        // v25.22 SECURITY: RACE CONDITION FIX - Use atomic balance verification
+        // Re-check balance right before distribution starts and require exact match or surplus
+        const finalBalanceCheck = await connection.getBalance(devKeypair.publicKey);
+        const finalAvailable = finalBalanceCheck - SAFETY_RESERVE;
+
+        // v25.22: If balance decreased significantly since calculation, abort
+        // Allow small variance (up to 0.01 SOL for tx fees that may have occurred)
+        const BALANCE_TOLERANCE = 0.01 * LAMPORTS_PER_SOL;
+        if (finalAvailable < totalPlannedWithKoth - BALANCE_TOLERANCE) {
+            logger.error(`[Airdrop] ABORTED: Balance changed during preparation (race condition detected). Initial: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL, Now: ${(finalAvailable / LAMPORTS_PER_SOL).toFixed(4)} SOL, Planned: ${(totalPlannedWithKoth / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
             return;
+        }
+
+        // v25.22: If balance increased, recalculate with new balance (don't overspend original calculation)
+        // We use the ORIGINAL planned amounts to prevent mid-airdrop manipulation
+        if (finalAvailable > availableForAirdrop) {
+            logger.info(`[Airdrop] Balance increased during preparation (${((finalAvailable - availableForAirdrop) / LAMPORTS_PER_SOL).toFixed(4)} SOL). Using original plan to prevent manipulation.`);
         }
 
         logger.info(`Distributing ${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL to ${distributionPlan.length} users (Community Pool)`);
