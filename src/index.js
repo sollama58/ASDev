@@ -5,11 +5,16 @@
  * v22.0 - Added API-only mode support for worker server architecture
  * v24.0 - Redis connection validation on startup
  * v25.4 - WebSocket support for real-time updates, relaxed rate limits
+ * v25.26 - Fixed logging for Render visibility
  *
  * Environment Variables:
  *   SERVER_MODE=api-only   - Start without background tasks (use with separate worker server)
  *   SERVER_MODE=full       - Default: Start with both API and background tasks
  */
+
+// v25.26: Immediate stdout write to verify process starts (before any imports)
+process.stdout.write(`[${new Date().toISOString()}] [INFO] ASDev Server process starting...\n`);
+
 require('dotenv').config();
 
 const http = require('http');

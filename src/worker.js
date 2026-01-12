@@ -1,6 +1,6 @@
 /**
  * ASDev Worker Server
- * v22.0 - Dedicated worker process for background tasks
+ * v25.26 - Dedicated worker process for background tasks
  *
  * This file runs ONLY the background tasks (holders, metadata, robinhood, flywheel, etc.)
  * without starting the Express HTTP server. Use this on a second Render instance
@@ -15,6 +15,10 @@
  *   SERVER_MODE=worker node src/worker.js
  *   SERVER_MODE=worker WORKER_TASKS=holders,metadata node src/worker.js
  */
+
+// v25.26: Immediate stdout write to verify process starts (before any imports)
+process.stdout.write(`[${new Date().toISOString()}] [INFO] ASDev Worker process starting...\n`);
+
 require('dotenv').config();
 
 const { Connection, Keypair, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
