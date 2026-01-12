@@ -3,6 +3,7 @@
  * Redis connection, queue management, and globalState
  * v13.0 - Added globalState for cross-process sharing
  * v24.0 - Added connection validation and health checking
+ * v25.23 - Improved reconnection handling for long-running deployments
  */
 const IORedis = require('ioredis');
 const { Queue, Worker } = require('bullmq');
@@ -46,14 +47,32 @@ async function init() {
         redisConnection = new IORedis(config.REDIS_URL, {
             maxRetriesPerRequest: null,
             enableReadyCheck: true,  // v24.0: Enable ready check for connection validation
+            // v25.23: Improved retry strategy for long-running deployments
+            // Never give up - keep retrying with exponential backoff up to 30 seconds
             retryStrategy: (times) => {
-                if (times > 10) {
-                    logger.error('Redis: Max reconnection attempts reached');
-                    return null; // Stop retrying
+                // Exponential backoff: 200ms, 400ms, 800ms, ... up to 30 seconds max
+                const delay = Math.min(times * 200, 30000);
+
+                // Log every 10 attempts to avoid log spam
+                if (times % 10 === 1 || times <= 3) {
+                    logger.warn(`Redis: Reconnecting in ${delay}ms (attempt ${times})`);
                 }
-                const delay = Math.min(times * 200, 5000);
-                logger.warn(`Redis: Reconnecting in ${delay}ms (attempt ${times})`);
-                return delay;
+
+                // After 50 attempts (~5 minutes of trying), log as error but keep trying
+                if (times === 50) {
+                    logger.error('Redis: Extended reconnection attempts - check Redis server status');
+                }
+
+                return delay; // Always return delay to keep retrying
+            },
+            // v25.23: Connection settings for stability
+            connectTimeout: 10000,        // 10 second connection timeout
+            keepAlive: 30000,             // Send keepalive every 30 seconds
+            lazyConnect: false,           // Connect immediately
+            reconnectOnError: (err) => {
+                // Reconnect on connection reset errors
+                const targetErrors = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT'];
+                return targetErrors.some(e => err.message.includes(e));
             }
         });
 
@@ -79,6 +98,12 @@ async function init() {
 
         redisConnection.on('reconnecting', () => {
             logger.info('Redis: Attempting to reconnect...');
+        });
+
+        // v25.23: Handle complete disconnection (retry strategy returned null or max retries)
+        redisConnection.on('end', () => {
+            isConnected = false;
+            logger.error('Redis: Connection ended - will attempt to reconnect');
         });
 
         // v24.0: Validate connection with ping before proceeding
