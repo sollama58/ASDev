@@ -1542,14 +1542,15 @@
 <div id="airdrop-log-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAirdropLogModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2 font-normal">Airdrop Distribution History</h3><div id="modal-airdrop-log-content" class="max-h-[60vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
 <!-- v25.2: Updated airdrop info modal with non-bold headings -->
+<!-- v25.4: Updated with volume-weighted points system -->
 <div id="airdrop-info-modal" class="modal">
     <div class="modal-content border-purple-600">
         <span class="close-btn" onclick="closeAirdropInfoModal()">&times;</span>
         <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2 font-normal">SOL Airdrop System</h3>
         <div class="font-sans text-sm text-purple-200 space-y-3">
             <div class="bg-green-900/30 p-3 rounded border border-green-700/50 mb-4">
-                <p class="text-green-400 text-xs uppercase mb-1">Proportional Airdrops</p>
-                <p class="text-xs text-gray-300">Airdrops are distributed in SOL proportionally to your holdings. The more you hold, the more you earn.</p>
+                <p class="text-green-400 text-xs uppercase mb-1">Volume-Weighted Airdrops</p>
+                <p class="text-xs text-gray-300">Airdrops are distributed in SOL proportionally to your holdings. Higher-volume tokens reward their holders more since they contribute more fees to the pool.</p>
             </div>
             <div class="bg-orange-900/30 p-3 rounded border border-orange-700/50 mb-4">
                 <p class="text-orange-400 text-xs uppercase mb-1">Timing</p>
@@ -1558,13 +1559,20 @@
             <p>Points are calculated based on your proportional holdings in eligible tokens:</p>
             <ul class="list-disc list-inside ml-4 space-y-2 text-purple-300">
                 <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400">250 holders</span> of tokens with <span class="text-green-400">>$100 24hr volume</span> earn points.</li>
-                <li><span class="text-white">Base Points:</span> Each eligible token distributes <span class="text-yellow-400">1000 points</span> proportionally based on your balance vs total holdings.</li>
-                <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+Points</span> for holding partner tokens (scaled by fee share %).</li>
+                <li><span class="text-white">Volume Weight:</span> Each token's base points are scaled by its 24hr volume relative to other eligible tokens (<span class="text-yellow-400">0.5x to 2.0x</span> multiplier).</li>
+                <li><span class="text-white">Base Points:</span> Each eligible token distributes <span class="text-yellow-400">500-2000 points</span> (based on volume) proportionally among top 250 holders.</li>
+                <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+Points</span> for holding partner tokens (scaled by volume + fee share %).</li>
                 <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400">2x Total Points</span> if you're a Top 100 $ASDF holder.</li>
             </ul>
+            <div class="bg-cyan-900/30 p-3 rounded border border-cyan-700/50 mt-4">
+                <p class="text-cyan-400 text-xs uppercase mb-1">Volume Weight Formula</p>
+                <p class="text-xs text-gray-300">Weight = 0.5 + 1.5 × (log(tokenVol) - log(minVol)) / (log(maxVol) - log(minVol))</p>
+                <p class="text-xs text-gray-400 mt-1">Lowest volume token = 0.5x, Highest volume token = 2.0x (logarithmic scale)</p>
+            </div>
             <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mt-4">
                 <p class="text-yellow-400 text-xs uppercase mb-1">Example</p>
-                <p class="text-xs text-gray-300">If you hold 10% of a token's top 250 supply, you get 100 points from that token. With the ASDF multiplier, that becomes 200 points.</p>
+                <p class="text-xs text-gray-300">Token A ($50k volume, max) = 2.0x weight = 2000 base points. If you hold 10% of top 250 supply = 200 points. With ASDF multiplier = 400 points.</p>
+                <p class="text-xs text-gray-400 mt-1">Token B ($1k volume, min) = 0.5x weight = 500 base points. Same 10% holding = 50 points.</p>
             </div>
             <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
                 <p class="text-fuchsia-400 text-xs uppercase mb-1">King of the Pill (KOTH)</p>
@@ -1595,13 +1603,15 @@
                 </ul>
             </div>
 
+            <!-- v25.4: Updated with volume-weighted points -->
             <div>
-                <h4 class="text-purple-400 mb-3 border-b border-purple-800 pb-1 font-normal">3. Proportional Points System</h4>
-                <p class="text-purple-200 mb-2">Points are distributed proportionally based on your holdings. No signup required.</p>
+                <h4 class="text-purple-400 mb-3 border-b border-purple-800 pb-1 font-normal">3. Volume-Weighted Points System</h4>
+                <p class="text-purple-200 mb-2">Points are distributed proportionally based on your holdings. Higher-volume tokens reward more points since they contribute more fees.</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
                     <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400">250 holders</span> of tokens with <span class="text-green-400">>$100 24hr volume</span>.</li>
-                    <li><span class="text-white">Base Points:</span> Each eligible token distributes <span class="text-yellow-400">1000 points</span> proportionally to holdings.</li>
-                    <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+Points</span> for holding partner tokens (scaled by fee share %).</li>
+                    <li><span class="text-white">Volume Weight:</span> Each token's points scaled by volume (<span class="text-cyan-400">0.5x to 2.0x</span>) relative to other tokens.</li>
+                    <li><span class="text-white">Base Points:</span> Each eligible token distributes <span class="text-yellow-400">500-2000 points</span> (based on volume) proportionally.</li>
+                    <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+Points</span> for holding partner tokens (scaled by volume + fee share %).</li>
                     <li><span class="text-white">Multiplier:</span> <span class="text-green-400">2x Total Points</span> if you are a Top 100 $ASDF holder.</li>
                 </ul>
                 <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
@@ -1635,7 +1645,7 @@
     </div>
 </div>
 
-<!-- v25.2: Updated Robinhood info modal with non-bold headings -->
+<!-- v25.4: Updated Robinhood info modal with volume-weighted points -->
 <div id="robinhood-info-modal" class="modal">
     <div class="modal-content border-green-600">
         <span class="close-btn text-green-400" onclick="closeRobinhoodInfoModal()">&times;</span>
@@ -1658,8 +1668,9 @@
             <div>
                 <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">How You Benefit</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
-                    <li><span class="text-white">Proportional Points</span> based on your holdings (Top 250 holders)</li>
-                    <li><span class="text-yellow-400">Points scaled by fee share %</span> (e.g., 50% share = 50% points)</li>
+                    <li><span class="text-white">Proportional Points</span> based on your holdings (Top 100 holders)</li>
+                    <li><span class="text-cyan-400">Volume Weight:</span> Higher volume tokens = more points (0.5x to 2.0x)</li>
+                    <li><span class="text-yellow-400">Fee Share Scaling:</span> Points multiplied by fee share % (50% share = 50% points)</li>
                     <li>These points stack with your regular leaderboard holdings</li>
                     <li>More Robinhood partnerships = more airdrop opportunities</li>
                 </ul>
@@ -1670,14 +1681,20 @@
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
                     <li>Share fees with our wallet to join the Robinhood network</li>
                     <li>Your holders gain airdrop eligibility automatically</li>
-                    <li>Points are proportional to your fee share (higher % = more points for holders)</li>
+                    <li>Higher volume = more points for your holders (rewards active trading)</li>
                     <li>Creates additional incentives for holders to stay in your token</li>
                 </ul>
             </div>
 
+            <div class="bg-cyan-900/30 p-3 rounded border border-cyan-700/50 mt-4">
+                <p class="text-cyan-400 text-xs uppercase mb-1">Volume-Weighted Formula</p>
+                <p class="text-xs text-gray-300">Robinhood Points = (Your Balance / Top 100 Balance) × <span class="text-cyan-400">Volume Weight</span> × <span class="text-yellow-400">Fee Share %</span> × 1000</p>
+                <p class="text-xs text-gray-400 mt-1">Volume Weight ranges from 0.5x (lowest vol) to 2.0x (highest vol) using logarithmic scale</p>
+            </div>
+
             <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 mt-4">
-                <p class="text-purple-400 text-xs uppercase mb-1">Combined Points Formula</p>
-                <p class="text-xs text-gray-300">(Leaderboard Holdings + (Created × 2) + <span class="text-green-400">Robinhood Holdings × Fee Share %</span>) × ASDF Multiplier</p>
+                <p class="text-purple-400 text-xs uppercase mb-1">Total Points Formula</p>
+                <p class="text-xs text-gray-300">(Platform Holdings × Vol Weight + <span class="text-green-400">Robinhood Holdings × Vol Weight × Fee%</span>) × ASDF Multiplier</p>
             </div>
         </div>
     </div>
@@ -1707,8 +1724,9 @@
 </div>
 
 <script>
-    const FRONTEND_VERSION = "v25.2";
+    const FRONTEND_VERSION = "v25.4";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
+    const WS_URL = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
     // Wallet address is fetched from backend API to ensure consistency
     let DEV_WALLET_PUBKEY = "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB"; // Default fallback
     const DEPLOYMENT_FEE = 0.02;
@@ -1760,6 +1778,194 @@
 
     const activeIntervals = [];
     const registerInterval = (id) => { activeIntervals.push(id); return id; };
+
+    // v25.4: WebSocket connection for real-time updates
+    let ws = null;
+    let wsReconnectAttempts = 0;
+    let wsConnected = false;
+    const WS_MAX_RECONNECT_ATTEMPTS = 10;
+    const WS_RECONNECT_DELAY = 3000;
+
+    const initWebSocket = () => {
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+            return; // Already connected or connecting
+        }
+
+        try {
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                console.log('[WS] Connected to server');
+                wsConnected = true;
+                wsReconnectAttempts = 0;
+                systemStatus.backend = 'ONLINE';
+                // Send ping to keep connection alive
+                setInterval(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'ping' }));
+                    }
+                }, 25000);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    handleWebSocketMessage(msg);
+                } catch (e) {
+                    console.warn('[WS] Failed to parse message:', e);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('[WS] Connection closed');
+                wsConnected = false;
+                scheduleReconnect();
+            };
+
+            ws.onerror = (err) => {
+                console.warn('[WS] Error:', err);
+                wsConnected = false;
+            };
+        } catch (e) {
+            console.error('[WS] Failed to create WebSocket:', e);
+            wsConnected = false;
+            scheduleReconnect();
+        }
+    };
+
+    const scheduleReconnect = () => {
+        if (wsReconnectAttempts < WS_MAX_RECONNECT_ATTEMPTS) {
+            wsReconnectAttempts++;
+            const delay = WS_RECONNECT_DELAY * Math.min(wsReconnectAttempts, 5);
+            console.log(`[WS] Reconnecting in ${delay/1000}s (attempt ${wsReconnectAttempts})`);
+            setTimeout(initWebSocket, delay);
+        } else {
+            console.log('[WS] Max reconnect attempts reached, falling back to polling');
+        }
+    };
+
+    const handleWebSocketMessage = (msg) => {
+        if (msg.type === 'pong') return;
+
+        if (msg.type === 'initial' || msg.type === 'update') {
+            const data = msg.data;
+
+            // Update stats
+            if (data.totalTokens !== undefined) {
+                ui.totalLaunches.innerText = data.totalTokens;
+            }
+            if (data.airdropPoolSol !== undefined) {
+                ui.airdropPoolBalance.innerText = data.airdropPoolSol.toFixed(3);
+                updateCountdownPool(data.airdropPoolSol.toFixed(3));
+            }
+            if (data.totalPoints !== undefined) {
+                currentGlobalPoints = data.totalPoints;
+            }
+
+            // Update leaderboard if provided
+            if (data.leaderboard && Array.isArray(data.leaderboard)) {
+                updateLeaderboardFromWS(data.leaderboard);
+            }
+
+            // Update KOTH if provided
+            if (data.koth) {
+                updateKOTHFromWS(data.koth);
+            }
+
+            // Update recent launches if provided
+            if (data.recentLaunches && Array.isArray(data.recentLaunches)) {
+                updateRecentLaunchesFromWS(data.recentLaunches);
+            }
+
+            // Update Robinhood stats if provided
+            if (data.robinhood) {
+                updateRobinhoodFromWS(data.robinhood);
+            }
+
+            // Mark system as online
+            systemStatus.backend = 'ONLINE';
+        }
+
+        if (msg.type === 'launch') {
+            // New token launched - show notification or update UI
+            console.log('[WS] New launch:', msg.data);
+            showStatus(`New token launched: ${msg.data.name} ($${msg.data.ticker})`, 'success');
+        }
+
+        if (msg.type === 'airdrop') {
+            // Airdrop distributed
+            console.log('[WS] Airdrop distributed:', msg.data);
+            showStatus(`Airdrop: ${msg.data.amount.toFixed(4)} SOL distributed to ${msg.data.recipients} holders!`, 'success');
+            // Reset countdown
+            lastAirdropTime = Date.now();
+        }
+    };
+
+    // Helper functions to update UI from WebSocket data
+    const updateLeaderboardFromWS = (tokens) => {
+        if (!ui.leaderTbody || tokens.length === 0) return;
+
+        let html = '';
+        tokens.slice(0, 10).forEach((t, i) => {
+            const bondedBadge = t.isBonded ? '<span class="bonded-badge">BONDED</span>' : '';
+            html += `<tr class="hover:bg-gray-900/40 cursor-pointer" onclick="window.open('${PUMPFUN_URL_BASE}${escapeHtml(t.mint)}', '_blank')">
+                <td class="text-gray-500 text-center font-mono">${i + 1}</td>
+                <td><img src="${resolveTokenImage(t.image)}" loading="lazy" width="28" height="28" class="rounded" onerror="this.src='https://placehold.co/28x28/333/fff?text=?';"></td>
+                <td class="font-mono truncate max-w-24">${escapeHtml(t.ticker || '?')}</td>
+                <td class="text-green-400 text-right font-mono">${formatMcap(t.marketCap)}</td>
+                <td class="text-yellow-400 text-right font-mono">${formatMcap(t.volume24h || 0)}</td>
+                <td class="text-center">${bondedBadge}</td>
+            </tr>`;
+        });
+        ui.leaderTbody.innerHTML = sanitize(html);
+    };
+
+    const updateKOTHFromWS = (koth) => {
+        if (!koth || !ui.kothPanel) return;
+        ui.kothTicker.innerText = '$' + (koth.ticker || '???');
+        ui.kothName.innerText = koth.name || 'Unknown';
+        ui.kothMcap.innerText = formatMcap(koth.marketCap);
+        ui.kothImg.src = resolveTokenImage(koth.image);
+        ui.kothPanel.onclick = () => window.open(PUMPFUN_URL_BASE + koth.mint, '_blank');
+    };
+
+    const updateRecentLaunchesFromWS = (launches) => {
+        if (!ui.recentLaunchBox || launches.length === 0) return;
+
+        let html = '';
+        launches.slice(0, 5).forEach(t => {
+            const timeAgo = getTimeAgo(new Date(t.createdAt));
+            html += `<div class="flex items-center justify-between py-1.5 border-b border-gray-800 last:border-0 hover:bg-gray-800/30 cursor-pointer px-1 rounded" onclick="window.open('${PUMPFUN_URL_BASE}${escapeHtml(t.mint)}', '_blank')">
+                <div class="flex items-center gap-2">
+                    <img src="${resolveTokenImage(t.image)}" loading="lazy" width="24" height="24" class="rounded" onerror="this.src='https://placehold.co/24x24/333/fff?text=?';">
+                    <span class="font-mono text-sm">${escapeHtml(t.ticker || '?')}</span>
+                </div>
+                <span class="text-xs text-gray-500">${timeAgo}</span>
+            </div>`;
+        });
+        ui.recentLaunchBox.innerHTML = sanitize(html);
+    };
+
+    const updateRobinhoodFromWS = (robinhood) => {
+        const countEl = document.getElementById('robinhood-count');
+        const pendingEl = document.getElementById('robinhood-pending');
+        const collectedEl = document.getElementById('robinhood-collected');
+
+        if (countEl) countEl.innerText = robinhood.count || 0;
+        if (pendingEl) pendingEl.innerText = (robinhood.pendingFees || 0).toFixed(4);
+        if (collectedEl) collectedEl.innerText = (robinhood.collectedFees || 0).toFixed(4);
+    };
+
+    const getTimeAgo = (date) => {
+        const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+        if (seconds < 60) return 'just now';
+        if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+        if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+        return Math.floor(seconds / 86400) + 'd ago';
+    };
+
+    // Initialize WebSocket on load
+    setTimeout(initWebSocket, 1000);
     const clearAllIntervals = () => { activeIntervals.forEach(id => clearInterval(id)); activeIntervals.length = 0; };
     window.addEventListener('beforeunload', clearAllIntervals);
 
@@ -2314,31 +2520,44 @@
         return Promise.allSettled(results);
     };
 
-    const refreshAllData = async () => {
+    const refreshAllData = async (forceFullRefresh = false) => {
         if (ui.refreshBtn) ui.refreshBtn.classList.add('opacity-50', 'cursor-wait');
         systemStatus.backend = 'CHECKING';
         systemStatus.db_access = 'CHECKING';
         systemStatus.solana_rpc = 'CHECKING';
         try {
-            // Stagger API calls with 100ms delay to reduce burst load on Render
-            await staggeredFetch([
-                () => checkHealth(),          // Most important - do first
-                () => updateLeaderboard(),
-                () => updateKOTH(),
-                () => fetchRecentLaunches(),
-                () => updatePumpPrice(),
-                () => refreshWalletBalance(),
-                () => checkAsdfStatus()
-            ], 100);
+            // v25.4: If WebSocket is connected, only refresh data not provided by WS
+            if (wsConnected && !forceFullRefresh) {
+                // Only refresh wallet balance and ASDF status (not sent via WS)
+                await staggeredFetch([
+                    () => checkHealth(),
+                    () => updatePumpPrice(),
+                    () => refreshWalletBalance(),
+                    () => checkAsdfStatus()
+                ], 100);
+            } else {
+                // Full refresh - WebSocket not connected or forced
+                await staggeredFetch([
+                    () => checkHealth(),
+                    () => updateLeaderboard(),
+                    () => updateKOTH(),
+                    () => fetchRecentLaunches(),
+                    () => updatePumpPrice(),
+                    () => refreshWalletBalance(),
+                    () => checkAsdfStatus()
+                ], 100);
+            }
         } catch (e) { console.error("Auto-Refresh Error", e); }
         if (ui.refreshBtn) ui.refreshBtn.classList.remove('opacity-50', 'cursor-wait');
     };
     window.refreshAllData = refreshAllData;
 
-    registerInterval(setInterval(refreshAllData, 60000));
-    refreshAllData();
+    // v25.4: Reduce polling interval - WebSocket handles most updates
+    // Poll every 2 minutes for data not sent via WebSocket
+    registerInterval(setInterval(refreshAllData, 120000));
+    refreshAllData(true); // Force full refresh on initial load
 
-    ui.refreshBtn.onclick = () => refreshAllData();
+    ui.refreshBtn.onclick = () => refreshAllData(true); // Force full refresh on manual click
 
     const toggleStatusModal = () => {
         const list = ui.statusDetailsList;

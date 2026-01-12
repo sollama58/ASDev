@@ -6,6 +6,8 @@
  *         Points are now calculated proportionally to token balance, not just position count
  * v17.0 - Fixed expected airdrop calculation to use actual SOL balance (not PUMP holdings)
  * v18.0 - Changed from top 10 tokens to all tokens with >$100 24hr volume
+ * v25.4 - Volume-weighted points: higher volume tokens distribute more points
+ *         Dynamic scaling based on current eligible tokens' volume range
  */
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
@@ -18,6 +20,38 @@ const { logger } = require('../services');
 const TOP_HOLDERS_LIMIT = 250; // Track top 250 holders per eligible token
 const SAFETY_RESERVE_SOL = 0.5; // Reserve 0.5 SOL for operations
 const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // v18.0: Minimum 24hr volume for eligibility
+
+// v25.4: Volume weight range (min multiplier to max multiplier)
+const VOLUME_WEIGHT_MIN = 0.5;  // Lowest volume token gets 0.5x base points
+const VOLUME_WEIGHT_MAX = 2.0;  // Highest volume token gets 2.0x base points
+
+/**
+ * v25.4: Calculate dynamic volume weight for a token
+ * Uses logarithmic scaling relative to the volume range of all eligible tokens
+ * @param {number} tokenVolume - This token's 24hr volume
+ * @param {number} minVolume - Minimum volume among eligible tokens
+ * @param {number} maxVolume - Maximum volume among eligible tokens
+ * @returns {number} Weight multiplier between VOLUME_WEIGHT_MIN and VOLUME_WEIGHT_MAX
+ */
+function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
+    // Edge case: all tokens have same volume
+    if (maxVolume <= minVolume || minVolume <= 0) {
+        return 1.0; // Default to 1x if no range
+    }
+
+    // Use log scale to prevent extreme tokens from dominating
+    const logMin = Math.log10(minVolume);
+    const logMax = Math.log10(maxVolume);
+    const logVolume = Math.log10(Math.max(tokenVolume, minVolume));
+
+    // Normalize to 0-1 range based on log position
+    const normalized = (logVolume - logMin) / (logMax - logMin);
+
+    // Scale to weight range
+    const weight = VOLUME_WEIGHT_MIN + (normalized * (VOLUME_WEIGHT_MAX - VOLUME_WEIGHT_MIN));
+
+    return Math.max(VOLUME_WEIGHT_MIN, Math.min(VOLUME_WEIGHT_MAX, weight));
+}
 
 /**
  * Update global state (holders, points, expected airdrops)
@@ -40,13 +74,23 @@ async function updateGlobalState(deps) {
 
     try {
         // v18.0: Get all tokens with >$100 24hr volume (no limit)
+        // v25.4: Include volume24h for dynamic volume weighting
         const eligibleTokens = await db.all(
-            'SELECT mint, userPubkey FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
+            'SELECT mint, userPubkey, volume24h FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
             [MIN_VOLUME_USD]
         );
         const eligibleMints = eligibleTokens.map(t => t.mint);
 
-        logger.debug(`[HolderScanner] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume`);
+        // v25.4: Calculate volume range for dynamic weighting
+        let platformMinVolume = MIN_VOLUME_USD;
+        let platformMaxVolume = MIN_VOLUME_USD;
+        if (eligibleTokens.length > 0) {
+            const volumes = eligibleTokens.map(t => parseFloat(t.volume24h) || MIN_VOLUME_USD);
+            platformMinVolume = Math.min(...volumes);
+            platformMaxVolume = Math.max(...volumes);
+        }
+
+        logger.debug(`[HolderScanner] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume (range: $${platformMinVolume.toFixed(0)} - $${platformMaxVolume.toFixed(0)})`);
 
         // v17.0: Get actual SOL balance for expected airdrop calculation (not PUMP holdings)
         let availableSolForAirdrop = 0;
@@ -157,16 +201,22 @@ async function updateGlobalState(deps) {
         }
 
         // v14.0: Calculate global points with proportional holdings
-        // Each token distributes 1000 base points proportionally among its top 250 holders
+        // v25.4: Points are now volume-weighted - higher volume tokens distribute more points
+        // Base points = 1000, scaled by volume weight (0.5x to 2.0x based on relative volume)
         // v23.0: Removed creator bonus - all holders earn same points proportionally
-        const POINTS_PER_TOKEN = 1000;
+        const BASE_POINTS_PER_TOKEN = 1000;
         let rawPointsMap = new Map(); // pubkey -> { basePoints, robinhoodPoints }
         let tempTotalPoints = 0;
 
         if (eligibleMints.length > 0) {
-            // v18.0: For each eligible token (>$100 volume), calculate proportional points
+            // v25.4: For each eligible token, calculate volume-weighted proportional points
             for (const token of eligibleTokens) {
                 if (!token.mint) continue;
+
+                // v25.4: Calculate volume weight for this token (0.5x to 2.0x)
+                const tokenVolume = parseFloat(token.volume24h) || MIN_VOLUME_USD;
+                const volumeWeight = calculateVolumeWeight(tokenVolume, platformMinVolume, platformMaxVolume);
+                const weightedPointsForToken = BASE_POINTS_PER_TOKEN * volumeWeight;
 
                 // Get all holders with balances for this token
                 const holders = await db.all(
@@ -184,14 +234,14 @@ async function updateGlobalState(deps) {
 
                 if (totalBalance === BigInt(0)) continue;
 
-                // Distribute points proportionally
+                // Distribute volume-weighted points proportionally
                 for (const holder of holders) {
                     const holderBalance = BigInt(holder.balance || '0');
                     if (holderBalance === BigInt(0)) continue;
 
-                    // Calculate proportional points for this token
-                    // points = (holderBalance / totalBalance) * POINTS_PER_TOKEN
-                    const proportionalPoints = Number((holderBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                    // v25.4: Calculate proportional points with volume weight
+                    // points = (holderBalance / totalBalance) * weightedPointsForToken
+                    const proportionalPoints = Number((holderBalance * BigInt(Math.round(weightedPointsForToken * 1000))) / totalBalance) / 1000;
 
                     // Accumulate points
                     const entry = rawPointsMap.get(holder.holderPubkey) || {
@@ -202,6 +252,8 @@ async function updateGlobalState(deps) {
                     entry.basePoints += proportionalPoints;
                     rawPointsMap.set(holder.holderPubkey, entry);
                 }
+
+                logger.debug(`[HolderScanner] ${token.mint.slice(0, 8)}: Vol $${tokenVolume.toFixed(0)} -> ${volumeWeight.toFixed(2)}x weight -> ${weightedPointsForToken.toFixed(0)} points`);
             }
         }
 
@@ -209,25 +261,40 @@ async function updateGlobalState(deps) {
         // Holders of tokens that share fees with us also earn airdrop eligibility
         // v16.0: Points are now scaled proportionally to our fee share percentage
         // v18.0: All robinhood tokens with >$100 volume are eligible (no limit)
+        // v25.4: Also apply volume weighting to Robinhood tokens
         try {
             const robinhoodTokens = await db.all(
-                'SELECT mint, "feeShareBps", ticker FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
+                'SELECT mint, "feeShareBps", ticker, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
                 [MIN_VOLUME_USD]
             );
             const robinhoodMints = robinhoodTokens.map(t => t.mint).filter(m => m);
 
-            logger.debug(`[HolderScanner] Found ${robinhoodMints.length} eligible Robinhood tokens with >${MIN_VOLUME_USD} USD volume`);
+            // v25.4: Calculate volume range for Robinhood tokens
+            let rhMinVolume = MIN_VOLUME_USD;
+            let rhMaxVolume = MIN_VOLUME_USD;
+            if (robinhoodTokens.length > 0) {
+                const rhVolumes = robinhoodTokens.map(t => parseFloat(t.volume24h) || MIN_VOLUME_USD);
+                rhMinVolume = Math.min(...rhVolumes);
+                rhMaxVolume = Math.max(...rhVolumes);
+            }
+
+            logger.debug(`[HolderScanner] Found ${robinhoodMints.length} eligible Robinhood tokens with >${MIN_VOLUME_USD} USD volume (range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
 
             if (robinhoodMints.length > 0) {
-                // For each robinhood token, calculate proportional points scaled by our fee share
+                // For each robinhood token, calculate volume-weighted proportional points scaled by fee share
                 for (const rhToken of robinhoodTokens) {
                     if (!rhToken.mint) continue;
+
+                    // v25.4: Calculate volume weight for this Robinhood token
+                    const tokenVolume = parseFloat(rhToken.volume24h) || MIN_VOLUME_USD;
+                    const volumeWeight = calculateVolumeWeight(tokenVolume, rhMinVolume, rhMaxVolume);
+                    const weightedBasePoints = BASE_POINTS_PER_TOKEN * volumeWeight;
 
                     // Get fee share multiplier (100% = 10000 bps = 1.0 multiplier)
                     const feeShareBps = rhToken.feeShareBps || 10000; // Default to 100% if not set
                     const feeShareMultiplier = feeShareBps / 10000; // Convert BPS to decimal (1000 bps = 0.1 = 10%)
 
-                    logger.debug(`[Robinhood] ${rhToken.ticker || rhToken.mint.slice(0, 8)}: Fee share ${(feeShareMultiplier * 100).toFixed(1)}% (${feeShareBps} bps)`);
+                    logger.debug(`[Robinhood] ${rhToken.ticker || rhToken.mint.slice(0, 8)}: Vol $${tokenVolume.toFixed(0)} -> ${volumeWeight.toFixed(2)}x weight, Fee share ${(feeShareMultiplier * 100).toFixed(1)}%`);
 
                     const holders = await db.all(
                         'SELECT "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC',
@@ -244,13 +311,13 @@ async function updateGlobalState(deps) {
 
                     if (totalBalance === BigInt(0)) continue;
 
-                    // Distribute points proportionally, scaled by fee share percentage
+                    // v25.4: Distribute volume-weighted points proportionally, scaled by fee share percentage
                     for (const holder of holders) {
                         const holderBalance = BigInt(holder.balance || '0');
                         if (holderBalance === BigInt(0)) continue;
 
-                        // Base proportional points for this token
-                        const baseProportionalPoints = Number((holderBalance * BigInt(POINTS_PER_TOKEN * 1000)) / totalBalance) / 1000;
+                        // v25.4: Base proportional points with volume weight
+                        const baseProportionalPoints = Number((holderBalance * BigInt(Math.round(weightedBasePoints * 1000))) / totalBalance) / 1000;
                         // Scale by our fee share percentage (100% share = full points, 50% share = half points)
                         const scaledPoints = baseProportionalPoints * feeShareMultiplier;
 

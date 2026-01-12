@@ -5,6 +5,7 @@
  * v14.0 - Added mintExtractor for unified mint discovery
  * v24.0 - Added circuitBreaker for external API resilience
  * v25.1 - Removed cloudflareImages (using Imgur for user uploads)
+ * v25.4 - Added websocket for real-time frontend updates
  */
 const logger = require('./logger');
 const postgres = require('./postgres');
@@ -21,6 +22,7 @@ const mintExtractor = require('./mintExtractor');
 const imageUtils = require('./imageUtils');
 const circuitBreaker = require('./circuitBreaker');
 const sanitizer = require('./sanitizer');
+const websocket = require('./websocket');
 
 // v13.0: Use PostgreSQL as the database layer
 const database = postgres;
@@ -42,4 +44,5 @@ module.exports = {
     imageUtils,
     circuitBreaker,
     sanitizer,
+    websocket,
 };

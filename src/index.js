@@ -4,6 +4,7 @@
  * v13.0 - PostgreSQL + Redis globalState
  * v22.0 - Added API-only mode support for worker server architecture
  * v24.0 - Redis connection validation on startup
+ * v25.4 - WebSocket support for real-time updates, relaxed rate limits
  *
  * Environment Variables:
  *   SERVER_MODE=api-only   - Start without background tasks (use with separate worker server)
@@ -11,6 +12,7 @@
  */
 require('dotenv').config();
 
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -24,7 +26,7 @@ const path = require('path');
 // Internal imports
 const config = require('./config/env');
 const { WALLETS } = require('./config/constants');
-const { logger, database, redis, twitter, solana } = require('./services');
+const { logger, database, redis, twitter, solana, websocket } = require('./services');
 const routes = require('./routes');
 const tasks = require('./tasks');
 
@@ -162,22 +164,25 @@ async function main() {
     app.use(cors(corsOptions));
     app.use(express.json({ limit: '10mb' })); // SECURITY FIX: Reduced from 50mb to 10mb
 
-    // Rate limiting - SECURITY FIX: Reduced to more reasonable limits
+    // v25.4: Rate limiting - More permissive for frontend polling, strict for deployments
+    // With WebSocket, polling should be reduced but we still allow reasonable API access
     const apiLimiter = rateLimit({
-        windowMs: 15 * 60 * 1000, // 15 minutes
-        max: 300, // SECURITY FIX: Reduced from 2000 to 300 (20 req/min average)
+        windowMs: 60 * 1000, // 1 minute window
+        max: 120, // 120 requests per minute (2 per second)
         message: { error: 'Too many requests, please try again later' },
         standardHeaders: true,
         legacyHeaders: false,
         skip: (req) => {
-            // Skip rate limiting for health checks
-            return req.path === '/api/health' || req.path === '/api/version';
+            // Skip rate limiting for health checks and static data
+            return req.path === '/api/health' ||
+                   req.path === '/api/version' ||
+                   req.path === '/api/stats';
         }
     });
 
     const deployLimiter = rateLimit({
         windowMs: 60 * 1000, // 1 minute
-        max: 3, // SECURITY FIX: Reduced from 10 to 3 deployments per minute
+        max: 5, // 5 deployments per minute (relaxed from 3)
         message: { error: 'Too many deployment requests, please wait' },
         standardHeaders: true,
         legacyHeaders: false
@@ -243,9 +248,21 @@ async function main() {
         tasks.startAll(deps);
     }
 
+    // v25.4: Create HTTP server for WebSocket support
+    const server = http.createServer(app);
+
+    // Initialize WebSocket server
+    websocket.init(server);
+
+    // Start periodic WebSocket broadcasts (only if not API-only mode)
+    if (serverMode !== 'api-only') {
+        websocket.startBroadcasting(deps);
+    }
+
     // Start server
-    app.listen(config.PORT, () => {
+    server.listen(config.PORT, () => {
         logger.info(`Server ${config.VERSION} running on port ${config.PORT}`);
+        logger.info(`[WebSocket] Available at ws://localhost:${config.PORT}/ws`);
     });
 }
 

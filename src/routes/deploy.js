@@ -3,6 +3,7 @@
  * Token deployment and metadata preparation endpoints
  * v24.0 - Added input sanitization for user-provided content
  * v25.1 - Imgur URL support (user uploads to Imgur, provides URL)
+ * v25.4 - Restored payment verification logic
  */
 const express = require('express');
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -109,20 +110,60 @@ function init(deps) {
 
     // Deploy token
     // v24.0: Added input sanitization
+    // v25.4: Restored payment verification logic
     router.post('/deploy', async (req, res) => {
         try {
             // v24.0 SECURITY: Sanitize user inputs
             const sanitized = sanitizer.sanitizeDeploymentRequest(req.body);
-            const { metadataUri, userPubkey, isMayhemMode } = req.body;
+            const { metadataUri, userTx, userPubkey, isMayhemMode } = req.body;
 
             if (!metadataUri) return res.status(400).json({ error: "Missing metadata URI" });
             if (!userPubkey || !isValidPubkey(userPubkey)) return res.status(400).json({ error: "Invalid Address" });
+            if (!userTx || typeof userTx !== 'string') return res.status(400).json({ error: "Invalid transaction signature" });
 
-            // Transaction verification logic (simplified for brevity, keep your existing logic)
-            // ... (keep existing payment verification loop) ...
+            // v25.4: Check for duplicate transaction
+            try {
+                await db.run('INSERT INTO transactions (signature, "userPubkey") VALUES ($1, $2)', [userTx, userPubkey]);
+            } catch (dbErr) {
+                if (dbErr.message.includes('UNIQUE') || dbErr.message.includes('duplicate')) {
+                    return res.status(400).json({ error: "Transaction already used." });
+                }
+                throw dbErr;
+            }
 
-            // Assume payment verified for this file replacement context:
-            // In real file, keep the verification loop here.
+            // v25.4: Payment verification loop
+            let validPayment = false;
+            for (let i = 0; i < 15; i++) {
+                try {
+                    const txInfo = await connection.getParsedTransaction(userTx, {
+                        commitment: "confirmed",
+                        maxSupportedTransactionVersion: 0
+                    });
+
+                    if (txInfo) {
+                        validPayment = txInfo.transaction.message.instructions.some(ix => {
+                            if (ix.programId.toString() !== '11111111111111111111111111111111') return false;
+                            if (!ix.parsed || ix.parsed.type !== 'transfer') return false;
+                            return ix.parsed.info.destination === devKeypair.publicKey.toString() &&
+                                   ix.parsed.info.lamports >= config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL;
+                        });
+                        if (validPayment) break;
+                    }
+                } catch (txErr) {
+                    logger.debug('[Deploy] TX fetch attempt failed', { attempt: i, error: txErr.message });
+                }
+                await new Promise(r => setTimeout(r, 2000));
+            }
+
+            if (!validPayment) {
+                // Remove the transaction record since payment failed
+                await db.run('DELETE FROM transactions WHERE signature = $1', [userTx]);
+                logger.warn('[Deploy] Payment verification failed', { userPubkey, userTx: userTx.substring(0, 20) });
+                return res.status(400).json({ error: "Payment verification failed or timed out." });
+            }
+
+            // Record the fee
+            await addFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL);
 
             // Add job with sanitized data
             const job = await redis.addDeployJob({
@@ -137,6 +178,7 @@ function init(deps) {
                 metadataUri
             });
 
+            logger.info('[Deploy] Job queued', { jobId: job.id, userPubkey, name: sanitized.name });
             res.json({ success: true, jobId: job.id, message: "Queued" });
         } catch (err) {
             logger.error("Deploy API Error", { error: err.message, stack: err.stack });
