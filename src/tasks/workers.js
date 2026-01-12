@@ -453,7 +453,7 @@ function initHolderScannerWorker(deps) {
                         rawPointsMap.set(row.holderPubkey, entry);
                     }
 
-                    logger.debug(`[Worker] Included ${robinhoodRows.length} unique holders from ${robinhoodMints.length} Robinhood tokens`);
+                    logger.info(`[Worker] Included ${robinhoodRows.length} unique holders from ${robinhoodMints.length} Robinhood tokens`);
                 }
             } catch (e) {
                 logger.debug('[Worker] Robinhood holder points calculation skipped', { error: e.message });

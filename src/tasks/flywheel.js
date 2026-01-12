@@ -421,7 +421,7 @@ async function processAirdrop(deps) {
     // RACE CONDITION FIX: Use mutex for atomic locking
     const release = await airdropMutex.tryAcquire();
     if (!release) {
-        logger.debug('[Airdrop] Skipping - already in progress');
+        logger.info('[Airdrop] Skipping - already in progress');
         return;
     }
 
@@ -442,7 +442,7 @@ async function processAirdrop(deps) {
 
         // Basic Threshold Check - need at least MIN_AIRDROP_POOL SOL after reserve
         if (availableForAirdrop < MIN_AIRDROP_POOL) {
-            logger.debug(`[Airdrop] Below threshold: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available, need ${config.AIRDROP_THRESHOLD_SOL || 1.0} SOL`);
+            logger.info(`[Airdrop] Below threshold: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available, need ${config.AIRDROP_THRESHOLD_SOL || 1.0} SOL`);
             return; // Lock will be released in finally block
         }
 
@@ -920,7 +920,7 @@ async function runPurchaseAndFees(deps) {
     // RACE CONDITION FIX: Use mutex for atomic locking
     const release = await buybackMutex.tryAcquire();
     if (!release) {
-        logger.debug('[Flywheel] Skipping - already in progress');
+        logger.info('[Flywheel] Skipping - already in progress');
         return;
     }
 

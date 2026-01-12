@@ -108,7 +108,7 @@ async function updateGlobalState(deps) {
     // If previous scan still running, skip this one
     const release = await holderScannerMutex.tryAcquire();
     if (!release) {
-        logger.debug('[HolderScanner] Skipping - previous scan still in progress');
+        logger.info('[HolderScanner] Skipping - previous scan still in progress');
         return;
     }
 
@@ -130,7 +130,7 @@ async function updateGlobalState(deps) {
             platformMaxVolume = Math.max(...volumes);
         }
 
-        logger.debug(`[HolderScanner] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume (range: $${platformMinVolume.toFixed(0)} - $${platformMaxVolume.toFixed(0)})`);
+        logger.info(`[HolderScanner] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume (range: $${platformMinVolume.toFixed(0)} - $${platformMaxVolume.toFixed(0)})`);
 
         // v17.0: Get actual SOL balance for expected airdrop calculation (not PUMP holdings)
         let availableSolForAirdrop = 0;
@@ -328,7 +328,7 @@ async function updateGlobalState(deps) {
                 rhMaxVolume = Math.max(...rhVolumes);
             }
 
-            logger.debug(`[HolderScanner] Found ${robinhoodMints.length} eligible Robinhood tokens with >${MIN_VOLUME_USD} USD volume (range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
+            logger.info(`[HolderScanner] Found ${robinhoodMints.length} eligible Robinhood tokens with >${MIN_VOLUME_USD} USD volume (range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
 
             if (robinhoodMints.length > 0) {
                 // For each robinhood token, calculate volume-weighted proportional points scaled by fee share
