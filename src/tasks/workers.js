@@ -117,20 +117,38 @@ function initDeployWorker(deps) {
             const sig = await solana.sendTxWithRetry(tx, [devKeypair, mintKeypair]);
             logger.info(`Transaction Confirmed: ${sig}`);
 
-            // CRITICAL: Save data with the explicit Image URL we got from Pinata
+            // CRITICAL: Ensure we have the image URL
+            // v25.6: If image is missing, fetch it from the metadataUri (IPFS)
+            let finalImageUrl = image;
+            if (!finalImageUrl || finalImageUrl === '' || finalImageUrl === 'null' || finalImageUrl === 'undefined') {
+                logger.info(`[Deploy] Image missing, fetching from metadataUri...`, { ticker, metadataUri: metadataUri?.substring(0, 50) });
+                try {
+                    const metadataImage = await imageUtils.fetchImageFromMetadataUri(metadataUri, 5000);
+                    if (metadataImage) {
+                        finalImageUrl = metadataImage;
+                        logger.info(`[Deploy] Successfully fetched image from metadataUri`, { ticker, image: metadataImage.substring(0, 50) });
+                    } else {
+                        logger.warn(`[Deploy] Could not fetch image from metadataUri`, { ticker });
+                    }
+                } catch (metaErr) {
+                    logger.warn(`[Deploy] Failed to fetch metadataUri`, { ticker, error: metaErr.message });
+                }
+            }
+
             logger.info(`[Deploy] Saving token to database...`, {
                 mint: mint.toString(),
                 ticker,
                 name,
                 userPubkey,
-                hasImage: !!image,
+                hasImage: !!finalImageUrl,
+                imageSource: image ? 'direct' : (finalImageUrl ? 'metadataUri' : 'none'),
                 hasMetadataUri: !!metadataUri
             });
 
             try {
                 await saveTokenData(userPubkey, mint.toString(), {
                     name, ticker, description, twitter: twitterHandle,
-                    website, image, // <-- This is now the URL
+                    website, image: finalImageUrl, // v25.6: Use resolved image URL
                     isMayhemMode, metadataUri
                 });
                 logger.info(`[Deploy] Token saved to database successfully: ${ticker} (${mint.toString()})`);
