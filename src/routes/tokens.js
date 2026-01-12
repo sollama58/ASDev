@@ -1085,18 +1085,33 @@ function init(deps) {
             }
 
             const token = await db.get(
-                'SELECT mint, ticker, name, image, "userPubkey", "marketCap", volume24h, timestamp FROM tokens WHERE mint = $1',
+                'SELECT mint, ticker, name, image, metadataUri, "userPubkey", "marketCap", volume24h, timestamp FROM tokens WHERE mint = $1',
                 [mint]
             );
 
             if (token) {
+                // v25.6: Apply metadataUri fallback for missing images
+                let image = token.image;
+                if ((!image || image === '' || image === 'null') && token.metadataUri) {
+                    try {
+                        const fallbackImage = await imageUtils.fetchImageFromMetadataUri(token.metadataUri, 3000);
+                        if (fallbackImage) {
+                            image = fallbackImage;
+                            // Update database async
+                            db.run('UPDATE tokens SET image = $1 WHERE mint = $2', [fallbackImage, mint]).catch(() => {});
+                        }
+                    } catch (e) {
+                        // Silently fail
+                    }
+                }
+
                 res.json({
                     registered: true,
                     token: {
                         mint: token.mint,
                         ticker: token.ticker,
                         name: token.name,
-                        image: token.image,
+                        image: image,
                         creator: token.userPubkey,
                         marketCap: token.marketCap,
                         volume24h: token.volume24h,

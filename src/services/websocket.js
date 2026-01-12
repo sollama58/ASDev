@@ -2,9 +2,11 @@
  * WebSocket Service
  * Real-time data push to frontend clients
  * v25.4 - Initial implementation to reduce polling load
+ * v25.6 - Added metadataUri fallback for images
  */
 const WebSocket = require('ws');
 const logger = require('./logger');
+const imageUtils = require('./imageUtils');
 
 let wss = null;
 let broadcastInterval = null;
@@ -142,14 +144,14 @@ function startBroadcasting(deps, intervalMs = 10000) {
             ] = await Promise.all([
                 db.get('SELECT COUNT(*) as total FROM tokens'),
                 db.all(`
-                    SELECT mint, name, ticker, image, volume24h, "marketCap", price, "isBonded"
+                    SELECT mint, name, ticker, image, metadataUri, volume24h, "marketCap", price, "isBonded"
                     FROM tokens
                     ORDER BY volume24h DESC
                     LIMIT 20
                 `),
-                db.get('SELECT mint, name, ticker, image, "marketCap" FROM tokens ORDER BY "marketCap" DESC LIMIT 1'),
+                db.get('SELECT mint, name, ticker, image, metadataUri, "marketCap" FROM tokens ORDER BY "marketCap" DESC LIMIT 1'),
                 db.all(`
-                    SELECT mint, name, ticker, image, "userPubkey", "createdAt"
+                    SELECT mint, name, ticker, image, metadataUri, "userPubkey", "createdAt"
                     FROM tokens
                     ORDER BY "createdAt" DESC
                     LIMIT 10
@@ -162,6 +164,39 @@ function startBroadcasting(deps, intervalMs = 10000) {
                     FROM robinhood_tokens
                     WHERE "isActive" = 1
                 `)
+            ]);
+
+            // v25.6: Apply metadataUri fallback for tokens with missing images
+            const resolveImages = async (tokens) => {
+                if (!tokens || !Array.isArray(tokens)) return tokens;
+                return Promise.all(tokens.map(async (token) => {
+                    // If image is missing/null, try metadataUri fallback
+                    if (!token.image || token.image === '' || token.image === 'null') {
+                        if (token.metadataUri) {
+                            try {
+                                const metadataImage = await imageUtils.fetchImageFromMetadataUri(token.metadataUri, 3000);
+                                if (metadataImage) {
+                                    token.image = metadataImage;
+                                    // Update database so we don't fetch again
+                                    db.run('UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
+                                        [metadataImage, token.mint]).catch(() => {});
+                                }
+                            } catch (e) {
+                                // Silently fail - fallback mechanism
+                            }
+                        }
+                    }
+                    // Remove metadataUri from response (not needed by frontend)
+                    const { metadataUri, ...rest } = token;
+                    return rest;
+                }));
+            };
+
+            // Resolve images for all token lists
+            const [resolvedLeaderboard, resolvedKoth, resolvedRecentLaunches] = await Promise.all([
+                resolveImages(leaderboard || []),
+                kothToken ? resolveImages([kothToken]).then(arr => arr[0]) : null,
+                resolveImages(recentLaunches || [])
             ]);
 
             // Get airdrop pool balance
@@ -182,14 +217,14 @@ function startBroadcasting(deps, intervalMs = 10000) {
                 solBalance,
                 totalPoints: globalState.totalPoints || 0,
 
-                // Leaderboard
-                leaderboard: leaderboard || [],
+                // Leaderboard (with resolved images)
+                leaderboard: resolvedLeaderboard || [],
 
-                // KOTH
-                koth: kothToken || null,
+                // KOTH (with resolved image)
+                koth: resolvedKoth || null,
 
-                // Recent launches
-                recentLaunches: recentLaunches || [],
+                // Recent launches (with resolved images)
+                recentLaunches: resolvedRecentLaunches || [],
 
                 // Robinhood
                 robinhood: {
