@@ -1301,33 +1301,42 @@
                 </div>
             </div>
 
-            <!-- Robinhood Section - v25.3: Fixed overflow and alignment -->
+            <!-- Robinhood Section - v25.11: Enhanced status monitor -->
             <div class="panel bg-green-900/10" id="robinhood-section">
                 <h3 class="text-green-400 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-4 md:mb-6 flex items-center gap-2">
                     <svg class="w-3 h-3 md:w-4 md:h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
-                    <span>ROBINHOOD</span>
+                    <span>ROBINHOOD PARTNERS</span>
+                    <span class="ml-auto text-[10px] text-green-500/70 font-normal" id="robinhood-status-indicator">ACTIVE</span>
                 </h3>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 md:gap-3">
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Active</div>
+                        <div class="metric-label" style="color: #86efac;">Partners</div>
                         <div id="robinhood-token-count" class="metric-value" style="color: #4ade80;">0</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Pending</div>
-                        <div id="robinhood-pending-fees" class="metric-value" style="color: #4ade80; font-size: 16px;">0.00</div>
+                        <div class="metric-label" style="color: #86efac;">Pending Fees</div>
+                        <div id="robinhood-pending-fees" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00 SOL</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Collected</div>
-                        <div id="robinhood-fees" class="metric-value" style="color: #4ade80; font-size: 16px;">0.00</div>
+                        <div class="metric-label" style="color: #86efac;">Lifetime</div>
+                        <div id="robinhood-fees" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00 SOL</div>
                     </div>
                     <div class="metric-card" style="border-color: #22c55e;">
                         <div class="metric-label" style="color: #86efac;">Your Holds</div>
                         <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80; font-size: 16px;">-</div>
                     </div>
+                    <div class="metric-card" style="border-color: #22c55e;">
+                        <div class="metric-label" style="color: #86efac;">Your Points</div>
+                        <div id="robinhood-user-points-display" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00</div>
+                    </div>
+                    <div class="metric-card" style="border-color: #22c55e;">
+                        <div class="metric-label" style="color: #86efac;">Top Earner</div>
+                        <div id="robinhood-top-earner" class="metric-value" style="color: #4ade80; font-size: 12px;">-</div>
+                    </div>
                 </div>
                 <div class="text-center mt-4 flex justify-center gap-2 flex-wrap">
-                    <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">VIEW ALL</button>
-                    <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">INFO</button>
+                    <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">VIEW PARTNERS</button>
+                    <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">HOW IT WORKS</button>
                 </div>
             </div>
         </div>
@@ -1584,7 +1593,7 @@
             </div>
             <div class="bg-orange-900/30 p-3 rounded border border-orange-700/50 mb-4">
                 <p class="text-orange-400 text-xs uppercase mb-1">Timing</p>
-                <p class="text-xs text-gray-300">Fees collected every <span class="text-yellow-400">1 minute</span> (>0.05 SOL). Airdrops distributed every <span class="text-yellow-400">15 minutes</span> (>1.0 SOL pool).</p>
+                <p class="text-xs text-gray-300">Fees collected every <span class="text-yellow-400">5 minutes</span> (>0.05 SOL). Airdrops distributed every <span class="text-yellow-400">5 minutes</span> (>1.0 SOL pool).</p>
             </div>
             <p>Points are calculated based on your proportional holdings in eligible tokens:</p>
             <ul class="list-disc list-inside ml-4 space-y-2 text-purple-300">
@@ -1653,7 +1662,7 @@
 
         <div class="mt-6">
             <h4 class="text-green-400 mb-3 border-b border-green-800 pb-1 font-normal">4. Automated Airdrop Engine</h4>
-            <p class="text-gray-300 mb-2">Runs every <span class="text-yellow-400">15 minutes</span> automatically.</p>
+            <p class="text-gray-300 mb-2">Runs every <span class="text-yellow-400">5 minutes</span> automatically.</p>
             <ul class="list-disc list-inside text-gray-400 space-y-1">
                 <li><span class="text-white">Trigger:</span> When SOL Airdrop Pool > <span class="text-yellow-400">1.0 SOL</span> (after 0.5 SOL reserve).</li>
                 <li><span class="text-white">Action:</span> Distributes 99% of the SOL pool directly to all qualified users.</li>
@@ -1675,56 +1684,75 @@
     </div>
 </div>
 
-<!-- v25.4: Updated Robinhood info modal with volume-weighted points -->
+<!-- v25.11: Updated Robinhood info modal with comprehensive information -->
 <div id="robinhood-info-modal" class="modal">
     <div class="modal-content border-green-600">
         <span class="close-btn text-green-400" onclick="closeRobinhoodInfoModal()">&times;</span>
-        <h3 class="text-green-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-green-800/50 pb-2 font-normal">How Robinhood Works</h3>
+        <h3 class="text-green-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-green-800/50 pb-2 font-normal">Robinhood Partnership Program</h3>
         <div class="font-sans text-sm text-green-200 space-y-4">
             <div class="bg-green-900/30 p-4 rounded border border-green-700/50">
-                <p class="text-green-400 text-xs uppercase mb-2">PumpFun Creator Rewards Sharing</p>
-                <p class="text-xs text-gray-300">PumpFun allows token creators to share their 1% creator fees with other wallets. When another creator adds our wallet as a fee shareholder, we automatically detect it and include their token in our ecosystem.</p>
+                <p class="text-green-400 text-xs uppercase mb-2">What is Robinhood?</p>
+                <p class="text-xs text-gray-300">Robinhood is our partnership program for external token creators. When creators share their PumpFun trading fees with IGNITION, their token joins our ecosystem and their holders become eligible for SOL airdrops.</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+                <div class="bg-green-900/20 p-3 rounded border border-green-800/50">
+                    <p class="text-green-400 text-xs uppercase mb-1">Fee Collection</p>
+                    <p class="text-xs text-gray-300">Every <span class="text-yellow-400">5 minutes</span></p>
+                </div>
+                <div class="bg-green-900/20 p-3 rounded border border-green-800/50">
+                    <p class="text-green-400 text-xs uppercase mb-1">Airdrop Cycle</p>
+                    <p class="text-xs text-gray-300">Every <span class="text-yellow-400">5 minutes</span></p>
+                </div>
             </div>
 
             <div>
-                <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">Automatic Detection</h4>
+                <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">How It Works</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
-                    <li>Our bot monitors the Solana blockchain for fee sharing configs</li>
-                    <li>When a token shares fees with us, it's automatically added as a "Robinhood Token"</li>
-                    <li>No manual registration required - fully automated</li>
+                    <li>Token creators add IGNITION's wallet as a fee recipient on PumpFun</li>
+                    <li>Our bot automatically detects the fee sharing configuration</li>
+                    <li>The token is added to our Robinhood network</li>
+                    <li>Holders of that token start earning points toward airdrops</li>
                 </ul>
             </div>
 
             <div>
-                <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">How You Benefit</h4>
+                <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">Benefits for Holders</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
-                    <li><span class="text-white">Proportional Points</span> based on your holdings (Top 100 holders)</li>
-                    <li><span class="text-cyan-400">Volume Weight:</span> Higher volume tokens = more points (0.5x to 2.0x)</li>
-                    <li><span class="text-yellow-400">Fee Share Scaling:</span> Points multiplied by fee share % (50% share = 50% points)</li>
-                    <li>These points stack with your regular leaderboard holdings</li>
-                    <li>More Robinhood partnerships = more airdrop opportunities</li>
+                    <li><span class="text-white">Top 250 Holders</span> earn proportional points based on holdings</li>
+                    <li><span class="text-cyan-400">Volume Multiplier:</span> Higher volume = more points (0.5x to 2.0x scale)</li>
+                    <li><span class="text-yellow-400">Fee Share %:</span> Points scaled by creator's fee share (e.g., 50% share = 50% points)</li>
+                    <li>Points stack with platform token holdings for maximum earnings</li>
+                    <li>SOL airdrops distributed based on total point share</li>
                 </ul>
             </div>
 
             <div>
                 <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">For Token Creators</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
-                    <li>Share fees with our wallet to join the Robinhood network</li>
-                    <li>Your holders gain airdrop eligibility automatically</li>
-                    <li>Higher volume = more points for your holders (rewards active trading)</li>
-                    <li>Creates additional incentives for holders to stay in your token</li>
+                    <li>Go to <span class="text-white">PumpFun Creator Dashboard</span></li>
+                    <li>Add IGNITION wallet as fee recipient (any %)</li>
+                    <li>Your token is automatically detected and added</li>
+                    <li>Your holders gain instant airdrop eligibility</li>
+                    <li>Higher volume = more rewards for your community</li>
                 </ul>
             </div>
 
             <div class="bg-cyan-900/30 p-3 rounded border border-cyan-700/50 mt-4">
-                <p class="text-cyan-400 text-xs uppercase mb-1">Volume-Weighted Formula</p>
-                <p class="text-xs text-gray-300">Robinhood Points = (Your Balance / Top 100 Balance) × <span class="text-cyan-400">Volume Weight</span> × <span class="text-yellow-400">Fee Share %</span> × 1000</p>
-                <p class="text-xs text-gray-400 mt-1">Volume Weight ranges from 0.5x (lowest vol) to 2.0x (highest vol) using logarithmic scale</p>
+                <p class="text-cyan-400 text-xs uppercase mb-1">Points Formula</p>
+                <p class="text-xs text-gray-300">Robinhood Points = (Your Balance / Top 250 Balance) × <span class="text-cyan-400">Volume Weight</span> × <span class="text-yellow-400">Fee Share %</span> × 1000</p>
+                <p class="text-xs text-gray-400 mt-1">Volume Weight: 0.5x (min volume) to 2.0x (max volume) - logarithmic scale</p>
             </div>
 
             <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 mt-4">
-                <p class="text-purple-400 text-xs uppercase mb-1">Total Points Formula</p>
-                <p class="text-xs text-gray-300">(Platform Holdings × Vol Weight + <span class="text-green-400">Robinhood Holdings × Vol Weight × Fee%</span>) × ASDF Multiplier</p>
+                <p class="text-purple-400 text-xs uppercase mb-1">Total Points (Combined)</p>
+                <p class="text-xs text-gray-300">(Platform Points + <span class="text-green-400">Robinhood Points</span>) × ASDF Multiplier</p>
+                <p class="text-xs text-gray-400 mt-1">ASDF Multiplier: 2x boost for Top 50 ASDF holders</p>
+            </div>
+
+            <div class="bg-orange-900/30 p-3 rounded border border-orange-700/50 mt-4">
+                <p class="text-orange-400 text-xs uppercase mb-1">Minimum Requirements</p>
+                <p class="text-xs text-gray-300">Token must have <span class="text-yellow-400">>$100 24hr volume</span> for holders to earn points</p>
             </div>
         </div>
     </div>
@@ -2211,9 +2239,27 @@
     lucide.createIcons();
 
     // v25.3: Airdrop Countdown Timer
-    // v25.7: Now syncs with backend's nextAirdropTime
-    let AIRDROP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes default, updated from backend
-    let nextAirdropTime = Date.now() + AIRDROP_INTERVAL_MS; // Will be synced from backend
+    // v25.11: Now syncs with backend's nextAirdropTime and persists across page loads
+    let AIRDROP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes default, updated from backend
+
+    // v25.11: Load persisted timer from sessionStorage if available
+    const getPersistedAirdropTime = () => {
+        try {
+            const stored = sessionStorage.getItem('ignition_nextAirdropTime');
+            const storedInterval = sessionStorage.getItem('ignition_airdropInterval');
+            if (stored) {
+                const storedTime = parseInt(stored, 10);
+                // Only use stored time if it's in the future or within 30 seconds of now
+                if (storedTime > Date.now() - 30000) {
+                    if (storedInterval) AIRDROP_INTERVAL_MS = parseInt(storedInterval, 10);
+                    return storedTime;
+                }
+            }
+        } catch (e) { /* sessionStorage not available */ }
+        return Date.now() + AIRDROP_INTERVAL_MS;
+    };
+
+    let nextAirdropTime = getPersistedAirdropTime();
     let countdownInterval = null;
 
     const updateCountdown = () => {
@@ -2224,6 +2270,8 @@
         if (remaining <= 0) {
             nextAirdropTime = now + AIRDROP_INTERVAL_MS;
             remaining = AIRDROP_INTERVAL_MS;
+            // Persist the new time
+            try { sessionStorage.setItem('ignition_nextAirdropTime', String(nextAirdropTime)); } catch(e) {}
         }
 
         const hours = Math.floor(remaining / (1000 * 60 * 60));
@@ -2241,13 +2289,16 @@
         countdownInterval = setInterval(updateCountdown, 1000);
     };
 
-    // v25.7: Sync airdrop timer with backend
+    // v25.11: Sync airdrop timer with backend and persist
     const syncAirdropTimer = (backendNextAirdropTime, intervalMs) => {
         if (backendNextAirdropTime && backendNextAirdropTime > Date.now()) {
             nextAirdropTime = backendNextAirdropTime;
+            // Persist the synced time
+            try { sessionStorage.setItem('ignition_nextAirdropTime', String(nextAirdropTime)); } catch(e) {}
         }
         if (intervalMs) {
             AIRDROP_INTERVAL_MS = intervalMs;
+            try { sessionStorage.setItem('ignition_airdropInterval', String(intervalMs)); } catch(e) {}
         }
     };
 
@@ -2504,6 +2555,16 @@
             // v14.0: Display proportional points (basePoints + robinhoodPoints)
             ui.userTopPositions.innerText = (data.basePoints || 0).toFixed(2);
             ui.userRobinhoodPoints.innerText = (data.robinhoodPoints || 0).toFixed(2);
+            // v25.11: Also update Robinhood panel display
+            const robinhoodPointsDisplay = document.getElementById('robinhood-user-points-display');
+            if (robinhoodPointsDisplay) {
+                robinhoodPointsDisplay.textContent = (data.robinhoodPoints || 0).toFixed(2);
+            }
+            // v25.11: Update user's Robinhood holds count
+            const robinhoodHoldsEl = document.getElementById('robinhood-user-positions');
+            if (robinhoodHoldsEl && data.robinhoodHoldingsCount !== undefined) {
+                robinhoodHoldsEl.textContent = data.robinhoodHoldingsCount;
+            }
 
             if (data.isAsdfTop50) {
                 ui.asdfStatus.innerText = "YES (QUALIFIED)";
@@ -2668,11 +2729,35 @@
                     ui.consNotice.classList.remove('conservation-active');
                 }
 
-                // v12.0: Update Robinhood stats from health response (v23.0: Added pending fees)
+                // v25.11: Update Robinhood stats from health response with enhanced metrics
                 if (data.robinhood) {
-                    document.getElementById('robinhood-token-count').textContent = data.robinhood.activeTokens || 0;
-                    document.getElementById('robinhood-fees').textContent = `${(data.robinhood.totalFeesCollectedSol || 0).toFixed(2)}\u00A0SOL`;
-                    document.getElementById('robinhood-pending-fees').textContent = `${data.robinhood.pendingFeesSol || '0.00'}\u00A0SOL`;
+                    const tokenCount = data.robinhood.activeTokens || 0;
+                    document.getElementById('robinhood-token-count').textContent = tokenCount;
+                    document.getElementById('robinhood-fees').textContent = `${(data.robinhood.totalFeesCollectedSol || 0).toFixed(2)} SOL`;
+                    document.getElementById('robinhood-pending-fees').textContent = `${data.robinhood.pendingFeesSol || '0.00'} SOL`;
+
+                    // Status indicator
+                    const statusEl = document.getElementById('robinhood-status-indicator');
+                    if (statusEl) {
+                        if (tokenCount > 0) {
+                            statusEl.textContent = 'ACTIVE';
+                            statusEl.className = 'ml-auto text-[10px] text-green-500/70 font-normal';
+                        } else {
+                            statusEl.textContent = 'NO PARTNERS';
+                            statusEl.className = 'ml-auto text-[10px] text-yellow-500/70 font-normal';
+                        }
+                    }
+
+                    // Top earner from pending details
+                    const topEarnerEl = document.getElementById('robinhood-top-earner');
+                    if (topEarnerEl && data.robinhood.pendingDetails && data.robinhood.pendingDetails.length > 0) {
+                        const sorted = [...data.robinhood.pendingDetails].sort((a, b) => b.pendingLamports - a.pendingLamports);
+                        const top = sorted[0];
+                        topEarnerEl.textContent = `${top.ticker}`;
+                        topEarnerEl.title = `${(top.pendingLamports / 1e9).toFixed(4)} SOL pending`;
+                    } else if (topEarnerEl) {
+                        topEarnerEl.textContent = '-';
+                    }
                 }
             } else { 
                 status = 'OFFLINE';
@@ -2692,8 +2777,8 @@
         }
     };
 
-    // v25.7: Improved rewards claim tracker countdown with auto-recovery
-    const FEE_COLLECTION_INTERVAL_MS = 60000; // 1 minute - matches backend config
+    // v25.11: Improved rewards claim tracker countdown with auto-recovery
+    const FEE_COLLECTION_INTERVAL_MS = 300000; // 5 minutes - matches backend config
     registerInterval(setInterval(() => {
         if (nextCheckTime > 0) {
             const now = Date.now();

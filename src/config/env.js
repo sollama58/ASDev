@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.11-METADATA-IMAGE-FALLBACK",
+    VERSION: "v25.12-TIMER-SYNC-ROBINHOOD",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 
@@ -40,8 +40,8 @@ const config = {
     AIRDROP_MIN_VOLUME_USD: 100, // v18.0: Minimum 24hr volume for airdrop eligibility
 
     // Update Intervals (ms)
-    FEE_COLLECTION_INTERVAL: 60000, // v17.0: Fee collection every 1 minute
-    AIRDROP_INTERVAL: 900000, // v17.0: Airdrop processing every 15 minutes
+    FEE_COLLECTION_INTERVAL: 300000, // v25.11: Fee collection every 5 minutes
+    AIRDROP_INTERVAL: 300000, // v25.11: Airdrop processing every 5 minutes
     HOLDER_UPDATE_INTERVAL: parseInt(process.env.HOLDER_UPDATE_INTERVAL) || 120000,
     METADATA_UPDATE_INTERVAL: parseInt(process.env.METADATA_UPDATE_INTERVAL) || 60000,
     ASDF_UPDATE_INTERVAL: 300000,
