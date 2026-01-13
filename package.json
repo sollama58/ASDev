@@ -17,6 +17,7 @@
     "security": "bigint-buffer vulnerability (GHSA-3gc7-fjrx-p6mg) is a known Solana ecosystem issue with no clean fix available. The affected toBigIntLE() function is not directly used in this application."
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
     "@coral-xyz/anchor": "^0.29.0",
     "@solana/spl-token": "^0.4.0",
     "@solana/web3.js": "^1.91.0",

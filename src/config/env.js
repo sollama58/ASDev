@@ -93,6 +93,10 @@ const config = {
     TWITTER_ACCESS_SECRET: process.env.TWITTER_ACCESS_SECRET,
     TWITTER_USERNAME: process.env.TWITTER_USERNAME, // v25.22: Fallback for tweet URLs
 
+    // v25.38: Claude AI for KOTH Selection
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    KOTH_AI_ENABLED: process.env.KOTH_AI_ENABLED !== 'false', // Enabled by default if API key exists
+
     // UI
     HEADER_IMAGE_URL: process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO",
 

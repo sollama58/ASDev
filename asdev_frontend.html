@@ -1263,7 +1263,7 @@
             </div>
         </div>
 
-        <!-- KING OF THE PILL PANEL -->
+        <!-- KING OF THE PILL PANEL - v25.38: Smart multi-factor selection -->
         <div id="koth-panel" class="panel koth-panel koth-glow mb-6 md:mb-8 hidden">
             <div class="flex flex-col md:flex-row items-center justify-between gap-4 md:gap-6">
                 <!-- Title -->
@@ -1271,7 +1271,7 @@
                     <div class="text-2xl md:text-4xl">💊</div>
                     <div class="text-center md:text-left">
                         <h3 class="text-fuchsia-400 font-mono font-bold text-sm md:text-lg uppercase tracking-widest koth-title">KING OF THE PILL</h3>
-                        <p class="text-fuchsia-200/80 text-[10px] md:text-xs font-mono">HIGHEST MARKET CAP LAUNCH</p>
+                        <p id="koth-subtitle" class="text-fuchsia-200/80 text-[10px] md:text-xs font-mono">SMART SELECTION</p>
                     </div>
                 </div>
 
@@ -1291,12 +1291,19 @@
                         <div class="text-[10px] md:text-xs text-fuchsia-500 uppercase font-mono mb-1">Market Cap</div>
                         <div id="koth-mcap" class="text-lg md:text-2xl font-bold text-white font-mono mcap-amount">$0</div>
                     </div>
+                    <div class="text-center">
+                        <div class="text-[10px] md:text-xs text-cyan-500 uppercase font-mono mb-1">Score</div>
+                        <div id="koth-score" class="text-lg md:text-2xl font-bold text-cyan-400 font-mono">--</div>
+                    </div>
                     <div class="text-center md:text-right">
                         <div class="text-[9px] md:text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">Holder Bonus</div>
                         <div class="text-lg md:text-xl font-bold text-green-400 font-mono">10%</div>
-                        <div class="text-[9px] md:text-[10px] text-fuchsia-500 font-mono">to all holders</div>
                     </div>
                 </div>
+            </div>
+            <!-- Selection Reasoning -->
+            <div id="koth-reasoning" class="mt-3 pt-3 border-t border-fuchsia-900/50 hidden">
+                <p id="koth-reasoning-text" class="text-[10px] md:text-xs text-fuchsia-200/70 font-mono text-center"></p>
             </div>
         </div>
 
@@ -1706,9 +1713,10 @@
                 <p class="text-xs text-gray-400 mt-1">Token B ($1k volume, min) = 0.5x weight = 500 base points. Same 1% holding = 5 points.</p>
             </div>
             <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
-                <p class="text-fuchsia-400 text-xs uppercase mb-1">King of the Pill (KOTH)</p>
-                <p class="text-xs text-gray-300"><span class="text-white">10%</span> of every airdrop goes to holders of the highest market cap token, proportional to their holdings.</p>
-                <p class="text-xs text-gray-400 mt-1">Requirements: Token must have <span class="text-yellow-400">≥10 holders</span> and <span class="text-green-400">≥$1,000 market cap</span> to qualify for KOTH bonus.</p>
+                <p class="text-fuchsia-400 text-xs uppercase mb-1">King of the Pill (KOTH) - Smart Selection (v25.38)</p>
+                <p class="text-xs text-gray-300"><span class="text-white">10%</span> of every airdrop goes to holders of the top-scoring champion token.</p>
+                <p class="text-xs text-gray-400 mt-1">Tokens are scored <span class="text-cyan-400">hourly</span> based on: trading volume (35%), market cap (25%), holder growth (20%), volume consistency (10%), and token age (10%).</p>
+                <p class="text-xs text-gray-400 mt-1">Requirements: <span class="text-yellow-400">≥10 holders</span>, <span class="text-green-400">≥$1,000 mcap</span>, and <span class="text-cyan-400">≥$100 24hr volume</span>.</p>
             </div>
         </div>
     </div>
@@ -2472,6 +2480,10 @@
         kothMcap: document.getElementById('koth-mcap'),
         kothImg: document.getElementById('koth-img'),
         kothHolders: document.getElementById('koth-holders'),
+        kothScore: document.getElementById('koth-score'),
+        kothReasoning: document.getElementById('koth-reasoning'),
+        kothReasoningText: document.getElementById('koth-reasoning-text'),
+        kothSubtitle: document.getElementById('koth-subtitle'),
         consNotice: document.getElementById('conservation-notice'),
         consUsers: document.getElementById('cons-users'),
         consNeed: document.getElementById('cons-need'),
@@ -2860,6 +2872,7 @@
         }
     };
 
+    // v25.38: Updated to show AI selection reasoning
     const updateKOTH = async () => {
         try {
             const res = await fetch(`${BACKEND_URL}/api/koth`);
@@ -2879,6 +2892,35 @@
                     if (data.token.image) {
                         ui.kothImg.src = resolveTokenImage(data.token.image);
                         ui.kothImg.classList.remove('hidden');
+                    }
+
+                    // v25.38: Display AI/smart selection info
+                    if (data.ai && ui.kothScore) {
+                        ui.kothScore.innerText = data.ai.score ? `${data.ai.score.toFixed(0)}/100` : '--';
+
+                        // Show reasoning with runner-up info if available
+                        if (data.ai.reasoning && ui.kothReasoning && ui.kothReasoningText) {
+                            let reasoningText = data.ai.reasoning;
+                            if (data.ai.runnerUp && data.ai.runnerUpReason) {
+                                reasoningText += ` Runner-up: ${data.ai.runnerUp} - ${data.ai.runnerUpReason}`;
+                            }
+                            ui.kothReasoningText.innerText = reasoningText;
+                            ui.kothReasoning.classList.remove('hidden');
+                        }
+
+                        if (ui.kothSubtitle) {
+                            // Show "AI SELECTION" for Claude, "SMART SELECTION" for algorithm
+                            ui.kothSubtitle.innerText = data.ai.isAI ? 'AI SELECTION' : 'SMART SELECTION';
+                        }
+                    } else if (ui.kothScore) {
+                        // Fallback mode (market cap only)
+                        ui.kothScore.innerText = '--';
+                        if (ui.kothSubtitle) {
+                            ui.kothSubtitle.innerText = 'HIGHEST MARKET CAP';
+                        }
+                        if (ui.kothReasoning) {
+                            ui.kothReasoning.classList.add('hidden');
+                        }
                     }
                 } else {
                     const panel = document.getElementById('koth-panel');

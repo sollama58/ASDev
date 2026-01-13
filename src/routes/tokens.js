@@ -154,19 +154,33 @@ function init(deps) {
     });
 
     // King of the Pill (KOTH) Endpoint - Cached for 15 seconds
+    // v25.38: Now uses AI-based selection from Redis cache (set by flywheel)
     router.get('/koth', async (req, res) => {
         try {
             const result = await redis.smartCache('koth_data', 15, async () => {
-                // Select token with highest market cap
-                // Ensure we only select valid tokens (non-null marketCap)
-                // v25.4: Also fetch metadataUri for image fallback
-                const koth = await db.get(`
-                    SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h
-                    FROM tokens
-                    WHERE "marketCap" > 0
-                    ORDER BY "marketCap" DESC
-                    LIMIT 1
-                `);
+                // v25.38: First try to get AI-selected KOTH from Redis
+                let aiSelection = null;
+                try {
+                    const aiData = await redis.get('koth_ai_selection');
+                    if (aiData) {
+                        aiSelection = JSON.parse(aiData);
+                    }
+                } catch (e) {
+                    // Fallback to market cap if AI selection unavailable
+                }
+
+                // Get the KOTH token (AI-selected mint or fallback to highest mcap)
+                const kothMint = aiSelection?.mint;
+                const koth = kothMint
+                    ? await db.get(`
+                        SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, "holderCount"
+                        FROM tokens WHERE mint = $1
+                    `, [kothMint])
+                    : await db.get(`
+                        SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, "holderCount"
+                        FROM tokens WHERE "marketCap" > 0
+                        ORDER BY "marketCap" DESC LIMIT 1
+                    `);
 
                 if (koth) {
                     // v25.4: Fetch image from metadataUri if missing
@@ -176,13 +190,10 @@ function init(deps) {
                             const fallbackImage = await imageUtils.fetchImageFromMetadataUri(koth.metadataUri, 2000);
                             if (fallbackImage) {
                                 image = fallbackImage;
-                                // Update the database (async, don't wait)
                                 db.run('UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
                                     [fallbackImage, koth.mint]).catch(() => {});
                             }
-                        } catch (e) {
-                            // Silently fail
-                        }
+                        } catch (e) { /* silent fail */ }
                     }
 
                     return {
@@ -194,8 +205,21 @@ function init(deps) {
                             ticker: koth.ticker,
                             image: image,
                             marketCap: koth.marketCap,
-                            volume: koth.volume24h
-                        }
+                            volume: koth.volume24h,
+                            holderCount: koth.holderCount || 0
+                        },
+                        // v25.38: Include AI selection details
+                        ai: aiSelection ? {
+                            score: aiSelection.score,
+                            reasoning: aiSelection.reasoning,
+                            breakdown: aiSelection.breakdown,
+                            evaluatedAt: aiSelection.evaluatedAt,
+                            candidates: aiSelection.candidates,
+                            isAI: aiSelection.isAI || false,
+                            model: aiSelection.model || null,
+                            runnerUp: aiSelection.runnerUp || null,
+                            runnerUpReason: aiSelection.runnerUpReason || null
+                        } : null
                     };
                 } else {
                     return { found: false };

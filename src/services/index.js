@@ -7,6 +7,7 @@
  * v25.1 - Removed cloudflareImages (using Imgur for user uploads)
  * v25.4 - Added websocket for real-time frontend updates
  * v25.22 - Added signatureVerifier for cryptographic request authentication
+ * v25.38 - Added claudeKoth for AI-based KOTH selection
  */
 const logger = require('./logger');
 const postgres = require('./postgres');
@@ -25,6 +26,7 @@ const circuitBreaker = require('./circuitBreaker');
 const sanitizer = require('./sanitizer');
 const websocket = require('./websocket');
 const signatureVerifier = require('./signatureVerifier');
+const claudeKoth = require('./claudeKoth');
 
 // v13.0: Use PostgreSQL as the database layer
 const database = postgres;
@@ -48,4 +50,5 @@ module.exports = {
     sanitizer,
     websocket,
     signatureVerifier,
+    claudeKoth,
 };

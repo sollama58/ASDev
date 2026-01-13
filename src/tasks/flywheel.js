@@ -10,6 +10,7 @@
  * v25.4 - Fixed next check time countdown to update after fee collection
  * v25.23 - AMM fee monitoring with alerts, optimized batch size (25 transfers)
  * v25.37 - Fixed error handling: RPC errors no longer incorrectly deactivate tokens
+ * v25.38 - AI-based KOTH selection (volume, holders, age, consistency) evaluated hourly
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -20,7 +21,7 @@ const {
 } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, pump, solana, jupiter, redis, mutex, mintExtractor } = require('../services');
+const { logger, pump, solana, jupiter, redis, mutex, mintExtractor, claudeKoth } = require('../services');
 
 // RACE CONDITION FIX: Use mutex for atomic lock/unlock instead of boolean flags
 const buybackMutex = mutex.getMutex('flywheel_buyback');
@@ -48,6 +49,309 @@ let totalPendingAmmFees = 0; // Track for monitoring
 // Testing shows 25 transfers work reliably with priority fees
 const AIRDROP_BATCH_SIZE = 25; // Increased from 21 for better throughput
 const KOTH_BATCH_SIZE = 25; // Increased from 21 for consistency
+
+// v25.38: AI-based KOTH selection system
+// Evaluates tokens on multiple metrics instead of just market cap
+const KOTH_EVALUATION_INTERVAL_MS = 60 * 60 * 1000; // Hourly evaluation
+let lastKothEvaluation = 0;
+let currentKothMint = null;
+let currentKothScore = 0;
+let currentKothReasoning = '';
+
+/**
+ * v25.38: Smart KOTH Scoring Algorithm
+ * Calculates a composite score based on multiple health and engagement metrics
+ * All data comes from existing database - no additional RPC calls needed
+ *
+ * Note: This is a deterministic weighted algorithm, not an LLM/AI model.
+ * The term "smart" refers to multi-factor analysis vs simple market cap sorting.
+ *
+ * Scoring weights (total = 100):
+ * - Market Cap (25%): Higher market cap indicates market confidence
+ * - Volume (35%): Trading activity shows engagement (primary factor)
+ * - Holder Growth (20%): Growing holder base is healthy
+ * - Volume Consistency (10%): Steady volume > pump and dump patterns
+ * - Token Age (10%): Older tokens with sustained metrics are more reliable
+ */
+const KOTH_SCORING_WEIGHTS = {
+    marketCap: 25,
+    volume: 35,
+    holderGrowth: 20,
+    volumeConsistency: 10,
+    tokenAge: 10
+};
+
+/**
+ * Calculate KOTH score for a single token
+ * @param {Object} token - Token data from database
+ * @param {Object} stats - Aggregated stats for normalization
+ * @returns {Object} Score breakdown and total
+ */
+function calculateKothScore(token, stats) {
+    const scores = {};
+
+    // 1. Market Cap Score (logarithmic scale, normalized) - 25%
+    // Higher market cap = higher score, but diminishing returns
+    const mcapLog = token.marketCap > 0 ? Math.log10(token.marketCap) : 0;
+    const maxMcapLog = stats.maxMarketCap > 0 ? Math.log10(stats.maxMarketCap) : 1;
+    scores.marketCap = maxMcapLog > 0 ? (mcapLog / maxMcapLog) * KOTH_SCORING_WEIGHTS.marketCap : 0;
+
+    // 2. Volume Score (logarithmic scale, normalized) - 35%
+    // Higher 24hr volume = more active trading (primary factor)
+    const volLog = token.volume24h > 0 ? Math.log10(token.volume24h) : 0;
+    const maxVolLog = stats.maxVolume > 0 ? Math.log10(stats.maxVolume) : 1;
+    scores.volume = maxVolLog > 0 ? (volLog / maxVolLog) * KOTH_SCORING_WEIGHTS.volume : 0;
+
+    // 3. Holder Growth Score - 20%
+    // Positive growth is rewarded, decline is penalized
+    // holderGrowth is calculated as % change from previous scan
+    const growthScore = token.holderGrowth !== undefined
+        ? Math.min(1, Math.max(0, (token.holderGrowth + 0.1) / 0.2)) // -10% to +10% range normalized
+        : 0.5; // Default to neutral if no data
+    scores.holderGrowth = growthScore * KOTH_SCORING_WEIGHTS.holderGrowth;
+
+    // 4. Volume Consistency Score - 10%
+    // Measures how stable volume is (avg volume vs current)
+    // Tokens with steady volume score higher than pump-and-dump patterns
+    const volumeRatio = token.avgVolume > 0 ? token.volume24h / token.avgVolume : 1;
+    // Sweet spot is 0.8x to 1.5x of average (not too low, not suspiciously high)
+    const consistencyScore = volumeRatio >= 0.5 && volumeRatio <= 2.0
+        ? 1 - Math.abs(volumeRatio - 1) / 2
+        : 0.3;
+    scores.volumeConsistency = consistencyScore * KOTH_SCORING_WEIGHTS.volumeConsistency;
+
+    // 5. Token Age Score (logarithmic, rewards longevity) - 10%
+    // Tokens that have been around longer with good metrics are more reliable
+    const ageHours = token.ageHours || 0;
+    const ageScore = ageHours > 0 ? Math.min(1, Math.log10(ageHours + 1) / 3) : 0; // Max at ~1000 hours
+    scores.tokenAge = ageScore * KOTH_SCORING_WEIGHTS.tokenAge;
+
+    // Calculate total score
+    const totalScore = Object.values(scores).reduce((sum, s) => sum + s, 0);
+
+    return {
+        scores,
+        totalScore: Math.round(totalScore * 100) / 100,
+        breakdown: {
+            marketCap: `${scores.marketCap.toFixed(1)}/${KOTH_SCORING_WEIGHTS.marketCap}`,
+            volume: `${scores.volume.toFixed(1)}/${KOTH_SCORING_WEIGHTS.volume}`,
+            holderGrowth: `${scores.holderGrowth.toFixed(1)}/${KOTH_SCORING_WEIGHTS.holderGrowth}`,
+            volumeConsistency: `${scores.volumeConsistency.toFixed(1)}/${KOTH_SCORING_WEIGHTS.volumeConsistency}`,
+            tokenAge: `${scores.tokenAge.toFixed(1)}/${KOTH_SCORING_WEIGHTS.tokenAge}`
+        }
+    };
+}
+
+/**
+ * v25.38: Evaluate and select the best KOTH candidate
+ * Runs hourly, uses only database queries (no RPC calls)
+ *
+ * @param {Object} db - Database connection
+ * @returns {Object} Selected KOTH token with score and reasoning
+ */
+async function evaluateKothCandidates(db) {
+    const KOTH_MIN_HOLDERS = 10;
+    const KOTH_MIN_MARKET_CAP = 1000;
+    const KOTH_MIN_VOLUME = 100;
+
+    try {
+        // Get all eligible tokens with their metrics (single query)
+        const candidates = await db.all(`
+            SELECT
+                t.mint,
+                t.ticker,
+                t.name,
+                t."marketCap",
+                t.volume24h,
+                t."holderCount",
+                t.timestamp,
+                COUNT(th."holderPubkey") as actualHolders
+            FROM tokens t
+            LEFT JOIN token_holders th ON th.mint = t.mint
+            WHERE t."marketCap" >= $1
+            AND t.volume24h >= $2
+            GROUP BY t.mint, t.ticker, t.name, t."marketCap", t.volume24h, t."holderCount", t.timestamp
+            HAVING COUNT(th."holderPubkey") >= $3
+            ORDER BY t."marketCap" DESC
+            LIMIT 50
+        `, [KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME, KOTH_MIN_HOLDERS]);
+
+        if (candidates.length === 0) {
+            logger.info('[KOTH] No eligible candidates found');
+            return { token: null, score: 0, reasoning: 'No tokens meet minimum requirements' };
+        }
+
+        // Calculate aggregate stats for normalization
+        const stats = {
+            maxMarketCap: Math.max(...candidates.map(t => t.marketCap || 0)),
+            maxVolume: Math.max(...candidates.map(t => t.volume24h || 0)),
+            maxHolders: Math.max(...candidates.map(t => t.actualHolders || 0))
+        };
+
+        // Score each candidate
+        const scoredCandidates = candidates.map(token => {
+            // Calculate token age in hours
+            const ageHours = token.timestamp
+                ? (Date.now() - token.timestamp) / (1000 * 60 * 60)
+                : 0;
+
+            const tokenWithMetrics = {
+                ...token,
+                holderCount: token.actualHolders || 0,
+                ageHours,
+                // For now, assume neutral growth and consistent volume
+                // These could be enhanced with historical tracking later
+                holderGrowth: 0,
+                avgVolume: token.volume24h // No historical data yet
+            };
+
+            const scoreResult = calculateKothScore(tokenWithMetrics, stats);
+
+            return {
+                ...token,
+                ...scoreResult,
+                ageHours
+            };
+        });
+
+        // Sort by total score
+        scoredCandidates.sort((a, b) => b.totalScore - a.totalScore);
+
+        // Select the winner
+        const winner = scoredCandidates[0];
+        const runnerUp = scoredCandidates[1];
+
+        // Generate reasoning
+        const reasoning = generateKothReasoning(winner, runnerUp, stats);
+
+        logger.info(`[KOTH] 👑 AI Selected: ${winner.ticker} (Score: ${winner.totalScore}/100)`);
+        logger.info(`[KOTH] Breakdown: ${JSON.stringify(winner.breakdown)}`);
+
+        return {
+            token: winner,
+            score: winner.totalScore,
+            reasoning,
+            breakdown: winner.breakdown,
+            candidates: scoredCandidates.slice(0, 5).map(c => ({
+                ticker: c.ticker,
+                score: c.totalScore,
+                marketCap: c.marketCap
+            }))
+        };
+
+    } catch (e) {
+        logger.error('[KOTH] Evaluation error', { error: e.message });
+        return { token: null, score: 0, reasoning: `Evaluation failed: ${e.message}` };
+    }
+}
+
+/**
+ * Generate human-readable reasoning for KOTH selection
+ */
+function generateKothReasoning(winner, runnerUp, stats) {
+    const reasons = [];
+
+    // Highlight top scoring categories
+    const breakdown = winner.scores || {};
+    const sortedMetrics = Object.entries(breakdown)
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 3);
+
+    for (const [metric, score] of sortedMetrics) {
+        const weight = KOTH_SCORING_WEIGHTS[metric];
+
+        switch (metric) {
+            case 'volume':
+                reasons.push(`Strong trading activity ($${(winner.volume24h || 0).toLocaleString()} 24hr volume)`);
+                break;
+            case 'marketCap':
+                reasons.push(`Solid market cap ($${(winner.marketCap || 0).toLocaleString()})`);
+                break;
+            case 'holderGrowth':
+                if (score > KOTH_SCORING_WEIGHTS.holderGrowth * 0.6) {
+                    reasons.push('Growing holder base');
+                }
+                break;
+            case 'volumeConsistency':
+                if (score > KOTH_SCORING_WEIGHTS.volumeConsistency * 0.6) {
+                    reasons.push('Consistent trading volume');
+                }
+                break;
+            case 'tokenAge':
+                if (winner.ageHours > 24) {
+                    reasons.push(`Established token (${Math.round(winner.ageHours / 24)} days old)`);
+                }
+                break;
+        }
+    }
+
+    let reasoning = `${winner.ticker} selected as King of the Pill. `;
+    reasoning += reasons.slice(0, 3).join('. ') + '.';
+
+    if (runnerUp) {
+        const scoreDiff = winner.totalScore - runnerUp.totalScore;
+        if (scoreDiff < 5) {
+            reasoning += ` Close competition with ${runnerUp.ticker} (${runnerUp.totalScore.toFixed(1)} pts).`;
+        }
+    }
+
+    return reasoning;
+}
+
+/**
+ * v25.38: Get the current AI-selected KOTH
+ * Uses Claude AI for intelligent selection, falls back to weighted algorithm
+ * Re-evaluates hourly, uses cached result between evaluations
+ */
+async function getAiSelectedKoth(db) {
+    const now = Date.now();
+
+    // Re-evaluate if hour has passed or no current selection
+    if (!currentKothMint || (now - lastKothEvaluation) >= KOTH_EVALUATION_INTERVAL_MS) {
+        let result;
+
+        // Try Claude AI first if enabled, fall back to weighted algorithm
+        if (claudeKoth.isEnabled()) {
+            logger.info('[KOTH] 🤖 Using Claude AI for KOTH selection...');
+            result = await claudeKoth.getKothWithFallback(db, evaluateKothCandidates);
+        } else {
+            logger.info('[KOTH] Using weighted algorithm for KOTH selection (AI not configured)');
+            result = await evaluateKothCandidates(db);
+        }
+
+        if (result.token) {
+            currentKothMint = result.token.mint;
+            currentKothScore = result.score;
+            currentKothReasoning = result.reasoning;
+            lastKothEvaluation = now;
+
+            // Store in Redis for API access
+            await redis.set('koth_ai_selection', JSON.stringify({
+                mint: result.token.mint,
+                ticker: result.token.ticker,
+                name: result.token.name,
+                score: result.score,
+                reasoning: result.reasoning,
+                breakdown: result.breakdown,
+                candidates: result.candidates,
+                evaluatedAt: now,
+                isAI: result.isAI || false,
+                model: result.model || null,
+                runnerUp: result.runnerUp || null,
+                runnerUpReason: result.runnerUpReason || null
+            }), 'EX', 7200); // 2 hour TTL
+        }
+
+        return result;
+    }
+
+    // Return cached selection
+    return {
+        token: { mint: currentKothMint },
+        score: currentKothScore,
+        reasoning: currentKothReasoning
+    };
+}
 
 /**
  * v25.21: Get fee sharing config with caching
@@ -482,17 +786,23 @@ async function processAirdrop(deps) {
         let communityAmount = totalDistributable;
         let kothTxSignature = null;
 
-        // 1. Identify King of the Hill (Highest MCAP)
-        // v25.22 SECURITY: Added minimum requirements to prevent KOTH manipulation
-        // Token must have at least 10 holders and $1000 market cap to qualify
+        // 1. Identify King of the Hill using AI scoring system
+        // v25.38: AI-based selection considers multiple metrics (volume, holders, age, etc.)
+        // v25.22 SECURITY: Minimum requirements still enforced
         const KOTH_MIN_HOLDERS = 10;
-        const KOTH_MIN_MARKET_CAP = 1000; // $1000 USD
         const KOTH_MAX_PERCENT = 0.10; // 10% cap
 
-        const kothToken = await db.get(
-            'SELECT userPubkey, ticker, mint, "marketCap" FROM tokens WHERE "marketCap" >= $1 ORDER BY "marketCap" DESC LIMIT 1',
-            [KOTH_MIN_MARKET_CAP]
-        );
+        // Use AI-selected KOTH (re-evaluates hourly)
+        const kothResult = await getAiSelectedKoth(db);
+        const kothToken = kothResult.token ? await db.get(
+            'SELECT "userPubkey", ticker, mint, "marketCap" FROM tokens WHERE mint = $1',
+            [kothResult.token.mint]
+        ) : null;
+
+        // Log AI reasoning
+        if (kothResult.reasoning) {
+            logger.info(`[KOTH] AI Reasoning: ${kothResult.reasoning}`);
+        }
 
         // 2. Process KOTH Payout (10%) - v13.0: Now distributed to all holders of the king token
         // v25.22 SECURITY: Only process if token meets minimum requirements
