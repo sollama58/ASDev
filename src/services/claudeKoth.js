@@ -418,7 +418,7 @@ async function getKothWithFallback(db, algorithmFallback) {
     try {
         // Get eligible candidates (same query as algorithm)
         const queryStart = Date.now();
-        const candidates = await db.all(`
+        let candidates = await db.all(`
             SELECT
                 t.mint,
                 t.ticker,
