@@ -309,6 +309,7 @@
             <button class="tab-btn" onclick="switchTab('database')">Database</button>
             <button class="tab-btn" onclick="switchTab('logs')">Live Logs</button>
             <button class="tab-btn" onclick="switchTab('tools')">Tools</button>
+            <button class="tab-btn" onclick="switchTab('koth')">KOTH AI</button>
         </div>
 
         <!-- Tab Content -->
@@ -907,6 +908,118 @@
                         </div>
                         <div id="api-result" class="result-box mt-4">
                             // API response will appear here
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- KOTH AI Tab (v25.40) -->
+            <div id="tab-koth" class="tab-content hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- KOTH AI Status -->
+                    <div class="panel">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold flex items-center gap-2">
+                                <span>🤖 KOTH AI Status</span>
+                                <span id="koth-ai-badge" class="text-xs bg-blue-900/50 text-blue-400 px-2 py-0.5 rounded">CLAUDE</span>
+                            </h3>
+                            <button onclick="fetchKothStatus()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="koth-status-container" class="space-y-3">
+                            <div class="text-gray-400 text-sm">Click "Refresh" to fetch KOTH AI status...</div>
+                        </div>
+                    </div>
+
+                    <!-- KOTH AI Actions -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">KOTH AI Actions</h3>
+                        </div>
+                        <div class="space-y-3">
+                            <button onclick="triggerKothRefresh()" class="btn btn-primary w-full flex items-center justify-center gap-2">
+                                <span>🔄</span> Force KOTH Re-evaluation
+                            </button>
+                            <button onclick="clearKothCache()" class="btn btn-secondary w-full flex items-center justify-center gap-2">
+                                <span>🗑️</span> Clear KOTH Cache Only
+                            </button>
+                            <div class="text-xs text-gray-500 mt-2">
+                                Force re-evaluation clears both caches and triggers a new Claude AI selection.
+                                Clear cache only clears the cache without triggering a new evaluation.
+                            </div>
+                        </div>
+                        <div id="koth-action-result" class="result-box mt-4 text-green-400">
+                            // Action results will appear here
+                        </div>
+                    </div>
+
+                    <!-- Current KOTH Selection -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">Current KOTH Selection</h3>
+                            <span id="koth-selection-age" class="text-xs text-gray-500">--</span>
+                        </div>
+                        <div id="koth-current-selection" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="bg-black/30 p-4 rounded border border-orange-900/30">
+                                <div class="text-xs text-gray-500">Selected Champion</div>
+                                <div id="koth-selected-ticker" class="text-2xl font-bold text-orange-400">--</div>
+                                <div id="koth-selected-mint" class="text-xs text-gray-500 font-mono">--</div>
+                                <div class="mt-2 flex items-center gap-2">
+                                    <span class="text-xs text-gray-400">Confidence:</span>
+                                    <span id="koth-confidence" class="text-sm font-bold text-green-400">--%</span>
+                                    <span id="koth-is-ai" class="text-xs bg-purple-900/50 text-purple-400 px-1.5 py-0.5 rounded hidden">AI</span>
+                                </div>
+                            </div>
+                            <div class="bg-black/30 p-4 rounded border border-orange-900/30">
+                                <div class="text-xs text-gray-500">AI Reasoning</div>
+                                <div id="koth-reasoning" class="text-sm text-gray-300 mt-1">--</div>
+                                <div class="mt-3 pt-3 border-t border-orange-900/20">
+                                    <div class="text-xs text-gray-500">Runner-up: <span id="koth-runner-up" class="text-orange-400">--</span></div>
+                                    <div id="koth-runner-up-reason" class="text-xs text-gray-400 mt-1">--</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- KOTH AI Evaluation Logs -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">Evaluation Logs</h3>
+                            <div class="flex items-center gap-2">
+                                <select id="koth-log-limit" class="input-field text-xs" onchange="fetchKothLogs()">
+                                    <option value="20">Last 20</option>
+                                    <option value="50" selected>Last 50</option>
+                                    <option value="100">Last 100</option>
+                                </select>
+                                <button onclick="fetchKothLogs()" class="btn btn-secondary text-xs">Refresh Logs</button>
+                            </div>
+                        </div>
+                        <div id="koth-logs-container" class="result-box" style="max-height: 400px;">
+                            <div class="text-gray-400 text-sm">Click "Refresh Logs" to fetch evaluation history...</div>
+                        </div>
+                    </div>
+
+                    <!-- KOTH Configuration -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">KOTH AI Configuration</h3>
+                        </div>
+                        <div id="koth-config" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div class="stat-card">
+                                <div class="text-xs text-gray-400">AI Enabled</div>
+                                <div id="koth-config-enabled" class="text-lg font-bold text-green-400">--</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="text-xs text-gray-400">Model</div>
+                                <div id="koth-config-model" class="text-sm font-bold text-blue-400">--</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="text-xs text-gray-400">Max Candidates</div>
+                                <div id="koth-config-candidates" class="text-lg font-bold text-purple-400">--</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="text-xs text-gray-400">Recent Success Rate</div>
+                                <div id="koth-config-success-rate" class="text-lg font-bold text-orange-400">--%</div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1712,6 +1825,208 @@
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Airdrop error: ${e.message}`, 'error');
+            }
+        }
+
+        // ===== KOTH AI MANAGEMENT (v25.40) =====
+        async function fetchKothStatus() {
+            log('Fetching KOTH AI status...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/koth-status`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Update configuration
+                    const status = data.status || {};
+                    document.getElementById('koth-config-enabled').textContent = status.enabled ? 'YES' : 'NO';
+                    document.getElementById('koth-config-enabled').className = status.enabled ? 'text-lg font-bold text-green-400' : 'text-lg font-bold text-red-400';
+                    document.getElementById('koth-config-model').textContent = status.model || 'N/A';
+                    document.getElementById('koth-config-candidates').textContent = status.maxCandidates || 'N/A';
+
+                    // Update success rate
+                    const activity = data.recentActivity || {};
+                    const total = activity.total || 0;
+                    const successes = activity.successes || 0;
+                    const successRate = total > 0 ? Math.round((successes / total) * 100) : 0;
+                    document.getElementById('koth-config-success-rate').textContent = successRate + '%';
+
+                    // Update current selection
+                    const current = data.current;
+                    if (current) {
+                        document.getElementById('koth-selected-ticker').textContent = current.ticker || 'N/A';
+                        document.getElementById('koth-selected-mint').textContent = current.mint || 'N/A';
+                        document.getElementById('koth-confidence').textContent = (current.confidence || 0) + '%';
+                        document.getElementById('koth-reasoning').textContent = current.reasoning || 'No reasoning provided';
+                        document.getElementById('koth-runner-up').textContent = current.runnerUp || 'N/A';
+                        document.getElementById('koth-runner-up-reason').textContent = current.runnerUpReason || '';
+
+                        // Show AI badge if AI selected
+                        const aiBadge = document.getElementById('koth-is-ai');
+                        if (current.isAI) {
+                            aiBadge.classList.remove('hidden');
+                        } else {
+                            aiBadge.classList.add('hidden');
+                        }
+
+                        // Show age
+                        if (current.ageMinutes !== null) {
+                            document.getElementById('koth-selection-age').textContent = `Updated ${current.ageMinutes} min ago`;
+                        }
+                    } else {
+                        document.getElementById('koth-selected-ticker').textContent = 'No selection';
+                        document.getElementById('koth-selected-mint').textContent = '--';
+                        document.getElementById('koth-confidence').textContent = '--%';
+                        document.getElementById('koth-reasoning').textContent = 'No current KOTH selection';
+                        document.getElementById('koth-runner-up').textContent = '--';
+                        document.getElementById('koth-runner-up-reason').textContent = '';
+                    }
+
+                    log('KOTH status fetched successfully', 'success');
+                } else {
+                    log(`KOTH status error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                log(`KOTH status fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchKothLogs() {
+            const limit = document.getElementById('koth-log-limit').value || 50;
+            const container = document.getElementById('koth-logs-container');
+            container.innerHTML = '<span class="text-blue-400">Loading logs...</span>';
+            log(`Fetching KOTH logs (limit: ${limit})...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/koth-logs?limit=${limit}`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const logs = data.logs || [];
+                    if (logs.length === 0) {
+                        container.innerHTML = '<span class="text-gray-500">No evaluation logs found</span>';
+                    } else {
+                        container.innerHTML = logs.map(log => {
+                            const typeColors = {
+                                'SELECTION_SUCCESS': 'text-green-400 bg-green-900/20',
+                                'API_ERROR': 'text-red-400 bg-red-900/20',
+                                'PARSE_ERROR': 'text-red-400 bg-red-900/20',
+                                'ERROR': 'text-red-400 bg-red-900/20',
+                                'EVALUATION_START': 'text-blue-400 bg-blue-900/20',
+                                'API_RESPONSE': 'text-cyan-400 bg-cyan-900/20',
+                                'FALLBACK_TO_ALGORITHM': 'text-yellow-400 bg-yellow-900/20',
+                                'ADMIN_REFRESH_TRIGGERED': 'text-purple-400 bg-purple-900/20',
+                                'ADMIN_CACHE_CLEARED': 'text-purple-400 bg-purple-900/20',
+                                'default': 'text-gray-400 bg-gray-900/20'
+                            };
+
+                            const colorClass = typeColors[log.type] || typeColors.default;
+                            const time = log.timestampISO ? new Date(log.timestampISO).toLocaleString() : 'Unknown';
+
+                            let details = '';
+                            if (log.selectedTicker) details += ` | ${log.selectedTicker}`;
+                            if (log.confidence) details += ` (${log.confidence}%)`;
+                            if (log.inputTokens) details += ` | ${log.inputTokens}/${log.outputTokens} tokens`;
+                            if (log.error) details += ` | ${log.error}`;
+                            if (log.candidateCount !== undefined) details += ` | ${log.candidateCount} candidates`;
+
+                            return `<div class="log-entry ${colorClass} px-2 py-1 rounded text-xs mb-1">
+                                <span class="text-gray-500">[${time}]</span>
+                                <span class="font-bold">${log.type}</span>
+                                <span class="text-gray-400">${details}</span>
+                            </div>`;
+                        }).join('');
+                    }
+                    log(`Loaded ${logs.length} KOTH evaluation logs`, 'success');
+                } else {
+                    container.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`KOTH logs error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                container.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`KOTH logs fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function triggerKothRefresh() {
+            const resultEl = document.getElementById('koth-action-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Triggering KOTH re-evaluation...</span>';
+            log('Triggering KOTH AI refresh...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/trigger-koth-refresh`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ ${data.message}</span>\n\n` +
+                        `Redis cache cleared: ${data.redisCacheCleared ? 'Yes' : 'No'}\n` +
+                        `Flywheel cache reset: ${data.flywheelCacheReset ? 'Yes' : 'No'}\n\n` +
+                        `<span class="text-gray-400">${data.note || ''}</span>`;
+                    log('KOTH refresh triggered successfully', 'success');
+
+                    // Refresh status after a delay
+                    setTimeout(() => {
+                        fetchKothStatus();
+                        fetchKothLogs();
+                    }, 3000);
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`KOTH refresh failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`KOTH refresh error: ${e.message}`, 'error');
+            }
+        }
+
+        async function clearKothCache() {
+            const resultEl = document.getElementById('koth-action-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Clearing KOTH cache...</span>';
+            log('Clearing KOTH cache...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/clear-koth-cache`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ ${data.message}</span>`;
+                    log('KOTH cache cleared successfully', 'success');
+                    fetchKothStatus();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error || 'Cache clear failed'}</span>`;
+                    log(`KOTH cache clear failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`KOTH cache clear error: ${e.message}`, 'error');
             }
         }
 

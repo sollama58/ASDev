@@ -1263,15 +1263,20 @@
             </div>
         </div>
 
-        <!-- KING OF THE PILL PANEL - v25.38: Smart multi-factor selection -->
+        <!-- KING OF THE PILL PANEL - v25.39: AI-powered selection with Claude -->
         <div id="koth-panel" class="panel koth-panel koth-glow mb-6 md:mb-8 hidden">
             <div class="flex flex-col md:flex-row items-center justify-between gap-4 md:gap-6">
                 <!-- Title -->
                 <div class="flex items-center gap-3 md:gap-4 w-full md:w-auto justify-center md:justify-start">
                     <div class="text-2xl md:text-4xl">💊</div>
                     <div class="text-center md:text-left">
-                        <h3 class="text-fuchsia-400 font-mono font-bold text-sm md:text-lg uppercase tracking-widest koth-title">KING OF THE PILL</h3>
-                        <p id="koth-subtitle" class="text-fuchsia-200/80 text-[10px] md:text-xs font-mono">SMART SELECTION</p>
+                        <div class="flex items-center gap-2 justify-center md:justify-start">
+                            <h3 class="text-fuchsia-400 font-mono font-bold text-sm md:text-lg uppercase tracking-widest koth-title">KING OF THE PILL</h3>
+                            <button onclick="toggleKothInfoModal()" class="p-1 rounded-full bg-fuchsia-900/50 border border-fuchsia-700 hover:bg-fuchsia-800 transition text-fuchsia-400 hover:text-white" title="How KOTH Works">
+                                <i data-lucide="info" class="w-3 h-3 md:w-4 md:h-4"></i>
+                            </button>
+                        </div>
+                        <p id="koth-subtitle" class="text-fuchsia-200/80 text-[10px] md:text-xs font-mono">AI SELECTION</p>
                     </div>
                 </div>
 
@@ -1303,7 +1308,15 @@
             </div>
             <!-- Selection Reasoning -->
             <div id="koth-reasoning" class="mt-3 pt-3 border-t border-fuchsia-900/50 hidden">
+                <div class="flex items-center justify-center gap-2 mb-2">
+                    <span id="koth-model-badge" class="text-[9px] bg-cyan-900/50 text-cyan-400 px-2 py-0.5 rounded font-mono hidden">AI</span>
+                    <span id="koth-evaluated-at" class="text-[9px] text-fuchsia-400/60 font-mono"></span>
+                </div>
                 <p id="koth-reasoning-text" class="text-[10px] md:text-xs text-fuchsia-200/70 font-mono text-center"></p>
+                <div id="koth-runner-up" class="mt-2 text-center hidden">
+                    <span class="text-[9px] text-fuchsia-400/50 font-mono">Runner-up: </span>
+                    <span id="koth-runner-up-ticker" class="text-[9px] text-fuchsia-300 font-mono font-bold"></span>
+                </div>
             </div>
         </div>
 
@@ -1713,9 +1726,10 @@
                 <p class="text-xs text-gray-400 mt-1">Token B ($1k volume, min) = 0.5x weight = 500 base points. Same 1% holding = 5 points.</p>
             </div>
             <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
-                <p class="text-fuchsia-400 text-xs uppercase mb-1">King of the Pill (KOTH) - Smart Selection (v25.38)</p>
-                <p class="text-xs text-gray-300"><span class="text-white">10%</span> of every airdrop goes to holders of the top-scoring champion token.</p>
-                <p class="text-xs text-gray-400 mt-1">Tokens are scored <span class="text-cyan-400">hourly</span> based on: trading volume (35%), market cap (25%), holder growth (20%), volume consistency (10%), and token age (10%).</p>
+                <p class="text-fuchsia-400 text-xs uppercase mb-1 flex items-center gap-2">King of the Pill (KOTH) - AI Selection <span class="text-[9px] bg-cyan-700/50 text-cyan-300 px-1.5 py-0.5 rounded">CLAUDE</span></p>
+                <p class="text-xs text-gray-300"><span class="text-white">10%</span> of every airdrop goes to holders of the AI-selected champion token.</p>
+                <p class="text-xs text-gray-400 mt-1">Claude AI evaluates tokens <span class="text-cyan-400">hourly</span> based on: 24hr volume (35%), market cap (25%), holder growth (20%), and token age (10%).</p>
+                <p class="text-xs text-gray-400 mt-1">The AI avoids pump-and-dump patterns and rewards genuine community engagement.</p>
                 <p class="text-xs text-gray-400 mt-1">Requirements: <span class="text-yellow-400">≥10 holders</span>, <span class="text-green-400">≥$1,000 mcap</span>, and <span class="text-cyan-400">≥$100 24hr volume</span>.</p>
             </div>
         </div>
@@ -1755,9 +1769,10 @@
                     <li><span class="text-white">Multiplier:</span> <span class="text-green-400">2x Total Points</span> if you are a Top 100 $ASDF holder.</li>
                 </ul>
                 <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
-                    <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1">King of the Pill</p>
-                    <p class="text-xs text-gray-300"><span class="text-white">10% of the entire airdrop pool</span> is distributed to all holders of the highest market cap token, proportional to their holdings.</p>
-                    <p class="text-[10px] text-gray-400 mt-1">Requires: ≥10 holders & ≥$1,000 market cap</p>
+                    <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1 flex items-center gap-2">King of the Pill <span class="text-[8px] bg-cyan-700/50 text-cyan-300 px-1 py-0.5 rounded">AI POWERED</span></p>
+                    <p class="text-xs text-gray-300"><span class="text-white">10% of the entire airdrop pool</span> is distributed to holders of the AI-selected champion token.</p>
+                    <p class="text-[10px] text-gray-400 mt-1">Claude AI evaluates candidates hourly using volume, market cap, holder growth, and token age.</p>
+                    <p class="text-[10px] text-gray-400 mt-1">Requires: ≥10 holders, ≥$1,000 mcap, ≥$100 24hr volume</p>
                 </div>
             </div>
         </div>
@@ -1977,7 +1992,7 @@
                     <li class="flex items-start gap-2"><span class="text-yellow-400">•</span><span><span class="text-white font-medium">Hold tokens</span> - Be in top 250 holders of tokens with >$100 daily volume</span></li>
                     <li class="flex items-start gap-2"><span class="text-green-400">•</span><span><span class="text-white font-medium">Robinhood partners</span> - Hold external tokens that share fees with us</span></li>
                     <li class="flex items-start gap-2"><span class="text-purple-400">•</span><span><span class="text-white font-medium">ASDF multiplier</span> - Top 100 $ASDF holders get 2x total points</span></li>
-                    <li class="flex items-start gap-2"><span class="text-fuchsia-400">•</span><span><span class="text-white font-medium">King of the Pill</span> - 10% bonus pool for highest market cap token holders</span></li>
+                    <li class="flex items-start gap-2"><span class="text-fuchsia-400">•</span><span><span class="text-white font-medium">King of the Pill</span> - 10% bonus pool for AI-selected champion token holders <span class="text-[9px] bg-cyan-700/40 text-cyan-400 px-1 rounded">CLAUDE</span></span></li>
                 </ul>
             </div>
 
@@ -2027,6 +2042,103 @@
                 <button onclick="closeMainAboutModal(); toggleAboutModal();" class="text-xs text-orange-400 hover:text-white border border-orange-800 hover:bg-orange-900/50 px-3 py-1.5 rounded transition">Fee Mechanics</button>
                 <button onclick="closeMainAboutModal(); toggleAirdropInfoModal();" class="text-xs text-purple-400 hover:text-white border border-purple-800 hover:bg-purple-900/50 px-3 py-1.5 rounded transition">Points System</button>
                 <button onclick="closeMainAboutModal(); toggleRobinhoodInfoModal();" class="text-xs text-green-400 hover:text-white border border-green-800 hover:bg-green-900/50 px-3 py-1.5 rounded transition">Robinhood Partners</button>
+                <button onclick="closeMainAboutModal(); toggleKothInfoModal();" class="text-xs text-fuchsia-400 hover:text-white border border-fuchsia-800 hover:bg-fuchsia-900/50 px-3 py-1.5 rounded transition">King of the Pill</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- v25.39: King of the Pill Info Modal - AI Selection Explanation -->
+<div id="koth-info-modal" class="modal">
+    <div class="modal-content border-fuchsia-600" style="max-width: 650px;">
+        <span class="close-btn text-fuchsia-400" onclick="closeKothInfoModal()">&times;</span>
+        <h3 class="text-fuchsia-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-fuchsia-800/50 pb-2 font-normal flex items-center gap-2">
+            <span class="text-2xl">💊</span> King of the Pill - AI Selection
+        </h3>
+
+        <div class="font-sans text-sm space-y-4">
+            <!-- What is KOTH -->
+            <div class="bg-fuchsia-900/30 p-4 rounded border border-fuchsia-700/50">
+                <p class="text-fuchsia-400 text-xs uppercase mb-2 font-bold">What is King of the Pill?</p>
+                <p class="text-gray-300 text-sm">The King of the Pill (KOTH) is our champion token - selected hourly by Claude AI. <span class="text-green-400 font-bold">10% of every airdrop</span> is distributed exclusively to holders of the KOTH token, proportional to their holdings.</p>
+            </div>
+
+            <!-- AI Selection Process -->
+            <div class="bg-cyan-900/30 p-4 rounded border border-cyan-700/50">
+                <p class="text-cyan-400 text-xs uppercase mb-2 font-bold">AI-Powered Selection</p>
+                <p class="text-gray-300 text-xs mb-3">Claude AI analyzes all eligible tokens and selects the best candidate based on multiple health metrics:</p>
+                <div class="grid grid-cols-2 gap-2 text-xs">
+                    <div class="bg-black/30 p-2 rounded">
+                        <span class="text-yellow-400 font-bold">35%</span>
+                        <span class="text-gray-400"> - 24hr Volume</span>
+                        <p class="text-[10px] text-gray-500 mt-1">Active trading indicates engagement</p>
+                    </div>
+                    <div class="bg-black/30 p-2 rounded">
+                        <span class="text-green-400 font-bold">25%</span>
+                        <span class="text-gray-400"> - Market Cap</span>
+                        <p class="text-[10px] text-gray-500 mt-1">Market confidence indicator</p>
+                    </div>
+                    <div class="bg-black/30 p-2 rounded">
+                        <span class="text-purple-400 font-bold">20%</span>
+                        <span class="text-gray-400"> - Holder Growth</span>
+                        <p class="text-[10px] text-gray-500 mt-1">Growing base = healthy token</p>
+                    </div>
+                    <div class="bg-black/30 p-2 rounded">
+                        <span class="text-blue-400 font-bold">10%</span>
+                        <span class="text-gray-400"> - Token Age</span>
+                        <p class="text-[10px] text-gray-500 mt-1">Established tokens are reliable</p>
+                    </div>
+                </div>
+                <p class="text-[10px] text-cyan-400/70 mt-2">The AI also considers volume/mcap ratio and avoids pump-and-dump patterns.</p>
+            </div>
+
+            <!-- Requirements -->
+            <div class="bg-yellow-900/30 p-4 rounded border border-yellow-700/50">
+                <p class="text-yellow-400 text-xs uppercase mb-2 font-bold">Eligibility Requirements</p>
+                <ul class="text-xs text-gray-300 space-y-1.5">
+                    <li class="flex items-center gap-2"><span class="text-yellow-400">•</span> Minimum <span class="text-white font-bold">10 holders</span> (prevents single-holder manipulation)</li>
+                    <li class="flex items-center gap-2"><span class="text-yellow-400">•</span> Minimum <span class="text-white font-bold">$1,000 market cap</span></li>
+                    <li class="flex items-center gap-2"><span class="text-yellow-400">•</span> Minimum <span class="text-white font-bold">$100 24hr volume</span></li>
+                </ul>
+            </div>
+
+            <!-- Timing -->
+            <div class="grid grid-cols-2 gap-3">
+                <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
+                    <p class="text-gray-400 text-[10px] uppercase mb-1">Evaluation Frequency</p>
+                    <p class="text-white font-mono text-lg">Every Hour</p>
+                    <p class="text-[10px] text-gray-500">AI re-evaluates candidates</p>
+                </div>
+                <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
+                    <p class="text-gray-400 text-[10px] uppercase mb-1">Holder Bonus</p>
+                    <p class="text-green-400 font-mono text-lg">10% of Pool</p>
+                    <p class="text-[10px] text-gray-500">Distributed proportionally</p>
+                </div>
+            </div>
+
+            <!-- Current Selection -->
+            <div id="koth-modal-current" class="bg-fuchsia-900/20 p-4 rounded border border-fuchsia-700/30">
+                <p class="text-fuchsia-400 text-xs uppercase mb-2 font-bold">Current Selection</p>
+                <div class="flex items-center gap-4">
+                    <img id="koth-modal-img" src="" class="w-12 h-12 rounded border border-fuchsia-500 object-cover hidden">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-2">
+                            <span id="koth-modal-ticker" class="text-xl text-white font-bold font-mono">Loading...</span>
+                            <span id="koth-modal-score-badge" class="text-xs bg-cyan-600 text-white px-2 py-0.5 rounded font-mono hidden">--/100</span>
+                        </div>
+                        <p id="koth-modal-reasoning" class="text-[11px] text-gray-400 mt-1">Fetching AI reasoning...</p>
+                    </div>
+                </div>
+                <div id="koth-modal-candidates" class="mt-3 pt-3 border-t border-fuchsia-800/30 hidden">
+                    <p class="text-[10px] text-fuchsia-400/60 uppercase mb-2">Top Candidates</p>
+                    <div id="koth-modal-candidates-list" class="flex flex-wrap gap-2"></div>
+                </div>
+            </div>
+
+            <!-- How to become KOTH -->
+            <div class="bg-green-900/20 p-3 rounded border border-green-700/30">
+                <p class="text-green-400 text-xs uppercase mb-1 font-bold">How to Become King</p>
+                <p class="text-[11px] text-gray-400">Build a healthy token with strong trading activity, growing holder base, and sustained volume. The AI rewards genuine engagement over short-term pumps.</p>
             </div>
         </div>
     </div>
@@ -2489,7 +2601,19 @@
         consNeed: document.getElementById('cons-need'),
         consHave: document.getElementById('cons-have'),
         consMissing: document.getElementById('cons-missing'),
-        mainAboutModal: document.getElementById('main-about-modal')
+        mainAboutModal: document.getElementById('main-about-modal'),
+        // v25.39: KOTH info modal and elements
+        kothInfoModal: document.getElementById('koth-info-modal'),
+        kothModalImg: document.getElementById('koth-modal-img'),
+        kothModalTicker: document.getElementById('koth-modal-ticker'),
+        kothModalScoreBadge: document.getElementById('koth-modal-score-badge'),
+        kothModalReasoning: document.getElementById('koth-modal-reasoning'),
+        kothModalCandidates: document.getElementById('koth-modal-candidates'),
+        kothModalCandidatesList: document.getElementById('koth-modal-candidates-list'),
+        kothModelBadge: document.getElementById('koth-model-badge'),
+        kothEvaluatedAt: document.getElementById('koth-evaluated-at'),
+        kothRunnerUp: document.getElementById('koth-runner-up'),
+        kothRunnerUpTicker: document.getElementById('koth-runner-up-ticker')
     };
 
     lucide.createIcons();
@@ -2873,6 +2997,7 @@
     };
 
     // v25.38: Updated to show AI selection reasoning
+    // v25.39: Added model badge, evaluated-at, runner-up display, and modal caching
     const updateKOTH = async () => {
         try {
             const res = await fetch(`${BACKEND_URL}/api/koth`);
@@ -2894,18 +3019,55 @@
                         ui.kothImg.classList.remove('hidden');
                     }
 
+                    // v25.39: Cache KOTH data for modal display
+                    cachedKothData = {
+                        ticker: data.token.ticker,
+                        name: data.token.name,
+                        image: data.token.image,
+                        marketCap: data.token.marketCap,
+                        score: data.ai?.score,
+                        reasoning: data.ai?.reasoning,
+                        runnerUp: data.ai?.runnerUp,
+                        runnerUpReason: data.ai?.runnerUpReason,
+                        isAI: data.ai?.isAI,
+                        model: data.ai?.model,
+                        evaluatedAt: data.ai?.evaluatedAt || new Date().toISOString()
+                    };
+
                     // v25.38: Display AI/smart selection info
                     if (data.ai && ui.kothScore) {
                         ui.kothScore.innerText = data.ai.score ? `${data.ai.score.toFixed(0)}/100` : '--';
 
-                        // Show reasoning with runner-up info if available
+                        // Show reasoning
                         if (data.ai.reasoning && ui.kothReasoning && ui.kothReasoningText) {
-                            let reasoningText = data.ai.reasoning;
-                            if (data.ai.runnerUp && data.ai.runnerUpReason) {
-                                reasoningText += ` Runner-up: ${data.ai.runnerUp} - ${data.ai.runnerUpReason}`;
-                            }
-                            ui.kothReasoningText.innerText = reasoningText;
+                            ui.kothReasoningText.innerText = data.ai.reasoning;
                             ui.kothReasoning.classList.remove('hidden');
+                        }
+
+                        // v25.39: Show model badge for AI selection
+                        if (ui.kothModelBadge) {
+                            if (data.ai.isAI && data.ai.model) {
+                                const modelName = data.ai.model.includes('haiku') ? 'HAIKU' :
+                                                  data.ai.model.includes('sonnet') ? 'SONNET' : 'AI';
+                                ui.kothModelBadge.innerText = modelName;
+                                ui.kothModelBadge.classList.remove('hidden');
+                            } else {
+                                ui.kothModelBadge.classList.add('hidden');
+                            }
+                        }
+
+                        // v25.39: Show evaluation timestamp
+                        if (ui.kothEvaluatedAt && data.ai.evaluatedAt) {
+                            const evalTime = new Date(data.ai.evaluatedAt);
+                            ui.kothEvaluatedAt.innerText = `Evaluated ${evalTime.toLocaleTimeString()}`;
+                        }
+
+                        // v25.39: Show runner-up in panel
+                        if (ui.kothRunnerUp && ui.kothRunnerUpTicker && data.ai.runnerUp) {
+                            ui.kothRunnerUpTicker.innerText = '$' + data.ai.runnerUp;
+                            ui.kothRunnerUp.classList.remove('hidden');
+                        } else if (ui.kothRunnerUp) {
+                            ui.kothRunnerUp.classList.add('hidden');
                         }
 
                         if (ui.kothSubtitle) {
@@ -2921,10 +3083,17 @@
                         if (ui.kothReasoning) {
                             ui.kothReasoning.classList.add('hidden');
                         }
+                        if (ui.kothModelBadge) {
+                            ui.kothModelBadge.classList.add('hidden');
+                        }
+                        if (ui.kothRunnerUp) {
+                            ui.kothRunnerUp.classList.add('hidden');
+                        }
                     }
                 } else {
                     const panel = document.getElementById('koth-panel');
                     if (panel) panel.classList.add('hidden');
+                    cachedKothData = null;
                 }
             }
         } catch (e) {
@@ -3462,6 +3631,53 @@
     window.toggleMainAboutModal = toggleMainAboutModal;
     const closeMainAboutModal = () => { ui.mainAboutModal.style.display = 'none'; };
     window.closeMainAboutModal = closeMainAboutModal;
+
+    // v25.39: KOTH Info Modal - AI selection explanation
+    const toggleKothInfoModal = () => {
+        ui.kothInfoModal.style.display = 'block';
+        lucide.createIcons();
+        // Populate modal with current KOTH data
+        populateKothModal();
+    };
+    window.toggleKothInfoModal = toggleKothInfoModal;
+    const closeKothInfoModal = () => { ui.kothInfoModal.style.display = 'none'; };
+    window.closeKothInfoModal = closeKothInfoModal;
+
+    // v25.39: Populate KOTH modal with current selection data
+    let cachedKothData = null;
+    const populateKothModal = () => {
+        if (!cachedKothData) {
+            ui.kothModalTicker.textContent = 'No KOTH selected';
+            ui.kothModalReasoning.textContent = 'Waiting for AI evaluation...';
+            ui.kothModalImg.classList.add('hidden');
+            ui.kothModalScoreBadge.classList.add('hidden');
+            return;
+        }
+
+        const k = cachedKothData;
+
+        // Token image
+        if (k.image) {
+            ui.kothModalImg.src = resolveTokenImage(k.image);
+            ui.kothModalImg.classList.remove('hidden');
+        } else {
+            ui.kothModalImg.classList.add('hidden');
+        }
+
+        // Ticker
+        ui.kothModalTicker.textContent = k.ticker || 'Unknown';
+
+        // AI confidence score
+        if (k.score) {
+            ui.kothModalScoreBadge.textContent = `${k.score}/100`;
+            ui.kothModalScoreBadge.classList.remove('hidden');
+        } else {
+            ui.kothModalScoreBadge.classList.add('hidden');
+        }
+
+        // AI reasoning
+        ui.kothModalReasoning.textContent = k.reasoning || 'Selected based on token metrics.';
+    };
 
     // v18.0: User Holdings Modal - shows each token, eligibility, and points
     const toggleUserHoldingsModal = async () => {

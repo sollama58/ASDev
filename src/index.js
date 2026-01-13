@@ -31,7 +31,7 @@ const path = require('path');
 // Internal imports
 const config = require('./config/env');
 const { WALLETS } = require('./config/constants');
-const { logger, database, redis, twitter, solana, websocket } = require('./services');
+const { logger, database, redis, twitter, solana, websocket, claudeKoth } = require('./services');
 const routes = require('./routes');
 const tasks = require('./tasks');
 
@@ -98,6 +98,13 @@ async function main() {
         logger.error('FATAL: Redis initialization failed - BullMQ job queues require Redis');
         logger.error('Check REDIS_URL environment variable and Redis server availability');
         process.exit(1);
+    }
+
+    // v25.40: Initialize Claude KOTH with Redis client for log storage
+    const redisConnection = redis.getConnection();
+    if (redisConnection) {
+        claudeKoth.setRedisClient(redisConnection);
+        logger.info('[ClaudeKOTH] Redis client initialized for evaluation logging');
     }
 
     // v13.0: Initialize PostgreSQL database

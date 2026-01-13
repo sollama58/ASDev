@@ -28,7 +28,7 @@ const bs58 = require('bs58');
 // Internal imports
 const config = require('./config/env');
 const { WALLETS } = require('./config/constants');
-const { logger, database, redis, twitter, solana } = require('./services');
+const { logger, database, redis, twitter, solana, claudeKoth } = require('./services');
 const tasks = require('./tasks');
 
 // Check if running in worker mode
@@ -116,6 +116,13 @@ async function startWorker() {
         logger.error('FATAL: Redis initialization failed - BullMQ job queues require Redis');
         logger.error('Check REDIS_URL environment variable and Redis server availability');
         process.exit(1);
+    }
+
+    // v25.40: Initialize Claude KOTH with Redis client for log storage
+    const redisConnection = redis.getConnection();
+    if (redisConnection) {
+        claudeKoth.setRedisClient(redisConnection);
+        logger.info('[ClaudeKOTH] Redis client initialized for evaluation logging');
     }
 
     // Initialize PostgreSQL database

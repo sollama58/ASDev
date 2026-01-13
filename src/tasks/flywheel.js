@@ -11,6 +11,7 @@
  * v25.23 - AMM fee monitoring with alerts, optimized batch size (25 transfers)
  * v25.37 - Fixed error handling: RPC errors no longer incorrectly deactivate tokens
  * v25.38 - AI-based KOTH selection (volume, holders, age, consistency) evaluated hourly
+ * v25.39 - Fresh data guarantee: Holder scanner runs before each airdrop distribution
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -29,6 +30,9 @@ const airdropMutex = mutex.getMutex('flywheel_airdrop');
 
 // Import Robinhood scanner for fee claiming
 const robinhoodScanner = require('./robinhoodScanner');
+
+// v25.39: Import holder scanner to refresh data before airdrop
+const holderScanner = require('./holderScanner');
 
 // v25.21: Cache for fee_sharing_config accounts to reduce RPC calls
 // Key: creatorPubkey string, Value: { config, timestamp }
@@ -57,6 +61,18 @@ let lastKothEvaluation = 0;
 let currentKothMint = null;
 let currentKothScore = 0;
 let currentKothReasoning = '';
+
+/**
+ * v25.40: Reset the KOTH evaluation cache
+ * Called by admin endpoints to force a fresh evaluation
+ */
+function resetKothCache() {
+    lastKothEvaluation = 0;
+    currentKothMint = null;
+    currentKothScore = 0;
+    currentKothReasoning = '';
+    logger.info('[KOTH] Evaluation cache reset - next call will re-evaluate');
+}
 
 /**
  * v25.38: Smart KOTH Scoring Algorithm
@@ -768,6 +784,17 @@ async function processAirdrop(deps) {
         }
 
         logger.info(`SOL AIRDROP TRIGGERED: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available for distribution`);
+
+        // v25.39: Refresh holder data BEFORE distribution to ensure fresh points
+        // This is critical - without fresh data, users who bought/sold recently won't have accurate points
+        logger.info('[Airdrop] Refreshing holder data and points before distribution...');
+        try {
+            await holderScanner.updateGlobalState(deps);
+            logger.info('[Airdrop] Holder data refreshed successfully');
+        } catch (holderError) {
+            // Log but don't abort - proceed with last known data
+            logger.warn('[Airdrop] Holder refresh failed, using cached data', { error: holderError.message });
+        }
 
         // v23.0: Refresh fee share BPS for all Robinhood tokens before calculating points
         // This ensures points reflect current on-chain reward percentages
@@ -1546,4 +1573,4 @@ async function start(deps) {
     setTimeout(() => processAirdrop(deps), 10000);
 }
 
-module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, refreshAllFeeShares, start };
+module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, refreshAllFeeShares, start, getAiSelectedKoth, resetKothCache };

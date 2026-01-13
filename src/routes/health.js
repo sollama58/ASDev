@@ -9,7 +9,7 @@ const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS } = require('../config/constants');
-const { pump, logger, imageUtils, circuitBreaker, redis } = require('../services');
+const { pump, logger, imageUtils, circuitBreaker, redis, claudeKoth } = require('../services');
 
 const router = express.Router();
 
@@ -902,6 +902,158 @@ function init(deps) {
         } catch (e) {
             logger.error('[Admin] Point reset error', { error: e.message });
             res.status(500).json({ error: 'Failed to reset points', details: e.message });
+        }
+    });
+
+    // ===== KOTH AI ADMIN ENDPOINTS (v25.40) =====
+
+    /**
+     * GET /admin/koth-logs
+     * v25.40: Get AI KOTH evaluation logs for debugging
+     */
+    router.get('/admin/koth-logs', adminAuth, async (req, res) => {
+        try {
+            const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+            const logs = await claudeKoth.getEvaluationLogs(limit);
+            const status = claudeKoth.getStatus();
+            const current = await claudeKoth.getCurrentKoth();
+
+            res.json({
+                success: true,
+                status,
+                current: current ? {
+                    ticker: current.token?.ticker,
+                    mint: current.token?.mint,
+                    confidence: current.score,
+                    reasoning: current.reasoning,
+                    runnerUp: current.runnerUp,
+                    model: current.model,
+                    updatedAt: current.updatedAt,
+                    updatedAtISO: current.updatedAtISO
+                } : null,
+                logs,
+                logCount: logs.length,
+                timestamp: new Date().toISOString()
+            });
+        } catch (e) {
+            logger.error('[Admin] KOTH logs error', { error: e.message });
+            res.status(500).json({ error: 'Failed to retrieve KOTH logs' });
+        }
+    });
+
+    /**
+     * GET /admin/koth-status
+     * v25.40: Get current KOTH AI status and configuration
+     */
+    router.get('/admin/koth-status', adminAuth, async (req, res) => {
+        try {
+            const status = claudeKoth.getStatus();
+            const current = await claudeKoth.getCurrentKoth();
+
+            // Get recent success/error counts from logs
+            const recentLogs = await claudeKoth.getEvaluationLogs(20);
+            const successCount = recentLogs.filter(l => l.type === 'SELECTION_SUCCESS').length;
+            const errorCount = recentLogs.filter(l => l.type === 'API_ERROR' || l.type === 'PARSE_ERROR' || l.type === 'ERROR').length;
+            const fallbackCount = recentLogs.filter(l => l.type === 'FALLBACK_TO_ALGORITHM' || l.type === 'LAST_RESORT_SELECTION').length;
+
+            res.json({
+                success: true,
+                status,
+                current: current ? {
+                    ticker: current.token?.ticker,
+                    mint: current.token?.mint,
+                    confidence: current.score,
+                    reasoning: current.reasoning,
+                    model: current.model,
+                    isAI: current.isAI,
+                    updatedAt: current.updatedAt,
+                    updatedAtISO: current.updatedAtISO,
+                    ageMinutes: current.updatedAt ? Math.round((Date.now() - current.updatedAt) / 60000) : null
+                } : null,
+                recentActivity: {
+                    total: recentLogs.length,
+                    successes: successCount,
+                    errors: errorCount,
+                    fallbacks: fallbackCount
+                },
+                timestamp: new Date().toISOString()
+            });
+        } catch (e) {
+            logger.error('[Admin] KOTH status error', { error: e.message });
+            res.status(500).json({ error: 'Failed to get KOTH status' });
+        }
+    });
+
+    /**
+     * POST /admin/trigger-koth-refresh
+     * v25.40: Force a new KOTH AI evaluation (clears cache and triggers refresh)
+     */
+    router.post('/admin/trigger-koth-refresh', adminAuth, async (req, res) => {
+        try {
+            logger.info('[Admin] Triggering manual KOTH AI refresh...');
+
+            const flywheel = require('../tasks/flywheel');
+
+            // Clear both caches - Redis (ClaudeKOTH) and in-memory (Flywheel)
+            const redisCacheCleared = await claudeKoth.clearCurrentKoth();
+            flywheel.resetKothCache();
+
+            // Log the manual trigger
+            await claudeKoth.logEvaluation({
+                type: 'ADMIN_REFRESH_TRIGGERED',
+                triggeredBy: 'admin',
+                redisCacheCleared,
+                flywheelCacheReset: true
+            });
+
+            // Trigger a new KOTH selection via the flywheel
+            // Run async - don't wait for completion
+            flywheel.getAiSelectedKoth(db).then(result => {
+                logger.info('[Admin] Manual KOTH refresh completed', {
+                    selectedTicker: result?.token?.ticker,
+                    isAI: result?.isAI
+                });
+            }).catch(e => {
+                logger.error('[Admin] Manual KOTH refresh failed', { error: e.message });
+            });
+
+            res.json({
+                success: true,
+                message: 'KOTH refresh triggered. Both caches cleared and new evaluation started.',
+                redisCacheCleared,
+                flywheelCacheReset: true,
+                note: 'Check /admin/koth-status in a few seconds for results.'
+            });
+
+        } catch (e) {
+            logger.error('[Admin] KOTH refresh error', { error: e.message });
+            res.status(500).json({ error: 'Failed to trigger KOTH refresh' });
+        }
+    });
+
+    /**
+     * POST /admin/clear-koth-cache
+     * v25.40: Clear the KOTH cache without triggering a new evaluation
+     */
+    router.post('/admin/clear-koth-cache', adminAuth, async (req, res) => {
+        try {
+            const cleared = await claudeKoth.clearCurrentKoth();
+
+            await claudeKoth.logEvaluation({
+                type: 'ADMIN_CACHE_CLEARED',
+                triggeredBy: 'admin'
+            });
+
+            logger.info('[Admin] KOTH cache cleared manually');
+
+            res.json({
+                success: true,
+                cleared,
+                message: cleared ? 'KOTH cache cleared successfully' : 'Cache was already empty or clear failed'
+            });
+        } catch (e) {
+            logger.error('[Admin] Clear KOTH cache error', { error: e.message });
+            res.status(500).json({ error: 'Failed to clear KOTH cache' });
         }
     });
 
