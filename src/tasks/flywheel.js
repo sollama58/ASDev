@@ -9,6 +9,7 @@
  * v23.0 - Refresh fee share BPS before airdrop to handle dynamic reward distribution changes
  * v25.4 - Fixed next check time countdown to update after fee collection
  * v25.23 - AMM fee monitoring with alerts, optimized batch size (25 transfers)
+ * v25.37 - Fixed error handling: RPC errors no longer incorrectly deactivate tokens
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -354,12 +355,13 @@ async function refreshAllFeeShares(deps) {
         const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 500');
 
         if (tokens.length === 0) {
-            return { total: 0, updated: 0, deactivated: 0 };
+            return { total: 0, updated: 0, deactivated: 0, errors: 0 };
         }
 
         const platformWallet = devKeypair.publicKey.toString();
         let updated = 0;
         let deactivated = 0;
+        let errors = 0;
 
         for (const token of tokens) {
             try {
@@ -368,6 +370,14 @@ async function refreshAllFeeShares(deps) {
                     platformWallet,
                     connection
                 );
+
+                // v25.37: Check for error flag - don't deactivate on RPC errors
+                // This prevents incorrectly removing tokens due to network issues
+                if (verification.error) {
+                    errors++;
+                    logger.warn(`[FeeShareRefresh] ${token.ticker} (${token.mint.slice(0, 8)}...) - Verification error, keeping current state: ${verification.error}`);
+                    continue;
+                }
 
                 if (!verification.isRecipient) {
                     // No longer a fee recipient - deactivate
@@ -391,18 +401,20 @@ async function refreshAllFeeShares(deps) {
                 await new Promise(r => setTimeout(r, 50));
 
             } catch (e) {
-                logger.debug(`[FeeShareRefresh] Error for ${token.mint}`, { error: e.message });
+                // v25.37: Count errors but don't deactivate - could be temporary issue
+                errors++;
+                logger.warn(`[FeeShareRefresh] Error for ${token.ticker} (${token.mint.slice(0, 8)}...): ${e.message}`);
             }
         }
 
-        if (updated > 0 || deactivated > 0) {
-            logger.info(`[FeeShareRefresh] Complete: ${updated} updated, ${deactivated} deactivated out of ${tokens.length} tokens`);
+        if (updated > 0 || deactivated > 0 || errors > 0) {
+            logger.info(`[FeeShareRefresh] Complete: ${updated} updated, ${deactivated} deactivated, ${errors} errors out of ${tokens.length} tokens`);
         }
 
-        return { total: tokens.length, updated, deactivated };
+        return { total: tokens.length, updated, deactivated, errors };
     } catch (e) {
         logger.error('[FeeShareRefresh] Error', { error: e.message });
-        return { total: 0, updated: 0, deactivated: 0, error: e.message };
+        return { total: 0, updated: 0, deactivated: 0, errors: 1, error: e.message };
     }
 }
 

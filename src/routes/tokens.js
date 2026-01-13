@@ -7,6 +7,7 @@
  * v18.0 - Changed from top 10 to volume threshold eligibility
  * v24.0 - Added rate limiting for token registration, input sanitization
  * v25.22 - SECURITY: Added signature verification for token registration
+ * v25.36 - User holdings now uses supply-based point calculation (1B total supply)
  */
 const express = require('express');
 const axios = require('axios');
@@ -25,6 +26,10 @@ const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
 // v25.25: Volume weight range for point calculation (must match holderScanner.js)
 const VOLUME_WEIGHT_MIN = 0.5;  // Lowest volume token gets 0.5x base points
 const VOLUME_WEIGHT_MAX = 2.0;  // Highest volume token gets 2.0x base points
+
+// v25.36: Pump.fun standard total supply (1 billion tokens with 6 decimals)
+// All pump.fun tokens have fixed 1B supply - use this for accurate % of supply calculation
+const PUMP_FUN_TOTAL_SUPPLY = BigInt('1000000000000000'); // 1B tokens * 10^6 decimals
 
 /**
  * v25.25: Calculate dynamic volume weight for a token
@@ -544,6 +549,7 @@ function init(deps) {
                 const platformMaxVol = parseFloat(platformVolumeRange?.max_vol) || MIN_VOLUME_USD;
 
                 // v24.0: Single optimized query with JOINs for launched tokens
+                // v25.36: Removed total_balance subquery - no longer needed (using fixed 1B supply)
                 const launchedHoldings = await db.all(`
                     SELECT
                         t.mint,
@@ -554,31 +560,23 @@ function init(deps) {
                         t.volume24h,
                         t."marketCap",
                         th.balance,
-                        th.rank,
-                        totals.total_balance
+                        th.rank
                     FROM token_holders th
                     INNER JOIN tokens t ON t.mint = th.mint
-                    INNER JOIN (
-                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
-                        FROM token_holders
-                        GROUP BY mint
-                    ) totals ON totals.mint = th.mint
                     WHERE th."holderPubkey" = $1 AND CAST(th.balance AS BIGINT) > 0
                     ORDER BY t.volume24h DESC
                 `, [userPubkey]);
 
                 for (const row of launchedHoldings) {
-                    const totalBalance = safeTotalBalance(row.total_balance);
                     const userBalance = safeBalance(row.balance);
                     if (userBalance === 0n) continue;
-                    if (totalBalance <= 1n && userBalance > 1n) continue;
 
                     const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
                     const volumeWeight = calculateVolumeWeight(tokenVolume, platformMinVol, platformMaxVol);
                     const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
-                    const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
+                    // v25.36: Calculate points based on % of TOTAL SUPPLY (1B tokens), not tracked holders
+                    const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
-                    const sanitizedPts = Math.min(proportionalPts, weightedPoints);
 
                     holdings.push({
                         mint: row.mint,
@@ -590,8 +588,8 @@ function init(deps) {
                         rank: row.rank,
                         isEligible,
                         volumeWeight: Math.round(volumeWeight * 100) / 100,
-                        basePoints: isEligible ? Math.round(sanitizedPts * 100) / 100 : 0,
-                        totalPoints: isEligible ? Math.round(sanitizedPts * 100) / 100 : 0,
+                        basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
+                        totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
                         source: 'launched'
                     });
                 }
@@ -605,6 +603,7 @@ function init(deps) {
                 const rhMaxVol = parseFloat(robinhoodVolumeRange?.max_vol) || MIN_VOLUME_USD;
 
                 // v24.0: Single optimized query with JOINs for Robinhood tokens
+                // v25.36: Removed total_balance subquery - no longer needed (using fixed 1B supply)
                 const robinhoodHoldings = await db.all(`
                     SELECT
                         rt.mint,
@@ -615,33 +614,25 @@ function init(deps) {
                         rt.volume24h,
                         rt."marketCap",
                         rth.balance,
-                        rth.rank,
-                        totals.total_balance
+                        rth.rank
                     FROM robinhood_token_holders rth
                     INNER JOIN robinhood_tokens rt ON rt.mint = rth.mint AND rt."isActive" = 1
-                    INNER JOIN (
-                        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance
-                        FROM robinhood_token_holders
-                        GROUP BY mint
-                    ) totals ON totals.mint = rth.mint
                     WHERE rth."holderPubkey" = $1 AND CAST(rth.balance AS BIGINT) > 0
                     ORDER BY rt.volume24h DESC
                 `, [userPubkey]);
 
                 for (const row of robinhoodHoldings) {
-                    const totalBalance = safeTotalBalance(row.total_balance);
                     const userBalance = safeBalance(row.balance);
                     if (userBalance === 0n) continue;
-                    if (totalBalance <= 1n && userBalance > 1n) continue;
 
                     const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
                     const volumeWeight = calculateVolumeWeight(tokenVolume, rhMinVol, rhMaxVol);
                     const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
-                    const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / totalBalance) / 1000;
+                    // v25.36: Calculate points based on % of TOTAL SUPPLY (1B tokens), not tracked holders
+                    const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
                     const feeShareBps = row.feeShareBps || 10000;
                     const feeShareMultiplier = feeShareBps / 10000;
-                    const sanitizedBasePts = Math.min(baseProportionalPts, weightedPoints);
-                    const scaledPts = sanitizedBasePts * feeShareMultiplier;
+                    const scaledPts = baseProportionalPts * feeShareMultiplier;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
 
                     holdings.push({

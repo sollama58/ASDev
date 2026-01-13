@@ -7,6 +7,7 @@
  * - AMM/Pool transactions (post-graduation)
  *
  * v14.0 - Centralized mint extraction for all scanners
+ * v25.37 - verifyFeeRecipient now returns error flag to prevent incorrect deactivations on RPC errors
  */
 const axios = require('axios');
 const { PublicKey } = require('@solana/web3.js');
@@ -1098,8 +1099,10 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
         return { isRecipient: false, source: null, feeShareBps: 0, feeSharePercent: 0 };
 
     } catch (e) {
+        // v25.37: Return error flag instead of isRecipient: false
+        // This prevents incorrectly deactivating tokens due to RPC errors
         logger.warn(`[MintExtractor] Fee recipient verification failed for ${mint}`, { error: e.message });
-        return { isRecipient: false, source: null, feeShareBps: 0, feeSharePercent: 0 };
+        return { isRecipient: false, source: null, feeShareBps: 0, feeSharePercent: 0, error: e.message };
     }
 }
 
