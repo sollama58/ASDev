@@ -56,7 +56,7 @@ const KOTH_BATCH_SIZE = 25; // Increased from 21 for consistency
 
 // v25.38: AI-based KOTH selection system
 // Evaluates tokens on multiple metrics instead of just market cap
-const KOTH_EVALUATION_INTERVAL_MS = 60 * 60 * 1000; // Hourly evaluation
+const KOTH_EVALUATION_INTERVAL_MS = 30 * 60 * 1000; // v25.41: Every 30 minutes (reduced from hourly)
 let lastKothEvaluation = 0;
 let currentKothMint = null;
 let currentKothScore = 0;

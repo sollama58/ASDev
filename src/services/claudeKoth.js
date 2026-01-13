@@ -442,19 +442,15 @@ Avoid pump-and-dumps (new tokens with suspicious metrics). Respond with JSON onl
  * @returns {Object} Selection result
  */
 async function getKothWithFallback(db, algorithmFallback) {
-    const KOTH_MIN_HOLDERS = 10;
-    const KOTH_MIN_MARKET_CAP = 1000;
-    const KOTH_MIN_VOLUME = 100;
+    // v25.41: Simplified - only consider top 10 leaderboard tokens (by 24hr volume)
+    // This reduces API calls and ensures KOTH is always a visible, active token
 
     logger.debug('[ClaudeKOTH] Starting KOTH selection with fallback', {
-        aiEnabled: isEnabled(),
-        minHolders: KOTH_MIN_HOLDERS,
-        minMarketCap: KOTH_MIN_MARKET_CAP,
-        minVolume: KOTH_MIN_VOLUME
+        aiEnabled: isEnabled()
     });
 
     try {
-        // Get eligible candidates (same query as algorithm)
+        // Get top 10 tokens by 24hr volume (matches leaderboard display)
         const queryStart = Date.now();
         let candidates = await db.all(`
             SELECT
@@ -465,16 +461,12 @@ async function getKothWithFallback(db, algorithmFallback) {
                 t.volume24h,
                 t."holderCount",
                 t.timestamp,
-                COUNT(th."holderPubkey") as actualHolders
+                COALESCE((SELECT COUNT(*) FROM token_holders th WHERE th.mint = t.mint), 0) as actualHolders
             FROM tokens t
-            LEFT JOIN token_holders th ON th.mint = t.mint
-            WHERE t."marketCap" >= $1
-            AND t.volume24h >= $2
-            GROUP BY t.mint, t.ticker, t.name, t."marketCap", t.volume24h, t."holderCount", t.timestamp
-            HAVING COUNT(th."holderPubkey") >= $3
-            ORDER BY t."marketCap" DESC
-            LIMIT 20
-        `, [KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME, KOTH_MIN_HOLDERS]);
+            WHERE t.volume24h > 0
+            ORDER BY t.volume24h DESC
+            LIMIT 10
+        `);
         const queryDuration = Date.now() - queryStart;
 
         logger.debug('[ClaudeKOTH] Candidate query completed', {
@@ -486,60 +478,16 @@ async function getKothWithFallback(db, algorithmFallback) {
             type: 'CANDIDATE_QUERY',
             candidateCount: candidates.length,
             queryDurationMs: queryDuration,
-            criteria: {
-                minHolders: KOTH_MIN_HOLDERS,
-                minMarketCap: KOTH_MIN_MARKET_CAP,
-                minVolume: KOTH_MIN_VOLUME
-            }
+            message: 'Top 10 tokens by 24hr volume'
         });
 
         if (candidates.length === 0) {
-            logger.info('[ClaudeKOTH] No candidates meet strict requirements, falling back to top 10 by volume');
+            logger.warn('[ClaudeKOTH] No candidates found - no tokens with volume');
             await logEvaluation({
-                type: 'NO_ELIGIBLE_CANDIDATES',
-                message: 'No tokens meet minimum requirements, trying volume fallback'
+                type: 'NO_CANDIDATES_AT_ALL',
+                message: 'No tokens with any volume found'
             });
-
-            // Fallback: Get top 10 tokens by 24hr volume regardless of other criteria
-            const fallbackQueryStart = Date.now();
-            candidates = await db.all(`
-                SELECT
-                    t.mint,
-                    t.ticker,
-                    t.name,
-                    t."marketCap",
-                    t.volume24h,
-                    t."holderCount",
-                    t.timestamp,
-                    COALESCE((SELECT COUNT(*) FROM token_holders th WHERE th.mint = t.mint), 0) as actualHolders
-                FROM tokens t
-                WHERE t.volume24h > 0
-                ORDER BY t.volume24h DESC
-                LIMIT 10
-            `);
-            const fallbackQueryDuration = Date.now() - fallbackQueryStart;
-
-            logger.info('[ClaudeKOTH] Volume fallback query completed', {
-                candidateCount: candidates.length,
-                queryDurationMs: fallbackQueryDuration
-            });
-
-            await logEvaluation({
-                type: 'VOLUME_FALLBACK_QUERY',
-                candidateCount: candidates.length,
-                queryDurationMs: fallbackQueryDuration,
-                message: 'Using top 10 tokens by volume as candidates'
-            });
-
-            // If still no candidates, return null
-            if (candidates.length === 0) {
-                logger.warn('[ClaudeKOTH] No candidates found even with volume fallback');
-                await logEvaluation({
-                    type: 'NO_CANDIDATES_AT_ALL',
-                    message: 'No tokens with any volume found'
-                });
-                return { token: null, score: 0, reasoning: 'No tokens with trading volume found' };
-            }
+            return { token: null, score: 0, reasoning: 'No tokens with trading volume found' };
         }
 
         // Try Claude first if enabled
