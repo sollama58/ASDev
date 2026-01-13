@@ -1188,7 +1188,7 @@ function init(deps) {
 
             // Check the tokens table (IGNITION-launched tokens)
             const ignitionToken = await db.get(`
-                SELECT mint, ticker, name, image, metadataUri, "userPubkey", "marketCap", volume24h, timestamp
+                SELECT mint, ticker, name, image, "metadataUri", "userPubkey", "marketCap", volume24h, timestamp
                 FROM tokens WHERE mint = $1
             `, [mint]);
 
@@ -1225,25 +1225,12 @@ function init(deps) {
 
             // Check the robinhood_tokens table (fee-sharing partner tokens)
             const robinhoodToken = await db.get(`
-                SELECT mint, ticker, name, image, metadataUri, "originalCreator", "feeShareBps", "marketCap", volume24h, "isActive", timestamp
+                SELECT mint, ticker, name, image, "creatorPubkey", "feeShareBps", "marketCap", volume24h, "isActive", "discoveredAt"
                 FROM robinhood_tokens WHERE mint = $1
             `, [mint]);
 
             if (robinhoodToken) {
                 // Token is a Robinhood fee-sharing partner
-                let image = robinhoodToken.image;
-
-                // Apply metadataUri fallback for missing images
-                if ((!image || image === '' || image === 'null') && robinhoodToken.metadataUri) {
-                    try {
-                        const fallbackImage = await imageUtils.fetchImageFromMetadataUri(robinhoodToken.metadataUri, 3000);
-                        if (fallbackImage) {
-                            image = fallbackImage;
-                            db.run('UPDATE robinhood_tokens SET image = $1 WHERE mint = $2', [fallbackImage, mint]).catch(() => {});
-                        }
-                    } catch (e) { /* silent fail */ }
-                }
-
                 return res.json({
                     registered: true,
                     type: 'robinhood',
@@ -1252,13 +1239,13 @@ function init(deps) {
                         mint: robinhoodToken.mint,
                         ticker: robinhoodToken.ticker,
                         name: robinhoodToken.name,
-                        image: image,
-                        originalCreator: robinhoodToken.originalCreator,
+                        image: robinhoodToken.image,
+                        creator: robinhoodToken.creatorPubkey,
                         feeShareBps: robinhoodToken.feeShareBps,
                         feeSharePercent: (robinhoodToken.feeShareBps / 100).toFixed(1),
                         marketCap: robinhoodToken.marketCap || 0,
                         volume24h: robinhoodToken.volume24h || 0,
-                        registeredAt: robinhoodToken.timestamp
+                        registeredAt: robinhoodToken.discoveredAt
                     }
                 });
             }
@@ -1271,10 +1258,11 @@ function init(deps) {
             });
 
         } catch (e) {
-            logger.error('[TokenLookup] Error', { mint: req.params.mint, error: e.message });
+            logger.error('[TokenLookup] Error', { mint: req.params.mint, error: e.message, stack: e.stack });
             res.status(500).json({
                 registered: false,
-                error: 'Database error'
+                error: 'Database error',
+                details: e.message
             });
         }
     });
