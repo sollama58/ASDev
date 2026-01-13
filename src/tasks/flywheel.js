@@ -342,20 +342,23 @@ async function getAiSelectedKoth(db) {
             lastKothEvaluation = now;
 
             // Store in Redis for API access
-            await redis.set('koth_ai_selection', JSON.stringify({
-                mint: result.token.mint,
-                ticker: result.token.ticker,
-                name: result.token.name,
-                score: result.score,
-                reasoning: result.reasoning,
-                breakdown: result.breakdown,
-                candidates: result.candidates,
-                evaluatedAt: now,
-                isAI: result.isAI || false,
-                model: result.model || null,
-                runnerUp: result.runnerUp || null,
-                runnerUpReason: result.runnerUpReason || null
-            }), 'EX', 7200); // 2 hour TTL
+            const redisConn = redis.getConnection();
+            if (redisConn) {
+                await redisConn.set('koth_ai_selection', JSON.stringify({
+                    mint: result.token.mint,
+                    ticker: result.token.ticker,
+                    name: result.token.name,
+                    score: result.score,
+                    reasoning: result.reasoning,
+                    breakdown: result.breakdown,
+                    candidates: result.candidates,
+                    evaluatedAt: now,
+                    isAI: result.isAI || false,
+                    model: result.model || null,
+                    runnerUp: result.runnerUp || null,
+                    runnerUpReason: result.runnerUpReason || null
+                }), 'EX', 7200); // 2 hour TTL
+            }
         }
 
         return result;

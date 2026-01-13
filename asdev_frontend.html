@@ -1291,31 +1291,24 @@
                 </div>
 
                 <!-- Stats Row (Mobile: inline, Desktop: separate) -->
-                <div class="flex justify-center gap-6 md:gap-4 w-full md:w-auto">
+                <div class="flex justify-center items-center gap-6 md:gap-4 w-full md:w-auto">
                     <div class="text-center">
                         <div class="text-[10px] md:text-xs text-fuchsia-500 uppercase font-mono mb-1">Market Cap</div>
                         <div id="koth-mcap" class="text-lg md:text-2xl font-bold text-white font-mono mcap-amount">$0</div>
                     </div>
                     <div class="text-center">
-                        <div class="text-[10px] md:text-xs text-cyan-500 uppercase font-mono mb-1">Score</div>
-                        <div id="koth-score" class="text-lg md:text-2xl font-bold text-cyan-400 font-mono">--</div>
+                        <button id="koth-ai-reason-btn" onclick="toggleKothReasoningModal()" class="flex flex-col items-center gap-1 p-2 rounded-lg bg-cyan-900/30 border border-cyan-600/50 hover:bg-cyan-800/40 hover:border-cyan-500 transition group" title="View AI Selection Reasoning">
+                            <div class="text-[10px] md:text-xs text-cyan-400 uppercase font-mono group-hover:text-cyan-300">AI Reasoning</div>
+                            <div class="flex items-center gap-1">
+                                <i data-lucide="sparkles" class="w-4 h-4 md:w-5 md:h-5 text-cyan-400 group-hover:text-cyan-300"></i>
+                                <span id="koth-score" class="text-sm md:text-lg font-bold text-cyan-400 font-mono group-hover:text-cyan-300">--</span>
+                            </div>
+                        </button>
                     </div>
                     <div class="text-center md:text-right">
                         <div class="text-[9px] md:text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">Holder Bonus</div>
                         <div class="text-lg md:text-xl font-bold text-green-400 font-mono">10%</div>
                     </div>
-                </div>
-            </div>
-            <!-- Selection Reasoning -->
-            <div id="koth-reasoning" class="mt-3 pt-3 border-t border-fuchsia-900/50 hidden">
-                <div class="flex items-center justify-center gap-2 mb-2">
-                    <span id="koth-model-badge" class="text-[9px] bg-cyan-900/50 text-cyan-400 px-2 py-0.5 rounded font-mono hidden">AI</span>
-                    <span id="koth-evaluated-at" class="text-[9px] text-fuchsia-400/60 font-mono"></span>
-                </div>
-                <p id="koth-reasoning-text" class="text-[10px] md:text-xs text-fuchsia-200/70 font-mono text-center"></p>
-                <div id="koth-runner-up" class="mt-2 text-center hidden">
-                    <span class="text-[9px] text-fuchsia-400/50 font-mono">Runner-up: </span>
-                    <span id="koth-runner-up-ticker" class="text-[9px] text-fuchsia-300 font-mono font-bold"></span>
                 </div>
             </div>
         </div>
@@ -2144,8 +2137,76 @@
     </div>
 </div>
 
+<!-- v25.41: KOTH AI Reasoning Modal - Shows Claude's selection explanation -->
+<div id="koth-reasoning-modal" class="modal">
+    <div class="modal-content border-cyan-600" style="max-width: 500px;">
+        <span class="close-btn text-cyan-400" onclick="closeKothReasoningModal()">&times;</span>
+        <h3 class="text-cyan-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-cyan-800/50 pb-2 font-normal flex items-center gap-2">
+            <i data-lucide="sparkles" class="w-5 h-5"></i> AI Selection Reasoning
+        </h3>
+
+        <div class="font-sans text-sm space-y-4">
+            <!-- Current KOTH Token -->
+            <div id="koth-reason-token" class="bg-fuchsia-900/30 p-4 rounded border border-fuchsia-700/50">
+                <div class="flex items-center gap-4">
+                    <img id="koth-reason-img" src="" class="w-14 h-14 rounded border border-fuchsia-500 object-cover hidden">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span id="koth-reason-ticker" class="text-2xl text-white font-bold font-mono">$????</span>
+                            <span id="koth-reason-score-badge" class="text-xs bg-cyan-600 text-white px-2 py-0.5 rounded font-mono hidden">--/100</span>
+                            <span id="koth-reason-model-badge" class="text-[9px] bg-cyan-900/50 text-cyan-400 px-2 py-0.5 rounded font-mono hidden">CLAUDE</span>
+                        </div>
+                        <p id="koth-reason-name" class="text-xs text-fuchsia-400 font-mono mt-1">Loading...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AI Reasoning -->
+            <div class="bg-cyan-900/20 p-4 rounded border border-cyan-700/50">
+                <p class="text-cyan-400 text-xs uppercase mb-2 font-bold flex items-center gap-2">
+                    <i data-lucide="brain" class="w-4 h-4"></i> Claude's Analysis
+                </p>
+                <p id="koth-reason-text" class="text-gray-300 text-sm leading-relaxed">Waiting for AI evaluation...</p>
+            </div>
+
+            <!-- Metrics Summary -->
+            <div id="koth-reason-metrics" class="grid grid-cols-3 gap-3 hidden">
+                <div class="bg-gray-800/50 p-3 rounded border border-gray-700 text-center">
+                    <p class="text-gray-400 text-[10px] uppercase mb-1">Market Cap</p>
+                    <p id="koth-reason-mcap" class="text-white font-mono text-sm font-bold">$0</p>
+                </div>
+                <div class="bg-gray-800/50 p-3 rounded border border-gray-700 text-center">
+                    <p class="text-gray-400 text-[10px] uppercase mb-1">24h Volume</p>
+                    <p id="koth-reason-volume" class="text-white font-mono text-sm font-bold">$0</p>
+                </div>
+                <div class="bg-gray-800/50 p-3 rounded border border-gray-700 text-center">
+                    <p class="text-gray-400 text-[10px] uppercase mb-1">Holders</p>
+                    <p id="koth-reason-holders" class="text-white font-mono text-sm font-bold">0</p>
+                </div>
+            </div>
+
+            <!-- Runner-up -->
+            <div id="koth-reason-runnerup" class="bg-gray-800/30 p-3 rounded border border-gray-700/50 hidden">
+                <p class="text-gray-400 text-[10px] uppercase mb-1">Runner-up</p>
+                <div class="flex items-center justify-between">
+                    <span id="koth-reason-runnerup-ticker" class="text-fuchsia-300 font-mono font-bold">$???</span>
+                    <span id="koth-reason-runnerup-reason" class="text-[10px] text-gray-500"></span>
+                </div>
+            </div>
+
+            <!-- Evaluation Time -->
+            <div class="flex items-center justify-between text-[10px] text-gray-500 pt-2 border-t border-gray-800">
+                <span id="koth-reason-evaluated-at">Last evaluated: --</span>
+                <button onclick="closeKothReasoningModal(); toggleKothInfoModal();" class="text-cyan-400 hover:text-cyan-300 transition">
+                    Learn how KOTH works →
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
-    const FRONTEND_VERSION = "v25.22";
+    const FRONTEND_VERSION = "v25.41";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const WS_URL = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
     // Wallet address is fetched from backend API to ensure consistency
@@ -2593,8 +2654,6 @@
         kothImg: document.getElementById('koth-img'),
         kothHolders: document.getElementById('koth-holders'),
         kothScore: document.getElementById('koth-score'),
-        kothReasoning: document.getElementById('koth-reasoning'),
-        kothReasoningText: document.getElementById('koth-reasoning-text'),
         kothSubtitle: document.getElementById('koth-subtitle'),
         consNotice: document.getElementById('conservation-notice'),
         consUsers: document.getElementById('cons-users'),
@@ -2610,10 +2669,22 @@
         kothModalReasoning: document.getElementById('koth-modal-reasoning'),
         kothModalCandidates: document.getElementById('koth-modal-candidates'),
         kothModalCandidatesList: document.getElementById('koth-modal-candidates-list'),
-        kothModelBadge: document.getElementById('koth-model-badge'),
-        kothEvaluatedAt: document.getElementById('koth-evaluated-at'),
-        kothRunnerUp: document.getElementById('koth-runner-up'),
-        kothRunnerUpTicker: document.getElementById('koth-runner-up-ticker')
+        // v25.41: KOTH AI Reasoning modal elements
+        kothReasoningModal: document.getElementById('koth-reasoning-modal'),
+        kothReasonImg: document.getElementById('koth-reason-img'),
+        kothReasonTicker: document.getElementById('koth-reason-ticker'),
+        kothReasonName: document.getElementById('koth-reason-name'),
+        kothReasonScoreBadge: document.getElementById('koth-reason-score-badge'),
+        kothReasonModelBadge: document.getElementById('koth-reason-model-badge'),
+        kothReasonText: document.getElementById('koth-reason-text'),
+        kothReasonMetrics: document.getElementById('koth-reason-metrics'),
+        kothReasonMcap: document.getElementById('koth-reason-mcap'),
+        kothReasonVolume: document.getElementById('koth-reason-volume'),
+        kothReasonHolders: document.getElementById('koth-reason-holders'),
+        kothReasonRunnerup: document.getElementById('koth-reason-runnerup'),
+        kothReasonRunnerupTicker: document.getElementById('koth-reason-runnerup-ticker'),
+        kothReasonRunnerupReason: document.getElementById('koth-reason-runnerup-reason'),
+        kothReasonEvaluatedAt: document.getElementById('koth-reason-evaluated-at')
     };
 
     lucide.createIcons();
@@ -3019,12 +3090,14 @@
                         ui.kothImg.classList.remove('hidden');
                     }
 
-                    // v25.39: Cache KOTH data for modal display
+                    // v25.41: Cache KOTH data for modal display (including metrics for reasoning modal)
                     cachedKothData = {
                         ticker: data.token.ticker,
                         name: data.token.name,
                         image: data.token.image,
                         marketCap: data.token.marketCap,
+                        volume24h: data.token.volume24h,
+                        holders: data.token.holderCount || data.token.holders,
                         score: data.ai?.score,
                         reasoning: data.ai?.reasoning,
                         runnerUp: data.ai?.runnerUp,
@@ -3034,44 +3107,10 @@
                         evaluatedAt: data.ai?.evaluatedAt || new Date().toISOString()
                     };
 
-                    // v25.38: Display AI/smart selection info
+                    // v25.41: Update score in AI Reasoning button and subtitle
                     if (data.ai && ui.kothScore) {
-                        ui.kothScore.innerText = data.ai.score ? `${data.ai.score.toFixed(0)}/100` : '--';
-
-                        // Show reasoning
-                        if (data.ai.reasoning && ui.kothReasoning && ui.kothReasoningText) {
-                            ui.kothReasoningText.innerText = data.ai.reasoning;
-                            ui.kothReasoning.classList.remove('hidden');
-                        }
-
-                        // v25.39: Show model badge for AI selection
-                        if (ui.kothModelBadge) {
-                            if (data.ai.isAI && data.ai.model) {
-                                const modelName = data.ai.model.includes('haiku') ? 'HAIKU' :
-                                                  data.ai.model.includes('sonnet') ? 'SONNET' : 'AI';
-                                ui.kothModelBadge.innerText = modelName;
-                                ui.kothModelBadge.classList.remove('hidden');
-                            } else {
-                                ui.kothModelBadge.classList.add('hidden');
-                            }
-                        }
-
-                        // v25.39: Show evaluation timestamp
-                        if (ui.kothEvaluatedAt && data.ai.evaluatedAt) {
-                            const evalTime = new Date(data.ai.evaluatedAt);
-                            ui.kothEvaluatedAt.innerText = `Evaluated ${evalTime.toLocaleTimeString()}`;
-                        }
-
-                        // v25.39: Show runner-up in panel
-                        if (ui.kothRunnerUp && ui.kothRunnerUpTicker && data.ai.runnerUp) {
-                            ui.kothRunnerUpTicker.innerText = '$' + data.ai.runnerUp;
-                            ui.kothRunnerUp.classList.remove('hidden');
-                        } else if (ui.kothRunnerUp) {
-                            ui.kothRunnerUp.classList.add('hidden');
-                        }
-
+                        ui.kothScore.innerText = data.ai.score ? `${data.ai.score.toFixed(0)}` : '--';
                         if (ui.kothSubtitle) {
-                            // Show "AI SELECTION" for Claude, "SMART SELECTION" for algorithm
                             ui.kothSubtitle.innerText = data.ai.isAI ? 'AI SELECTION' : 'SMART SELECTION';
                         }
                     } else if (ui.kothScore) {
@@ -3079,15 +3118,6 @@
                         ui.kothScore.innerText = '--';
                         if (ui.kothSubtitle) {
                             ui.kothSubtitle.innerText = 'HIGHEST MARKET CAP';
-                        }
-                        if (ui.kothReasoning) {
-                            ui.kothReasoning.classList.add('hidden');
-                        }
-                        if (ui.kothModelBadge) {
-                            ui.kothModelBadge.classList.add('hidden');
-                        }
-                        if (ui.kothRunnerUp) {
-                            ui.kothRunnerUp.classList.add('hidden');
                         }
                     }
                 } else {
@@ -3677,6 +3707,97 @@
 
         // AI reasoning
         ui.kothModalReasoning.textContent = k.reasoning || 'Selected based on token metrics.';
+    };
+
+    // v25.41: KOTH AI Reasoning Modal - Shows Claude's detailed explanation
+    const toggleKothReasoningModal = () => {
+        ui.kothReasoningModal.style.display = 'block';
+        lucide.createIcons();
+        populateKothReasoningModal();
+    };
+    window.toggleKothReasoningModal = toggleKothReasoningModal;
+
+    const closeKothReasoningModal = () => { ui.kothReasoningModal.style.display = 'none'; };
+    window.closeKothReasoningModal = closeKothReasoningModal;
+
+    // v25.41: Populate KOTH reasoning modal with current selection data
+    const populateKothReasoningModal = () => {
+        if (!cachedKothData) {
+            ui.kothReasonTicker.textContent = '$????';
+            ui.kothReasonName.textContent = 'No KOTH selected';
+            ui.kothReasonText.textContent = 'Waiting for AI evaluation...';
+            ui.kothReasonImg.classList.add('hidden');
+            ui.kothReasonScoreBadge.classList.add('hidden');
+            ui.kothReasonModelBadge.classList.add('hidden');
+            ui.kothReasonMetrics.classList.add('hidden');
+            ui.kothReasonRunnerup.classList.add('hidden');
+            return;
+        }
+
+        const k = cachedKothData;
+
+        // Token image
+        if (k.image) {
+            ui.kothReasonImg.src = resolveTokenImage(k.image);
+            ui.kothReasonImg.classList.remove('hidden');
+        } else {
+            ui.kothReasonImg.classList.add('hidden');
+        }
+
+        // Token info
+        ui.kothReasonTicker.textContent = '$' + (k.ticker || '???');
+        ui.kothReasonName.textContent = k.name || 'Unknown Token';
+
+        // AI confidence score
+        if (k.score) {
+            ui.kothReasonScoreBadge.textContent = `${k.score}/100`;
+            ui.kothReasonScoreBadge.classList.remove('hidden');
+        } else {
+            ui.kothReasonScoreBadge.classList.add('hidden');
+        }
+
+        // Model badge
+        if (k.model) {
+            const modelName = k.model.includes('haiku') ? 'HAIKU' :
+                             k.model.includes('sonnet') ? 'SONNET' : 'CLAUDE';
+            ui.kothReasonModelBadge.textContent = modelName;
+            ui.kothReasonModelBadge.classList.remove('hidden');
+        } else if (k.isAI) {
+            ui.kothReasonModelBadge.textContent = 'CLAUDE';
+            ui.kothReasonModelBadge.classList.remove('hidden');
+        } else {
+            ui.kothReasonModelBadge.classList.add('hidden');
+        }
+
+        // AI reasoning text
+        ui.kothReasonText.textContent = k.reasoning || 'Selected based on highest market cap (AI unavailable).';
+
+        // Token metrics
+        if (k.marketCap || k.volume24h || k.holders) {
+            ui.kothReasonMcap.textContent = formatMcap(k.marketCap || 0);
+            ui.kothReasonVolume.textContent = formatMcap(k.volume24h || 0);
+            ui.kothReasonHolders.textContent = (k.holders || 0).toLocaleString();
+            ui.kothReasonMetrics.classList.remove('hidden');
+        } else {
+            ui.kothReasonMetrics.classList.add('hidden');
+        }
+
+        // Runner-up
+        if (k.runnerUp) {
+            ui.kothReasonRunnerupTicker.textContent = '$' + k.runnerUp;
+            ui.kothReasonRunnerupReason.textContent = k.runnerUpReason || '';
+            ui.kothReasonRunnerup.classList.remove('hidden');
+        } else {
+            ui.kothReasonRunnerup.classList.add('hidden');
+        }
+
+        // Evaluation time
+        if (k.evaluatedAt) {
+            const evalTime = new Date(k.evaluatedAt);
+            ui.kothReasonEvaluatedAt.textContent = `Last evaluated: ${evalTime.toLocaleTimeString()}`;
+        } else {
+            ui.kothReasonEvaluatedAt.textContent = 'Last evaluated: --';
+        }
     };
 
     // v18.0: User Holdings Modal - shows each token, eligibility, and points
