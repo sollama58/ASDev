@@ -235,13 +235,13 @@ async function selectKoth(candidates) {
 
     const tokenList = formatTokensForPrompt(candidates);
 
-    // Concise system prompt (~150 tokens vs ~250 original)
-    const systemPrompt = `Select the best KOTH (King of the Pill) token. Holders get 10% airdrop bonus.
-Prioritize: 1) 24hr Volume (most important) 2) Market Cap 3) Holder count 4) Token age (older=reliable)
-Avoid pump-and-dumps (new tokens with suspicious metrics). Respond with JSON only, no markdown.`;
+    // Concise system prompt - explicitly forbid markdown
+    const systemPrompt = `You select the KOTH (King of the Pill) token from candidates. KOTH holders get 10% airdrop bonus.
+Prioritize: 1) 24hr Volume 2) Market Cap 3) Holder count 4) Token age
+CRITICAL: Output ONLY raw JSON. No markdown, no code blocks, no backticks. Just the JSON object.`;
 
-    const userPrompt = `CANDIDATES:\n${tokenList}\n\nJSON response format:
-{"selectedTicker":"TICKER","selectedMint":"mint_prefix","confidence":85,"reasoning":"Why selected (2-3 sentences)","runnerUp":"TICKER2","runnerUpReason":"Brief reason"}`;
+    const userPrompt = `CANDIDATES:\n${tokenList}\n\nRespond with this exact JSON structure (no markdown):
+{"selectedTicker":"X","selectedMint":"prefix","confidence":50,"reasoning":"One sentence why.","runnerUp":"Y"}`;
 
     try {
         logger.info(`[ClaudeKOTH] Requesting selection from ${Math.min(candidates.length, MAX_CANDIDATES)} candidates using ${CLAUDE_MODEL}...`);
@@ -298,7 +298,6 @@ Avoid pump-and-dumps (new tokens with suspicious metrics). Respond with JSON onl
             jsonText = jsonText.replace(/\n?```\s*$/, '').trim();
 
             // Try to extract valid JSON even if truncated
-            // Look for the opening brace and try to find matching close
             const jsonStart = jsonText.indexOf('{');
             if (jsonStart !== -1) {
                 jsonText = jsonText.slice(jsonStart);
@@ -307,17 +306,21 @@ Avoid pump-and-dumps (new tokens with suspicious metrics). Respond with JSON onl
                 try {
                     result = JSON.parse(jsonText);
                 } catch (e) {
-                    // Try to fix truncated JSON by adding closing braces/quotes
-                    // Count open braces and brackets
-                    let openBraces = (jsonText.match(/\{/g) || []).length;
-                    let closeBraces = (jsonText.match(/\}/g) || []).length;
+                    // Try to fix truncated JSON
+                    logger.debug('[ClaudeKOTH] Attempting to recover truncated JSON...');
 
-                    // If truncated mid-string, close the string
+                    // Remove any trailing incomplete key-value pairs
+                    // e.g., "runnerUpReason":"Second-  ->  remove this incomplete part
+                    jsonText = jsonText.replace(/,\s*"[^"]*":\s*"[^"]*$/g, '');
+
+                    // If still truncated mid-string, close it
                     if (jsonText.match(/"[^"]*$/)) {
                         jsonText += '"';
                     }
 
-                    // Add missing closing braces
+                    // Count and balance braces
+                    let openBraces = (jsonText.match(/\{/g) || []).length;
+                    let closeBraces = (jsonText.match(/\}/g) || []).length;
                     while (closeBraces < openBraces) {
                         jsonText += '}';
                         closeBraces++;
@@ -329,6 +332,17 @@ Avoid pump-and-dumps (new tokens with suspicious metrics). Respond with JSON onl
             } else {
                 throw new Error('No JSON object found in response');
             }
+
+            // Validate required fields exist
+            if (!result.selectedTicker || !result.selectedMint) {
+                throw new Error('Missing required fields: selectedTicker or selectedMint');
+            }
+
+            // Set defaults for optional fields
+            result.confidence = result.confidence || 50;
+            result.reasoning = result.reasoning || 'Selected based on metrics.';
+            result.runnerUp = result.runnerUp || null;
+
         } catch (parseError) {
             logger.error('[ClaudeKOTH] Failed to parse response JSON', {
                 error: parseError.message,
