@@ -658,10 +658,25 @@ async function invalidateCache(key) {
     }
 }
 
+/**
+ * v25.42: Simple get wrapper for Redis
+ * Returns null if Redis unavailable or key doesn't exist
+ */
+async function get(key) {
+    if (!redisConnection) return null;
+    try {
+        return await redisConnection.get(key);
+    } catch (e) {
+        logger.error(`[Redis] Get failed [${key}]`, { error: e.message });
+        return null;
+    }
+}
+
 module.exports = {
     init,
     smartCache,
     invalidateCache,
+    get,
     createWorker,
     addDeployJob,
     addSocialJob,
