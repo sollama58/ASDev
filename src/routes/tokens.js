@@ -205,7 +205,7 @@ function init(deps) {
                             ticker: koth.ticker,
                             image: image,
                             marketCap: koth.marketCap,
-                            volume: koth.volume24h,
+                            volume24h: koth.volume24h,  // v25.42: Fixed field name (was 'volume')
                             holderCount: koth.holderCount || 0
                         },
                         // v25.38: Include AI selection details

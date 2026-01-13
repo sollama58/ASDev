@@ -642,9 +642,26 @@ async function performMemoryCleanup() {
     return stats;
 }
 
+/**
+ * v25.42: Invalidate a smart cache entry
+ * Used to force refresh of cached data (e.g., after admin triggers KOTH refresh)
+ */
+async function invalidateCache(key) {
+    if (!redisConnection) return false;
+    try {
+        await redisConnection.del(key);
+        logger.debug(`[Redis] Cache invalidated: ${key}`);
+        return true;
+    } catch (e) {
+        logger.error(`[Redis] Failed to invalidate cache [${key}]`, { error: e.message });
+        return false;
+    }
+}
+
 module.exports = {
     init,
     smartCache,
+    invalidateCache,
     createWorker,
     addDeployJob,
     addSocialJob,

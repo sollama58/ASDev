@@ -994,16 +994,21 @@ function init(deps) {
 
             const flywheel = require('../tasks/flywheel');
 
-            // Clear both caches - Redis (ClaudeKOTH) and in-memory (Flywheel)
+            // Clear all KOTH-related caches:
+            // 1. ClaudeKOTH Redis cache (koth_ai_current)
+            // 2. Flywheel in-memory cache
+            // 3. API smartCache (koth_data) - v25.42: Added to ensure frontend gets fresh data
             const redisCacheCleared = await claudeKoth.clearCurrentKoth();
             flywheel.resetKothCache();
+            await redis.invalidateCache('koth_data');
 
             // Log the manual trigger
             await claudeKoth.logEvaluation({
                 type: 'ADMIN_REFRESH_TRIGGERED',
                 triggeredBy: 'admin',
                 redisCacheCleared,
-                flywheelCacheReset: true
+                flywheelCacheReset: true,
+                apiCacheInvalidated: true
             });
 
             // Trigger a new KOTH selection via the flywheel
@@ -1019,10 +1024,11 @@ function init(deps) {
 
             res.json({
                 success: true,
-                message: 'KOTH refresh triggered. Both caches cleared and new evaluation started.',
+                message: 'KOTH refresh triggered. All caches cleared and new evaluation started.',
                 redisCacheCleared,
                 flywheelCacheReset: true,
-                note: 'Check /admin/koth-status in a few seconds for results.'
+                apiCacheInvalidated: true,
+                note: 'Frontend will show new selection within seconds.'
             });
 
         } catch (e) {
