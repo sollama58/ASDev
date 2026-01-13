@@ -1298,10 +1298,10 @@
                     </div>
                     <div class="text-center">
                         <button id="koth-ai-reason-btn" onclick="toggleKothReasoningModal()" class="flex flex-col items-center gap-1 p-2 rounded-lg bg-cyan-900/30 border border-cyan-600/50 hover:bg-cyan-800/40 hover:border-cyan-500 transition group" title="View AI Selection Reasoning">
-                            <div class="text-[10px] md:text-xs text-cyan-400 uppercase font-mono group-hover:text-cyan-300">AI Reasoning</div>
+                            <div class="text-[10px] md:text-xs text-cyan-400 uppercase font-mono group-hover:text-cyan-300">Claude AI Reasoning</div>
                             <div class="flex items-center gap-1">
                                 <i data-lucide="sparkles" class="w-4 h-4 md:w-5 md:h-5 text-cyan-400 group-hover:text-cyan-300"></i>
-                                <span id="koth-score" class="text-sm md:text-lg font-bold text-cyan-400 font-mono group-hover:text-cyan-300">--</span>
+                                <span id="koth-score" class="text-sm md:text-lg font-bold text-cyan-400 font-mono group-hover:text-cyan-300"></span>
                             </div>
                         </button>
                     </div>
@@ -2265,9 +2265,9 @@
             }
         }
 
-        // v25.8: Handle IPFS protocol
+        // v25.8: Handle IPFS protocol - use reliable Cloudflare gateway
         if (cleanUrl.startsWith('ipfs://')) {
-            cleanUrl = cleanUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
+            cleanUrl = cleanUrl.replace('ipfs://', 'https://cloudflare-ipfs.com/ipfs/');
         }
 
         // v25.8: Handle Arweave protocol
@@ -2293,10 +2293,10 @@
         // Format: https://assets.geckoterminal.com/<asset-id>
         // These don't need transformation, just pass through
 
-        // v25.8: Normalize various IPFS gateways to ipfs.io for reliability
+        // v25.42: Normalize various IPFS gateways to Cloudflare (more reliable than ipfs.io)
         const ipfsGateways = [
             'gateway.pinata.cloud',
-            'cloudflare-ipfs.com',
+            'ipfs.io',
             'dweb.link',
             'nftstorage.link',
             'ipfs.infura.io',
@@ -2305,7 +2305,7 @@
         ];
         for (const gateway of ipfsGateways) {
             if (cleanUrl.includes(gateway)) {
-                cleanUrl = cleanUrl.replace(gateway, 'ipfs.io');
+                cleanUrl = cleanUrl.replace(gateway, 'cloudflare-ipfs.com');
                 break;
             }
         }
@@ -2313,7 +2313,7 @@
         // v25.8: Handle relative IPFS paths (just the CID)
         // CIDs typically start with Qm (v0) or bafy (v1)
         if (/^(Qm[a-zA-Z0-9]{44}|bafy[a-zA-Z0-9]{50,})/.test(cleanUrl)) {
-            cleanUrl = `https://ipfs.io/ipfs/${cleanUrl}`;
+            cleanUrl = `https://cloudflare-ipfs.com/ipfs/${cleanUrl}`;
         }
 
         // v25.8: Validate URL format before proxying
@@ -2324,7 +2324,15 @@
             return fallback;
         }
 
-        // Use wsrv.nl proxy for resizing and format conversion
+        // v25.42: Direct URLs for known reliable hosts (no proxy needed)
+        // Imgur, Cloudflare, and GeckoTerminal serve images directly with CORS
+        if (cleanUrl.includes('i.imgur.com') ||
+            cleanUrl.includes('imagedelivery.net') ||
+            cleanUrl.includes('assets.geckoterminal.com')) {
+            return cleanUrl;
+        }
+
+        // Use wsrv.nl proxy for resizing and CORS for other URLs (IPFS, etc.)
         return `https://wsrv.nl/?url=${encodeURIComponent(cleanUrl)}&w=64&output=webp&q=80&default=${encodeURIComponent(fallback)}`;
     };
 

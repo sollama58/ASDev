@@ -42,9 +42,9 @@ function normalizeImageUrl(url) {
         }
     }
 
-    // Handle IPFS protocol
+    // Handle IPFS protocol - use reliable Cloudflare gateway
     if (cleanUrl.startsWith('ipfs://')) {
-        cleanUrl = cleanUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
+        cleanUrl = cleanUrl.replace('ipfs://', 'https://cloudflare-ipfs.com/ipfs/');
     }
 
     // Handle Arweave protocol
@@ -70,10 +70,10 @@ function normalizeImageUrl(url) {
     // Format: https://assets.geckoterminal.com/<asset-id>
     // These don't need transformation, just pass through
 
-    // Normalize various IPFS gateways to ipfs.io
+    // v25.42: Normalize various IPFS gateways to Cloudflare (more reliable)
     const ipfsGateways = [
         'gateway.pinata.cloud',
-        'cloudflare-ipfs.com',
+        'ipfs.io',
         'dweb.link',
         'nftstorage.link',
         'ipfs.infura.io',
@@ -83,14 +83,14 @@ function normalizeImageUrl(url) {
     ];
     for (const gateway of ipfsGateways) {
         if (cleanUrl.includes(gateway)) {
-            cleanUrl = cleanUrl.replace(gateway, 'ipfs.io');
+            cleanUrl = cleanUrl.replace(gateway, 'cloudflare-ipfs.com');
             break;
         }
     }
 
     // Handle bare IPFS CIDs (Qm... for v0, bafy... for v1)
     if (/^(Qm[a-zA-Z0-9]{44}|bafy[a-zA-Z0-9]{50,})/.test(cleanUrl)) {
-        cleanUrl = `https://ipfs.io/ipfs/${cleanUrl}`;
+        cleanUrl = `https://cloudflare-ipfs.com/ipfs/${cleanUrl}`;
     }
 
     // Validate URL format
