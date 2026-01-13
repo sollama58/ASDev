@@ -57,6 +57,10 @@ const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // v18.0: Minimum 2
 const VOLUME_WEIGHT_MIN = 0.5;  // Lowest volume token gets 0.5x base points
 const VOLUME_WEIGHT_MAX = 2.0;  // Highest volume token gets 2.0x base points
 
+// v25.36: Pump.fun standard total supply (1 billion tokens with 6 decimals)
+// All pump.fun tokens have fixed 1B supply - use this for accurate % of supply calculation
+const PUMP_FUN_TOTAL_SUPPLY = BigInt('1000000000000000'); // 1B tokens * 10^6 decimals
+
 /**
  * v25.4: Calculate dynamic volume weight for a token
  * Uses logarithmic scaling relative to the volume range of all eligible tokens
@@ -90,7 +94,6 @@ function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
  *
  * v14.0 - New proportional point system:
  * - Track top 250 holders of each eligible token
- * - Points are proportional to holdings (balance / total supply held by top 250)
  * - Each token contributes 1000 base points distributed proportionally among holders
  * - ASDF multiplier: 2x total points if top 100 ASDF holder
  * - KOTH: 10% of airdrop reserved for king token holders (unchanged)
@@ -100,6 +103,11 @@ function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
  *
  * v23.0 - Removed creator bonus (no longer 2x for creators)
  * - Includes both tokens table and robinhood_tokens table
+ *
+ * v25.36 - Points now proportional to % of TOTAL SUPPLY (1B tokens):
+ * - Previously: points = (balance / tracked holders balance) * token points
+ * - Now: points = (balance / 1B total supply) * token points
+ * - This ensures fair distribution based on actual ownership percentage
  */
 async function updateGlobalState(deps) {
     const { connection, devKeypair, db, globalState } = deps;
@@ -276,22 +284,14 @@ async function updateGlobalState(deps) {
 
                 if (holders.length === 0) continue;
 
-                // Calculate total balance held by top 250
-                let totalBalance = BigInt(0);
-                for (const h of holders) {
-                    totalBalance += BigInt(h.balance || '0');
-                }
-
-                if (totalBalance === BigInt(0)) continue;
-
-                // Distribute volume-weighted points proportionally
+                // v25.36: Distribute points based on % of TOTAL SUPPLY, not % of tracked holders
                 for (const holder of holders) {
                     const holderBalance = BigInt(holder.balance || '0');
                     if (holderBalance === BigInt(0)) continue;
 
-                    // v25.4: Calculate proportional points with volume weight
-                    // points = (holderBalance / totalBalance) * weightedPointsForToken
-                    const proportionalPoints = Number((holderBalance * BigInt(Math.round(weightedPointsForToken * 1000))) / totalBalance) / 1000;
+                    // v25.36: Calculate points based on % of total supply (1B tokens)
+                    // If user holds 1% of total supply, they get 1% of the token's weighted points
+                    const proportionalPoints = Number((holderBalance * BigInt(Math.round(weightedPointsForToken * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
 
                     // Accumulate points
                     const entry = rawPointsMap.get(holder.holderPubkey) || {
@@ -353,21 +353,13 @@ async function updateGlobalState(deps) {
 
                     if (holders.length === 0) continue;
 
-                    // Calculate total balance
-                    let totalBalance = BigInt(0);
-                    for (const h of holders) {
-                        totalBalance += BigInt(h.balance || '0');
-                    }
-
-                    if (totalBalance === BigInt(0)) continue;
-
-                    // v25.4: Distribute volume-weighted points proportionally, scaled by fee share percentage
+                    // v25.36: Distribute points based on % of TOTAL SUPPLY, scaled by fee share
                     for (const holder of holders) {
                         const holderBalance = BigInt(holder.balance || '0');
                         if (holderBalance === BigInt(0)) continue;
 
-                        // v25.4: Base proportional points with volume weight
-                        const baseProportionalPoints = Number((holderBalance * BigInt(Math.round(weightedBasePoints * 1000))) / totalBalance) / 1000;
+                        // v25.36: Calculate points based on % of total supply (1B tokens)
+                        const baseProportionalPoints = Number((holderBalance * BigInt(Math.round(weightedBasePoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
                         // Scale by our fee share percentage (100% share = full points, 50% share = half points)
                         const scaledPoints = baseProportionalPoints * feeShareMultiplier;
 

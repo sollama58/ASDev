@@ -275,6 +275,10 @@ const MIN_VOLUME_USD = 100;     // Minimum 24hr volume for eligibility
 const BASE_POINTS_PER_TOKEN = 1000; // Base points distributed per token
 const TOP_HOLDERS_LIMIT = 250;  // Track top 250 holders per token
 
+// v25.36: Pump.fun standard total supply (1 billion tokens with 6 decimals)
+// All pump.fun tokens have fixed 1B supply - use this for accurate % of supply calculation
+const PUMP_FUN_TOTAL_SUPPLY = BigInt('1000000000000000'); // 1B tokens * 10^6 decimals
+
 /**
  * v25.27: Calculate dynamic volume weight for a token
  * Uses logarithmic scaling relative to the volume range of all eligible tokens
@@ -430,6 +434,7 @@ function initHolderScannerWorker(deps) {
             let tempTotalPoints = 0;
 
             // Platform tokens: proportional points with volume weighting
+            // v25.36: Points now based on % of TOTAL SUPPLY, not % of tracked holders
             for (const token of eligibleTokens) {
                 if (!token.mint) continue;
 
@@ -443,15 +448,13 @@ function initHolderScannerWorker(deps) {
                 );
                 if (holders.length === 0) continue;
 
-                let totalBalance = BigInt(0);
-                for (const h of holders) totalBalance += BigInt(h.balance || '0');
-                if (totalBalance === BigInt(0)) continue;
-
                 for (const holder of holders) {
                     const holderBalance = BigInt(holder.balance || '0');
                     if (holderBalance === BigInt(0)) continue;
 
-                    const proportionalPoints = Number((holderBalance * BigInt(Math.round(weightedPointsForToken * 1000))) / totalBalance) / 1000;
+                    // v25.36: Calculate points based on % of total supply (1B tokens)
+                    // If user holds 1% of total supply, they get 1% of the token's weighted points
+                    const proportionalPoints = Number((holderBalance * BigInt(Math.round(weightedPointsForToken * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
                     // v25.33: Track positions count for user_points table
                     const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0, positionsCount: 0 };
                     entry.basePoints += proportionalPoints;
@@ -475,6 +478,7 @@ function initHolderScannerWorker(deps) {
                 }
                 logger.info(`[Worker] Found ${robinhoodTokens.length} eligible Robinhood tokens (vol range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
 
+                // v25.36: Points now based on % of TOTAL SUPPLY for Robinhood tokens too
                 for (const rhToken of robinhoodTokens) {
                     if (!rhToken.mint) continue;
 
@@ -489,15 +493,12 @@ function initHolderScannerWorker(deps) {
                     );
                     if (holders.length === 0) continue;
 
-                    let totalBalance = BigInt(0);
-                    for (const h of holders) totalBalance += BigInt(h.balance || '0');
-                    if (totalBalance === BigInt(0)) continue;
-
                     for (const holder of holders) {
                         const holderBalance = BigInt(holder.balance || '0');
                         if (holderBalance === BigInt(0)) continue;
 
-                        const baseProportionalPoints = Number((holderBalance * BigInt(Math.round(weightedBasePoints * 1000))) / totalBalance) / 1000;
+                        // v25.36: Calculate points based on % of total supply (1B tokens)
+                        const baseProportionalPoints = Number((holderBalance * BigInt(Math.round(weightedBasePoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
                         const scaledPoints = baseProportionalPoints * feeShareMultiplier;
 
                         // v25.33: Track positions count for user_points table
