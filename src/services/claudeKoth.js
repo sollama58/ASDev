@@ -23,7 +23,7 @@ const config = require('../config/env');
 const logger = require('./logger');
 
 // Model selection - Haiku is 10x cheaper than Sonnet and sufficient for this task
-const CLAUDE_MODEL = 'claude-haiku-4-20250514';
+const CLAUDE_MODEL = 'claude-3-5-haiku-20241022';
 const MAX_CANDIDATES = 10; // Limit candidates to reduce input tokens
 const MAX_RESPONSE_TOKENS = 512; // Response is ~200 tokens, 512 provides buffer
 
