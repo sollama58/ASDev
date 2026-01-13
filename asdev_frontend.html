@@ -10,7 +10,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        /* HOLDEX-STYLE DARK THEME v25.2 - Responsive text wrapping, non-bold modal headings */
+        /* HOLDEX-STYLE DARK THEME v25.34 - Improved table readability, better contrast */
         :root {
             --bg-primary: #0a0a0f;
             --bg-secondary: #12121a;
@@ -19,8 +19,8 @@
             --border-primary: #2a2a3a;
             --border-accent: #f59e0b;
             --text-primary: #ffffff;
-            --text-secondary: #9ca3af;
-            --text-muted: #6b7280;
+            --text-secondary: #a8b0bf;
+            --text-muted: #7c8491;
             --accent-orange: #f59e0b;
             --accent-amber: #fbbf24;
             --accent-green: #22c55e;
@@ -50,29 +50,86 @@
             overflow: hidden;
         }
 
-        /* Ticker */
+        /* Ticker - v25.35: Improved animation and styling */
         .ticker-wrap {
             width: 100%;
-            background-color: var(--bg-primary);
+            background: linear-gradient(90deg, var(--bg-primary) 0%, rgba(245, 158, 11, 0.05) 50%, var(--bg-primary) 100%);
             border-bottom: 1px solid var(--border-primary);
             overflow: hidden;
-            height: 36px;
+            height: 40px;
             display: flex;
             align-items: center;
+            position: relative;
+        }
+        .ticker-wrap::before,
+        .ticker-wrap::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 60px;
+            z-index: 2;
+            pointer-events: none;
+        }
+        .ticker-wrap::before {
+            left: 0;
+            background: linear-gradient(90deg, var(--bg-primary) 0%, transparent 100%);
+        }
+        .ticker-wrap::after {
+            right: 0;
+            background: linear-gradient(90deg, transparent 0%, var(--bg-primary) 100%);
         }
         .ticker {
             display: flex;
-            gap: 2rem;
+            gap: 3rem;
             white-space: nowrap;
-            animation: marquee 80s linear infinite;
+            animation: marquee 60s linear infinite;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
+            font-size: 11px;
             color: var(--text-secondary);
+            padding-left: 100%;
         }
-        .ticker-item { display: inline-flex; align-items: center; gap: 6px; }
-        .ticker-item a { color: var(--accent-green); text-decoration: none; transition: color 0.2s; }
+        .ticker:hover {
+            animation-play-state: paused;
+        }
+        .ticker-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.2s;
+        }
+        .ticker-item:hover {
+            background: rgba(245, 158, 11, 0.1);
+            border-color: rgba(245, 158, 11, 0.3);
+        }
+        .ticker-item a { color: var(--accent-orange); text-decoration: none; font-weight: 600; }
         .ticker-item a:hover { color: var(--text-primary); text-decoration: underline; }
-        @keyframes marquee { 0% { transform: translateX(100%); } 100% { transform: translateX(-100%); } }
+        .ticker-item img {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            object-fit: cover;
+            border: 1px solid var(--border-primary);
+        }
+        .ticker-time {
+            font-size: 9px;
+            color: var(--text-muted);
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .ticker-price {
+            color: var(--accent-green);
+            font-weight: 500;
+        }
+        @keyframes marquee {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
 
         /* Cards/Panels */
         .panel {
@@ -235,7 +292,7 @@
         .close-btn { color: var(--text-muted); float: right; font-size: 24px; font-weight: bold; line-height: 1; }
         .close-btn:hover { color: var(--text-primary); cursor: pointer; }
 
-        /* Leaderboard Table - v25.32: Clean, compact table design */
+        /* Leaderboard Table - v25.34: Improved readability */
         .leader-table {
             width: 100%;
             border-collapse: collapse;
@@ -248,7 +305,7 @@
             border-bottom: 1px solid var(--accent-orange);
             color: var(--accent-orange);
             text-transform: uppercase;
-            font-size: 9px;
+            font-size: 10px;
             font-weight: 600;
             letter-spacing: 0.5px;
             white-space: nowrap;
@@ -258,25 +315,27 @@
             border-bottom: 1px solid rgba(255,255,255,0.04);
             vertical-align: middle;
             white-space: nowrap;
+            color: var(--text-primary);
         }
         .leader-table tr:hover { background: rgba(234, 88, 12, 0.06); }
         .leader-table tr:last-child td { border-bottom: none; }
         .leader-table tbody tr { transition: background 0.1s ease; }
-        /* Token name can wrap */
+        /* Token name can wrap - v25.34: improved readability */
         .leader-table .token-name {
             white-space: normal;
-            max-width: 100px;
-            line-height: 1.2;
+            max-width: 120px;
+            line-height: 1.3;
+            font-size: 10px;
         }
 
-        /* v25.32: Volume multiplier badge - compact */
+        /* v25.34: Volume multiplier badge - improved readability */
         .vol-multiplier {
             display: inline-block;
-            font-size: 8px;
+            font-size: 9px;
             font-weight: 700;
-            padding: 1px 4px;
+            padding: 2px 5px;
             border-radius: 3px;
-            margin-left: 3px;
+            margin-left: 4px;
             vertical-align: middle;
         }
         .vol-multiplier.high { background: rgba(34, 197, 94, 0.25); color: #4ade80; }
@@ -291,7 +350,7 @@
             gap: 1px;
         }
         .data-cell .value { font-weight: 600; font-size: 12px; }
-        .data-cell .label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; }
+        .data-cell .label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
 
         .token-img-sm {
             width: 28px;
@@ -2609,7 +2668,7 @@
                                 <div class="flex items-center gap-1">
                                     ${statusDot}<span class="text-white">${escapeHtml(item.ticker)}</span>${robinhoodMark}${holderMark}
                                 </div>
-                                <div class="token-name text-[9px] text-gray-500">${escapeHtml(item.name)}</div>
+                                <div class="token-name text-[10px] text-gray-400">${escapeHtml(item.name)}</div>
                             </div>
                         </div>
                     </td>
@@ -2757,25 +2816,47 @@
         }
     };
 
-    const fetchRecentLaunches = async () => { 
-        ui.tickerContent.innerHTML = '<span class="ticker-item text-orange-600">FETCHING LAUNCH FEED... PLEASE WAIT...</span>';
-        try { 
-            const res = await fetch(`${BACKEND_URL}/api/recent-launches`); 
-            if (res.ok) { 
-                const launches = await res.json(); 
-                if (launches.length === 0) { 
-                    ui.tickerContent.innerHTML = '<span class="ticker-item text-orange-600">NO RECENT LAUNCHES YET... START ONE!</span>'; 
-                    return; 
-                } 
-                const repeatedLaunches = Array(5).fill(launches).flat();
-                const tickerItems = repeatedLaunches.map(launch => `<span class="ticker-item"><span class="text-white font-bold">LAUNCHED:</span><span class="text-white">${escapeHtml(launch.userSnippet)}...</span><span class="text-orange-400">-></span><a href="${PUMPFUN_URL_BASE}${escapeHtml(launch.mint)}" target="_blank" class="font-bold underline">${escapeHtml(launch.ticker)}</a></span>`).join('');
-                ui.tickerContent.innerHTML = tickerItems; 
+    // v25.35: Enhanced ticker with images, prices, and relative times
+    const formatTimeAgo = (timestamp) => {
+        const seconds = Math.floor((Date.now() - timestamp) / 1000);
+        if (seconds < 60) return 'just now';
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+        if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+        return `${Math.floor(seconds / 86400)}d ago`;
+    };
+
+    const fetchRecentLaunches = async () => {
+        ui.tickerContent.innerHTML = '<span class="ticker-item text-orange-400">Loading recent tokens...</span>';
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/recent-launches`);
+            if (res.ok) {
+                const launches = await res.json();
+                if (launches.length === 0) {
+                    ui.tickerContent.innerHTML = '<span class="ticker-item text-orange-400">No tokens launched yet - be the first!</span>';
+                    return;
+                }
+                // Duplicate for seamless loop (need 2x for 50% transform)
+                const repeatedLaunches = [...launches, ...launches];
+                const tickerItems = repeatedLaunches.map(launch => {
+                    const imgSrc = resolveTokenImage(launch.image);
+                    const timeAgo = formatTimeAgo(launch.timestamp);
+                    const mcapDisplay = launch.marketCap > 0 ? formatMcap(launch.marketCap) : '';
+                    return `
+                        <span class="ticker-item">
+                            <img src="${imgSrc}" alt="" onerror="this.src='https://placehold.co/20x20/333/fff?text=?'">
+                            <a href="${PUMPFUN_URL_BASE}${escapeHtml(launch.mint)}" target="_blank">$${escapeHtml(launch.ticker)}</a>
+                            ${mcapDisplay ? `<span class="ticker-price">${mcapDisplay}</span>` : ''}
+                            <span class="ticker-time">${timeAgo}</span>
+                        </span>
+                    `;
+                }).join('');
+                ui.tickerContent.innerHTML = tickerItems;
             } else {
-                 ui.tickerContent.innerHTML = '<span class="ticker-item text-red-500">ERROR: FAILED TO LOAD LAUNCH FEED (Server Issue)</span>'; 
+                ui.tickerContent.innerHTML = '<span class="ticker-item text-red-400">Failed to load token feed</span>';
             }
         } catch (e) {
-            ui.tickerContent.innerHTML = '<span class="ticker-item text-red-500">ERROR: FAILED TO LOAD LAUNCH FEED (Network Error)</span>';
-        } 
+            ui.tickerContent.innerHTML = '<span class="ticker-item text-red-400">Network error - retrying...</span>';
+        }
     };
 
     const updateKOTH = async () => {
@@ -3052,6 +3133,9 @@
     registerInterval(setInterval(refreshAllData, 120000));
     refreshAllData(true); // Force full refresh on initial load
 
+    // v25.35: Refresh ticker more frequently to keep "time ago" fresh
+    registerInterval(setInterval(fetchRecentLaunches, 45000));
+
     ui.refreshBtn.onclick = () => refreshAllData(true); // Force full refresh on manual click
 
     const toggleStatusModal = () => {
@@ -3220,13 +3304,13 @@
 
                                 // v18.0: Eligibility badge
                                 const eligibilityBadge = item.isEligible
-                                    ? '<span class="text-[9px] bg-green-900/50 text-green-400 px-1 py-0.5 rounded no-break">YES</span>'
-                                    : '<span class="text-[9px] bg-red-900/30 text-red-400/70 px-1 py-0.5 rounded no-break">NO</span>';
+                                    ? '<span class="text-[10px] bg-green-900/50 text-green-400 px-1.5 py-0.5 rounded no-break font-medium">YES</span>'
+                                    : '<span class="text-[10px] bg-red-900/30 text-red-400/70 px-1.5 py-0.5 rounded no-break">NO</span>';
 
                                 // v25.0: Source badge (platform vs robinhood)
                                 const sourceBadge = item.source === 'robinhood'
-                                    ? '<span class="badge-robinhood text-[9px]">ROBINHOOD</span>'
-                                    : '<span class="text-[9px] bg-orange-900/50 text-orange-400 px-1 py-0.5 rounded no-break">PLATFORM</span>';
+                                    ? '<span class="badge-robinhood text-[10px]">ROBINHOOD</span>'
+                                    : '<span class="text-[10px] bg-orange-900/50 text-orange-400 px-1.5 py-0.5 rounded no-break font-medium">PLATFORM</span>';
 
                                 return `
                                 <tr>
@@ -3236,7 +3320,7 @@
                                             <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="" onerror="this.src='https://placehold.co/28x28/333/fff?text=?'">
                                             <div>
                                                 <a href="${PUMPFUN_URL_BASE}${escapeHtml(item.mint)}" target="_blank" class="text-white hover:underline">${escapeHtml(item.ticker)}</a>
-                                                <div class="token-name text-[9px] text-gray-500">${escapeHtml(item.name)}</div>
+                                                <div class="token-name text-[10px] text-gray-400">${escapeHtml(item.name)}</div>
                                             </div>
                                         </div>
                                     </td>
@@ -3400,7 +3484,7 @@
             for (const h of holdings) {
                 const imgSrc = resolveTokenImage(h.image);
                 const pts = h.isEligible ? `<span class="text-yellow-400">${h.basePoints.toFixed(1)}</span>` : '<span class="text-gray-600">-</span>';
-                const rhBadge = h.source === 'robinhood' ? '<span class="text-[8px] text-green-400 ml-1">RH</span>' : '';
+                const rhBadge = h.source === 'robinhood' ? '<span class="text-[9px] text-green-400 ml-1 font-medium">RH</span>' : '';
 
                 html += `
                     <tr>
@@ -3409,7 +3493,7 @@
                                 <img src="${imgSrc}" class="token-img-sm" alt="" onerror="this.src='https://placehold.co/28x28/333/fff?text=?'">
                                 <div>
                                     <a href="${PUMPFUN_URL_BASE}${escapeHtml(h.mint)}" target="_blank" class="text-white hover:underline">${escapeHtml(h.ticker)}</a>${rhBadge}
-                                    <div class="token-name text-[9px] text-gray-500">${escapeHtml(h.name)}</div>
+                                    <div class="token-name text-[10px] text-gray-400">${escapeHtml(h.name)}</div>
                                 </div>
                             </div>
                         </td>
@@ -3597,7 +3681,7 @@
                                         <img src="${resolveTokenImage(t.image)}" class="token-img-sm" onerror="this.src='https://placehold.co/28x28/333/fff?text=?'" loading="lazy">
                                         <div>
                                             <span class="text-white">${escapeHtml(t.ticker)}</span>
-                                            <div class="text-[9px] text-gray-500">${t.mint ? t.mint.slice(0, 6) + '...' : '-'}</div>
+                                            <div class="text-[10px] text-gray-400">${t.mint ? t.mint.slice(0, 6) + '...' : '-'}</div>
                                         </div>
                                     </div>
                                 </td>

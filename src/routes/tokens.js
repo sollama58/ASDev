@@ -309,19 +309,30 @@ function init(deps) {
         }
     });
 
-    // Recent launches - Cached for 15 seconds
+    // Recent launches - v25.35: Enhanced with images, prices, and timestamps
+    // Cached for 30 seconds
     router.get('/recent-launches', async (req, res) => {
         try {
-            const result = await redis.smartCache('recent_launches', 15, async () => {
-                const rows = await db.all('SELECT "userPubkey", ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10');
+            const result = await redis.smartCache('recent_launches', 30, async () => {
+                const rows = await db.all(`
+                    SELECT "userPubkey", ticker, name, mint, image, "marketCap", timestamp
+                    FROM tokens
+                    ORDER BY timestamp DESC
+                    LIMIT 15
+                `);
                 return rows.map(r => ({
-                    userSnippet: r.userPubkey.slice(0, 5),
-                    ticker: r.ticker,
-                    mint: r.mint
+                    userSnippet: r.userPubkey?.slice(0, 5) || '?????',
+                    ticker: r.ticker || 'UNKNOWN',
+                    name: r.name || '',
+                    mint: r.mint,
+                    image: r.image || null,
+                    marketCap: r.marketCap || 0,
+                    timestamp: r.timestamp || Date.now()
                 }));
             });
             res.json(result);
         } catch (e) {
+            logger.error('[API] Recent launches error', { error: e.message });
             res.status(500).json([]);
         }
     });
