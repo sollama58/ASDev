@@ -8,6 +8,7 @@
  * v24.0 - Added rate limiting for token registration, input sanitization
  * v25.22 - SECURITY: Added signature verification for token registration
  * v25.36 - User holdings now uses supply-based point calculation (1B total supply)
+ * v25.37 - Added token-lookup and token-lookup-batch endpoints for external integrations
  */
 const express = require('express');
 const axios = require('axios');
@@ -1160,6 +1161,218 @@ function init(deps) {
                 success: false,
                 error: 'Database error'
             });
+        }
+    });
+
+    /**
+     * GET /token-lookup/:mint
+     * v25.37: Comprehensive token lookup for external integrations (DexScreener, etc.)
+     *
+     * Checks if a token is registered in the IGNITION ecosystem and returns:
+     * - Whether the token is registered
+     * - Token type: 'ignition' (launched via IGNITION) or 'robinhood' (fee-sharing partner)
+     * - Token metadata, market data, and fee share info (for robinhood tokens)
+     *
+     * This endpoint is designed for cross-platform queries from external applications.
+     */
+    router.get('/token-lookup/:mint', async (req, res) => {
+        try {
+            const { mint } = req.params;
+
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({
+                    registered: false,
+                    error: 'Invalid mint address'
+                });
+            }
+
+            // Check the tokens table (IGNITION-launched tokens)
+            const ignitionToken = await db.get(`
+                SELECT mint, ticker, name, image, metadataUri, "userPubkey", "marketCap", volume24h, timestamp
+                FROM tokens WHERE mint = $1
+            `, [mint]);
+
+            if (ignitionToken) {
+                // Token was launched via IGNITION platform
+                let image = ignitionToken.image;
+
+                // Apply metadataUri fallback for missing images
+                if ((!image || image === '' || image === 'null') && ignitionToken.metadataUri) {
+                    try {
+                        const fallbackImage = await imageUtils.fetchImageFromMetadataUri(ignitionToken.metadataUri, 3000);
+                        if (fallbackImage) {
+                            image = fallbackImage;
+                            db.run('UPDATE tokens SET image = $1 WHERE mint = $2', [fallbackImage, mint]).catch(() => {});
+                        }
+                    } catch (e) { /* silent fail */ }
+                }
+
+                return res.json({
+                    registered: true,
+                    type: 'ignition',
+                    token: {
+                        mint: ignitionToken.mint,
+                        ticker: ignitionToken.ticker,
+                        name: ignitionToken.name,
+                        image: image,
+                        creator: ignitionToken.userPubkey,
+                        marketCap: ignitionToken.marketCap || 0,
+                        volume24h: ignitionToken.volume24h || 0,
+                        registeredAt: ignitionToken.timestamp
+                    }
+                });
+            }
+
+            // Check the robinhood_tokens table (fee-sharing partner tokens)
+            const robinhoodToken = await db.get(`
+                SELECT mint, ticker, name, image, metadataUri, "originalCreator", "feeShareBps", "marketCap", volume24h, "isActive", timestamp
+                FROM robinhood_tokens WHERE mint = $1
+            `, [mint]);
+
+            if (robinhoodToken) {
+                // Token is a Robinhood fee-sharing partner
+                let image = robinhoodToken.image;
+
+                // Apply metadataUri fallback for missing images
+                if ((!image || image === '' || image === 'null') && robinhoodToken.metadataUri) {
+                    try {
+                        const fallbackImage = await imageUtils.fetchImageFromMetadataUri(robinhoodToken.metadataUri, 3000);
+                        if (fallbackImage) {
+                            image = fallbackImage;
+                            db.run('UPDATE robinhood_tokens SET image = $1 WHERE mint = $2', [fallbackImage, mint]).catch(() => {});
+                        }
+                    } catch (e) { /* silent fail */ }
+                }
+
+                return res.json({
+                    registered: true,
+                    type: 'robinhood',
+                    active: robinhoodToken.isActive === 1,
+                    token: {
+                        mint: robinhoodToken.mint,
+                        ticker: robinhoodToken.ticker,
+                        name: robinhoodToken.name,
+                        image: image,
+                        originalCreator: robinhoodToken.originalCreator,
+                        feeShareBps: robinhoodToken.feeShareBps,
+                        feeSharePercent: (robinhoodToken.feeShareBps / 100).toFixed(1),
+                        marketCap: robinhoodToken.marketCap || 0,
+                        volume24h: robinhoodToken.volume24h || 0,
+                        registeredAt: robinhoodToken.timestamp
+                    }
+                });
+            }
+
+            // Token not found in either table
+            return res.json({
+                registered: false,
+                type: null,
+                mint: mint
+            });
+
+        } catch (e) {
+            logger.error('[TokenLookup] Error', { mint: req.params.mint, error: e.message });
+            res.status(500).json({
+                registered: false,
+                error: 'Database error'
+            });
+        }
+    });
+
+    /**
+     * GET /token-lookup-batch
+     * v25.37: Batch token lookup for external integrations
+     *
+     * Query parameters:
+     * - mints: Comma-separated list of mint addresses (max 50)
+     *
+     * Returns an object with each mint as a key and its registration status as value.
+     */
+    router.get('/token-lookup-batch', async (req, res) => {
+        try {
+            const { mints } = req.query;
+
+            if (!mints || typeof mints !== 'string') {
+                return res.status(400).json({
+                    error: 'Missing or invalid mints parameter. Provide comma-separated mint addresses.'
+                });
+            }
+
+            const mintList = mints.split(',').map(m => m.trim()).filter(m => m.length > 0);
+
+            if (mintList.length === 0) {
+                return res.status(400).json({ error: 'No valid mint addresses provided' });
+            }
+
+            if (mintList.length > 50) {
+                return res.status(400).json({ error: 'Maximum 50 mints per request' });
+            }
+
+            // Validate all mints
+            const validMints = mintList.filter(m => isValidPubkey(m));
+            if (validMints.length === 0) {
+                return res.status(400).json({ error: 'No valid Solana addresses provided' });
+            }
+
+            const results = {};
+
+            // Initialize all requested mints as not registered
+            for (const mint of validMints) {
+                results[mint] = { registered: false, type: null };
+            }
+
+            // Query ignition tokens
+            if (validMints.length > 0) {
+                const placeholders = validMints.map((_, i) => `$${i + 1}`).join(',');
+                const ignitionTokens = await db.all(`
+                    SELECT mint, ticker, name, "marketCap", volume24h
+                    FROM tokens WHERE mint IN (${placeholders})
+                `, validMints);
+
+                for (const token of ignitionTokens) {
+                    results[token.mint] = {
+                        registered: true,
+                        type: 'ignition',
+                        ticker: token.ticker,
+                        name: token.name,
+                        marketCap: token.marketCap || 0,
+                        volume24h: token.volume24h || 0
+                    };
+                }
+
+                // Query robinhood tokens (only for mints not found in ignition)
+                const remainingMints = validMints.filter(m => !results[m].registered);
+                if (remainingMints.length > 0) {
+                    const rhPlaceholders = remainingMints.map((_, i) => `$${i + 1}`).join(',');
+                    const robinhoodTokens = await db.all(`
+                        SELECT mint, ticker, name, "feeShareBps", "marketCap", volume24h, "isActive"
+                        FROM robinhood_tokens WHERE mint IN (${rhPlaceholders})
+                    `, remainingMints);
+
+                    for (const token of robinhoodTokens) {
+                        results[token.mint] = {
+                            registered: true,
+                            type: 'robinhood',
+                            active: token.isActive === 1,
+                            ticker: token.ticker,
+                            name: token.name,
+                            feeSharePercent: (token.feeShareBps / 100).toFixed(1),
+                            marketCap: token.marketCap || 0,
+                            volume24h: token.volume24h || 0
+                        };
+                    }
+                }
+            }
+
+            res.json({
+                total: validMints.length,
+                registered: Object.values(results).filter(r => r.registered).length,
+                results
+            });
+
+        } catch (e) {
+            logger.error('[TokenLookupBatch] Error', { error: e.message });
+            res.status(500).json({ error: 'Database error' });
         }
     });
 
