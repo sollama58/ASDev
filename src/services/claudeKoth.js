@@ -456,12 +456,52 @@ async function getKothWithFallback(db, algorithmFallback) {
         });
 
         if (candidates.length === 0) {
-            logger.info('[ClaudeKOTH] No eligible candidates found');
+            logger.info('[ClaudeKOTH] No candidates meet strict requirements, falling back to top 10 by volume');
             await logEvaluation({
                 type: 'NO_ELIGIBLE_CANDIDATES',
-                message: 'No tokens meet minimum requirements'
+                message: 'No tokens meet minimum requirements, trying volume fallback'
             });
-            return { token: null, score: 0, reasoning: 'No tokens meet minimum requirements' };
+
+            // Fallback: Get top 10 tokens by 24hr volume regardless of other criteria
+            const fallbackQueryStart = Date.now();
+            candidates = await db.all(`
+                SELECT
+                    t.mint,
+                    t.ticker,
+                    t.name,
+                    t."marketCap",
+                    t.volume24h,
+                    t."holderCount",
+                    t.timestamp,
+                    COALESCE((SELECT COUNT(*) FROM token_holders th WHERE th.mint = t.mint), 0) as actualHolders
+                FROM tokens t
+                WHERE t.volume24h > 0
+                ORDER BY t.volume24h DESC
+                LIMIT 10
+            `);
+            const fallbackQueryDuration = Date.now() - fallbackQueryStart;
+
+            logger.info('[ClaudeKOTH] Volume fallback query completed', {
+                candidateCount: candidates.length,
+                queryDurationMs: fallbackQueryDuration
+            });
+
+            await logEvaluation({
+                type: 'VOLUME_FALLBACK_QUERY',
+                candidateCount: candidates.length,
+                queryDurationMs: fallbackQueryDuration,
+                message: 'Using top 10 tokens by volume as candidates'
+            });
+
+            // If still no candidates, return null
+            if (candidates.length === 0) {
+                logger.warn('[ClaudeKOTH] No candidates found even with volume fallback');
+                await logEvaluation({
+                    type: 'NO_CANDIDATES_AT_ALL',
+                    message: 'No tokens with any volume found'
+                });
+                return { token: null, score: 0, reasoning: 'No tokens with trading volume found' };
+            }
         }
 
         // Try Claude first if enabled
