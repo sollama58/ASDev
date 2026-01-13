@@ -26,7 +26,7 @@ const logger = require('./logger');
 // $1/MTok input, $5/MTok output vs Sonnet's $3/$15
 const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 const MAX_CANDIDATES = 10; // Limit candidates to reduce input tokens
-const MAX_RESPONSE_TOKENS = 512; // Response is ~200 tokens, 512 provides buffer
+const MAX_RESPONSE_TOKENS = 1024; // Increased from 512 to handle longer reasoning
 
 // Redis key for KOTH evaluation logs
 const KOTH_LOG_KEY = 'koth_ai_evaluation_logs';
@@ -286,12 +286,49 @@ Avoid pump-and-dumps (new tokens with suspicious metrics). Respond with JSON onl
         // Parse JSON response
         let result;
         try {
-            // Clean potential markdown code blocks
+            // Clean potential markdown code blocks (handles both complete and truncated responses)
             let jsonText = textContent.text.trim();
+
+            // Remove opening markdown fence
             if (jsonText.startsWith('```')) {
-                jsonText = jsonText.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+                jsonText = jsonText.replace(/^```json?\n?/, '');
             }
-            result = JSON.parse(jsonText);
+
+            // Remove closing markdown fence (if present)
+            jsonText = jsonText.replace(/\n?```\s*$/, '').trim();
+
+            // Try to extract valid JSON even if truncated
+            // Look for the opening brace and try to find matching close
+            const jsonStart = jsonText.indexOf('{');
+            if (jsonStart !== -1) {
+                jsonText = jsonText.slice(jsonStart);
+
+                // If JSON is truncated, try to salvage what we can
+                try {
+                    result = JSON.parse(jsonText);
+                } catch (e) {
+                    // Try to fix truncated JSON by adding closing braces/quotes
+                    // Count open braces and brackets
+                    let openBraces = (jsonText.match(/\{/g) || []).length;
+                    let closeBraces = (jsonText.match(/\}/g) || []).length;
+
+                    // If truncated mid-string, close the string
+                    if (jsonText.match(/"[^"]*$/)) {
+                        jsonText += '"';
+                    }
+
+                    // Add missing closing braces
+                    while (closeBraces < openBraces) {
+                        jsonText += '}';
+                        closeBraces++;
+                    }
+
+                    result = JSON.parse(jsonText);
+                    logger.warn('[ClaudeKOTH] Recovered truncated JSON response');
+                }
+            } else {
+                throw new Error('No JSON object found in response');
+            }
         } catch (parseError) {
             logger.error('[ClaudeKOTH] Failed to parse response JSON', {
                 error: parseError.message,
