@@ -41,6 +41,10 @@ function startAll(deps) {
     // Start flywheel (still runs in main process - timing critical)
     flywheel.start(deps);
 
+    // v25.45: Start tiered metadata updater for frequent price updates
+    // Top 10 tokens update every 1 minute, all tokens every 5 minutes
+    metadataUpdater.start(deps);
+
     // Start vanity pool auto-refill
     if (config.VANITY_GRINDER_ENABLED && config.VANITY_GRINDER_URL) {
         vanity.startAutoRefill();
@@ -75,7 +79,7 @@ function startAll(deps) {
     }, 600000); // 10 minutes
     registerInterval(redisCleanupInterval);
 
-    logger.info("All background tasks started (v25.27 - with Redis memory management)");
+    logger.info("All background tasks started (v25.45 - tiered price updates enabled)");
 }
 
 /**

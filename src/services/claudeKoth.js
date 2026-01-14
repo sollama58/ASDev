@@ -247,7 +247,7 @@ CRITICAL: Output ONLY raw JSON. No markdown, no code blocks, no backticks. Just 
         logger.info(`[ClaudeKOTH] Requesting selection from ${Math.min(candidates.length, MAX_CANDIDATES)} candidates using ${CLAUDE_MODEL}...`);
 
         const apiStartTime = Date.now();
-        const response = await anthropic.messages.create({
+        const response = await client.messages.create({
             model: CLAUDE_MODEL,
             max_tokens: MAX_RESPONSE_TOKENS,
             messages: [

@@ -12,6 +12,7 @@
  * v25.37 - Fixed error handling: RPC errors no longer incorrectly deactivate tokens
  * v25.38 - AI-based KOTH selection (volume, holders, age, consistency) evaluated hourly
  * v25.39 - Fresh data guarantee: Holder scanner runs before each airdrop distribution
+ * v25.46 - Twitter announcements when KOTH changes (with AI reasoning)
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -22,7 +23,7 @@ const {
 } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, pump, solana, jupiter, redis, mutex, mintExtractor, claudeKoth } = require('../services');
+const { logger, pump, solana, jupiter, redis, mutex, mintExtractor, claudeKoth, twitter } = require('../services');
 
 // RACE CONDITION FIX: Use mutex for atomic lock/unlock instead of boolean flags
 const buybackMutex = mutex.getMutex('flywheel_buyback');
@@ -61,6 +62,7 @@ let lastKothEvaluation = 0;
 let currentKothMint = null;
 let currentKothScore = 0;
 let currentKothReasoning = '';
+let lastTweetedKothMint = null; // v25.46: Track last tweeted KOTH to avoid duplicates
 
 /**
  * v25.40: Reset the KOTH evaluation cache
@@ -336,6 +338,7 @@ async function getAiSelectedKoth(db) {
         }
 
         if (result.token) {
+            const isNewKoth = currentKothMint !== result.token.mint;
             currentKothMint = result.token.mint;
             currentKothScore = result.score;
             currentKothReasoning = result.reasoning;
@@ -358,6 +361,26 @@ async function getAiSelectedKoth(db) {
                     runnerUp: result.runnerUp || null,
                     runnerUpReason: result.runnerUpReason || null
                 }), 'EX', 7200); // 2 hour TTL
+            }
+
+            // v25.46: Tweet announcement when KOTH changes
+            // Only tweet if this is a NEW king (different from last tweeted)
+            if (isNewKoth && lastTweetedKothMint !== result.token.mint) {
+                try {
+                    const tweetUrl = await twitter.postKothTweet(
+                        result.token.name || result.token.ticker,
+                        result.token.ticker,
+                        result.token.mint,
+                        result.reasoning
+                    );
+                    if (tweetUrl) {
+                        lastTweetedKothMint = result.token.mint;
+                        logger.info(`[KOTH] 📢 Announced new king on Twitter: ${result.token.ticker}`);
+                    }
+                } catch (tweetErr) {
+                    // Log but don't fail - Twitter is non-critical
+                    logger.warn('[KOTH] Twitter announcement failed', { error: tweetErr.message });
+                }
             }
         }
 
@@ -774,6 +797,14 @@ async function processAirdrop(deps) {
         const MIN_AIRDROP_POOL = (config.AIRDROP_THRESHOLD_SOL || 1.0) * LAMPORTS_PER_SOL;
 
         const availableForAirdrop = solBalance - SAFETY_RESERVE;
+
+        // v25.43: ALWAYS evaluate KOTH (even without airdrop) so frontend stays updated
+        // This runs every time processAirdrop is called (every 15 min) with internal 30-min cache
+        try {
+            await getAiSelectedKoth(db);
+        } catch (kothErr) {
+            logger.warn('[Airdrop] KOTH evaluation failed, continuing...', { error: kothErr.message });
+        }
 
         // Basic Threshold Check - need at least MIN_AIRDROP_POOL SOL after reserve
         if (availableForAirdrop < MIN_AIRDROP_POOL) {

@@ -49,6 +49,62 @@ async function init() {
 }
 
 /**
+ * v25.46: Post a tweet for KOTH (King of the Hill) selection
+ * Announces the new KOTH token with AI reasoning
+ */
+async function postKothTweet(name, ticker, mint, reasoning) {
+    if (!twitterClient) {
+        logger.warn("Skipping KOTH Tweet: Missing Credentials");
+        return null;
+    }
+
+    try {
+        const rwClient = twitterClient.readWrite;
+
+        // Truncate reasoning if too long (Twitter 280 char limit)
+        const maxReasoningLength = 120;
+        let shortReasoning = reasoning || 'Top performer by volume and market metrics';
+        if (shortReasoning.length > maxReasoningLength) {
+            shortReasoning = shortReasoning.slice(0, maxReasoningLength - 3) + '...';
+        }
+
+        const tweetText = `👑 NEW KING OF THE PILL
+
+$${ticker} (${name})
+
+🤖 AI Analysis: ${shortReasoning}
+
+Trade now:
+https://pump.fun/coin/${mint}
+
+#Solana #KOTH #Ignition`;
+
+        const { data } = await rwClient.v2.tweet(tweetText);
+
+        const tweetUrl = authenticatedUsername
+            ? `https://x.com/${authenticatedUsername}/status/${data.id}`
+            : `https://x.com/i/status/${data.id}`;
+
+        logger.info(`KOTH Tweet Posted: ${tweetUrl}`);
+        return tweetUrl;
+    } catch (e) {
+        if (e.code === 403) {
+            logger.error("KOTH Tweet Permission Error (403)", {
+                error: "Check App Permissions (Read/Write) in Developer Portal."
+            });
+        } else if (e.code === 401) {
+            logger.error("KOTH Tweet Auth Error (401)", {
+                error: "Regenerate Keys & Tokens."
+            });
+        } else {
+            logger.error("KOTH Tweet Failed", { error: e.message, code: e.code });
+        }
+        // Don't throw - KOTH tweeting failure shouldn't break the flow
+        return null;
+    }
+}
+
+/**
  * Post a tweet for a new token launch
  */
 async function postLaunchTweet(name, ticker, mint) {
@@ -99,5 +155,6 @@ https://pump.fun/coin/${mint}
 module.exports = {
     init,
     postLaunchTweet,
+    postKothTweet,
     getClient: () => twitterClient,
 };

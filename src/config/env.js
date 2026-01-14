@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.43-IMAGE-FIX",
+    VERSION: "v25.46-KOTH-TWITTER-ANNOUNCEMENTS",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 
