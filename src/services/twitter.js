@@ -2,12 +2,17 @@
  * Twitter Service
  * Twitter API v2 integration for posting tweets
  * v25.22 FIX: Cache authenticated username for proper tweet URLs
+ * v25.46: Added KOTH announcements with rate limiting
  */
 const { TwitterApi } = require('twitter-api-v2');
 const logger = require('./logger');
 
 let twitterClient = null;
 let authenticatedUsername = null; // v25.22: Cache the bot's Twitter username
+
+// v25.46: KOTH tweet rate limiting (Twitter free tier: 1500 tweets/month = ~50/day)
+const KOTH_TWEET_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes minimum between KOTH tweets
+let lastKothTweetTime = 0;
 
 /**
  * Initialize Twitter client and fetch authenticated user's username
@@ -51,10 +56,20 @@ async function init() {
 /**
  * v25.46: Post a tweet for KOTH (King of the Hill) selection
  * Announces the new KOTH token with AI reasoning
+ * Includes rate limiting to avoid Twitter 429 errors
  */
 async function postKothTweet(name, ticker, mint, reasoning) {
     if (!twitterClient) {
         logger.warn("Skipping KOTH Tweet: Missing Credentials");
+        return null;
+    }
+
+    // Rate limiting check
+    const now = Date.now();
+    const timeSinceLastTweet = now - lastKothTweetTime;
+    if (timeSinceLastTweet < KOTH_TWEET_COOLDOWN_MS) {
+        const waitMinutes = Math.ceil((KOTH_TWEET_COOLDOWN_MS - timeSinceLastTweet) / 60000);
+        logger.info(`[KOTH Tweet] Rate limited - wait ${waitMinutes} min before next tweet`);
         return null;
     }
 
@@ -85,6 +100,9 @@ https://pump.fun/coin/${mint}
             ? `https://x.com/${authenticatedUsername}/status/${data.id}`
             : `https://x.com/i/status/${data.id}`;
 
+        // Update rate limit timestamp on success
+        lastKothTweetTime = Date.now();
+
         logger.info(`KOTH Tweet Posted: ${tweetUrl}`);
         return tweetUrl;
     } catch (e) {
@@ -96,6 +114,10 @@ https://pump.fun/coin/${mint}
             logger.error("KOTH Tweet Auth Error (401)", {
                 error: "Regenerate Keys & Tokens."
             });
+        } else if (e.code === 429) {
+            // Rate limited by Twitter - set cooldown to prevent immediate retries
+            lastKothTweetTime = Date.now();
+            logger.warn("KOTH Tweet Rate Limited (429) - cooldown activated");
         } else {
             logger.error("KOTH Tweet Failed", { error: e.message, code: e.code });
         }
