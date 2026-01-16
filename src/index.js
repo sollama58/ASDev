@@ -232,10 +232,38 @@ async function main() {
         }
     };
 
+    // PAGS: Initialize dedicated PAGS wallet keypair if configured
+    // This wallet holds fees and signs claim transactions
+    let pagsKeypair = null;
+    if (config.PAGS_ENABLED && config.PAGS_WALLET_PRIVATE_KEY) {
+        try {
+            pagsKeypair = Keypair.fromSecretKey(bs58.decode(config.PAGS_WALLET_PRIVATE_KEY));
+            const pagsWalletPubkey = pagsKeypair.publicKey.toString();
+
+            // Verify the keypair matches the configured PAGS_WALLET public key
+            if (config.PAGS_WALLET && pagsWalletPubkey !== config.PAGS_WALLET) {
+                logger.error(`[PAGS] CRITICAL: Wallet mismatch! PAGS_WALLET=${config.PAGS_WALLET}, derived=${pagsWalletPubkey}`);
+                logger.error('[PAGS] Check PAGS_WALLET_PRIVATE_KEY - keypair does not match PAGS_WALLET public key');
+                pagsKeypair = null; // Disable to prevent issues
+            } else {
+                logger.info(`[PAGS] Wallet initialized: ${pagsWalletPubkey}`);
+            }
+        } catch (e) {
+            logger.error(`[PAGS] Failed to initialize wallet keypair: ${e.message}`);
+            logger.error('[PAGS] Claims will not be processed - check PAGS_WALLET_PRIVATE_KEY format (should be base58)');
+            pagsKeypair = null;
+        }
+    } else if (config.PAGS_ENABLED && !config.PAGS_WALLET_PRIVATE_KEY) {
+        logger.warn('[PAGS] PAGS_WALLET_PRIVATE_KEY not configured - falling back to devKeypair for claims');
+        logger.warn('[PAGS] For production, configure a dedicated PAGS wallet for security');
+        pagsKeypair = devKeypair; // Fallback to dev wallet
+    }
+
     // Dependencies object for modules
     const deps = {
         connection,
         devKeypair,
+        pagsKeypair, // Dedicated PAGS wallet (or null/devKeypair fallback)
         wallet,
         db,
         redis,

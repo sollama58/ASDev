@@ -73,11 +73,18 @@ function errorResponse(res, statusCode, message, code = null) {
  * Initialize PAGS routes
  */
 function init(deps) {
-    const { db, connection, devKeypair, redis } = deps;
+    const { db, connection, devKeypair, pagsKeypair, redis } = deps;
     const router = express.Router();
 
+    // Use dedicated PAGS keypair if available, otherwise fall back to devKeypair
+    const effectivePagsKeypair = pagsKeypair || devKeypair;
+
+    if (!pagsKeypair && config.PAGS_ENABLED) {
+        logger.warn('[PAGS Routes] No dedicated PAGS keypair - using devKeypair as fallback');
+    }
+
     // Initialize services with Redis
-    pags.init({ db, connection, pagsKeypair: devKeypair, redis });
+    pags.init({ db, connection, pagsKeypair: effectivePagsKeypair, redis });
     pagsTwitterAuth.init({ db, redis });
 
     // Rate limiters
@@ -242,14 +249,23 @@ function init(deps) {
                 });
             }
 
+            // Determine if this beneficiary has multiple fee recipients (less than 100% share)
+            const feeShareBps = beneficiary.feeShareBps || 10000;
+            const hasMultipleRecipients = feeShareBps < 10000;
+
             res.json({
                 success: true,
                 isRegistered: true,
                 beneficiary: {
                     mint: beneficiary.mint,
                     twitterUsername: beneficiary.twitterUsername,
-                    feeShareBps: beneficiary.feeShareBps,
-                    feeSharePercent: beneficiary.feeShareBps / 100,
+                    feeShareBps: feeShareBps,
+                    feeSharePercent: feeShareBps / 100,
+                    // Clearly indicate if this is a partial share
+                    hasMultipleRecipients,
+                    feeShareDescription: hasMultipleRecipients
+                        ? `Receives ${feeShareBps / 100}% of token fees (multiple recipients configured)`
+                        : 'Receives 100% of token fees',
                     totalFeesAccumulated: beneficiary.totalFeesAccumulated || 0,
                     totalFeesClaimed: beneficiary.totalFeesClaimed || 0,
                     pendingFees: (beneficiary.totalFeesAccumulated || 0) - (beneficiary.totalFeesClaimed || 0),
@@ -543,6 +559,20 @@ function init(deps) {
     /**
      * POST /api/admin/pags/record-fee
      * Manually record a fee collection (admin only)
+     *
+     * Body params:
+     * - mint: Token mint address (required)
+     * - amount: Fee amount in SOL (required)
+     * - source: Source of the fee (optional, defaults to 'admin')
+     * - txSignature: Transaction signature (optional)
+     * - applyFeeShare: If true (default), amount is total fee and will be multiplied
+     *                  by beneficiary's feeShareBps percentage. If false, amount is
+     *                  already the beneficiary's share.
+     *
+     * Example with multiple Pump.fun recipients:
+     * - If token has 30% fee share for PAGS beneficiary
+     * - Total fee = 1.0 SOL, applyFeeShare=true → Records 0.3 SOL
+     * - Already calculated = 0.3 SOL, applyFeeShare=false → Records 0.3 SOL
      */
     router.post('/admin/pags/record-fee', adminLimiter, async (req, res) => {
         try {
@@ -552,21 +582,30 @@ function init(deps) {
                 return errorResponse(res, 401, 'Unauthorized');
             }
 
-            const { mint, amount, source, txSignature } = req.body;
+            const { mint, amount, source, txSignature, applyFeeShare } = req.body;
 
             const sanitizedMint = sanitizeString(mint, 64);
             const sanitizedSource = sanitizeString(source, 64);
             const sanitizedTxSignature = sanitizeString(txSignature, 128);
+            // Default to true if not specified (apply fee share percentage)
+            const shouldApplyFeeShare = applyFeeShare !== false;
 
             if (!sanitizedMint || amount === undefined) {
                 return errorResponse(res, 400, 'mint and amount are required');
             }
 
+            // Validate amount is a number
+            const numAmount = parseFloat(amount);
+            if (isNaN(numAmount) || numAmount <= 0) {
+                return errorResponse(res, 400, 'amount must be a positive number');
+            }
+
             const result = await pags.recordFeeCollection(
                 sanitizedMint,
-                amount,
+                numAmount,
                 sanitizedSource || 'admin',
-                sanitizedTxSignature
+                sanitizedTxSignature,
+                shouldApplyFeeShare
             );
             res.json({ success: true, ...result });
         } catch (e) {
@@ -644,6 +683,51 @@ function init(deps) {
         } catch (e) {
             logger.error('[PAGS API] Process claim error', { error: e.message });
             return errorResponse(res, 500, 'Failed to process claim');
+        }
+    });
+
+    /**
+     * GET /api/admin/pags/beneficiaries
+     * Get all beneficiaries with their fee share info (admin only)
+     * Shows which tokens have multiple recipients configured
+     */
+    router.get('/admin/pags/beneficiaries', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            // Pagination
+            const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+            const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+
+            const beneficiaries = await db.all(`
+                SELECT b.*, t.ticker, t.name
+                FROM pags_beneficiaries b
+                LEFT JOIN tokens t ON t.mint = b.mint
+                ORDER BY b."createdAt" DESC
+                LIMIT $1 OFFSET $2
+            `, [limit, offset]);
+
+            const totalCount = await db.get('SELECT COUNT(*) as count FROM pags_beneficiaries');
+
+            // Enhance with fee share info
+            const enhancedBeneficiaries = beneficiaries.map(b => ({
+                ...b,
+                feeSharePercent: (b.feeShareBps || 10000) / 100,
+                hasMultipleRecipients: b.feeShareBps && b.feeShareBps < 10000,
+                pendingFees: (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0)
+            }));
+
+            res.json({
+                success: true,
+                beneficiaries: enhancedBeneficiaries,
+                pagination: { limit, offset, total: totalCount?.count || 0 }
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Get beneficiaries error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to fetch beneficiaries');
         }
     });
 

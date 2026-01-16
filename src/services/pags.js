@@ -223,6 +223,7 @@ async function getBeneficiaryByMint(mint) {
 
 /**
  * Get all pending rewards for a Twitter username
+ * Includes fee share percentage for transparency when there are multiple recipients
  */
 async function getPendingRewardsByUsername(twitterUsername) {
     if (!db) throw new Error('PAGS service not initialized');
@@ -252,7 +253,11 @@ async function getPendingRewardsByUsername(twitterUsername) {
                 image: b.image,
                 pendingAmount: pending,
                 totalAccumulated: b.totalFeesAccumulated || 0,
-                totalClaimed: b.totalFeesClaimed || 0
+                totalClaimed: b.totalFeesClaimed || 0,
+                // Include fee share info for transparency
+                feeShareBps: b.feeShareBps || 10000,
+                feeSharePercent: (b.feeShareBps || 10000) / 100,
+                hasMultipleRecipients: b.feeShareBps && b.feeShareBps < 10000
             });
         }
     }
@@ -519,8 +524,20 @@ async function executeClaimTransfer(claimId, recipientWallet, amount) {
 
 /**
  * Record fee collection for a beneficiary
+ *
+ * IMPORTANT: Fee share percentage handling
+ * - If applyFeeShare=true (default), the amount is the TOTAL fee and will be
+ *   multiplied by the beneficiary's feeShareBps percentage before recording
+ * - If applyFeeShare=false, the amount is already the beneficiary's share
+ *   (e.g., when recording manual admin entries that are already calculated)
+ *
+ * Example with multiple Pump.fun recipients:
+ * - Token has 2 recipients: Creator (70%) and PAGS beneficiary (30%)
+ * - Total fee collected: 1.0 SOL
+ * - If applyFeeShare=true: Records 1.0 * (3000/10000) = 0.3 SOL
+ * - If applyFeeShare=false: Records 1.0 SOL as-is (caller already calculated)
  */
-async function recordFeeCollection(mint, amount, source = 'manual', txSignature = null) {
+async function recordFeeCollection(mint, amount, source = 'manual', txSignature = null, applyFeeShare = true) {
     if (!db) throw new Error('PAGS service not initialized');
 
     // Validate mint
@@ -539,31 +556,51 @@ async function recordFeeCollection(mint, amount, source = 'manual', txSignature 
         throw new Error('Beneficiary not found for mint');
     }
 
-    // Update accumulated fees
+    // Calculate the actual fee amount based on beneficiary's share percentage
+    // feeShareBps is in basis points (10000 = 100%)
+    let actualAmount = amount;
+    if (applyFeeShare && beneficiary.feeShareBps && beneficiary.feeShareBps < 10000) {
+        actualAmount = amount * (beneficiary.feeShareBps / 10000);
+        logger.info('[PAGS] Applying fee share percentage', {
+            mint,
+            totalFee: amount,
+            feeShareBps: beneficiary.feeShareBps,
+            feeSharePercent: beneficiary.feeShareBps / 100,
+            actualAmount
+        });
+    }
+
+    // Update accumulated fees with the beneficiary's share
     await db.run(`
         UPDATE pags_beneficiaries
         SET "totalFeesAccumulated" = "totalFeesAccumulated" + $1, "lastFeeUpdate" = $2
         WHERE id = $3
-    `, [amount, Date.now(), beneficiary.id]);
+    `, [actualAmount, Date.now(), beneficiary.id]);
 
-    // Log the fee collection
+    // Log the fee collection (log both total and actual for transparency)
     await db.run(`
         INSERT INTO pags_fee_logs ("beneficiaryId", amount, source, "txSignature", "collectedAt")
         VALUES ($1, $2, $3, $4, $5)
-    `, [beneficiary.id, amount, source, txSignature, Date.now()]);
+    `, [beneficiary.id, actualAmount, source, txSignature, Date.now()]);
 
     logger.info('[PAGS] Fee recorded', {
         mint,
         beneficiaryId: beneficiary.id,
         twitterUsername: beneficiary.twitterUsername,
-        amount,
+        totalFeeInput: amount,
+        actualAmountRecorded: actualAmount,
+        feeShareBps: beneficiary.feeShareBps,
         source
     });
 
     return {
         beneficiaryId: beneficiary.id,
         twitterUsername: beneficiary.twitterUsername,
-        newTotal: (beneficiary.totalFeesAccumulated || 0) + amount
+        feeShareBps: beneficiary.feeShareBps,
+        feeSharePercent: beneficiary.feeShareBps / 100,
+        totalFeeInput: amount,
+        actualAmountRecorded: actualAmount,
+        newTotal: (beneficiary.totalFeesAccumulated || 0) + actualAmount
     };
 }
 

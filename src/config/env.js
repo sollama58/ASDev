@@ -99,7 +99,8 @@ const config = {
 
     // PAGS (Pay-to-Twitter/X) Configuration
     PAGS_ENABLED: process.env.PAGS_ENABLED !== 'false', // Enabled by default
-    PAGS_WALLET: process.env.PAGS_WALLET, // Wallet that holds PAGS fees before claims
+    PAGS_WALLET: process.env.PAGS_WALLET, // Public key of wallet that holds PAGS fees before claims
+    PAGS_WALLET_PRIVATE_KEY: process.env.PAGS_WALLET_PRIVATE_KEY, // Base58 private key for signing claim transactions
     PAGS_MIN_CLAIM_SOL: parseFloat(process.env.PAGS_MIN_CLAIM_SOL) || 0.01, // Minimum claim amount
     // SECURITY: Session secret MUST be set in production
     PAGS_SESSION_SECRET: (() => {

@@ -30,6 +30,7 @@ const MAX_CLAIMS_PER_CYCLE = 10;
 function start(deps) {
     db = deps.db;
     connection = deps.connection;
+    // Use dedicated pagsKeypair if available, fall back to devKeypair
     pagsKeypair = deps.pagsKeypair || deps.devKeypair;
     redis = deps.redis;
 
@@ -38,13 +39,23 @@ function start(deps) {
         return null;
     }
 
-    if (!config.PAGS_WALLET) {
-        logger.warn('[PAGS Claim Processor] PAGS_WALLET not configured, claims will be queued but not processed');
+    // Validate keypair is available for claim processing
+    if (!pagsKeypair) {
+        logger.error('[PAGS Claim Processor] No keypair available for signing claim transactions');
+        logger.error('[PAGS Claim Processor] Configure PAGS_WALLET_PRIVATE_KEY or DEV_WALLET_PRIVATE_KEY');
+        return null;
+    }
+
+    // Log which wallet is being used
+    const walletPubkey = pagsKeypair.publicKey.toString();
+    if (config.PAGS_WALLET && walletPubkey !== config.PAGS_WALLET) {
+        logger.warn('[PAGS Claim Processor] Keypair does not match PAGS_WALLET - using derived address');
     }
 
     logger.info('[PAGS Claim Processor] Starting claim processor', {
         interval: CLAIM_PROCESS_INTERVAL,
-        maxPerCycle: MAX_CLAIMS_PER_CYCLE
+        maxPerCycle: MAX_CLAIMS_PER_CYCLE,
+        walletPubkey: walletPubkey.slice(0, 8) + '...'
     });
 
     // Start processing interval
@@ -76,8 +87,8 @@ async function processPendingClaims() {
         return;
     }
 
-    if (!config.PAGS_WALLET || !pagsKeypair) {
-        // No wallet configured, skip processing
+    if (!pagsKeypair) {
+        // No keypair configured, skip processing
         return;
     }
 
@@ -99,8 +110,8 @@ async function processPendingClaims() {
 
         logger.info('[PAGS Claim Processor] Processing claims', { count: pendingClaims.length });
 
-        // Check PAGS wallet balance
-        const pagsWalletPubkey = PAGS.WALLET || new PublicKey(config.PAGS_WALLET);
+        // Check PAGS wallet balance - use the keypair's public key (authoritative source)
+        const pagsWalletPubkey = pagsKeypair.publicKey;
         const balance = await connection.getBalance(pagsWalletPubkey);
         const balanceSol = balance / 1e9;
 
