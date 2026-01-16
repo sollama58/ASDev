@@ -652,14 +652,15 @@ function requireSession(req, res, next) {
         token = req.cookies.pags_session;
     }
 
-    // Debug logging for cross-origin issues
-    logger.debug('[PAGS Session] requireSession check', {
+    // Log session check (use info level to ensure it appears in production logs)
+    logger.info('[PAGS Session] requireSession check', {
         path: req.path,
         hasAuthHeader: !!authHeader,
         authHeaderPrefix: authHeader ? authHeader.substring(0, 15) + '...' : null,
         hasCookie: !!(req.cookies && req.cookies.pags_session),
         tokenFound: !!token,
-        tokenLength: token ? token.length : 0
+        tokenLength: token ? token.length : 0,
+        origin: req.headers.origin
     });
 
     if (!token) {

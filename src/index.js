@@ -186,6 +186,13 @@ async function main() {
         corsOrigins = config.CORS_ORIGINS.includes('*') ? '*' : config.CORS_ORIGINS;
     }
 
+    // Log CORS configuration for debugging
+    logger.info('[CORS] Configuration', {
+        corsOrigins: Array.isArray(corsOrigins) ? corsOrigins : corsOrigins,
+        nodeEnv: config.NODE_ENV,
+        frontendUrl: config.FRONTEND_URL
+    });
+
     const corsOptions = {
         origin: corsOrigins,
         optionsSuccessStatus: 200,
@@ -194,6 +201,25 @@ async function main() {
         allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Key', 'X-Requested-With']
     };
     app.use(cors(corsOptions));
+
+    // Log incoming PAGS API requests for debugging
+    app.use('/api/pags', (req, res, next) => {
+        logger.info('[PAGS API] Request received', {
+            method: req.method,
+            path: req.path,
+            origin: req.headers.origin,
+            hasAuth: !!req.headers.authorization
+        });
+        next();
+    });
+    app.use('/api/auth', (req, res, next) => {
+        logger.info('[PAGS Auth] Request received', {
+            method: req.method,
+            path: req.path,
+            origin: req.headers.origin
+        });
+        next();
+    });
     app.use(cookieParser()); // v25.47: Required for PAGS session cookies
     app.use(express.json({ limit: '10mb' })); // SECURITY FIX: Reduced from 50mb to 10mb
 
