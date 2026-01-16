@@ -129,7 +129,6 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
 
     // Validate inputs
     if (!mint) throw new Error('mint is required');
-    if (!creatorPubkey) throw new Error('creatorPubkey is required');
     if (!twitterUsername) throw new Error('twitterUsername is required');
 
     // Validate mint is a valid public key
@@ -137,10 +136,11 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
         throw new Error('Invalid mint address format');
     }
 
-    // Validate creator pubkey
-    if (!isValidPublicKey(creatorPubkey)) {
-        throw new Error('Invalid creator public key format');
-    }
+    // creatorPubkey is optional - may be 'unknown' if not available from on-chain
+    // Only validate if it looks like a pubkey (not 'unknown')
+    const finalCreatorPubkey = creatorPubkey && creatorPubkey !== 'unknown' && isValidPublicKey(creatorPubkey)
+        ? creatorPubkey
+        : null;
 
     const normalizedUsername = normalizeUsername(twitterUsername);
     if (!isValidTwitterUsername(normalizedUsername)) {
@@ -184,7 +184,7 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
         const result = await db.run(`
             INSERT INTO pags_beneficiaries (mint, "creatorPubkey", "twitterUsername", "feeShareBps", "createdAt")
             VALUES ($1, $2, $3, $4, $5)
-        `, [mint, creatorPubkey, normalizedUsername, feeShareBps, Date.now()]);
+        `, [mint, finalCreatorPubkey, normalizedUsername, feeShareBps, Date.now()]);
 
         logger.info('[PAGS] Beneficiary registered', { mint, twitterUsername: normalizedUsername, feeShareBps });
 
