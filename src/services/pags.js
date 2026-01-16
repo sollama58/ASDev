@@ -518,14 +518,34 @@ async function executeClaimTransfer(claimId, recipientWallet, amount) {
                 WHERE id = $3
             `, [signature, Date.now(), claimId]);
 
-            // Update beneficiary claimed amounts
+            // Update beneficiary claimed amounts - per token, not total
+            // Get the claim record to find the username
             const claim = await db.get('SELECT * FROM pags_claims WHERE id = $1', [claimId]);
             if (claim) {
-                await db.run(`
-                    UPDATE pags_beneficiaries
-                    SET "totalFeesClaimed" = "totalFeesClaimed" + $1
-                    WHERE "twitterUsername" = $2
-                `, [amount, claim.twitterUsername]);
+                // Get all beneficiaries for this user and calculate what was claimed from each
+                const beneficiaries = await db.all(`
+                    SELECT id, mint, "totalFeesAccumulated", "totalFeesClaimed"
+                    FROM pags_beneficiaries
+                    WHERE "twitterUsername" = $1 AND "isActive" = 1
+                `, [claim.twitterUsername]);
+
+                // Update each beneficiary's totalFeesClaimed based on its individual pending amount
+                for (const b of beneficiaries) {
+                    const pendingForToken = (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0);
+                    if (pendingForToken > 0) {
+                        await db.run(`
+                            UPDATE pags_beneficiaries
+                            SET "totalFeesClaimed" = "totalFeesClaimed" + $1
+                            WHERE id = $2
+                        `, [pendingForToken, b.id]);
+
+                        logger.debug('[PAGS] Updated claimed amount for beneficiary', {
+                            beneficiaryId: b.id,
+                            mint: b.mint,
+                            claimedAmount: pendingForToken
+                        });
+                    }
+                }
             }
 
             logger.info('[PAGS] Claim transfer completed', {

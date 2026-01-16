@@ -211,12 +211,30 @@ async function processOneClaim(claim) {
             WHERE id = $3
         `, [signature, Date.now(), claim.id]);
 
-        // Update beneficiary claimed amounts
-        await db.run(`
-            UPDATE pags_beneficiaries
-            SET "totalFeesClaimed" = "totalFeesClaimed" + $1
-            WHERE "twitterUsername" = $2 AND "isActive" = 1
-        `, [claim.amount, claim.twitterUsername]);
+        // Update beneficiary claimed amounts - per token, not total
+        // Get all beneficiaries for this user and update each one's claimed amount
+        const beneficiaries = await db.all(`
+            SELECT id, mint, "totalFeesAccumulated", "totalFeesClaimed"
+            FROM pags_beneficiaries
+            WHERE "twitterUsername" = $1 AND "isActive" = 1
+        `, [claim.twitterUsername]);
+
+        for (const b of beneficiaries) {
+            const pendingForToken = (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0);
+            if (pendingForToken > 0) {
+                await db.run(`
+                    UPDATE pags_beneficiaries
+                    SET "totalFeesClaimed" = "totalFeesClaimed" + $1
+                    WHERE id = $2
+                `, [pendingForToken, b.id]);
+
+                logger.debug('[PAGS Claim Processor] Updated claimed amount for beneficiary', {
+                    beneficiaryId: b.id,
+                    mint: b.mint,
+                    claimedAmount: pendingForToken
+                });
+            }
+        }
 
         logger.info('[PAGS Claim Processor] Claim completed', {
             claimId: claim.id,

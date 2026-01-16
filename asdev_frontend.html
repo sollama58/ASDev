@@ -5299,12 +5299,28 @@
             // Update rewards breakdown
             const breakdownEl = document.getElementById('pags-rewards-breakdown');
             if (pagsUser.rewardBreakdown && pagsUser.rewardBreakdown.length > 0) {
-                breakdownEl.innerHTML = pagsUser.rewardBreakdown.map(b => `
-                    <div class="flex justify-between items-center py-2 border-b border-purple-800/30 last:border-0">
-                        <span class="text-purple-300 font-mono text-xs">${b.mint ? (b.mint.slice(0, 6) + '...' + b.mint.slice(-4)) : 'Unknown'}</span>
-                        <span class="text-green-400 font-bold">${(b.pending || 0).toFixed(6)} SOL</span>
-                    </div>
-                `).join('');
+                breakdownEl.innerHTML = pagsUser.rewardBreakdown.map(b => {
+                    const shortMint = b.mint ? (b.mint.slice(0, 6) + '...' + b.mint.slice(-4)) : 'Unknown';
+                    const displayTicker = b.ticker ? `$${b.ticker}` : shortMint;
+                    const feePercent = b.feeShareBps ? (b.feeShareBps / 100).toFixed(1) : '100.0';
+                    const isShared = b.hasMultipleRecipients || (b.feeShareBps && b.feeShareBps < 10000);
+                    const tokenImage = b.image || 'https://placehold.co/28x28/1a1a2e/purple?text=%24';
+
+                    return `
+                        <div class="flex items-center gap-2 py-2 border-b border-purple-800/30 last:border-0">
+                            <img src="${DOMPurify.sanitize(tokenImage)}" alt="${DOMPurify.sanitize(displayTicker)}" class="w-7 h-7 rounded-full border border-purple-600 object-cover flex-shrink-0" onerror="this.src='https://placehold.co/28x28/1a1a2e/purple?text=%24'">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    <span class="text-purple-300 font-bold text-xs">${DOMPurify.sanitize(displayTicker)}</span>
+                                    ${b.name ? `<span class="text-purple-400/60 text-[10px] truncate max-w-[80px]">${DOMPurify.sanitize(b.name)}</span>` : ''}
+                                    ${isShared ? `<span class="text-orange-400 text-[10px]" title="You receive ${feePercent}% of fees from this token">${feePercent}%</span>` : ''}
+                                </div>
+                                <div class="text-purple-400/40 font-mono text-[9px]">${shortMint}</div>
+                            </div>
+                            <div class="text-green-400 font-bold text-sm flex-shrink-0">${(b.pendingAmount || b.pending || 0).toFixed(6)} SOL</div>
+                        </div>
+                    `;
+                }).join('');
             } else {
                 breakdownEl.innerHTML = '<div class="text-purple-200/50 text-sm text-center py-4">No rewards found</div>';
             }
@@ -5546,15 +5562,26 @@
 
                 if (data.breakdown && data.breakdown.length > 0) {
                     html += '<div class="text-gray-400 text-xs mb-2">Tokens:</div>';
-                    html += '<div class="space-y-1">';
+                    html += '<div class="space-y-2">';
                     for (const b of data.breakdown.slice(0, 5)) {
-                        html += `<div class="flex justify-between text-xs">
-                            <span class="text-gray-500 font-mono">${b.mint ? (b.mint.slice(0, 6) + '...') : '?'}</span>
-                            <span class="text-green-400">${(b.pending || 0).toFixed(6)} SOL</span>
-                        </div>`;
+                        const shortMint = b.mint ? (b.mint.slice(0, 6) + '...') : '?';
+                        const displayTicker = b.ticker ? `$${b.ticker}` : shortMint;
+                        const feePercent = b.feeShareBps ? (b.feeShareBps / 100).toFixed(1) : '100.0';
+                        const isShared = b.feeShareBps && b.feeShareBps < 10000;
+                        const tokenImage = b.image || 'https://placehold.co/24x24/1a1a2e/purple?text=%24';
+
+                        html += `
+                            <div class="flex items-center gap-2 text-xs">
+                                <img src="${DOMPurify.sanitize(tokenImage)}" alt="${DOMPurify.sanitize(displayTicker)}" class="w-6 h-6 rounded-full border border-purple-600/50 object-cover flex-shrink-0" onerror="this.src='https://placehold.co/24x24/1a1a2e/purple?text=%24'">
+                                <div class="flex-1 min-w-0">
+                                    <span class="text-purple-300 font-bold">${DOMPurify.sanitize(displayTicker)}</span>
+                                    ${isShared ? `<span class="text-orange-400 ml-1">(${feePercent}%)</span>` : ''}
+                                </div>
+                                <span class="text-green-400 font-mono">${(b.pending || 0).toFixed(6)} SOL</span>
+                            </div>`;
                     }
                     if (data.breakdown.length > 5) {
-                        html += `<div class="text-gray-500 text-xs">...and ${data.breakdown.length - 5} more</div>`;
+                        html += `<div class="text-gray-500 text-xs mt-1">...and ${data.breakdown.length - 5} more</div>`;
                     }
                     html += '</div>';
                 } else {
@@ -5592,23 +5619,27 @@
                 for (const token of data.breakdown) {
                     const pending = (token.totalFeesAccumulated || 0) - (token.totalFeesClaimed || 0);
                     const shortMint = token.mint ? (token.mint.slice(0, 6) + '...' + token.mint.slice(-4)) : 'Unknown';
-                    const tokenName = token.ticker || shortMint;
+                    const displayTicker = token.ticker ? `$${token.ticker}` : shortMint;
+                    const displayName = token.name || '';
                     const feePercent = token.feeShareBps ? (token.feeShareBps / 100).toFixed(1) : '100.0';
+                    const tokenImage = token.image || 'https://placehold.co/40x40/1a1a2e/purple?text=%24';
 
                     html += `
-                        <div class="flex items-center justify-between py-3 border-b border-purple-800/30 last:border-0 hover:bg-purple-900/20 px-2 rounded">
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2">
-                                    <span class="text-purple-300 font-bold text-sm">${DOMPurify.sanitize(tokenName)}</span>
+                        <div class="flex items-center gap-3 py-3 border-b border-purple-800/30 last:border-0 hover:bg-purple-900/20 px-2 rounded">
+                            <img src="${DOMPurify.sanitize(tokenImage)}" alt="${DOMPurify.sanitize(displayTicker)}" class="w-10 h-10 rounded-full border border-purple-600 object-cover flex-shrink-0" onerror="this.src='https://placehold.co/40x40/1a1a2e/purple?text=%24'">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <span class="text-purple-300 font-bold text-sm">${DOMPurify.sanitize(displayTicker)}</span>
+                                    ${displayName ? `<span class="text-purple-400/60 text-xs truncate">${DOMPurify.sanitize(displayName)}</span>` : ''}
                                     <span class="text-purple-500 text-xs">${feePercent}% share</span>
                                 </div>
-                                <div class="text-purple-400/50 font-mono text-[10px]">${token.mint || 'Unknown'}</div>
+                                <div class="text-purple-400/50 font-mono text-[10px] truncate">${token.mint || 'Unknown'}</div>
                             </div>
-                            <div class="text-right">
+                            <div class="text-right flex-shrink-0">
                                 <div class="text-green-400 font-bold">${(token.pending || pending || 0).toFixed(6)} SOL</div>
                                 <div class="text-cyan-400/70 text-xs">Total: ${(token.totalFeesAccumulated || 0).toFixed(6)}</div>
                             </div>
-                            <a href="https://pump.fun/coin/${token.mint}" target="_blank" class="ml-3 text-purple-400 hover:text-purple-300 transition" title="View on Pump.fun">
+                            <a href="https://pump.fun/coin/${token.mint}" target="_blank" class="text-purple-400 hover:text-purple-300 transition flex-shrink-0" title="View on Pump.fun">
                                 <i data-lucide="external-link" class="w-4 h-4"></i>
                             </a>
                         </div>
@@ -5686,15 +5717,25 @@
         tokens.forEach((token, index) => {
             const pending = (token.totalFeesAccumulated || 0) - (token.totalFeesClaimed || 0);
             const shortMint = token.mint ? (token.mint.slice(0, 4) + '...' + token.mint.slice(-4)) : '???';
-            const tokenName = token.ticker || shortMint;
+            const displayTicker = token.ticker ? `$${token.ticker}` : shortMint;
+            const displayName = token.name || '';
             const feePercent = token.feeShareBps ? (token.feeShareBps / 100).toFixed(1) : '100.0';
+            const tokenImage = token.image || 'https://placehold.co/32x32/1a1a2e/purple?text=%24';
 
             html += `
                 <tr class="border-b border-purple-800/20 hover:bg-purple-900/20">
                     <td class="p-2 text-purple-400">${index + 1}</td>
                     <td class="p-2">
-                        <span class="text-white font-bold">${DOMPurify.sanitize(tokenName)}</span>
-                        <div class="text-purple-400/50 font-mono text-[10px]">${shortMint}</div>
+                        <div class="flex items-center gap-2">
+                            <img src="${DOMPurify.sanitize(tokenImage)}" alt="${DOMPurify.sanitize(displayTicker)}" class="w-8 h-8 rounded-full border border-purple-600 object-cover flex-shrink-0" onerror="this.src='https://placehold.co/32x32/1a1a2e/purple?text=%24'">
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    <span class="text-white font-bold">${DOMPurify.sanitize(displayTicker)}</span>
+                                    ${displayName ? `<span class="text-purple-400/60 text-xs truncate max-w-[100px]">${DOMPurify.sanitize(displayName)}</span>` : ''}
+                                </div>
+                                <div class="text-purple-400/50 font-mono text-[10px]">${shortMint}</div>
+                            </div>
+                        </div>
                     </td>
                     <td class="p-2 text-purple-300">@${DOMPurify.sanitize(token.twitterUsername || '???')}</td>
                     <td class="p-2 text-right text-orange-400">${feePercent}%</td>
