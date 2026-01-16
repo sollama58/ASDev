@@ -433,12 +433,15 @@ function init(deps) {
      * Sets session token via httpOnly cookie instead of URL parameter
      */
     router.get('/auth/twitter/callback', async (req, res) => {
+        // Default redirect path for errors (use FRONTEND_PATH from config)
+        const errorRedirectBase = config.FRONTEND_PATH || '/';
+
         try {
             const { code, state, error, error_description } = req.query;
 
             if (error) {
                 logger.warn('[PAGS API] OAuth error from Twitter', { error, error_description });
-                return res.redirect(`/?auth_error=${encodeURIComponent('Twitter authentication was denied')}`);
+                return res.redirect(`${errorRedirectBase}${errorRedirectBase.includes('?') ? '&' : '?'}auth_error=${encodeURIComponent('Twitter authentication was denied')}`);
             }
 
             const result = await pagsTwitterAuth.handleCallback(code, state);
@@ -447,11 +450,12 @@ function init(deps) {
             pagsTwitterAuth.setSessionCookie(res, result.sessionToken);
 
             // Redirect to frontend without session token in URL
-            const redirectUrl = result.redirectAfterAuth || '/';
+            // Use the stored redirect path from OAuth flow, or default to FRONTEND_PATH
+            const redirectUrl = result.redirectAfterAuth || config.FRONTEND_PATH || '/';
             res.redirect(`${redirectUrl}${redirectUrl.includes('?') ? '&' : '?'}auth_success=true`);
         } catch (e) {
             logger.error('[PAGS API] OAuth callback error', { error: e.message });
-            res.redirect(`/?auth_error=${encodeURIComponent('Authentication failed')}`);
+            res.redirect(`${errorRedirectBase}${errorRedirectBase.includes('?') ? '&' : '?'}auth_error=${encodeURIComponent('Authentication failed')}`);
         }
     });
 

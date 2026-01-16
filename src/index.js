@@ -21,6 +21,7 @@ const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const { Connection, Keypair, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
 const { Wallet } = require('@coral-xyz/anchor');
@@ -177,6 +178,7 @@ async function main() {
         allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Key', 'X-Requested-With']
     };
     app.use(cors(corsOptions));
+    app.use(cookieParser()); // v25.47: Required for PAGS session cookies
     app.use(express.json({ limit: '10mb' })); // SECURITY FIX: Reduced from 50mb to 10mb
 
     // v25.4: Rate limiting - More permissive for frontend polling, strict for deployments

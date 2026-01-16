@@ -200,7 +200,8 @@ function generatePKCE() {
  * Only allows relative paths or same-origin URLs
  */
 function validateRedirectUrl(url, baseUrl) {
-    if (!url) return '/';
+    // Default to FRONTEND_PATH if no URL provided
+    if (!url) return config.FRONTEND_PATH || '/';
 
     // Allow relative paths starting with /
     if (url.startsWith('/') && !url.startsWith('//')) {
@@ -214,7 +215,7 @@ function validateRedirectUrl(url, baseUrl) {
     // If it's an absolute URL, verify same origin
     try {
         const redirectUrl = new URL(url);
-        const base = new URL(baseUrl || process.env.BASE_URL || 'http://localhost:3000');
+        const base = new URL(baseUrl || config.BASE_URL || 'http://localhost:3000');
 
         if (redirectUrl.origin === base.origin) {
             return url;
@@ -224,7 +225,7 @@ function validateRedirectUrl(url, baseUrl) {
     }
 
     logger.warn('[PAGS Twitter Auth] Invalid redirect URL blocked', { url: url.slice(0, 100) });
-    return '/';
+    return config.FRONTEND_PATH || '/';
 }
 
 /**
@@ -245,13 +246,14 @@ async function getAuthorizationUrl(redirectAfterAuth = '/') {
     const state = generateState();
     const { codeVerifier, codeChallenge } = generatePKCE();
 
-    // Build callback URL
+    // Build callback URL using config.BASE_URL
     const callbackUrl = config.TWITTER_OAUTH_CALLBACK_URL.startsWith('http')
         ? config.TWITTER_OAUTH_CALLBACK_URL
-        : `${process.env.BASE_URL || 'http://localhost:3000'}${config.TWITTER_OAUTH_CALLBACK_URL}`;
+        : `${config.BASE_URL}${config.TWITTER_OAUTH_CALLBACK_URL}`;
 
-    // Validate redirect URL
-    const safeRedirect = validateRedirectUrl(redirectAfterAuth, process.env.BASE_URL);
+    // Validate redirect URL - default to FRONTEND_PATH if not specified
+    const defaultRedirect = config.FRONTEND_PATH || '/';
+    const safeRedirect = validateRedirectUrl(redirectAfterAuth || defaultRedirect, config.BASE_URL);
 
     // Generate auth link with OAuth 2.0
     const { url } = client.generateOAuth2AuthLink(
@@ -295,10 +297,10 @@ async function handleCallback(code, state) {
         clientSecret: config.TWITTER_OAUTH2_CLIENT_SECRET,
     });
 
-    // Build callback URL
+    // Build callback URL using config.BASE_URL
     const callbackUrl = config.TWITTER_OAUTH_CALLBACK_URL.startsWith('http')
         ? config.TWITTER_OAUTH_CALLBACK_URL
-        : `${process.env.BASE_URL || 'http://localhost:3000'}${config.TWITTER_OAUTH_CALLBACK_URL}`;
+        : `${config.BASE_URL}${config.TWITTER_OAUTH_CALLBACK_URL}`;
 
     try {
         // Exchange code for tokens

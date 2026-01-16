@@ -14,9 +14,15 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.47-PAGS-AUTO-FEE-DETECTION",
+    VERSION: "v25.48-PAGS-COOKIE-FIX",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
+    // v25.48: Base URL for OAuth callbacks and redirects (REQUIRED for production)
+    // Example: https://alonisthe.dev (without trailing slash)
+    BASE_URL: process.env.BASE_URL || 'http://localhost:3000',
+    // v25.48: Frontend path (for redirects after OAuth - the path where frontend is served)
+    // Example: /ignition for https://alonisthe.dev/ignition
+    FRONTEND_PATH: process.env.FRONTEND_PATH || '/',
 
     // Solana RPC
     HELIUS_API_KEY: process.env.HELIUS_API_KEY,
