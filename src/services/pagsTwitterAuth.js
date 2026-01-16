@@ -652,7 +652,23 @@ function requireSession(req, res, next) {
         token = req.cookies.pags_session;
     }
 
+    // Debug logging for cross-origin issues
+    logger.debug('[PAGS Session] requireSession check', {
+        path: req.path,
+        hasAuthHeader: !!authHeader,
+        authHeaderPrefix: authHeader ? authHeader.substring(0, 15) + '...' : null,
+        hasCookie: !!(req.cookies && req.cookies.pags_session),
+        tokenFound: !!token,
+        tokenLength: token ? token.length : 0
+    });
+
     if (!token) {
+        logger.warn('[PAGS Session] No token found', {
+            path: req.path,
+            origin: req.headers.origin,
+            hasAuthHeader: !!authHeader,
+            hasCookies: !!req.cookies
+        });
         return res.status(401).json({
             success: false,
             error: 'Authorization required',
@@ -663,6 +679,11 @@ function requireSession(req, res, next) {
     const decoded = verifySessionToken(token);
 
     if (!decoded.valid) {
+        logger.warn('[PAGS Session] Token validation failed', {
+            path: req.path,
+            error: decoded.error,
+            tokenLength: token.length
+        });
         return res.status(401).json({
             success: false,
             error: decoded.error,

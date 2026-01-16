@@ -5050,10 +5050,16 @@
         if (urlParams.get('auth_success') === 'true') {
             // Check if we got a token in the URL (cross-origin flow)
             const urlToken = urlParams.get('pags_token');
+            console.log('PAGS: OAuth callback received', {
+                hasToken: !!urlToken,
+                tokenLength: urlToken ? urlToken.length : 0
+            });
             if (urlToken) {
                 // Store the token from URL in localStorage
                 setPagsToken(urlToken);
-                console.log('PAGS: Stored token from OAuth callback');
+                console.log('PAGS: Stored token from OAuth callback, length:', urlToken.length);
+            } else {
+                console.warn('PAGS: No token in OAuth callback URL');
             }
             // Clear the URL parameters (security: don't leave token in URL)
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -5219,6 +5225,10 @@
             // Send to backend (include Authorization header for cross-origin support)
             const headers = { 'Content-Type': 'application/json' };
             const storedToken = localStorage.getItem('pags_token');
+            console.log('PAGS link-wallet: Token check', {
+                hasToken: !!storedToken,
+                tokenLength: storedToken ? storedToken.length : 0
+            });
             if (storedToken) {
                 headers['Authorization'] = `Bearer ${storedToken}`;
             }
