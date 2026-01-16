@@ -118,7 +118,10 @@ async function storeOAuthState(state, data) {
                     'EX',
                     OAUTH_STATE_TTL_SECONDS
                 );
-                return true;
+                logger.debug('[PAGS Twitter Auth] State stored in Redis', {
+                    state: state.slice(0, 8) + '...'
+                });
+                return 'redis';
             }
         } catch (e) {
             logger.warn('[PAGS Twitter Auth] Redis store failed, using fallback', { error: e.message });
@@ -127,7 +130,10 @@ async function storeOAuthState(state, data) {
 
     // Fallback to in-memory
     oauthStatesFallback.set(state, stateData);
-    return true;
+    logger.debug('[PAGS Twitter Auth] State stored in memory fallback', {
+        state: state.slice(0, 8) + '...'
+    });
+    return 'memory';
 }
 
 /**
@@ -143,8 +149,14 @@ async function retrieveOAuthState(state) {
                 if (data) {
                     // Delete after retrieval (one-time use)
                     await client.del(`pags:oauth:state:${state}`);
+                    logger.debug('[PAGS Twitter Auth] State retrieved from Redis', {
+                        state: state.slice(0, 8) + '...'
+                    });
                     return JSON.parse(data);
                 }
+                logger.debug('[PAGS Twitter Auth] State not found in Redis, trying fallback', {
+                    state: state.slice(0, 8) + '...'
+                });
             }
         } catch (e) {
             logger.warn('[PAGS Twitter Auth] Redis retrieve failed, trying fallback', { error: e.message });
@@ -155,9 +167,15 @@ async function retrieveOAuthState(state) {
     const data = oauthStatesFallback.get(state);
     if (data) {
         oauthStatesFallback.delete(state);
+        logger.debug('[PAGS Twitter Auth] State retrieved from memory fallback', {
+            state: state.slice(0, 8) + '...'
+        });
         return data;
     }
 
+    logger.warn('[PAGS Twitter Auth] State not found anywhere', {
+        state: state.slice(0, 8) + '...'
+    });
     return null;
 }
 
@@ -283,7 +301,7 @@ async function getAuthorizationUrl(redirectAfterAuth = '/') {
     );
 
     // Store state and verifier in Redis
-    await storeOAuthState(state, {
+    const storeResult = await storeOAuthState(state, {
         codeVerifier,
         redirectAfterAuth: safeRedirect
     });
@@ -291,7 +309,10 @@ async function getAuthorizationUrl(redirectAfterAuth = '/') {
     logger.info('[PAGS Twitter Auth] Auth URL generated', {
         state: state.slice(0, 8) + '...',
         callbackUrl,
-        baseUrl: config.BASE_URL
+        baseUrl: config.BASE_URL,
+        codeVerifierLength: codeVerifier.length,
+        codeVerifierPrefix: codeVerifier.slice(0, 8) + '...',
+        storedToRedis: storeResult
     });
 
     return { url, state };
@@ -310,6 +331,13 @@ async function handleCallback(code, state) {
     if (!stateData) {
         throw new Error('Invalid or expired OAuth state');
     }
+
+    logger.info('[PAGS Twitter Auth] State retrieved for callback', {
+        state: state.slice(0, 8) + '...',
+        codeVerifierLength: stateData.codeVerifier?.length,
+        codeVerifierPrefix: stateData.codeVerifier?.slice(0, 8) + '...',
+        hasRedirectAfterAuth: !!stateData.redirectAfterAuth
+    });
 
     // Create client for token exchange
     const client = new TwitterApi({
