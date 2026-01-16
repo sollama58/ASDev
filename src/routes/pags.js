@@ -448,7 +448,22 @@ function init(deps) {
 
             // For cross-origin setups, we can't use httpOnly cookies
             // Instead, pass the session token via URL parameter (will be stored in localStorage by frontend)
-            const redirectUrl = result.redirectAfterAuth || config.FRONTEND_URL || config.FRONTEND_PATH || '/';
+            let redirectUrl = result.redirectAfterAuth || config.FRONTEND_URL || config.FRONTEND_PATH || '/';
+
+            // If redirectUrl is a relative path and FRONTEND_URL is set to a full URL, prepend it
+            if (!redirectUrl.startsWith('http') && config.FRONTEND_URL && config.FRONTEND_URL.startsWith('http')) {
+                // redirectUrl is relative (like /ignition), prepend FRONTEND_URL base
+                const frontendBase = config.FRONTEND_URL.replace(/\/+$/, ''); // Remove trailing slashes
+                redirectUrl = redirectUrl.startsWith('/') ? `${frontendBase}${redirectUrl}` : `${frontendBase}/${redirectUrl}`;
+            }
+
+            logger.info('[PAGS API] OAuth callback redirect calculation', {
+                resultRedirectAfterAuth: result.redirectAfterAuth,
+                configFrontendUrl: config.FRONTEND_URL,
+                configFrontendPath: config.FRONTEND_PATH,
+                finalRedirectUrl: redirectUrl
+            });
+
             const separator = redirectUrl.includes('?') ? '&' : '?';
 
             // Check if this is a cross-origin redirect
