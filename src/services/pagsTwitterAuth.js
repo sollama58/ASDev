@@ -223,11 +223,13 @@ function generatePKCE() {
  * Validate redirect URL to prevent open redirect attacks
  * Allows relative paths, same-origin URLs, or the configured FRONTEND_URL
  *
- * For cross-origin setups: relative paths are converted to full URLs using FRONTEND_URL
+ * For cross-origin setups: Uses FRONTEND_URL directly as the redirect destination
  */
 function validateRedirectUrl(url, baseUrl) {
-    // Default to FRONTEND_URL if no URL provided
+    // Default to FRONTEND_URL if no URL provided or if it's just a relative path
     const defaultRedirect = config.FRONTEND_URL || config.FRONTEND_PATH || '/';
+
+    // If no URL provided, use the default
     if (!url) return defaultRedirect;
 
     // Handle relative paths starting with /
@@ -235,10 +237,12 @@ function validateRedirectUrl(url, baseUrl) {
         // Block any URL encoding tricks
         const decoded = decodeURIComponent(url);
         if (decoded.startsWith('/') && !decoded.startsWith('//') && !decoded.includes('://')) {
-            // For cross-origin setups, convert relative path to full URL using FRONTEND_URL
+            // For cross-origin setups with FRONTEND_URL configured as full URL,
+            // just use FRONTEND_URL directly (it already contains the path)
             if (config.FRONTEND_URL && config.FRONTEND_URL.startsWith('http')) {
-                const frontendBase = config.FRONTEND_URL.replace(/\/+$/, ''); // Remove trailing slashes
-                return `${frontendBase}${url}`;
+                // FRONTEND_URL is already the complete frontend URL (e.g., https://alonisthe.dev/ignition)
+                // Don't append the relative path again
+                return config.FRONTEND_URL;
             }
             // For same-origin, keep as relative
             return url;

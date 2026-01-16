@@ -450,11 +450,10 @@ function init(deps) {
             // Instead, pass the session token via URL parameter (will be stored in localStorage by frontend)
             let redirectUrl = result.redirectAfterAuth || config.FRONTEND_URL || config.FRONTEND_PATH || '/';
 
-            // If redirectUrl is a relative path and FRONTEND_URL is set to a full URL, prepend it
+            // If redirectUrl is a relative path and FRONTEND_URL is set to a full URL, use FRONTEND_URL directly
+            // (FRONTEND_URL already contains the complete path like https://alonisthe.dev/ignition)
             if (!redirectUrl.startsWith('http') && config.FRONTEND_URL && config.FRONTEND_URL.startsWith('http')) {
-                // redirectUrl is relative (like /ignition), prepend FRONTEND_URL base
-                const frontendBase = config.FRONTEND_URL.replace(/\/+$/, ''); // Remove trailing slashes
-                redirectUrl = redirectUrl.startsWith('/') ? `${frontendBase}${redirectUrl}` : `${frontendBase}/${redirectUrl}`;
+                redirectUrl = config.FRONTEND_URL;
             }
 
             logger.info('[PAGS API] OAuth callback redirect calculation', {
