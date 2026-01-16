@@ -487,13 +487,23 @@ function verifySessionToken(token) {
         });
 
         if (decoded.type !== 'pags_session') {
+            logger.warn('[PAGS Session] Token type mismatch', { type: decoded.type });
             return { valid: false, error: 'Invalid token type' };
         }
 
         // SECURITY: Validate required claims
         if (!decoded.twitterId || !decoded.jti) {
+            logger.warn('[PAGS Session] Token missing required claims', {
+                hasTwitterId: !!decoded.twitterId,
+                hasJti: !!decoded.jti
+            });
             return { valid: false, error: 'Invalid token structure' };
         }
+
+        logger.info('[PAGS Session] Token verified successfully', {
+            twitterId: decoded.twitterId,
+            username: decoded.username
+        });
 
         return {
             valid: true,
@@ -502,6 +512,12 @@ function verifySessionToken(token) {
             jti: decoded.jti
         };
     } catch (e) {
+        logger.warn('[PAGS Session] JWT verification error', {
+            errorName: e.name,
+            errorMessage: e.message,
+            secretConfigured: !!config.PAGS_SESSION_SECRET,
+            secretLength: config.PAGS_SESSION_SECRET ? config.PAGS_SESSION_SECRET.length : 0
+        });
         if (e.name === 'TokenExpiredError') {
             return { valid: false, error: 'Session expired' };
         }
