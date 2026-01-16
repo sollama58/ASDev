@@ -1664,6 +1664,53 @@ async function filterMintsWeAreRecipientFor(mints, creatorPubkey, connection) {
     return verified;
 }
 
+/**
+ * Fetch token metadata from Pump.fun API
+ * Used when registering PAGS beneficiaries to ensure token metadata is stored
+ *
+ * @param {string} mint - Token mint address
+ * @returns {Promise<{ticker: string, name: string, image: string, description: string, twitter: string, website: string, metadataUri: string}|null>}
+ */
+async function fetchPumpFunTokenMetadata(mint) {
+    try {
+        const pumpMetaUrl = `https://frontend-api.pump.fun/coins/${mint}`;
+        const response = await axios.get(pumpMetaUrl, { timeout: 5000 });
+
+        if (!response.data) {
+            logger.debug(`[MintExtractor] No data from pump.fun API for ${mint.slice(0, 8)}...`);
+            return null;
+        }
+
+        const pumpData = response.data;
+        let image = imageUtils.normalizeImageUrl(pumpData.image_uri || pumpData.image);
+
+        // Try GeckoTerminal if Pump.fun doesn't have image
+        if (!image) {
+            const geckoImage = await fetchGeckoTerminalImage(mint);
+            if (geckoImage) {
+                image = geckoImage;
+                logger.info(`[MintExtractor] Using GeckoTerminal image for ${mint.slice(0, 8)}... (fetchPumpFunTokenMetadata)`);
+            }
+        }
+
+        logger.info(`[MintExtractor] Fetched metadata for ${mint.slice(0, 8)}... from pump.fun: ticker=${pumpData.symbol}, name=${pumpData.name}, image=${image ? 'YES' : 'NO'}`);
+
+        return {
+            ticker: pumpData.symbol || 'UNKNOWN',
+            name: pumpData.name || 'Unknown Token',
+            image: image || null,
+            description: pumpData.description || '',
+            twitter: pumpData.twitter || '',
+            website: pumpData.website || '',
+            metadataUri: pumpData.metadata_uri || null,
+            creator: pumpData.creator || null
+        };
+    } catch (e) {
+        logger.debug(`[MintExtractor] Failed to fetch pump.fun metadata for ${mint.slice(0, 8)}...: ${e.message}`);
+        return null;
+    }
+}
+
 module.exports = {
     // Core extraction functions
     extractMintFromTransaction,
@@ -1682,6 +1729,7 @@ module.exports = {
     validateMintsBatch,
     fetchDexScreenerData,
     fetchGeckoTerminalImage,
+    fetchPumpFunTokenMetadata,
 
     // Fee recipient verification
     verifyFeeRecipient,

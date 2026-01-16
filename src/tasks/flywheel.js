@@ -32,6 +32,9 @@ const airdropMutex = mutex.getMutex('flywheel_airdrop');
 // Import Robinhood scanner for fee claiming
 const robinhoodScanner = require('./robinhoodScanner');
 
+// v25.51: Import PAGS fee scanner for automatic fee detection and collection
+const pagsFeeScanner = require('./pagsFeeScanner');
+
 // v25.39: Import holder scanner to refresh data before airdrop
 const holderScanner = require('./holderScanner');
 
@@ -1508,6 +1511,17 @@ async function runFeeCollection(deps) {
                 logger.debug('[FeeCollection] Robinhood fee claiming skipped', { error: e.message });
             }
 
+            // v25.51: Also collect PAGS fees from Pump.fun vaults
+            try {
+                const pagsResult = await pagsFeeScanner.collectAllFees();
+                if (pagsResult.totalClaimed > 0) {
+                    logger.info(`[FeeCollection] Claimed ${pagsResult.totalClaimed.toFixed(4)} SOL from ${pagsResult.claimedCount} PAGS tokens`);
+                    await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [pagsResult.totalClaimed * LAMPORTS_PER_SOL, 'lifetimePagsFeesLamports']);
+                }
+            } catch (e) {
+                logger.debug('[FeeCollection] PAGS fee collection skipped', { error: e.message });
+            }
+
             // Distribute platform fees (5% to fee wallets)
             if (claimedAmount > 0) {
                 const MIN_SPEND = 0.01 * LAMPORTS_PER_SOL;
@@ -1591,6 +1605,21 @@ async function start(deps) {
         }
     } catch (e) {
         logger.warn('[Flywheel] Failed to initialize nextAirdropTimestamp', { error: e.message });
+    }
+
+    // v25.51: Initialize PAGS fee scanner
+    try {
+        const pags = require('../services/pags');
+        pagsFeeScanner.init({
+            db: deps.db,
+            connection: deps.connection,
+            pagsKeypair: deps.pagsKeypair,
+            devKeypair: deps.devKeypair,
+            solana,
+            pags
+        });
+    } catch (e) {
+        logger.warn('[Flywheel] PAGS fee scanner init failed', { error: e.message });
     }
 
     // Fee collection every 1 minute

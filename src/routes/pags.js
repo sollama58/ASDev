@@ -146,6 +146,43 @@ function init(deps) {
     });
 
     /**
+     * GET /api/pags/pending-onchain
+     * Get on-chain pending fees from Pump.fun vaults for all PAGS tokens
+     * This shows fees that are waiting in vaults but not yet claimed
+     */
+    router.get('/pags/pending-onchain', lookupLimiter, async (req, res) => {
+        try {
+            if (!config.PAGS_ENABLED) {
+                return errorResponse(res, 503, 'PAGS is not enabled');
+            }
+
+            // Import and use the fee scanner
+            const pagsFeeScanner = require('../tasks/pagsFeeScanner');
+            const pending = await pagsFeeScanner.getAllPendingFees();
+
+            res.json({
+                success: true,
+                onChainPending: {
+                    totalPendingSol: pending.totalPendingSol || 0,
+                    beneficiaryCount: pending.beneficiaryCount || 0,
+                    tokens: (pending.beneficiaries || []).map(b => ({
+                        mint: b.mint,
+                        twitterUsername: b.twitterUsername,
+                        pendingSol: b.ourShareLamports / 1e9,
+                        shareBps: b.shareBps,
+                        sharePercent: b.sharePercent,
+                        bcFeesSol: b.bcFeesLamports / 1e9,
+                        ammFeesSol: b.ammFeesLamports / 1e9
+                    }))
+                }
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Pending on-chain error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to fetch on-chain pending fees');
+        }
+    });
+
+    /**
      * GET /api/pags/leaderboard
      * Get PAGS leaderboard data for public display
      * Returns top tokens and users by fees accumulated
@@ -400,9 +437,48 @@ function init(deps) {
                 feeShareBps: detectedFeeShareBps
             });
 
+            // Fetch and store token metadata to ensure frontend displays correctly
+            // This runs async after registration to not block the response
+            let tokenMetadata = null;
+            try {
+                tokenMetadata = await mintExtractor.fetchPumpFunTokenMetadata(sanitizedMint);
+                if (tokenMetadata && tokenMetadata.ticker && tokenMetadata.name) {
+                    const postgres = require('../services/postgres');
+                    await postgres.saveTokenData(
+                        feeRecipientResult.originalCreator || 'unknown',
+                        sanitizedMint,
+                        {
+                            ticker: tokenMetadata.ticker,
+                            name: tokenMetadata.name,
+                            image: tokenMetadata.image || '',
+                            description: tokenMetadata.description || '',
+                            twitter: tokenMetadata.twitter || '',
+                            website: tokenMetadata.website || '',
+                            metadataUri: tokenMetadata.metadataUri || ''
+                        }
+                    );
+                    logger.info('[PAGS API] Token metadata saved', {
+                        mint: sanitizedMint,
+                        ticker: tokenMetadata.ticker,
+                        hasImage: !!tokenMetadata.image
+                    });
+                }
+            } catch (metaError) {
+                // Don't fail registration if metadata fetch fails
+                logger.warn('[PAGS API] Could not fetch/save token metadata', {
+                    mint: sanitizedMint,
+                    error: metaError.message
+                });
+            }
+
             res.json({
                 success: true,
                 beneficiary: result,
+                tokenMetadata: tokenMetadata ? {
+                    ticker: tokenMetadata.ticker,
+                    name: tokenMetadata.name,
+                    image: tokenMetadata.image
+                } : null,
                 onChainVerification: {
                     verified: true,
                     source: feeRecipientResult.source,
@@ -1144,6 +1220,101 @@ function init(deps) {
         } catch (e) {
             logger.error('[PAGS API] Admin deactivate error', { error: e.message });
             return errorResponse(res, 500, 'Failed to deactivate');
+        }
+    });
+
+    /**
+     * POST /api/admin/pags/backfill-metadata
+     * Backfill token metadata for PAGS tokens that don't have it in the tokens table
+     * This is useful for tokens registered before v25.53 when metadata storage was added
+     */
+    router.post('/admin/pags/backfill-metadata', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            // Find PAGS beneficiaries without corresponding token metadata
+            const beneficiariesWithoutMetadata = await db.all(`
+                SELECT b.mint, b."creatorPubkey"
+                FROM pags_beneficiaries b
+                LEFT JOIN tokens t ON t.mint = b.mint
+                WHERE b."isActive" = 1 AND (t.mint IS NULL OR t.ticker IS NULL)
+                LIMIT 50
+            `);
+
+            if (beneficiariesWithoutMetadata.length === 0) {
+                return res.json({
+                    success: true,
+                    message: 'All PAGS tokens already have metadata',
+                    processed: 0
+                });
+            }
+
+            logger.info('[PAGS API] Backfilling metadata for tokens', {
+                count: beneficiariesWithoutMetadata.length
+            });
+
+            const postgres = require('../services/postgres');
+            const results = { success: 0, failed: 0, details: [] };
+
+            for (const b of beneficiariesWithoutMetadata) {
+                try {
+                    const metadata = await mintExtractor.fetchPumpFunTokenMetadata(b.mint);
+                    if (metadata && metadata.ticker && metadata.name) {
+                        await postgres.saveTokenData(
+                            b.creatorPubkey || 'unknown',
+                            b.mint,
+                            {
+                                ticker: metadata.ticker,
+                                name: metadata.name,
+                                image: metadata.image || '',
+                                description: metadata.description || '',
+                                twitter: metadata.twitter || '',
+                                website: metadata.website || '',
+                                metadataUri: metadata.metadataUri || ''
+                            }
+                        );
+                        results.success++;
+                        results.details.push({
+                            mint: b.mint,
+                            ticker: metadata.ticker,
+                            status: 'success'
+                        });
+                    } else {
+                        results.failed++;
+                        results.details.push({
+                            mint: b.mint,
+                            status: 'no_metadata'
+                        });
+                    }
+                } catch (e) {
+                    results.failed++;
+                    results.details.push({
+                        mint: b.mint,
+                        status: 'error',
+                        error: e.message
+                    });
+                }
+
+                // Rate limit API calls
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+
+            logger.info('[PAGS API] Metadata backfill complete', {
+                success: results.success,
+                failed: results.failed
+            });
+
+            res.json({
+                success: true,
+                processed: beneficiariesWithoutMetadata.length,
+                results
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Backfill metadata error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to backfill metadata');
         }
     });
 
