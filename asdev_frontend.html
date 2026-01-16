@@ -1757,7 +1757,7 @@
                         <p class="text-purple-200/70 text-xs mb-3">Before registering, you must add this wallet as a fee recipient on Pump.fun when creating your token or via their fee sharing settings:</p>
                         <div class="bg-black/40 rounded p-3 border border-purple-700/50">
                             <div class="flex items-center justify-between gap-2">
-                                <code id="pags-wallet-address" class="text-purple-300 font-mono text-xs break-all select-all">hMbZzF95KzG4PCpr1ciMZ8z1GXyktoxULbEM4pvCgA6</code>
+                                <code id="pags-wallet-address" class="text-purple-300 font-mono text-xs break-all select-all">Loading...</code>
                                 <button onclick="copyPagsWallet()" class="bg-purple-700 hover:bg-purple-600 text-white px-3 py-1.5 rounded text-xs font-mono flex items-center gap-1 transition flex-shrink-0" title="Copy to clipboard">
                                     <i data-lucide="copy" class="w-3 h-3"></i>
                                     <span id="pags-copy-text">COPY</span>
@@ -5623,8 +5623,37 @@
     };
     window.pagsCheckTokenStatus = pagsCheckTokenStatus;
 
+    // Fetch PAGS wallet address from the backend
+    const fetchPagsWalletAddress = async () => {
+        const walletEl = document.getElementById('pags-wallet-address');
+        if (!walletEl) return;
+
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/pags/stats`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && data.stats?.pagsWallet) {
+                    walletEl.textContent = data.stats.pagsWallet;
+                } else {
+                    walletEl.textContent = 'Not configured';
+                    walletEl.classList.add('text-red-400');
+                }
+            } else {
+                walletEl.textContent = 'Error loading wallet';
+                walletEl.classList.add('text-red-400');
+            }
+        } catch (e) {
+            console.error('Failed to fetch PAGS wallet:', e);
+            walletEl.textContent = 'Error loading wallet';
+            walletEl.classList.add('text-red-400');
+        }
+    };
+
     // Check PAGS session on load
     setTimeout(checkPagsSession, 1000);
+
+    // Fetch PAGS wallet address on load
+    setTimeout(fetchPagsWalletAddress, 500);
 
     // Update PAGS register wallet display on load if wallet already connected
     setTimeout(updatePagsRegisterWalletDisplay, 1500);

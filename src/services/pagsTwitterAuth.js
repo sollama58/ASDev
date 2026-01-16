@@ -109,14 +109,17 @@ async function storeOAuthState(state, data) {
 
     if (redis) {
         try {
-            const client = redis.getClient();
-            await client.set(
-                `pags:oauth:state:${state}`,
-                JSON.stringify(stateData),
-                'EX',
-                OAUTH_STATE_TTL_SECONDS
-            );
-            return true;
+            // Use getConnection() which returns the IORedis client directly
+            const client = redis.getConnection();
+            if (client) {
+                await client.set(
+                    `pags:oauth:state:${state}`,
+                    JSON.stringify(stateData),
+                    'EX',
+                    OAUTH_STATE_TTL_SECONDS
+                );
+                return true;
+            }
         } catch (e) {
             logger.warn('[PAGS Twitter Auth] Redis store failed, using fallback', { error: e.message });
         }
@@ -133,12 +136,15 @@ async function storeOAuthState(state, data) {
 async function retrieveOAuthState(state) {
     if (redis) {
         try {
-            const client = redis.getClient();
-            const data = await client.get(`pags:oauth:state:${state}`);
-            if (data) {
-                // Delete after retrieval (one-time use)
-                await client.del(`pags:oauth:state:${state}`);
-                return JSON.parse(data);
+            // Use getConnection() which returns the IORedis client directly
+            const client = redis.getConnection();
+            if (client) {
+                const data = await client.get(`pags:oauth:state:${state}`);
+                if (data) {
+                    // Delete after retrieval (one-time use)
+                    await client.del(`pags:oauth:state:${state}`);
+                    return JSON.parse(data);
+                }
             }
         } catch (e) {
             logger.warn('[PAGS Twitter Auth] Redis retrieve failed, trying fallback', { error: e.message });
@@ -282,7 +288,11 @@ async function getAuthorizationUrl(redirectAfterAuth = '/') {
         redirectAfterAuth: safeRedirect
     });
 
-    logger.info('[PAGS Twitter Auth] Auth URL generated', { state: state.slice(0, 8) + '...' });
+    logger.info('[PAGS Twitter Auth] Auth URL generated', {
+        state: state.slice(0, 8) + '...',
+        callbackUrl,
+        baseUrl: config.BASE_URL
+    });
 
     return { url, state };
 }
@@ -397,7 +407,14 @@ async function handleCallback(code, state) {
             redirectAfterAuth: stateData.redirectAfterAuth
         };
     } catch (e) {
-        logger.error('[PAGS Twitter Auth] Callback error', { error: e.message });
+        // Log detailed error for debugging
+        logger.error('[PAGS Twitter Auth] Callback error', {
+            error: e.message,
+            code: e.code,
+            data: e.data,
+            callbackUrl,
+            hasCodeVerifier: !!stateData.codeVerifier
+        });
         throw new Error('Failed to complete Twitter authentication');
     }
 }

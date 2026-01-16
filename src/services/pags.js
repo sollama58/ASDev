@@ -655,6 +655,8 @@ async function getStats() {
     `);
 
     return {
+        // Include PAGS wallet address for frontend display
+        pagsWallet: config.PAGS_WALLET || null,
         beneficiaries: {
             total: stats?.totalBeneficiaries || 0,
             active: stats?.activeBeneficiaries || 0
