@@ -2,14 +2,25 @@
  * PAGS Fee Scanner
  * Automatically detects and claims fees from Pump.fun vaults for PAGS-registered tokens
  *
- * How it works:
- * 1. For each PAGS beneficiary, we derive the creator's fee vault PDAs
- * 2. Check if PAGS_WALLET is a shareholder in the fee_sharing_config
- * 3. If so, check vault balances and calculate our share
- * 4. Call distribute_creator_fees to claim fees to PAGS_WALLET
- * 5. Record the claimed fees against the beneficiary for Twitter users to claim
+ * Handles two fee collection scenarios:
  *
- * This mirrors the Robinhood token fee collection flow.
+ * 1. DIRECT CREATOR (100% fee share):
+ *    - PAGS wallet IS the original token creator
+ *    - Fees accumulate in PAGS wallet's own creator vault
+ *    - Uses claim_creator_fees instruction to claim directly
+ *
+ * 2. FEE SHAREHOLDER (<100% fee share):
+ *    - PAGS wallet is listed in another creator's fee_sharing_config
+ *    - Fees accumulate in original creator's vault
+ *    - Uses distribute_creator_fees to distribute to all shareholders
+ *
+ * Flow:
+ * 1. For each PAGS beneficiary, check if creatorPubkey matches PAGS wallet
+ * 2. If direct creator: check PAGS wallet's own vault and claim directly
+ * 3. If shareholder: check original creator's vault and distribute
+ * 4. Record claimed fees in database for Twitter users to claim
+ *
+ * v25.53 - Added direct creator support (100% share scenario)
  */
 const { PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
@@ -146,6 +157,14 @@ function findPagsShare(configData) {
 
 /**
  * Check pending fees for a single PAGS beneficiary
+ *
+ * Handles two scenarios:
+ * 1. Direct Creator (100% share): PAGS wallet IS the original creator
+ *    - Fees accumulate in PAGS wallet's own creator vault
+ *    - Use claim_creator_fees to claim directly
+ * 2. Fee Shareholder (<100% share): PAGS wallet is in another creator's fee_sharing_config
+ *    - Fees accumulate in original creator's vault
+ *    - Use distribute_creator_fees to distribute to all shareholders
  */
 async function checkPendingFeesForBeneficiary(beneficiary) {
     if (!beneficiary.creatorPubkey || beneficiary.creatorPubkey === 'unknown') {
@@ -154,6 +173,62 @@ async function checkPendingFeesForBeneficiary(beneficiary) {
 
     try {
         const creatorPubkey = new PublicKey(beneficiary.creatorPubkey);
+        const pagsWalletStr = pagsKeypair ? pagsKeypair.publicKey.toString() : null;
+
+        // Check if PAGS wallet IS the direct creator (100% fee share scenario)
+        const isDirectCreator = pagsWalletStr && creatorPubkey.toString() === pagsWalletStr;
+
+        if (isDirectCreator) {
+            // Scenario 1: PAGS wallet is the direct creator
+            // Fees are in PAGS wallet's own creator vault
+            const { bcVault, ammVaultAta } = pump.getCreatorFeeVaults(pagsKeypair.publicKey);
+
+            // Check Bonding Curve vault balance
+            let bcFeesLamports = 0;
+            try {
+                const bcInfo = await connection.getAccountInfo(bcVault);
+                if (bcInfo && bcInfo.lamports > RENT_EXEMPT_MIN) {
+                    bcFeesLamports = bcInfo.lamports - RENT_EXEMPT_MIN;
+                }
+            } catch (e) { /* Silent */ }
+
+            // Check AMM vault balance
+            let ammFeesLamports = 0;
+            try {
+                const ammVaultAtaKey = await ammVaultAta;
+                const bal = await connection.getTokenAccountBalance(ammVaultAtaKey)
+                    .catch(() => ({ value: { amount: "0" } }));
+                ammFeesLamports = parseInt(bal.value.amount) || 0;
+            } catch (e) { /* Silent */ }
+
+            const totalFees = bcFeesLamports + ammFeesLamports;
+
+            logger.debug('[PAGS Fee Scanner] Direct creator check', {
+                mint: beneficiary.mint,
+                bcFeesLamports,
+                ammFeesLamports,
+                totalFees
+            });
+
+            return {
+                mint: beneficiary.mint,
+                creatorPubkey: beneficiary.creatorPubkey,
+                twitterUsername: beneficiary.twitterUsername,
+                isDirectCreator: true,
+                isShareHolder: true, // We are the 100% owner
+                bcFeesLamports,
+                ammFeesLamports,
+                totalFeesLamports: totalFees,
+                ourShareLamports: totalFees, // 100% for direct creator
+                shareBps: 10000, // 100%
+                sharePercent: 100,
+                bcVault, // For direct claim
+                ammVaultAta,
+                configData: null // No fee sharing config for direct creators
+            };
+        }
+
+        // Scenario 2: PAGS wallet might be a fee shareholder in another creator's config
         const { bcVault, ammVaultAta, sharingConfigPDA } = pump.getShareholderFeeVaults(creatorPubkey);
 
         // Get fee sharing config to see if PAGS wallet is a shareholder
@@ -162,8 +237,14 @@ async function checkPendingFeesForBeneficiary(beneficiary) {
 
         if (!pagsShare) {
             // PAGS wallet is not a shareholder for this token
+            logger.debug('[PAGS Fee Scanner] Not a shareholder', {
+                mint: beneficiary.mint,
+                creatorPubkey: beneficiary.creatorPubkey,
+                hasConfig: !!configData
+            });
             return {
                 mint: beneficiary.mint,
+                isDirectCreator: false,
                 isShareHolder: false,
                 bcFeesLamports: 0,
                 ammFeesLamports: 0,
@@ -197,6 +278,7 @@ async function checkPendingFeesForBeneficiary(beneficiary) {
             mint: beneficiary.mint,
             creatorPubkey: beneficiary.creatorPubkey,
             twitterUsername: beneficiary.twitterUsername,
+            isDirectCreator: false,
             isShareHolder: true,
             bcFeesLamports,
             ammFeesLamports,
@@ -256,23 +338,22 @@ async function getAllPendingFees() {
 }
 
 /**
- * Claim fees for a single beneficiary by calling distribute_creator_fees
+ * Claim fees for a single beneficiary
+ *
+ * For direct creators (100% share): Uses claim_creator_fees
+ * For fee shareholders (<100%): Uses distribute_creator_fees
  */
 async function claimFeesForBeneficiary(pendingInfo) {
-    if (!pendingInfo || !pendingInfo.isShareHolder || !pendingInfo.configData) {
+    if (!pendingInfo || !pendingInfo.isShareHolder) {
+        return null;
+    }
+
+    // Only claim from BC vault if there are fees (AMM vault needs separate handling)
+    if (pendingInfo.bcFeesLamports <= 0) {
         return null;
     }
 
     try {
-        const creatorPubkey = new PublicKey(pendingInfo.creatorPubkey);
-        const { bcVault, sharingConfigPDA } = pump.getShareholderFeeVaults(creatorPubkey);
-
-        // Only claim from BC vault if there are fees (AMM vault needs separate handling)
-        if (pendingInfo.bcFeesLamports <= 0) {
-            return null;
-        }
-
-        // Build distribute_creator_fees transaction
         const tx = new Transaction();
 
         // Add priority fee if solana service is available
@@ -280,39 +361,92 @@ async function claimFeesForBeneficiary(pendingInfo) {
             solana.addPriorityFee(tx);
         }
 
-        const distributeDiscriminator = pump.buildDistributeFeesData();
         const [eventAuthority] = PublicKey.findProgramAddressSync(
             [Buffer.from("__event_authority")],
             PROGRAMS.PUMP
         );
 
-        // Build account keys: sharing_config, creator_vault, [all shareholders...], system_program, event_authority, program
-        const distributeKeys = [
-            { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
-            { pubkey: bcVault, isSigner: false, isWritable: true },
-        ];
+        let claimedLamports;
 
-        // Add ALL shareholders as writable accounts
-        for (const shareholder of pendingInfo.configData.shareholders) {
-            distributeKeys.push({
-                pubkey: shareholder.pubkey,
-                isSigner: false,
-                isWritable: true
+        if (pendingInfo.isDirectCreator) {
+            // Scenario 1: Direct Creator - use claim_creator_fees
+            // This claims fees directly from PAGS wallet's own vault
+            const claimDiscriminator = pump.buildClaimFeesData();
+
+            const claimKeys = [
+                { pubkey: pagsKeypair.publicKey, isSigner: false, isWritable: true },
+                { pubkey: pendingInfo.bcVault, isSigner: false, isWritable: true },
+                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+            ];
+
+            tx.add(new TransactionInstruction({
+                keys: claimKeys,
+                programId: PROGRAMS.PUMP,
+                data: claimDiscriminator
+            }));
+
+            claimedLamports = pendingInfo.bcFeesLamports; // 100% for direct creator
+
+            logger.info('[PAGS Fee Scanner] Claiming as direct creator', {
+                mint: pendingInfo.mint,
+                bcFeesLamports: pendingInfo.bcFeesLamports
+            });
+
+        } else {
+            // Scenario 2: Fee Shareholder - use distribute_creator_fees
+            // This distributes fees from original creator's vault to all shareholders
+            if (!pendingInfo.configData) {
+                logger.warn('[PAGS Fee Scanner] No config data for shareholder claim', {
+                    mint: pendingInfo.mint
+                });
+                return null;
+            }
+
+            const creatorPubkey = new PublicKey(pendingInfo.creatorPubkey);
+            const { bcVault, sharingConfigPDA } = pump.getShareholderFeeVaults(creatorPubkey);
+
+            const distributeDiscriminator = pump.buildDistributeFeesData();
+
+            // Build account keys: sharing_config, creator_vault, [all shareholders...], system_program, event_authority, program
+            const distributeKeys = [
+                { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
+                { pubkey: bcVault, isSigner: false, isWritable: true },
+            ];
+
+            // Add ALL shareholders as writable accounts
+            for (const shareholder of pendingInfo.configData.shareholders) {
+                distributeKeys.push({
+                    pubkey: shareholder.pubkey,
+                    isSigner: false,
+                    isWritable: true
+                });
+            }
+
+            // Add system accounts
+            distributeKeys.push(
+                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+            );
+
+            tx.add(new TransactionInstruction({
+                keys: distributeKeys,
+                programId: PROGRAMS.PUMP,
+                data: distributeDiscriminator
+            }));
+
+            // Calculate our share of the vault
+            claimedLamports = Math.floor(pendingInfo.bcFeesLamports * (pendingInfo.shareBps / 10000));
+
+            logger.info('[PAGS Fee Scanner] Distributing as shareholder', {
+                mint: pendingInfo.mint,
+                totalFees: pendingInfo.bcFeesLamports,
+                ourShare: claimedLamports,
+                shareBps: pendingInfo.shareBps
             });
         }
-
-        // Add system accounts
-        distributeKeys.push(
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-            { pubkey: eventAuthority, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-        );
-
-        tx.add(new TransactionInstruction({
-            keys: distributeKeys,
-            programId: PROGRAMS.PUMP,
-            data: distributeDiscriminator
-        }));
 
         // Execute the transaction
         tx.feePayer = pagsKeypair.publicKey;
@@ -331,14 +465,13 @@ async function claimFeesForBeneficiary(pendingInfo) {
             lastValidBlockHeight
         }, 'confirmed');
 
-        // Calculate what we claimed (our share of BC vault)
-        const claimedLamports = Math.floor(pendingInfo.bcFeesLamports * (pendingInfo.shareBps / 10000));
         const claimedSol = claimedLamports / 1e9;
 
         logger.info('[PAGS Fee Scanner] Claimed fees', {
             mint: pendingInfo.mint,
             twitterUsername: pendingInfo.twitterUsername,
             claimedSol: claimedSol.toFixed(6),
+            isDirectCreator: pendingInfo.isDirectCreator,
             signature
         });
 
@@ -353,6 +486,7 @@ async function claimFeesForBeneficiary(pendingInfo) {
     } catch (e) {
         logger.warn('[PAGS Fee Scanner] Failed to claim fees', {
             mint: pendingInfo.mint,
+            isDirectCreator: pendingInfo.isDirectCreator,
             error: e.message
         });
         return null;
