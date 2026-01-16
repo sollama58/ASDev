@@ -162,10 +162,11 @@ function init(deps) {
     db = deps.db;
     redis = deps.redis || null;
 
-    const hasCredentials = !!(process.env.TWITTER_APP_KEY && process.env.TWITTER_APP_SECRET);
+    const hasCredentials = !!(config.TWITTER_OAUTH2_CLIENT_ID && config.TWITTER_OAUTH2_CLIENT_SECRET);
 
     logger.info('[PAGS Twitter Auth] Service initialized', {
         credentialsConfigured: hasCredentials,
+        clientIdConfigured: !!config.TWITTER_OAUTH2_CLIENT_ID,
         callbackUrl: config.TWITTER_OAUTH_CALLBACK_URL,
         redisAvailable: !!redis,
         encryptionEnabled: true
@@ -230,14 +231,14 @@ function validateRedirectUrl(url, baseUrl) {
  * Get the Twitter OAuth 2.0 authorization URL
  */
 async function getAuthorizationUrl(redirectAfterAuth = '/') {
-    if (!process.env.TWITTER_APP_KEY || !process.env.TWITTER_APP_SECRET) {
-        throw new Error('Twitter API credentials not configured');
+    if (!config.TWITTER_OAUTH2_CLIENT_ID || !config.TWITTER_OAUTH2_CLIENT_SECRET) {
+        throw new Error('Twitter OAuth 2.0 credentials not configured. Set TWITTER_OAUTH2_CLIENT_ID and TWITTER_OAUTH2_CLIENT_SECRET, or TWITTER_APP_KEY/SECRET.');
     }
 
     // Create OAuth 2.0 client
     const client = new TwitterApi({
-        clientId: process.env.TWITTER_APP_KEY,
-        clientSecret: process.env.TWITTER_APP_SECRET,
+        clientId: config.TWITTER_OAUTH2_CLIENT_ID,
+        clientSecret: config.TWITTER_OAUTH2_CLIENT_SECRET,
     });
 
     // Generate state and PKCE
@@ -290,8 +291,8 @@ async function handleCallback(code, state) {
 
     // Create client for token exchange
     const client = new TwitterApi({
-        clientId: process.env.TWITTER_APP_KEY,
-        clientSecret: process.env.TWITTER_APP_SECRET,
+        clientId: config.TWITTER_OAUTH2_CLIENT_ID,
+        clientSecret: config.TWITTER_OAUTH2_CLIENT_SECRET,
     });
 
     // Build callback URL
@@ -507,8 +508,8 @@ async function refreshTokenIfNeeded(twitterId) {
 
     try {
         const client = new TwitterApi({
-            clientId: process.env.TWITTER_APP_KEY,
-            clientSecret: process.env.TWITTER_APP_SECRET,
+            clientId: config.TWITTER_OAUTH2_CLIENT_ID,
+            clientSecret: config.TWITTER_OAUTH2_CLIENT_SECRET,
         });
 
         const { accessToken, refreshToken, expiresIn } = await client.refreshOAuth2Token(decryptedRefreshToken);

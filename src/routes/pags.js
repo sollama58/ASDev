@@ -21,6 +21,7 @@ const config = require('../config/env');
 const pags = require('../services/pags');
 const pagsTwitterAuth = require('../services/pagsTwitterAuth');
 const signatureVerifier = require('../services/signatureVerifier');
+const mintExtractor = require('../services/mintExtractor');
 
 /**
  * Timing-safe comparison for admin keys
@@ -175,6 +176,11 @@ function init(deps) {
     /**
      * POST /api/pags/register
      * Register a token with a Twitter username as beneficiary
+     *
+     * IMPORTANT: Fee share percentage is AUTO-DETECTED from on-chain Pump.fun
+     * fee sharing configuration. Users cannot set this manually.
+     *
+     * The token MUST have PAGS_WALLET configured as a fee recipient on-chain.
      */
     router.post('/pags/register', registrationLimiter, async (req, res) => {
         try {
@@ -182,7 +188,11 @@ function init(deps) {
                 return errorResponse(res, 503, 'PAGS is not enabled');
             }
 
-            const { mint, twitterUsername, feeShareBps, signedMessage, signature, signerPubkey } = req.body;
+            if (!config.PAGS_WALLET) {
+                return errorResponse(res, 503, 'PAGS wallet not configured');
+            }
+
+            const { mint, twitterUsername, signedMessage, signature, signerPubkey } = req.body;
 
             // Sanitize inputs
             const sanitizedMint = sanitizeString(mint, 64);
@@ -208,15 +218,77 @@ function init(deps) {
                 }
             }
 
-            // Register beneficiary
+            // AUTO-DETECT fee share from on-chain Pump.fun fee sharing configuration
+            // This verifies that PAGS_WALLET is actually configured as a fee recipient
+            logger.info('[PAGS API] Verifying fee recipient on-chain', {
+                mint: sanitizedMint,
+                pagsWallet: config.PAGS_WALLET.slice(0, 8) + '...'
+            });
+
+            const feeRecipientResult = await mintExtractor.verifyFeeRecipient(
+                sanitizedMint,
+                config.PAGS_WALLET,
+                connection
+            );
+
+            // Check for RPC errors (don't reject on temporary failures)
+            if (feeRecipientResult.error) {
+                logger.warn('[PAGS API] Fee recipient verification had RPC error', {
+                    mint: sanitizedMint,
+                    error: feeRecipientResult.error
+                });
+                return errorResponse(
+                    res, 503,
+                    'Could not verify fee recipient status. Please try again later.',
+                    'VERIFICATION_FAILED'
+                );
+            }
+
+            // Token must have PAGS wallet configured as a fee recipient on-chain
+            if (!feeRecipientResult.isRecipient) {
+                logger.warn('[PAGS API] PAGS wallet is not a fee recipient for token', {
+                    mint: sanitizedMint,
+                    pagsWallet: config.PAGS_WALLET
+                });
+                return errorResponse(
+                    res, 400,
+                    'PAGS wallet is not configured as a fee recipient for this token. ' +
+                    'Please add the PAGS wallet as a fee sharing recipient on Pump.fun first.',
+                    'NOT_FEE_RECIPIENT'
+                );
+            }
+
+            // Use the on-chain detected fee share percentage
+            const detectedFeeShareBps = feeRecipientResult.feeShareBps || 10000;
+
+            logger.info('[PAGS API] Fee share auto-detected from on-chain', {
+                mint: sanitizedMint,
+                feeShareBps: detectedFeeShareBps,
+                feeSharePercent: detectedFeeShareBps / 100,
+                source: feeRecipientResult.source,
+                originalCreator: feeRecipientResult.originalCreator
+            });
+
+            // Register beneficiary with auto-detected fee share
             const result = await pags.registerBeneficiary({
                 mint: sanitizedMint,
                 creatorPubkey: sanitizedSignerPubkey,
                 twitterUsername: sanitizedUsername,
-                feeShareBps: feeShareBps || 10000
+                feeShareBps: detectedFeeShareBps
             });
 
-            res.json({ success: true, beneficiary: result });
+            res.json({
+                success: true,
+                beneficiary: result,
+                onChainVerification: {
+                    verified: true,
+                    source: feeRecipientResult.source,
+                    feeShareBps: detectedFeeShareBps,
+                    feeSharePercent: detectedFeeShareBps / 100,
+                    isDirectCreator: detectedFeeShareBps === 10000,
+                    originalCreator: feeRecipientResult.originalCreator || null
+                }
+            });
         } catch (e) {
             logger.error('[PAGS API] Register error', { error: e.message });
             // Return the error message for business logic errors

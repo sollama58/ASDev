@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.46-KOTH-TWITTER-ANNOUNCEMENTS",
+    VERSION: "v25.47-PAGS-AUTO-FEE-DETECTION",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
 
@@ -86,12 +86,17 @@ const config = {
     VANITY_POOL_REFILL_COUNT: 20,
     VANITY_POOL_CHECK_INTERVAL: 30000,
 
-    // Twitter
+    // Twitter OAuth 1.0a (for bot posting)
     TWITTER_API_KEY: process.env.TWITTER_API_KEY,
     TWITTER_API_SECRET: process.env.TWITTER_API_SECRET,
     TWITTER_ACCESS_TOKEN: process.env.TWITTER_ACCESS_TOKEN,
     TWITTER_ACCESS_SECRET: process.env.TWITTER_ACCESS_SECRET,
     TWITTER_USERNAME: process.env.TWITTER_USERNAME, // v25.22: Fallback for tweet URLs
+    // v25.47: Twitter OAuth 2.0 (for PAGS user authentication)
+    // Get these from Twitter Developer Portal > Your App > Keys and tokens > OAuth 2.0 Client ID and Client Secret
+    // If not set, falls back to TWITTER_API_KEY/SECRET (works if app has OAuth 2.0 enabled with same credentials)
+    TWITTER_OAUTH2_CLIENT_ID: process.env.TWITTER_OAUTH2_CLIENT_ID || process.env.TWITTER_APP_KEY || process.env.TWITTER_API_KEY,
+    TWITTER_OAUTH2_CLIENT_SECRET: process.env.TWITTER_OAUTH2_CLIENT_SECRET || process.env.TWITTER_APP_SECRET || process.env.TWITTER_API_SECRET,
 
     // v25.38: Claude AI for KOTH Selection
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,

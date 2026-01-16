@@ -1740,23 +1740,71 @@
                 </div>
             </div>
 
-            <!-- For Token Developers -->
+            <!-- For Token Developers - Full Registration Utility -->
             <div class="panel bg-orange-950/20 border-orange-800">
                 <h3 class="text-orange-400 font-mono text-xs uppercase tracking-widest border-b border-orange-800/50 pb-2 mb-4 flex items-center gap-2">
-                    <i data-lucide="code" class="w-4 h-4"></i> For Token Developers
+                    <i data-lucide="rocket" class="w-4 h-4"></i> Register Your Token
                 </h3>
-                <div class="space-y-3 text-orange-200/80 text-sm">
-                    <p>Want to share fees with a Twitter/X influencer or community member?</p>
-                    <div class="bg-orange-900/30 rounded p-3 border border-orange-700/50">
-                        <div class="text-orange-300 text-xs mb-2">Register via API:</div>
-                        <code class="text-orange-400 text-xs break-all">POST /api/pags/register</code>
-                        <div class="text-orange-200/60 text-xs mt-2">
-                            Required: mint, twitterUsername, signerPubkey, signature
+                <div class="space-y-4">
+                    <p class="text-orange-200/80 text-sm">Share trading fees with a Twitter/X influencer or community member. They'll receive SOL rewards automatically!</p>
+
+                    <!-- Registration Form -->
+                    <div class="space-y-3">
+                        <div>
+                            <label class="text-orange-300 text-xs font-mono block mb-1">Token Mint Address *</label>
+                            <input type="text" id="pags-register-mint" class="input-field mb-0 text-sm" placeholder="Enter token mint address">
+                        </div>
+                        <div>
+                            <label class="text-orange-300 text-xs font-mono block mb-1">Twitter/X Username *</label>
+                            <div class="flex items-center gap-2">
+                                <span class="text-orange-500">@</span>
+                                <input type="text" id="pags-register-twitter" class="input-field flex-1 mb-0 text-sm" placeholder="username (without @)">
+                            </div>
                         </div>
                     </div>
-                    <p class="text-orange-300/70 text-xs">
-                        Contact the admin panel to manually register tokens, or integrate with the API directly from your dApp.
-                    </p>
+
+                    <!-- Fee Share Info -->
+                    <div class="bg-orange-900/20 rounded p-3 border border-orange-700/30">
+                        <div class="flex items-start gap-2">
+                            <i data-lucide="info" class="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5"></i>
+                            <div class="text-xs text-orange-200/70">
+                                <p class="font-semibold text-orange-300">Fee share is auto-detected from on-chain configuration</p>
+                                <p class="mt-1">Your token must have the PAGS wallet configured as a fee recipient on Pump.fun before registration. The fee percentage will be automatically read from on-chain data.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Wallet Connection Status -->
+                    <div id="pags-register-wallet-status" class="bg-black/30 rounded p-3 border border-orange-700/30">
+                        <div class="flex items-center justify-between">
+                            <span class="text-orange-300/70 text-xs">Your Wallet:</span>
+                            <span id="pags-register-wallet-display" class="text-orange-400 font-mono text-xs">Not Connected</span>
+                        </div>
+                    </div>
+
+                    <!-- Register Button -->
+                    <button id="pags-register-btn" onclick="pagsRegisterToken()" class="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-3 rounded font-bold text-sm transition">
+                        REGISTER TOKEN FOR PAGS
+                    </button>
+
+                    <!-- Status/Result -->
+                    <div id="pags-register-result" class="hidden bg-black/30 rounded p-3 border text-sm">
+                        <!-- Results appear here -->
+                    </div>
+
+                    <!-- Check Token Status -->
+                    <div class="border-t border-orange-800/50 pt-4 mt-4">
+                        <label class="text-orange-300 text-xs font-mono block mb-2">Check Token PAGS Status</label>
+                        <div class="flex gap-2">
+                            <input type="text" id="pags-check-status-mint" class="input-field flex-1 mb-0 text-sm" placeholder="Token mint address">
+                            <button onclick="pagsCheckTokenStatus()" class="bg-orange-800 hover:bg-orange-700 text-white px-4 py-2 rounded font-mono text-xs transition">
+                                CHECK
+                            </button>
+                        </div>
+                        <div id="pags-check-status-result" class="hidden mt-3 bg-black/30 rounded p-3 border text-sm">
+                            <!-- Status results appear here -->
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -5245,8 +5293,239 @@
     };
     window.pagsPublicLookup = pagsPublicLookup;
 
+    // Update PAGS register wallet display when wallet connects
+    const updatePagsRegisterWalletDisplay = () => {
+        const walletDisplay = document.getElementById('pags-register-wallet-display');
+        if (walletDisplay) {
+            if (userPubkey) {
+                walletDisplay.textContent = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4);
+                walletDisplay.classList.remove('text-red-400');
+                walletDisplay.classList.add('text-green-400');
+            } else {
+                walletDisplay.textContent = 'Not Connected';
+                walletDisplay.classList.remove('text-green-400');
+                walletDisplay.classList.add('text-orange-400');
+            }
+        }
+    };
+
+    // Hook into wallet connection to update PAGS display
+    const originalOnWalletConnect = window.onWalletConnect;
+    window.onWalletConnect = (pubkey) => {
+        if (originalOnWalletConnect) originalOnWalletConnect(pubkey);
+        updatePagsRegisterWalletDisplay();
+    };
+
+    // Register token for PAGS
+    // Fee share percentage is AUTO-DETECTED from on-chain Pump.fun configuration
+    const pagsRegisterToken = async () => {
+        const mintInput = document.getElementById('pags-register-mint');
+        const twitterInput = document.getElementById('pags-register-twitter');
+        const resultEl = document.getElementById('pags-register-result');
+        const registerBtn = document.getElementById('pags-register-btn');
+
+        const mint = mintInput.value.trim();
+        const twitterUsername = twitterInput.value.trim().replace('@', '');
+
+        // Validation
+        if (!mint) {
+            resultEl.innerHTML = '<span class="text-yellow-400">Please enter a token mint address</span>';
+            resultEl.classList.remove('hidden');
+            resultEl.classList.remove('border-green-700', 'border-red-700');
+            resultEl.classList.add('border-yellow-700');
+            return;
+        }
+
+        if (!twitterUsername) {
+            resultEl.innerHTML = '<span class="text-yellow-400">Please enter a Twitter/X username</span>';
+            resultEl.classList.remove('hidden');
+            resultEl.classList.remove('border-green-700', 'border-red-700');
+            resultEl.classList.add('border-yellow-700');
+            return;
+        }
+
+        if (!userPubkey) {
+            resultEl.innerHTML = '<span class="text-yellow-400">Please connect your wallet first</span>';
+            resultEl.classList.remove('hidden');
+            resultEl.classList.remove('border-green-700', 'border-red-700');
+            resultEl.classList.add('border-yellow-700');
+            return;
+        }
+
+        // Show loading
+        resultEl.innerHTML = '<span class="text-purple-400">Preparing registration...</span>';
+        resultEl.classList.remove('hidden', 'border-green-700', 'border-red-700', 'border-yellow-700');
+        resultEl.classList.add('border-purple-700');
+        registerBtn.disabled = true;
+        registerBtn.textContent = 'SIGNING...';
+
+        try {
+            // Create message to sign (fee share is auto-detected from on-chain)
+            const timestamp = Date.now();
+            const message = `PAGS Register Token\nMint: ${mint}\nTwitter: @${twitterUsername}\nSigner: ${userPubkey}\nTimestamp: ${timestamp}`;
+
+            // Sign the message
+            const encodedMessage = new TextEncoder().encode(message);
+            const signedMessage = await walletProvider.signMessage(encodedMessage, 'utf8');
+            const signature = bs58.encode(signedMessage);
+
+            resultEl.innerHTML = '<span class="text-purple-400">Verifying on-chain fee configuration...</span>';
+            registerBtn.textContent = 'VERIFYING...';
+
+            // Send registration request (fee share will be auto-detected from on-chain)
+            const res = await fetch(`${BACKEND_URL}/api/pags/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mint,
+                    twitterUsername,
+                    signedMessage: message,
+                    signature,
+                    signerPubkey: userPubkey
+                })
+            });
+
+            const data = await res.json();
+
+            if (data.success) {
+                // Get fee share from on-chain verification result
+                const feeSharePercent = data.onChainVerification?.feeSharePercent || data.beneficiary?.feeSharePercent || 100;
+                const isDirectCreator = data.onChainVerification?.isDirectCreator || feeSharePercent === 100;
+                const verificationSource = data.onChainVerification?.source || 'unknown';
+
+                resultEl.innerHTML = `
+                    <div class="text-green-400 font-bold mb-2">Registration Successful!</div>
+                    <div class="space-y-1 text-xs">
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Token:</span>
+                            <span class="text-green-300 font-mono">${mint.slice(0, 8)}...${mint.slice(-4)}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Beneficiary:</span>
+                            <span class="text-purple-400">@${DOMPurify.sanitize(twitterUsername)}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Fee Share:</span>
+                            <span class="text-orange-400">${feeSharePercent}%</span>
+                            <span class="text-green-500 text-[10px] ml-1">(auto-detected)</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Verified via:</span>
+                            <span class="text-cyan-400">${isDirectCreator ? 'Direct Creator' : 'Fee Sharing Config'}</span>
+                        </div>
+                    </div>
+                    <p class="text-green-300/70 text-xs mt-3">The Twitter user can now claim ${feeSharePercent}% of fees from this token!</p>
+                `;
+                resultEl.classList.remove('border-purple-700', 'border-yellow-700', 'border-red-700');
+                resultEl.classList.add('border-green-700');
+
+                // Clear form
+                mintInput.value = '';
+                twitterInput.value = '';
+            } else {
+                // Handle specific error codes
+                let errorMsg = data.error || 'Registration failed';
+                if (data.code === 'NOT_FEE_RECIPIENT') {
+                    errorMsg = 'PAGS wallet is not configured as a fee recipient for this token. Please add the PAGS wallet as a fee sharing recipient on Pump.fun first.';
+                } else if (data.code === 'VERIFICATION_FAILED') {
+                    errorMsg = 'Could not verify on-chain fee configuration. Please try again later.';
+                }
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${DOMPurify.sanitize(errorMsg)}</span>`;
+                resultEl.classList.remove('border-purple-700', 'border-yellow-700', 'border-green-700');
+                resultEl.classList.add('border-red-700');
+            }
+        } catch (e) {
+            resultEl.innerHTML = `<span class="text-red-400">Error: ${DOMPurify.sanitize(e.message)}</span>`;
+            resultEl.classList.remove('border-purple-700', 'border-yellow-700', 'border-green-700');
+            resultEl.classList.add('border-red-700');
+        } finally {
+            registerBtn.disabled = false;
+            registerBtn.textContent = 'REGISTER TOKEN FOR PAGS';
+        }
+    };
+    window.pagsRegisterToken = pagsRegisterToken;
+
+    // Check token PAGS status
+    const pagsCheckTokenStatus = async () => {
+        const mintInput = document.getElementById('pags-check-status-mint');
+        const resultEl = document.getElementById('pags-check-status-result');
+
+        const mint = mintInput.value.trim();
+
+        if (!mint) {
+            resultEl.innerHTML = '<span class="text-yellow-400">Please enter a token mint address</span>';
+            resultEl.classList.remove('hidden');
+            resultEl.classList.remove('border-green-700', 'border-red-700');
+            resultEl.classList.add('border-yellow-700');
+            return;
+        }
+
+        resultEl.innerHTML = '<span class="text-purple-400">Checking status...</span>';
+        resultEl.classList.remove('hidden', 'border-green-700', 'border-red-700', 'border-yellow-700');
+        resultEl.classList.add('border-orange-700');
+
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/pags/status/${encodeURIComponent(mint)}`);
+            const data = await res.json();
+
+            if (data.success) {
+                if (data.isRegistered && data.beneficiary) {
+                    const b = data.beneficiary;
+                    resultEl.innerHTML = `
+                        <div class="text-green-400 font-bold mb-2">PAGS Registered</div>
+                        <div class="space-y-1 text-xs">
+                            <div class="flex justify-between">
+                                <span class="text-gray-400">Beneficiary:</span>
+                                <span class="text-purple-400">@${DOMPurify.sanitize(b.twitterUsername)}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-400">Fee Share:</span>
+                                <span class="text-orange-400">${b.feeSharePercent}%${b.hasMultipleRecipients ? ' (multiple recipients)' : ''}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-400">Total Accumulated:</span>
+                                <span class="text-cyan-400">${(b.totalFeesAccumulated || 0).toFixed(6)} SOL</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-400">Pending:</span>
+                                <span class="text-green-400">${(b.pendingFees || 0).toFixed(6)} SOL</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-400">Status:</span>
+                                <span class="${b.isActive ? 'text-green-400' : 'text-red-400'}">${b.isActive ? 'Active' : 'Inactive'}</span>
+                            </div>
+                        </div>
+                        ${b.feeShareDescription ? `<p class="text-orange-300/70 text-xs mt-2">${DOMPurify.sanitize(b.feeShareDescription)}</p>` : ''}
+                    `;
+                    resultEl.classList.remove('border-orange-700', 'border-yellow-700', 'border-red-700');
+                    resultEl.classList.add('border-green-700');
+                } else {
+                    resultEl.innerHTML = `
+                        <div class="text-yellow-400 font-bold mb-2">Not Registered</div>
+                        <p class="text-gray-400 text-xs">This token is not registered for PAGS fee sharing.</p>
+                        <p class="text-orange-300/70 text-xs mt-2">Use the form above to register it!</p>
+                    `;
+                    resultEl.classList.remove('border-orange-700', 'border-green-700', 'border-red-700');
+                    resultEl.classList.add('border-yellow-700');
+                }
+            } else {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${DOMPurify.sanitize(data.error || 'Status check failed')}</span>`;
+                resultEl.classList.remove('border-orange-700', 'border-yellow-700', 'border-green-700');
+                resultEl.classList.add('border-red-700');
+            }
+        } catch (e) {
+            resultEl.innerHTML = `<span class="text-red-400">Error: ${DOMPurify.sanitize(e.message)}</span>`;
+            resultEl.classList.remove('border-orange-700', 'border-yellow-700', 'border-green-700');
+            resultEl.classList.add('border-red-700');
+        }
+    };
+    window.pagsCheckTokenStatus = pagsCheckTokenStatus;
+
     // Check PAGS session on load
     setTimeout(checkPagsSession, 1000);
+
+    // Update PAGS register wallet display on load if wallet already connected
+    setTimeout(updatePagsRegisterWalletDisplay, 1500);
 
 </script>
 
