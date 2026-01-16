@@ -37,7 +37,8 @@ function init(deps) {
             const balance = await connection.getBalance(new PublicKey(pubkey));
             res.json({ balance });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            // SECURITY: Don't expose internal error details
+            res.status(500).json({ error: 'Failed to fetch balance' });
         }
     });
 

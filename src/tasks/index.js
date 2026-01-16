@@ -3,12 +3,14 @@
  * Central export for all background tasks
  * v13.0 - Worker-based architecture with Redis queues
  * v25.14 - Added graceful shutdown with interval cleanup
+ * v25.47 - Added PAGS claim processor
  */
 const holderScanner = require('./holderScanner');
 const metadataUpdater = require('./metadataUpdater');
 const asdfSync = require('./asdfSync');
 const flywheel = require('./flywheel');
 const robinhoodScanner = require('./robinhoodScanner');
+const pagsClaimProcessor = require('./pagsClaimProcessor');
 const workers = require('./workers');
 const { vanity, logger } = require('../services');
 const config = require('../config/env');
@@ -79,7 +81,15 @@ function startAll(deps) {
     }, 600000); // 10 minutes
     registerInterval(redisCleanupInterval);
 
-    logger.info("All background tasks started (v25.45 - tiered price updates enabled)");
+    // v25.47: Start PAGS claim processor
+    if (config.PAGS_ENABLED) {
+        const pagsInterval = pagsClaimProcessor.start(deps);
+        if (pagsInterval) {
+            registerInterval(pagsInterval);
+        }
+    }
+
+    logger.info("All background tasks started (v25.47 - PAGS claim processor enabled)");
 }
 
 /**
@@ -129,6 +139,7 @@ module.exports = {
     asdfSync,
     flywheel,
     robinhoodScanner,
+    pagsClaimProcessor,
     workers,
     startAll,
     stopAll,

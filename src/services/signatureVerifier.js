@@ -140,10 +140,20 @@ function requireSignature(action) {
         const { signedMessage, signature, signerPubkey } = req.body;
 
         // Allow bypassing signature check in development (for testing)
-        // SECURITY: Remove this or set to false in production
+        // SECURITY: This is BLOCKED in production regardless of env var
         if (process.env.NODE_ENV === 'development' && process.env.SKIP_SIGNATURE_VERIFICATION === 'true') {
             logger.warn('[SignatureVerifier] DEVELOPMENT MODE: Signature verification bypassed');
             return next();
+        }
+
+        // SECURITY: Double-check production mode never bypasses signature verification
+        if (process.env.NODE_ENV === 'production' && !signedMessage) {
+            logger.warn('[SignatureVerifier] Production mode - signature required');
+            return res.status(401).json({
+                success: false,
+                error: 'Signature verification required',
+                code: 'SIGNATURE_REQUIRED'
+            });
         }
 
         const result = verifySignature({

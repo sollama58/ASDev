@@ -427,6 +427,81 @@ async function createSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_points_total ON user_points(total_points DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_points_updated ON user_points(updated_at DESC)`);
 
+    // ===========================================
+    // PAGS (Pay-to-Twitter/X) Tables
+    // ===========================================
+
+    // PAGS beneficiaries - Token-to-Twitter username mapping
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS pags_beneficiaries (
+            id SERIAL PRIMARY KEY,
+            mint TEXT NOT NULL UNIQUE,
+            "creatorPubkey" TEXT NOT NULL,
+            "twitterUsername" TEXT NOT NULL,
+            "feeShareBps" INTEGER NOT NULL DEFAULT 10000,
+            "totalFeesAccumulated" REAL DEFAULT 0,
+            "totalFeesClaimed" REAL DEFAULT 0,
+            "isActive" INTEGER DEFAULT 1,
+            "createdAt" BIGINT NOT NULL,
+            "lastFeeUpdate" BIGINT
+        )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_twitter ON pags_beneficiaries("twitterUsername")`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_active ON pags_beneficiaries("isActive") WHERE "isActive" = 1`);
+
+    // PAGS Twitter users - Verified Twitter users who can claim rewards
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS pags_twitter_users (
+            id SERIAL PRIMARY KEY,
+            "twitterId" TEXT UNIQUE NOT NULL,
+            "twitterUsername" TEXT NOT NULL,
+            "displayName" TEXT,
+            "profileImageUrl" TEXT,
+            "linkedWallet" TEXT,
+            "walletLinkedAt" BIGINT,
+            "accessToken" TEXT,
+            "refreshToken" TEXT,
+            "tokenExpiresAt" BIGINT,
+            "lastVerified" BIGINT,
+            "createdAt" BIGINT NOT NULL,
+            "isActive" INTEGER DEFAULT 1
+        )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_users_username ON pags_twitter_users("twitterUsername")`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_users_wallet ON pags_twitter_users("linkedWallet")`);
+
+    // PAGS claims - Claim history and pending claims
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS pags_claims (
+            id SERIAL PRIMARY KEY,
+            "twitterId" TEXT NOT NULL,
+            "twitterUsername" TEXT NOT NULL,
+            "recipientWallet" TEXT NOT NULL,
+            amount REAL NOT NULL,
+            signature TEXT UNIQUE,
+            status TEXT DEFAULT 'pending',
+            "createdAt" BIGINT NOT NULL,
+            "completedAt" BIGINT,
+            "failReason" TEXT
+        )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_claims_twitter ON pags_claims("twitterId")`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_claims_status ON pags_claims(status)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_claims_created ON pags_claims("createdAt" DESC)`);
+
+    // PAGS fee logs - Fee collection history per beneficiary
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS pags_fee_logs (
+            id SERIAL PRIMARY KEY,
+            "beneficiaryId" INTEGER REFERENCES pags_beneficiaries(id),
+            amount REAL NOT NULL,
+            source TEXT,
+            "txSignature" TEXT,
+            "collectedAt" BIGINT NOT NULL
+        )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_fee_logs_beneficiary ON pags_fee_logs("beneficiaryId")`);
+
     logger.info('[PostgreSQL] Schema created successfully');
 }
 

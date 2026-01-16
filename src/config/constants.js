@@ -71,11 +71,21 @@ const FEES = {
     RECIPIENT_STANDARD: safePublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM", "11111111111111111111111111111111", "FEE_RECIPIENT_STANDARD"),
 };
 
+// PAGS (Pay-to-Twitter/X) Configuration
+const PAGS = {
+    // PAGS_WALLET holds all fees until claimed by Twitter users
+    // Set via PAGS_WALLET environment variable
+    WALLET: process.env.PAGS_WALLET
+        ? safePublicKey(process.env.PAGS_WALLET, "11111111111111111111111111111111", "PAGS_WALLET")
+        : null,
+};
+
 module.exports = {
     TOKENS,
     WALLETS,
     PROGRAMS,
     MAYHEM,
     FEES,
+    PAGS,
     safePublicKey,
 };

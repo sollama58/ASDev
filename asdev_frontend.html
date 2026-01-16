@@ -1201,6 +1201,9 @@
             <button class="tab-btn" onclick="switchTab('register')" data-tab="register">
                 <i data-lucide="file-plus" class="inline-block w-4 h-4 mr-2"></i>Register Token
             </button>
+            <button class="tab-btn" onclick="switchTab('pags')" data-tab="pags">
+                <i data-lucide="twitter" class="inline-block w-4 h-4 mr-2"></i>PAGS
+            </button>
         </div>
 
         <!-- TAB: DASHBOARD (Airdrop & Leaderboard) -->
@@ -1611,6 +1614,172 @@
         </div>
 
         </div><!-- END TAB: REGISTER -->
+
+        <!-- TAB: PAGS (Pay-to-Twitter/X) -->
+        <div id="tab-pags" class="tab-content">
+
+        <!-- PAGS Header -->
+        <div class="panel bg-purple-950/30 border border-purple-800 mb-6">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-purple-800/50 pb-3 mb-4 gap-2">
+                <div>
+                    <h3 class="text-purple-400 font-mono text-sm uppercase tracking-widest flex items-center gap-2">
+                        <i data-lucide="twitter" class="w-5 h-5"></i>
+                        PAGS - Pay-to-Twitter/X
+                    </h3>
+                    <p class="text-purple-300/70 text-xs mt-1">Earn SOL rewards for being mentioned as a beneficiary by token developers</p>
+                </div>
+                <button onclick="pagsRefreshStatus()" class="text-purple-400 hover:text-white font-mono text-xs border border-purple-700 hover:bg-purple-800 px-4 py-2 rounded transition flex items-center gap-2">
+                    <i data-lucide="refresh-cw" class="w-3 h-3"></i> REFRESH
+                </button>
+            </div>
+
+            <!-- Twitter Login Status -->
+            <div id="pags-auth-section">
+                <!-- Not Logged In State -->
+                <div id="pags-login-prompt" class="text-center py-8">
+                    <div class="text-6xl mb-4">🐦</div>
+                    <h4 class="text-purple-300 text-lg font-bold mb-2">Connect Your Twitter/X Account</h4>
+                    <p class="text-purple-200/70 text-sm mb-6 max-w-md mx-auto">
+                        Log in with your Twitter/X account to check if you have pending rewards and claim them.
+                    </p>
+                    <button onclick="pagsLoginWithTwitter()" class="bg-purple-600 hover:bg-purple-500 text-white px-8 py-3 rounded-lg font-bold text-sm transition flex items-center gap-2 mx-auto">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                        Login with Twitter/X
+                    </button>
+                </div>
+
+                <!-- Logged In State -->
+                <div id="pags-user-dashboard" class="hidden">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <!-- User Info Card -->
+                        <div class="bg-purple-900/30 rounded-lg p-4 border border-purple-700/50">
+                            <div class="flex items-center gap-4 mb-4">
+                                <img id="pags-user-avatar" src="https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png" alt="Profile" class="w-16 h-16 rounded-full border-2 border-purple-500">
+                                <div>
+                                    <div id="pags-user-name" class="text-white font-bold text-lg">Username</div>
+                                    <div id="pags-user-handle" class="text-purple-400 text-sm">@handle</div>
+                                </div>
+                                <button onclick="pagsLogout()" class="ml-auto text-red-400 hover:text-red-300 text-xs border border-red-700 hover:bg-red-900/30 px-3 py-1 rounded">Logout</button>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div class="bg-black/30 rounded p-3 text-center">
+                                    <div class="text-purple-300 text-xs mb-1">Pending Rewards</div>
+                                    <div id="pags-pending-amount" class="text-green-400 font-bold text-xl">0.0000 SOL</div>
+                                </div>
+                                <div class="bg-black/30 rounded p-3 text-center">
+                                    <div class="text-purple-300 text-xs mb-1">Total Claimed</div>
+                                    <div id="pags-claimed-amount" class="text-cyan-400 font-bold text-xl">0.0000 SOL</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Wallet Link Card -->
+                        <div class="bg-purple-900/30 rounded-lg p-4 border border-purple-700/50">
+                            <h4 class="text-purple-300 font-mono text-xs uppercase tracking-wider mb-3 flex items-center gap-2">
+                                <i data-lucide="wallet" class="w-4 h-4"></i> Linked Wallet
+                            </h4>
+                            <div id="pags-wallet-not-linked" class="text-center py-4">
+                                <p class="text-purple-200/70 text-sm mb-4">Link your Solana wallet to receive rewards</p>
+                                <button onclick="pagsLinkWallet()" class="bg-orange-600 hover:bg-orange-500 text-white px-6 py-2 rounded font-bold text-sm transition">
+                                    Link Wallet
+                                </button>
+                            </div>
+                            <div id="pags-wallet-linked" class="hidden">
+                                <div class="bg-black/40 rounded p-3 mb-3">
+                                    <div class="text-purple-300 text-xs mb-1">Linked Wallet</div>
+                                    <div id="pags-linked-wallet" class="text-orange-400 font-mono text-sm break-all">Not linked</div>
+                                </div>
+                                <button onclick="pagsLinkWallet()" class="text-purple-400 hover:text-white text-xs underline">Change Wallet</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Rewards Breakdown -->
+                    <div class="mt-6 bg-purple-900/20 rounded-lg p-4 border border-purple-700/30">
+                        <h4 class="text-purple-300 font-mono text-xs uppercase tracking-wider mb-3">Rewards Breakdown by Token</h4>
+                        <div id="pags-rewards-breakdown" class="max-h-48 overflow-y-auto">
+                            <div class="text-purple-200/50 text-sm text-center py-4">No rewards found</div>
+                        </div>
+                    </div>
+
+                    <!-- Claim Button -->
+                    <div class="mt-6 text-center">
+                        <button id="pags-claim-btn" onclick="pagsClaim()" disabled class="bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 disabled:opacity-50 disabled:cursor-not-allowed text-white px-12 py-4 rounded-lg font-bold text-lg transition shadow-lg hover:shadow-green-500/30">
+                            🎉 CLAIM REWARDS
+                        </button>
+                        <p id="pags-claim-status" class="text-purple-300/70 text-xs mt-2">Link your wallet and have pending rewards to claim</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PAGS Info Sections -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- For Twitter Users -->
+            <div class="panel bg-cyan-950/20 border-cyan-800">
+                <h3 class="text-cyan-400 font-mono text-xs uppercase tracking-widest border-b border-cyan-800/50 pb-2 mb-4 flex items-center gap-2">
+                    <i data-lucide="user" class="w-4 h-4"></i> For Twitter/X Users
+                </h3>
+                <div class="space-y-3 text-cyan-200/80 text-sm">
+                    <div class="flex gap-3">
+                        <span class="text-cyan-400 font-bold">1.</span>
+                        <span>Token developers can designate your @username as a fee beneficiary</span>
+                    </div>
+                    <div class="flex gap-3">
+                        <span class="text-cyan-400 font-bold">2.</span>
+                        <span>Login with Twitter/X above to check if you have pending rewards</span>
+                    </div>
+                    <div class="flex gap-3">
+                        <span class="text-cyan-400 font-bold">3.</span>
+                        <span>Link your Solana wallet to receive payments</span>
+                    </div>
+                    <div class="flex gap-3">
+                        <span class="text-cyan-400 font-bold">4.</span>
+                        <span>Claim your accumulated SOL whenever you want!</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- For Token Developers -->
+            <div class="panel bg-orange-950/20 border-orange-800">
+                <h3 class="text-orange-400 font-mono text-xs uppercase tracking-widest border-b border-orange-800/50 pb-2 mb-4 flex items-center gap-2">
+                    <i data-lucide="code" class="w-4 h-4"></i> For Token Developers
+                </h3>
+                <div class="space-y-3 text-orange-200/80 text-sm">
+                    <p>Want to share fees with a Twitter/X influencer or community member?</p>
+                    <div class="bg-orange-900/30 rounded p-3 border border-orange-700/50">
+                        <div class="text-orange-300 text-xs mb-2">Register via API:</div>
+                        <code class="text-orange-400 text-xs break-all">POST /api/pags/register</code>
+                        <div class="text-orange-200/60 text-xs mt-2">
+                            Required: mint, twitterUsername, signerPubkey, signature
+                        </div>
+                    </div>
+                    <p class="text-orange-300/70 text-xs">
+                        Contact the admin panel to manually register tokens, or integrate with the API directly from your dApp.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Public Username Lookup -->
+        <div class="panel bg-gray-900/30 border-gray-700 mt-6">
+            <h3 class="text-gray-400 font-mono text-xs uppercase tracking-widest border-b border-gray-700/50 pb-2 mb-4 flex items-center gap-2">
+                <i data-lucide="search" class="w-4 h-4"></i> Check Any Username
+            </h3>
+            <p class="text-gray-300/70 text-sm mb-4">Look up pending rewards for any Twitter/X username (no login required)</p>
+            <div class="flex gap-2 items-center">
+                <span class="text-gray-500">@</span>
+                <input type="text" id="pags-public-lookup-username" class="input-field flex-1 mb-0" placeholder="username (without @)">
+                <button onclick="pagsPublicLookup()" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-3 rounded font-mono text-sm transition">
+                    LOOKUP
+                </button>
+            </div>
+            <div id="pags-public-lookup-result" class="mt-4 bg-black/30 rounded p-3 text-sm hidden">
+                <!-- Results appear here -->
+            </div>
+        </div>
+
+        </div><!-- END TAB: PAGS -->
 
         <div class="flex flex-col sm:flex-row justify-between items-center mt-6 md:mt-10 text-[10px] md:text-xs font-mono border-t border-orange-900 pt-4 md:pt-6 opacity-70 gap-2">
             <div><span class="text-orange-600">RPC: MAINNET PUBLIC</span></div>
@@ -4784,6 +4953,301 @@
         }
     };
     window.copyAirdropStatsToClipboard = copyAirdropStatsToClipboard;
+
+    // ===== PAGS (Pay-to-Twitter/X) Functions =====
+    let pagsSession = null;
+    let pagsUser = null;
+
+    // Check for PAGS session on page load (from cookie or URL callback)
+    const checkPagsSession = async () => {
+        // Check URL for auth_success parameter (after OAuth callback)
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('auth_success') === 'true') {
+            // Clear the URL parameter
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+
+        // Try to get user data (cookie-based session)
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/pags/me`, {
+                credentials: 'include'
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && data.user) {
+                    pagsUser = data.user;
+                    pagsUpdateUI();
+                }
+            }
+        } catch (e) {
+            console.log('PAGS session check:', e.message);
+        }
+    };
+
+    // Update PAGS UI based on login state
+    const pagsUpdateUI = () => {
+        const loginPrompt = document.getElementById('pags-login-prompt');
+        const userDashboard = document.getElementById('pags-user-dashboard');
+        const claimBtn = document.getElementById('pags-claim-btn');
+        const claimStatus = document.getElementById('pags-claim-status');
+
+        if (pagsUser) {
+            // Show logged in state
+            loginPrompt.classList.add('hidden');
+            userDashboard.classList.remove('hidden');
+
+            // Update user info
+            document.getElementById('pags-user-avatar').src = pagsUser.profileImageUrl || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png';
+            document.getElementById('pags-user-name').textContent = pagsUser.displayName || pagsUser.username;
+            document.getElementById('pags-user-handle').textContent = '@' + pagsUser.username;
+
+            // Update wallet status
+            if (pagsUser.linkedWallet) {
+                document.getElementById('pags-wallet-not-linked').classList.add('hidden');
+                document.getElementById('pags-wallet-linked').classList.remove('hidden');
+                document.getElementById('pags-linked-wallet').textContent = pagsUser.linkedWallet;
+            } else {
+                document.getElementById('pags-wallet-not-linked').classList.remove('hidden');
+                document.getElementById('pags-wallet-linked').classList.add('hidden');
+            }
+
+            // Update rewards
+            const pending = pagsUser.pendingRewards || 0;
+            document.getElementById('pags-pending-amount').textContent = pending.toFixed(4) + ' SOL';
+            document.getElementById('pags-claimed-amount').textContent = (pagsUser.totalClaimed || 0).toFixed(4) + ' SOL';
+
+            // Update rewards breakdown
+            const breakdownEl = document.getElementById('pags-rewards-breakdown');
+            if (pagsUser.rewardBreakdown && pagsUser.rewardBreakdown.length > 0) {
+                breakdownEl.innerHTML = pagsUser.rewardBreakdown.map(b => `
+                    <div class="flex justify-between items-center py-2 border-b border-purple-800/30 last:border-0">
+                        <span class="text-purple-300 font-mono text-xs">${b.mint ? (b.mint.slice(0, 6) + '...' + b.mint.slice(-4)) : 'Unknown'}</span>
+                        <span class="text-green-400 font-bold">${(b.pending || 0).toFixed(6)} SOL</span>
+                    </div>
+                `).join('');
+            } else {
+                breakdownEl.innerHTML = '<div class="text-purple-200/50 text-sm text-center py-4">No rewards found</div>';
+            }
+
+            // Update claim button state
+            const canClaim = pending >= 0.01 && pagsUser.linkedWallet;
+            claimBtn.disabled = !canClaim;
+            if (!pagsUser.linkedWallet) {
+                claimStatus.textContent = 'Link your wallet to claim rewards';
+            } else if (pending < 0.01) {
+                claimStatus.textContent = 'Minimum 0.01 SOL required to claim';
+            } else {
+                claimStatus.textContent = `Ready to claim ${pending.toFixed(4)} SOL!`;
+            }
+        } else {
+            // Show login prompt
+            loginPrompt.classList.remove('hidden');
+            userDashboard.classList.add('hidden');
+        }
+    };
+
+    // Login with Twitter
+    const pagsLoginWithTwitter = () => {
+        // Redirect to Twitter OAuth
+        const currentPath = window.location.pathname;
+        window.location.href = `${BACKEND_URL}/api/auth/twitter?redirect=${encodeURIComponent(currentPath)}`;
+    };
+    window.pagsLoginWithTwitter = pagsLoginWithTwitter;
+
+    // Logout
+    const pagsLogout = async () => {
+        try {
+            await fetch(`${BACKEND_URL}/api/auth/twitter/logout`, {
+                method: 'POST',
+                credentials: 'include'
+            });
+        } catch (e) {
+            console.error('Logout error:', e);
+        }
+        pagsUser = null;
+        pagsSession = null;
+        pagsUpdateUI();
+    };
+    window.pagsLogout = pagsLogout;
+
+    // Link wallet to PAGS account
+    const pagsLinkWallet = async () => {
+        if (!userPubkey || !activeWalletProvider) {
+            showStatus('Please connect your Solana wallet first', 'error');
+            return;
+        }
+
+        if (!pagsUser) {
+            showStatus('Please login with Twitter first', 'error');
+            return;
+        }
+
+        try {
+            // Create message to sign
+            const message = `PAGS Link Wallet\nTwitter: @${pagsUser.username}\nWallet: ${userPubkey}\nTimestamp: ${Date.now()}`;
+            const encodedMessage = new TextEncoder().encode(message);
+
+            // Sign message
+            const signedMessage = await activeWalletProvider.signMessage(encodedMessage, 'utf8');
+            const signature = btoa(String.fromCharCode(...new Uint8Array(signedMessage.signature || signedMessage)));
+
+            // Send to backend
+            const res = await fetch(`${BACKEND_URL}/api/pags/link-wallet`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                    walletPubkey: userPubkey,
+                    signedMessage: message,
+                    signature: signature
+                })
+            });
+
+            const data = await res.json();
+            if (data.success) {
+                showStatus('Wallet linked successfully!', 'success');
+                pagsUser.linkedWallet = userPubkey;
+                pagsUpdateUI();
+            } else {
+                showStatus('Failed to link wallet: ' + data.error, 'error');
+            }
+        } catch (e) {
+            console.error('Link wallet error:', e);
+            showStatus('Failed to link wallet: ' + e.message, 'error');
+        }
+    };
+    window.pagsLinkWallet = pagsLinkWallet;
+
+    // Claim rewards
+    const pagsClaim = async () => {
+        if (!pagsUser || !pagsUser.linkedWallet) {
+            showStatus('Please login and link a wallet first', 'error');
+            return;
+        }
+
+        if (!userPubkey || !activeWalletProvider) {
+            showStatus('Please connect your Solana wallet first', 'error');
+            return;
+        }
+
+        try {
+            const claimBtn = document.getElementById('pags-claim-btn');
+            claimBtn.disabled = true;
+            claimBtn.textContent = 'Processing...';
+
+            // Create claim signature
+            const message = `PAGS Claim\nTwitter: @${pagsUser.username}\nWallet: ${pagsUser.linkedWallet}\nTimestamp: ${Date.now()}`;
+            const encodedMessage = new TextEncoder().encode(message);
+            const signedMessage = await activeWalletProvider.signMessage(encodedMessage, 'utf8');
+            const signature = btoa(String.fromCharCode(...new Uint8Array(signedMessage.signature || signedMessage)));
+
+            // Send claim request
+            const res = await fetch(`${BACKEND_URL}/api/pags/claim`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                    signedMessage: message,
+                    signature: signature
+                })
+            });
+
+            const data = await res.json();
+            if (data.success) {
+                showStatus(`Claim submitted! ${(data.claim?.amount || 0).toFixed(4)} SOL will be sent to your wallet.`, 'success');
+                // Refresh user data
+                await pagsRefreshStatus();
+            } else {
+                showStatus('Claim failed: ' + data.error, 'error');
+            }
+
+            claimBtn.textContent = '🎉 CLAIM REWARDS';
+            claimBtn.disabled = false;
+        } catch (e) {
+            console.error('Claim error:', e);
+            showStatus('Claim failed: ' + e.message, 'error');
+            document.getElementById('pags-claim-btn').textContent = '🎉 CLAIM REWARDS';
+            document.getElementById('pags-claim-btn').disabled = false;
+        }
+    };
+    window.pagsClaim = pagsClaim;
+
+    // Refresh PAGS status
+    const pagsRefreshStatus = async () => {
+        if (!pagsUser) {
+            await checkPagsSession();
+            return;
+        }
+
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/pags/me`, {
+                credentials: 'include'
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && data.user) {
+                    pagsUser = data.user;
+                    pagsUpdateUI();
+                }
+            }
+        } catch (e) {
+            console.error('Refresh error:', e);
+        }
+    };
+    window.pagsRefreshStatus = pagsRefreshStatus;
+
+    // Public username lookup
+    const pagsPublicLookup = async () => {
+        const username = document.getElementById('pags-public-lookup-username').value.trim();
+        const resultEl = document.getElementById('pags-public-lookup-result');
+
+        if (!username) {
+            resultEl.innerHTML = '<span class="text-yellow-400">Please enter a username</span>';
+            resultEl.classList.remove('hidden');
+            return;
+        }
+
+        resultEl.innerHTML = '<span class="text-purple-400">Looking up @' + DOMPurify.sanitize(username) + '...</span>';
+        resultEl.classList.remove('hidden');
+
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/pags/lookup/${encodeURIComponent(username)}`);
+            const data = await res.json();
+
+            if (data.success) {
+                let html = `<div class="text-purple-400 font-bold mb-2">@${DOMPurify.sanitize(username)}</div>`;
+                html += `<div class="text-green-400 font-bold text-lg mb-3">Pending: ${(data.totalPending || 0).toFixed(6)} SOL</div>`;
+
+                if (data.breakdown && data.breakdown.length > 0) {
+                    html += '<div class="text-gray-400 text-xs mb-2">Tokens:</div>';
+                    html += '<div class="space-y-1">';
+                    for (const b of data.breakdown.slice(0, 5)) {
+                        html += `<div class="flex justify-between text-xs">
+                            <span class="text-gray-500 font-mono">${b.mint ? (b.mint.slice(0, 6) + '...') : '?'}</span>
+                            <span class="text-green-400">${(b.pending || 0).toFixed(6)} SOL</span>
+                        </div>`;
+                    }
+                    if (data.breakdown.length > 5) {
+                        html += `<div class="text-gray-500 text-xs">...and ${data.breakdown.length - 5} more</div>`;
+                    }
+                    html += '</div>';
+                } else {
+                    html += '<div class="text-gray-500 text-xs">No registered tokens for this username</div>';
+                }
+
+                resultEl.innerHTML = html;
+            } else {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${DOMPurify.sanitize(data.error || 'Unknown error')}</span>`;
+            }
+        } catch (e) {
+            resultEl.innerHTML = `<span class="text-red-400">Error: ${DOMPurify.sanitize(e.message)}</span>`;
+        }
+    };
+    window.pagsPublicLookup = pagsPublicLookup;
+
+    // Check PAGS session on load
+    setTimeout(checkPagsSession, 1000);
+
 </script>
 
 </body>

@@ -310,6 +310,7 @@
             <button class="tab-btn" onclick="switchTab('logs')">Live Logs</button>
             <button class="tab-btn" onclick="switchTab('tools')">Tools</button>
             <button class="tab-btn" onclick="switchTab('koth')">KOTH AI</button>
+            <button class="tab-btn" onclick="switchTab('pags')">PAGS</button>
         </div>
 
         <!-- Tab Content -->
@@ -1020,6 +1021,230 @@
                                 <div class="text-xs text-gray-400">Recent Success Rate</div>
                                 <div id="koth-config-success-rate" class="text-lg font-bold text-orange-400">--%</div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PAGS Tab (Pay-to-Twitter/X) -->
+            <div id="tab-pags" class="tab-content hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- PAGS Stats Overview -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold flex items-center gap-2">
+                                <span>📊 PAGS Overview</span>
+                                <span class="text-xs bg-purple-900/50 text-purple-400 px-2 py-0.5 rounded">Pay-to-Twitter/X</span>
+                            </h3>
+                            <button onclick="fetchPagsStats()" class="btn btn-secondary text-xs">Refresh Stats</button>
+                        </div>
+                        <div id="pags-stats-container" class="grid grid-cols-2 md:grid-cols-5 gap-4 mt-4">
+                            <div class="stat-card">
+                                <div class="text-xs text-gray-400">Total Beneficiaries</div>
+                                <div id="pags-stat-beneficiaries" class="text-lg font-bold text-purple-400">--</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="text-xs text-gray-400">Active Beneficiaries</div>
+                                <div id="pags-stat-active" class="text-lg font-bold text-green-400">--</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="text-xs text-gray-400">Verified Users</div>
+                                <div id="pags-stat-users" class="text-lg font-bold text-blue-400">--</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="text-xs text-gray-400">Total Fees Accumulated</div>
+                                <div id="pags-stat-accumulated" class="text-lg font-bold text-orange-400">-- SOL</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="text-xs text-gray-400">Total Fees Claimed</div>
+                                <div id="pags-stat-claimed" class="text-lg font-bold text-cyan-400">-- SOL</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Register Token Section -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">🎯 Register Token</h3>
+                            <p class="text-xs text-gray-500 mt-1">Register a token with a Twitter/X username as fee beneficiary</p>
+                        </div>
+                        <div class="space-y-3 mt-4">
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Token Mint Address *</label>
+                                <input type="text" id="pags-register-mint" class="input-field w-full" placeholder="Enter token mint address...">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Twitter/X Username *</label>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-gray-500">@</span>
+                                    <input type="text" id="pags-register-username" class="input-field flex-1" placeholder="username (without @)">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Fee Share (BPS) - Default: 10000 = 100%</label>
+                                <input type="number" id="pags-register-feeshare" class="input-field w-full" placeholder="10000" value="10000" min="0" max="10000">
+                                <p class="text-xs text-gray-500 mt-1">10000 = 100%, 5000 = 50%, etc.</p>
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Creator Wallet (for signature verification)</label>
+                                <input type="text" id="pags-register-creator" class="input-field w-full" placeholder="Creator pubkey (auto-detected if empty)">
+                            </div>
+                            <button onclick="registerPagsBeneficiary()" class="btn btn-primary w-full">Register Token</button>
+                        </div>
+                        <div id="pags-register-result" class="result-box mt-4 text-green-400">
+                            // Registration result will appear here
+                        </div>
+                    </div>
+
+                    <!-- Token Status Lookup -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">🔍 Token Status Lookup</h3>
+                            <p class="text-xs text-gray-500 mt-1">Check PAGS registration status for a token</p>
+                        </div>
+                        <div class="space-y-3 mt-4">
+                            <div class="flex gap-2">
+                                <input type="text" id="pags-lookup-mint" class="input-field flex-1" placeholder="Enter token mint address...">
+                                <button onclick="lookupPagsStatus()" class="btn btn-primary">Lookup</button>
+                            </div>
+                        </div>
+                        <div id="pags-lookup-result" class="result-box mt-4 text-cyan-400">
+                            // Token PAGS status will appear here
+                        </div>
+                    </div>
+
+                    <!-- Username Rewards Lookup -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">💰 Username Rewards Lookup</h3>
+                            <p class="text-xs text-gray-500 mt-1">Check pending rewards for a Twitter/X username</p>
+                        </div>
+                        <div class="space-y-3 mt-4">
+                            <div class="flex gap-2 items-center">
+                                <span class="text-gray-500">@</span>
+                                <input type="text" id="pags-username-lookup" class="input-field flex-1" placeholder="username (without @)">
+                                <button onclick="lookupPagsUsername()" class="btn btn-primary">Lookup</button>
+                            </div>
+                        </div>
+                        <div id="pags-username-result" class="result-box mt-4 text-yellow-400">
+                            // Username rewards will appear here
+                        </div>
+                    </div>
+
+                    <!-- Record Fee Collection (Admin) -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">📝 Record Fee Collection</h3>
+                            <p class="text-xs text-gray-500 mt-1">Manually record a fee collection for a beneficiary</p>
+                        </div>
+                        <div class="space-y-3 mt-4">
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Token Mint *</label>
+                                <input type="text" id="pags-fee-mint" class="input-field w-full" placeholder="Token mint address...">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Amount (SOL) *</label>
+                                <input type="number" id="pags-fee-amount" class="input-field w-full" placeholder="0.001" step="0.000001" min="0">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Source (optional)</label>
+                                <input type="text" id="pags-fee-source" class="input-field w-full" placeholder="flywheel / manual / etc.">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">TX Signature (optional)</label>
+                                <input type="text" id="pags-fee-signature" class="input-field w-full" placeholder="Transaction signature...">
+                            </div>
+                            <button onclick="recordPagsFee()" class="btn btn-success w-full">Record Fee</button>
+                        </div>
+                        <div id="pags-fee-result" class="result-box mt-4 text-green-400">
+                            // Fee recording result will appear here
+                        </div>
+                    </div>
+
+                    <!-- Pending Claims (Admin) -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">⏳ Pending Claims</h3>
+                            <button onclick="fetchPagsPendingClaims()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="pags-pending-claims" class="max-h-64 overflow-y-auto mt-4">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Twitter User</th>
+                                        <th>Recipient Wallet</th>
+                                        <th>Amount</th>
+                                        <th>Created</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pags-claims-table-body">
+                                    <tr><td colspan="6" class="text-center text-gray-500">Click "Refresh" to load claims...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- All Beneficiaries List -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">📋 All Registered Beneficiaries</h3>
+                            <button onclick="fetchPagsBeneficiaries()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="pags-beneficiaries-list" class="max-h-80 overflow-y-auto mt-4">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Token</th>
+                                        <th>Twitter Username</th>
+                                        <th>Fee Share</th>
+                                        <th>Accumulated</th>
+                                        <th>Claimed</th>
+                                        <th>Pending</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pags-beneficiaries-table-body">
+                                    <tr><td colspan="7" class="text-center text-gray-500">Click "Refresh" to load beneficiaries...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Deactivate Token -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-red-400 font-bold">⚠️ Deactivate PAGS</h3>
+                            <p class="text-xs text-gray-500 mt-1">Deactivate PAGS for a token (requires creator signature)</p>
+                        </div>
+                        <div class="space-y-3 mt-4">
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Token Mint to Deactivate</label>
+                                <input type="text" id="pags-deactivate-mint" class="input-field w-full" placeholder="Token mint address...">
+                            </div>
+                            <button onclick="deactivatePags()" class="btn btn-danger w-full">Deactivate PAGS</button>
+                        </div>
+                        <div id="pags-deactivate-result" class="result-box mt-4 text-yellow-400">
+                            // Deactivation result will appear here
+                        </div>
+                    </div>
+
+                    <!-- Process Claim (Admin) -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">🚀 Process Claim</h3>
+                            <p class="text-xs text-gray-500 mt-1">Manually process a pending claim</p>
+                        </div>
+                        <div class="space-y-3 mt-4">
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Claim ID</label>
+                                <input type="number" id="pags-process-claim-id" class="input-field w-full" placeholder="Enter claim ID...">
+                            </div>
+                            <button onclick="processPagsClaim()" class="btn btn-primary w-full">Process Claim</button>
+                        </div>
+                        <div id="pags-process-result" class="result-box mt-4 text-green-400">
+                            // Processing result will appear here
                         </div>
                     </div>
                 </div>
@@ -2202,6 +2427,403 @@
             } catch (e) {
                 tbody.innerHTML = `<tr><td colspan="6" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
                 log(`Top point holders fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        // ===== PAGS MANAGEMENT =====
+        async function fetchPagsStats() {
+            log('Fetching PAGS statistics...');
+
+            try {
+                const data = await apiCall('/api/pags/stats');
+
+                if (data.success) {
+                    const stats = data.stats || {};
+                    document.getElementById('pags-stat-beneficiaries').textContent = stats.totalBeneficiaries || 0;
+                    document.getElementById('pags-stat-active').textContent = stats.activeBeneficiaries || 0;
+                    document.getElementById('pags-stat-users').textContent = stats.verifiedUsers || 0;
+                    document.getElementById('pags-stat-accumulated').textContent = (stats.totalFeesAccumulated || 0).toFixed(4) + ' SOL';
+                    document.getElementById('pags-stat-claimed').textContent = (stats.totalFeesClaimed || 0).toFixed(4) + ' SOL';
+                    log('PAGS stats fetched successfully', 'success');
+                } else {
+                    log(`PAGS stats error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                log(`PAGS stats fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function registerPagsBeneficiary() {
+            const mint = document.getElementById('pags-register-mint').value.trim();
+            const username = document.getElementById('pags-register-username').value.trim();
+            const feeShareBps = parseInt(document.getElementById('pags-register-feeshare').value) || 10000;
+            const creatorPubkey = document.getElementById('pags-register-creator').value.trim();
+
+            const resultEl = document.getElementById('pags-register-result');
+
+            if (!mint || !username) {
+                resultEl.innerHTML = '<span class="text-red-400">Token mint and Twitter username are required</span>';
+                log('Missing required fields for PAGS registration', 'warning');
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Registering beneficiary...</span>';
+            log(`Registering PAGS for ${shortenPubkey(mint)} -> @${username}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/pags/register`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    },
+                    body: JSON.stringify({
+                        mint,
+                        twitterUsername: username,
+                        feeShareBps,
+                        signerPubkey: creatorPubkey || 'admin-skip-verification'
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Registration successful!</span>\n\n` +
+                        `Token: ${shortenPubkey(mint)}\n` +
+                        `Beneficiary: @${username}\n` +
+                        `Fee Share: ${feeShareBps / 100}%`;
+                    log(`PAGS registered: ${shortenPubkey(mint)} -> @${username}`, 'success');
+
+                    // Clear inputs
+                    document.getElementById('pags-register-mint').value = '';
+                    document.getElementById('pags-register-username').value = '';
+
+                    // Refresh beneficiaries list
+                    fetchPagsBeneficiaries();
+                    fetchPagsStats();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`PAGS registration failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`PAGS registration error: ${e.message}`, 'error');
+            }
+        }
+
+        async function lookupPagsStatus() {
+            const mint = document.getElementById('pags-lookup-mint').value.trim();
+            const resultEl = document.getElementById('pags-lookup-result');
+
+            if (!mint) {
+                resultEl.innerHTML = '<span class="text-yellow-400">Please enter a token mint address</span>';
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Looking up PAGS status...</span>';
+            log(`Looking up PAGS for ${shortenPubkey(mint)}...`);
+
+            try {
+                const data = await apiCall(`/api/pags/status/${mint}`);
+
+                if (data.success) {
+                    if (data.isRegistered) {
+                        const b = data.beneficiary;
+                        resultEl.innerHTML = `<span class="text-green-400">✓ PAGS Registered</span>\n\n` +
+                            `Twitter: <span class="text-purple-400">@${b.twitterUsername}</span>\n` +
+                            `Fee Share: <span class="text-orange-400">${b.feeSharePercent}%</span>\n` +
+                            `Accumulated: <span class="text-green-400">${(b.totalFeesAccumulated || 0).toFixed(6)} SOL</span>\n` +
+                            `Claimed: <span class="text-cyan-400">${(b.totalFeesClaimed || 0).toFixed(6)} SOL</span>\n` +
+                            `Pending: <span class="text-yellow-400">${(b.pendingFees || 0).toFixed(6)} SOL</span>\n` +
+                            `Status: ${b.isActive ? '<span class="text-green-400">Active</span>' : '<span class="text-red-400">Inactive</span>'}`;
+                        log(`PAGS found for ${shortenPubkey(mint)}`, 'success');
+                    } else {
+                        resultEl.innerHTML = '<span class="text-yellow-400">Token is not registered with PAGS</span>';
+                        log(`No PAGS registration for ${shortenPubkey(mint)}`, 'info');
+                    }
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`PAGS lookup error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`PAGS lookup failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function lookupPagsUsername() {
+            const username = document.getElementById('pags-username-lookup').value.trim();
+            const resultEl = document.getElementById('pags-username-result');
+
+            if (!username) {
+                resultEl.innerHTML = '<span class="text-yellow-400">Please enter a Twitter username</span>';
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Looking up rewards for @' + username + '...</span>';
+            log(`Looking up PAGS rewards for @${username}...`);
+
+            try {
+                const data = await apiCall(`/api/pags/lookup/${username}`);
+
+                if (data.success) {
+                    let html = `<span class="text-purple-400 font-bold">@${username}</span>\n\n`;
+                    html += `Total Pending: <span class="text-green-400 font-bold">${(data.totalPending || 0).toFixed(6)} SOL</span>\n\n`;
+
+                    if (data.breakdown && data.breakdown.length > 0) {
+                        html += `<span class="text-gray-400">Breakdown by Token:</span>\n`;
+                        for (const b of data.breakdown) {
+                            html += `  ${shortenPubkey(b.mint, 4)} - ${(b.pending || 0).toFixed(6)} SOL\n`;
+                        }
+                    } else {
+                        html += `<span class="text-gray-500">No tokens registered for this username</span>`;
+                    }
+
+                    resultEl.innerHTML = html;
+                    log(`Found ${data.totalPending || 0} SOL pending for @${username}`, 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`Username lookup error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Username lookup failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function recordPagsFee() {
+            const mint = document.getElementById('pags-fee-mint').value.trim();
+            const amount = parseFloat(document.getElementById('pags-fee-amount').value);
+            const source = document.getElementById('pags-fee-source').value.trim();
+            const txSignature = document.getElementById('pags-fee-signature').value.trim();
+
+            const resultEl = document.getElementById('pags-fee-result');
+
+            if (!mint || !amount || isNaN(amount)) {
+                resultEl.innerHTML = '<span class="text-red-400">Token mint and valid amount are required</span>';
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Recording fee collection...</span>';
+            log(`Recording ${amount} SOL fee for ${shortenPubkey(mint)}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/pags/record-fee`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    },
+                    body: JSON.stringify({
+                        mint,
+                        amount,
+                        source: source || 'admin',
+                        txSignature: txSignature || null
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Fee recorded successfully!</span>\n\n` +
+                        `Amount: ${amount} SOL\n` +
+                        `Beneficiary: @${data.beneficiary?.twitterUsername || 'Unknown'}\n` +
+                        `New Total: ${(data.beneficiary?.totalFeesAccumulated || 0).toFixed(6)} SOL`;
+                    log(`Fee recorded: ${amount} SOL for ${shortenPubkey(mint)}`, 'success');
+
+                    // Clear inputs
+                    document.getElementById('pags-fee-amount').value = '';
+                    document.getElementById('pags-fee-signature').value = '';
+
+                    // Refresh stats
+                    fetchPagsStats();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Fee recording failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Fee recording error: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchPagsPendingClaims() {
+            const tbody = document.getElementById('pags-claims-table-body');
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-gray-500">Loading...</td></tr>';
+            log('Fetching pending PAGS claims...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/pags/pending-claims`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const claims = data.claims || [];
+                    if (claims.length > 0) {
+                        tbody.innerHTML = claims.map(c => `
+                            <tr>
+                                <td class="text-orange-500">${c.id}</td>
+                                <td class="text-purple-400">@${c.twitterUsername}</td>
+                                <td class="text-gray-300">${shortenPubkey(c.recipientWallet)}</td>
+                                <td class="text-green-400">${(c.amount || 0).toFixed(6)} SOL</td>
+                                <td class="text-gray-500">${new Date(c.createdAt).toLocaleString()}</td>
+                                <td>
+                                    <button onclick="document.getElementById('pags-process-claim-id').value='${c.id}'; processPagsClaim();" class="btn btn-primary text-xs">Process</button>
+                                </td>
+                            </tr>
+                        `).join('');
+                        log(`Loaded ${claims.length} pending claims`, 'success');
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-gray-500">No pending claims</td></tr>';
+                        log('No pending claims found', 'info');
+                    }
+                } else {
+                    tbody.innerHTML = `<tr><td colspan="6" class="text-center text-red-400">Error: ${data.error}</td></tr>`;
+                    log(`Pending claims error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
+                log(`Pending claims fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchPagsBeneficiaries() {
+            const tbody = document.getElementById('pags-beneficiaries-table-body');
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray-500">Loading...</td></tr>';
+            log('Fetching PAGS beneficiaries...');
+
+            try {
+                // For now, we'll use the stats endpoint with a workaround
+                // In production, you'd have a dedicated /api/admin/pags/beneficiaries endpoint
+                const data = await apiCall('/api/pags/stats');
+
+                if (data.success && data.stats && data.stats.beneficiaries) {
+                    const beneficiaries = data.stats.beneficiaries || [];
+                    if (beneficiaries.length > 0) {
+                        tbody.innerHTML = beneficiaries.map(b => {
+                            const pending = (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0);
+                            return `
+                                <tr onclick="document.getElementById('pags-lookup-mint').value='${b.mint}'; lookupPagsStatus();" style="cursor: pointer;">
+                                    <td class="text-gray-300">${shortenPubkey(b.mint)}</td>
+                                    <td class="text-purple-400">@${b.twitterUsername}</td>
+                                    <td class="text-orange-400">${(b.feeShareBps || 10000) / 100}%</td>
+                                    <td class="text-green-400">${(b.totalFeesAccumulated || 0).toFixed(6)}</td>
+                                    <td class="text-cyan-400">${(b.totalFeesClaimed || 0).toFixed(6)}</td>
+                                    <td class="text-yellow-400">${pending.toFixed(6)}</td>
+                                    <td>${b.isActive ? '<span class="text-green-400">Active</span>' : '<span class="text-red-400">Inactive</span>'}</td>
+                                </tr>
+                            `;
+                        }).join('');
+                        log(`Loaded ${beneficiaries.length} beneficiaries`, 'success');
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray-500">No beneficiaries registered yet</td></tr>';
+                        log('No beneficiaries found', 'info');
+                    }
+                } else {
+                    // Stats doesn't include full beneficiary list - show placeholder
+                    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray-500">Use token lookup to check individual tokens</td></tr>';
+                    log('Beneficiary list not available via stats endpoint', 'info');
+                }
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="7" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
+                log(`Beneficiaries fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function processPagsClaim() {
+            const claimId = document.getElementById('pags-process-claim-id').value.trim();
+            const resultEl = document.getElementById('pags-process-result');
+
+            if (!claimId) {
+                resultEl.innerHTML = '<span class="text-yellow-400">Please enter a claim ID</span>';
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Processing claim...</span>';
+            log(`Processing PAGS claim #${claimId}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/pags/process-claim/${claimId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Claim processed successfully!</span>\n\n` +
+                        `Claim ID: ${claimId}\n` +
+                        `Signature: ${data.signature ? shortenPubkey(data.signature, 8) : 'N/A'}\n` +
+                        `Amount: ${(data.claim?.amount || 0).toFixed(6)} SOL`;
+                    log(`Claim #${claimId} processed successfully`, 'success');
+
+                    // Clear input and refresh claims
+                    document.getElementById('pags-process-claim-id').value = '';
+                    fetchPagsPendingClaims();
+                    fetchPagsStats();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Claim processing failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Claim processing error: ${e.message}`, 'error');
+            }
+        }
+
+        async function deactivatePags() {
+            const mint = document.getElementById('pags-deactivate-mint').value.trim();
+            const resultEl = document.getElementById('pags-deactivate-result');
+
+            if (!mint) {
+                resultEl.innerHTML = '<span class="text-yellow-400">Please enter a token mint address</span>';
+                return;
+            }
+
+            if (!confirm(`Are you sure you want to deactivate PAGS for ${shortenPubkey(mint)}?\n\nThis action can be undone by re-registering.`)) {
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Deactivating PAGS...</span>';
+            log(`Deactivating PAGS for ${shortenPubkey(mint)}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/pags/deactivate/${mint}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    },
+                    body: JSON.stringify({
+                        signerPubkey: 'admin-skip-verification'
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ PAGS deactivated for ${shortenPubkey(mint)}</span>`;
+                    log(`PAGS deactivated for ${shortenPubkey(mint)}`, 'success');
+
+                    document.getElementById('pags-deactivate-mint').value = '';
+                    fetchPagsBeneficiaries();
+                    fetchPagsStats();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Deactivation failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Deactivation error: ${e.message}`, 'error');
             }
         }
 
