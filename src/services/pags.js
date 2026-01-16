@@ -181,12 +181,38 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
         }
 
         // Insert new registration
-        const result = await db.run(`
-            INSERT INTO pags_beneficiaries (mint, "creatorPubkey", "twitterUsername", "feeShareBps", "createdAt")
-            VALUES ($1, $2, $3, $4, $5)
-        `, [mint, finalCreatorPubkey, normalizedUsername, feeShareBps, Date.now()]);
+        // Use 'unknown' as placeholder if creatorPubkey is null (column is NOT NULL in legacy schema)
+        const creatorValue = finalCreatorPubkey || 'unknown';
+        const timestamp = Date.now();
 
-        logger.info('[PAGS] Beneficiary registered', { mint, twitterUsername: normalizedUsername, feeShareBps });
+        logger.info('[PAGS] Attempting to insert beneficiary', {
+            mint,
+            creatorPubkey: creatorValue,
+            twitterUsername: normalizedUsername,
+            feeShareBps,
+            timestamp
+        });
+
+        const result = await db.run(`
+            INSERT INTO pags_beneficiaries (mint, "creatorPubkey", "twitterUsername", "feeShareBps", "createdAt", "isActive")
+            VALUES ($1, $2, $3, $4, $5, 1)
+        `, [mint, creatorValue, normalizedUsername, feeShareBps, timestamp]);
+
+        // Verify the insert succeeded by reading it back
+        const verification = await db.get('SELECT * FROM pags_beneficiaries WHERE mint = $1', [mint]);
+
+        logger.info('[PAGS] Beneficiary registered', {
+            mint,
+            twitterUsername: normalizedUsername,
+            feeShareBps,
+            insertResult: result,
+            verified: !!verification,
+            verifiedData: verification ? {
+                id: verification.id,
+                isActive: verification.isActive,
+                username: verification.twitterUsername
+            } : null
+        });
 
         return {
             id: result.lastID,
@@ -210,6 +236,7 @@ async function getBeneficiaryByMint(mint) {
 
     // Validate mint format
     if (!isValidPublicKey(mint)) {
+        logger.debug('[PAGS] getBeneficiaryByMint: invalid mint format', { mint });
         return null;
     }
 
@@ -217,6 +244,12 @@ async function getBeneficiaryByMint(mint) {
         'SELECT * FROM pags_beneficiaries WHERE mint = $1',
         [mint]
     );
+
+    logger.debug('[PAGS] getBeneficiaryByMint result', {
+        mint,
+        found: !!result,
+        data: result ? { id: result.id, username: result.twitterUsername, isActive: result.isActive } : null
+    });
 
     return result;
 }

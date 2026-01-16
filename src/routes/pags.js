@@ -146,8 +146,95 @@ function init(deps) {
     });
 
     /**
+     * GET /api/pags/leaderboard
+     * Get PAGS leaderboard data for public display
+     * Returns top tokens and users by fees accumulated
+     */
+    router.get('/pags/leaderboard', lookupLimiter, async (req, res) => {
+        try {
+            if (!config.PAGS_ENABLED) {
+                return errorResponse(res, 503, 'PAGS is not enabled');
+            }
+
+            // Get all active beneficiaries with token info
+            const tokens = await db.all(`
+                SELECT b.*, t.ticker, t.name, t.image
+                FROM pags_beneficiaries b
+                LEFT JOIN tokens t ON t.mint = b.mint
+                WHERE b."isActive" = 1
+                ORDER BY b."totalFeesAccumulated" DESC
+                LIMIT 50
+            `);
+
+            // Process tokens to add pending calculation
+            const processedTokens = tokens.map(t => ({
+                mint: t.mint,
+                ticker: t.ticker || null,
+                name: t.name || null,
+                image: t.image || null,
+                twitterUsername: t.twitterUsername,
+                feeShareBps: t.feeShareBps || 10000,
+                totalFeesAccumulated: t.totalFeesAccumulated || 0,
+                totalFeesClaimed: t.totalFeesClaimed || 0,
+                pending: (t.totalFeesAccumulated || 0) - (t.totalFeesClaimed || 0)
+            }));
+
+            // Aggregate by Twitter username for user leaderboard
+            const userMap = new Map();
+            for (const token of tokens) {
+                const username = token.twitterUsername;
+                if (!userMap.has(username)) {
+                    userMap.set(username, {
+                        twitterUsername: username,
+                        tokenCount: 0,
+                        totalAccumulated: 0,
+                        totalClaimed: 0,
+                        totalPending: 0
+                    });
+                }
+                const user = userMap.get(username);
+                user.tokenCount++;
+                user.totalAccumulated += (token.totalFeesAccumulated || 0);
+                user.totalClaimed += (token.totalFeesClaimed || 0);
+                user.totalPending += (token.totalFeesAccumulated || 0) - (token.totalFeesClaimed || 0);
+            }
+
+            const users = Array.from(userMap.values())
+                .sort((a, b) => b.totalAccumulated - a.totalAccumulated)
+                .slice(0, 50);
+
+            // Get overall stats
+            const stats = await db.get(`
+                SELECT
+                    COUNT(*) as totalTokens,
+                    COUNT(CASE WHEN "isActive" = 1 THEN 1 END) as activeBeneficiaries,
+                    COALESCE(SUM("totalFeesAccumulated"), 0) as totalAccumulated,
+                    COALESCE(SUM("totalFeesClaimed"), 0) as totalClaimed
+                FROM pags_beneficiaries
+            `);
+
+            res.json({
+                success: true,
+                stats: {
+                    totalTokens: stats?.totalTokens || 0,
+                    activeBeneficiaries: stats?.activeBeneficiaries || 0,
+                    totalAccumulated: stats?.totalAccumulated || 0,
+                    totalClaimed: stats?.totalClaimed || 0,
+                    totalPending: (stats?.totalAccumulated || 0) - (stats?.totalClaimed || 0)
+                },
+                tokens: processedTokens,
+                users
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Leaderboard error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to fetch leaderboard');
+        }
+    });
+
+    /**
      * GET /api/pags/lookup/:username
      * Lookup rewards for a Twitter username (public)
+     * Also returns token details for the My Tokens section
      */
     router.get('/pags/lookup/:username', lookupLimiter, async (req, res) => {
         try {
@@ -160,9 +247,56 @@ function init(deps) {
                 return errorResponse(res, 400, 'Invalid username');
             }
 
-            const result = await pags.lookupUsername(username);
+            logger.info('[PAGS API] Username lookup', { username, lowered: username.toLowerCase() });
 
-            res.json({ success: true, ...result });
+            // Get full token details for the user's tokens
+            const tokens = await db.all(`
+                SELECT b.*, t.ticker, t.name, t.image
+                FROM pags_beneficiaries b
+                LEFT JOIN tokens t ON t.mint = b.mint
+                WHERE LOWER(b."twitterUsername") = LOWER($1)
+                  AND b."isActive" = 1
+                ORDER BY b."totalFeesAccumulated" DESC
+            `, [username]);
+
+            logger.info('[PAGS API] Lookup results', {
+                username,
+                tokensFound: tokens.length,
+                tokens: tokens.map(t => ({ mint: t.mint, user: t.twitterUsername, isActive: t.isActive }))
+            });
+
+            // Calculate totals
+            let totalPending = 0;
+            let totalAccumulated = 0;
+            let totalClaimed = 0;
+
+            const breakdown = tokens.map(t => {
+                const pending = (t.totalFeesAccumulated || 0) - (t.totalFeesClaimed || 0);
+                totalPending += pending;
+                totalAccumulated += (t.totalFeesAccumulated || 0);
+                totalClaimed += (t.totalFeesClaimed || 0);
+
+                return {
+                    mint: t.mint,
+                    ticker: t.ticker || null,
+                    name: t.name || null,
+                    image: t.image || null,
+                    feeShareBps: t.feeShareBps || 10000,
+                    totalFeesAccumulated: t.totalFeesAccumulated || 0,
+                    totalFeesClaimed: t.totalFeesClaimed || 0,
+                    pending
+                };
+            });
+
+            res.json({
+                success: true,
+                twitterUsername: username,
+                totalPending,
+                totalAccumulated,
+                totalClaimed,
+                tokenCount: tokens.length,
+                breakdown
+            });
         } catch (e) {
             logger.error('[PAGS API] Lookup error', { error: e.message });
             return errorResponse(res, 500, 'Failed to lookup username');
@@ -832,6 +966,184 @@ function init(deps) {
         } catch (e) {
             logger.error('[PAGS API] Get beneficiaries error', { error: e.message });
             return errorResponse(res, 500, 'Failed to fetch beneficiaries');
+        }
+    });
+
+    /**
+     * GET /api/admin/pags/users
+     * Get all verified Twitter users (admin only)
+     */
+    router.get('/admin/pags/users', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            // Pagination
+            const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+            const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+
+            const users = await db.all(`
+                SELECT "twitterId", "twitterUsername", "displayName", "profileImageUrl",
+                       "linkedWallet", "walletLinkedAt", "lastVerified", "createdAt", "isActive"
+                FROM pags_twitter_users
+                ORDER BY "createdAt" DESC
+                LIMIT $1 OFFSET $2
+            `, [limit, offset]);
+
+            const totalCount = await db.get('SELECT COUNT(*) as count FROM pags_twitter_users');
+
+            res.json({
+                success: true,
+                users,
+                pagination: { limit, offset, total: totalCount?.count || 0 }
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Get users error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to fetch users');
+        }
+    });
+
+    /**
+     * GET /api/admin/pags/claims
+     * Get all claims with optional status filter (admin only)
+     */
+    router.get('/admin/pags/claims', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            // Pagination and filter
+            const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+            const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+            const status = req.query.status;
+
+            let query, params;
+            if (status && ['pending', 'completed', 'failed'].includes(status)) {
+                query = `
+                    SELECT * FROM pags_claims
+                    WHERE status = $1
+                    ORDER BY "createdAt" DESC
+                    LIMIT $2 OFFSET $3
+                `;
+                params = [status, limit, offset];
+            } else {
+                query = `
+                    SELECT * FROM pags_claims
+                    ORDER BY "createdAt" DESC
+                    LIMIT $1 OFFSET $2
+                `;
+                params = [limit, offset];
+            }
+
+            const claims = await db.all(query, params);
+
+            const countQuery = status && ['pending', 'completed', 'failed'].includes(status)
+                ? `SELECT COUNT(*) as count FROM pags_claims WHERE status = '${status}'`
+                : 'SELECT COUNT(*) as count FROM pags_claims';
+            const totalCount = await db.get(countQuery);
+
+            res.json({
+                success: true,
+                claims,
+                pagination: { limit, offset, total: totalCount?.count || 0 }
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Get claims error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to fetch claims');
+        }
+    });
+
+    /**
+     * GET /api/admin/pags/wallet
+     * Get PAGS wallet balance and status (admin only)
+     */
+    router.get('/admin/pags/wallet', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            // Get PAGS wallet address
+            const pagsWalletAddress = config.PAGS_WALLET;
+            if (!pagsWalletAddress) {
+                return res.json({
+                    success: true,
+                    wallet: {
+                        address: null,
+                        balance: 0,
+                        pendingClaims: 0,
+                        configured: false
+                    }
+                });
+            }
+
+            // Get wallet balance
+            let balance = 0;
+            try {
+                const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+                const pubkey = new PublicKey(pagsWalletAddress);
+                const lamports = await connection.getBalance(pubkey);
+                balance = lamports / LAMPORTS_PER_SOL;
+            } catch (e) {
+                logger.warn('[PAGS API] Could not fetch wallet balance', { error: e.message });
+            }
+
+            // Get total pending claims amount
+            const pendingResult = await db.get(`
+                SELECT COALESCE(SUM(amount), 0) as total
+                FROM pags_claims
+                WHERE status = 'pending'
+            `);
+
+            res.json({
+                success: true,
+                wallet: {
+                    address: pagsWalletAddress,
+                    balance,
+                    pendingClaims: pendingResult?.total || 0,
+                    configured: true
+                }
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Get wallet error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to fetch wallet info');
+        }
+    });
+
+    /**
+     * POST /api/admin/pags/deactivate/:mint
+     * Admin override to deactivate PAGS for a token without creator signature
+     */
+    router.post('/admin/pags/deactivate/:mint', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            const mint = sanitizeString(req.params.mint, 64);
+            if (!mint) {
+                return errorResponse(res, 400, 'Invalid mint address');
+            }
+
+            // Check if beneficiary exists
+            const beneficiary = await pags.getBeneficiaryByMint(mint);
+            if (!beneficiary) {
+                return errorResponse(res, 404, 'Beneficiary not found');
+            }
+
+            await pags.deactivateBeneficiary(mint);
+            logger.info('[PAGS API] Admin deactivated beneficiary', { mint });
+
+            res.json({ success: true, message: 'PAGS deactivated for this token' });
+        } catch (e) {
+            logger.error('[PAGS API] Admin deactivate error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to deactivate');
         }
     });
 

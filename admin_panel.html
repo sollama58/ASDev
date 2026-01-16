@@ -1212,11 +1212,95 @@
                         </div>
                     </div>
 
+                    <!-- Verified Twitter Users -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">🐦 Verified Twitter Users</h3>
+                            <button onclick="fetchPagsUsers()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="pags-users-list" class="max-h-64 overflow-y-auto mt-4">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Twitter User</th>
+                                        <th>Display Name</th>
+                                        <th>Linked Wallet</th>
+                                        <th>Verified</th>
+                                        <th>Active</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pags-users-table-body">
+                                    <tr><td colspan="5" class="text-center text-gray-500">Click "Refresh" to load users...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Claims History -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">📜 Claims History</h3>
+                            <div class="flex items-center gap-2">
+                                <select id="pags-claims-status-filter" class="input-field text-xs" onchange="fetchPagsClaimsHistory()">
+                                    <option value="all">All Status</option>
+                                    <option value="pending">Pending</option>
+                                    <option value="completed">Completed</option>
+                                    <option value="failed">Failed</option>
+                                </select>
+                                <button onclick="fetchPagsClaimsHistory()" class="btn btn-secondary text-xs">Refresh</button>
+                            </div>
+                        </div>
+                        <div id="pags-claims-history" class="max-h-80 overflow-y-auto mt-4">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Twitter User</th>
+                                        <th>Wallet</th>
+                                        <th>Amount</th>
+                                        <th>Status</th>
+                                        <th>TX</th>
+                                        <th>Created</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pags-claims-history-body">
+                                    <tr><td colspan="7" class="text-center text-gray-500">Click "Refresh" to load claims history...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- PAGS Wallet Balance -->
+                    <div class="panel">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">💰 PAGS Wallet</h3>
+                            <button onclick="fetchPagsWalletBalance()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="pags-wallet-info" class="space-y-2 mt-4">
+                            <div class="flex justify-between py-1">
+                                <span class="text-gray-400">Address:</span>
+                                <span id="pags-wallet-address" class="text-orange-300 text-xs">--</span>
+                            </div>
+                            <div class="flex justify-between py-1">
+                                <span class="text-gray-400">Balance:</span>
+                                <span id="pags-wallet-balance" class="text-green-400 font-bold">-- SOL</span>
+                            </div>
+                            <div class="flex justify-between py-1">
+                                <span class="text-gray-400">Total Pending Claims:</span>
+                                <span id="pags-wallet-pending" class="text-yellow-400">-- SOL</span>
+                            </div>
+                            <div class="flex justify-between py-1">
+                                <span class="text-gray-400">Available After Claims:</span>
+                                <span id="pags-wallet-available" class="text-cyan-400">-- SOL</span>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Deactivate Token -->
                     <div class="panel">
                         <div class="panel-header">
                             <h3 class="text-red-400 font-bold">⚠️ Deactivate PAGS</h3>
-                            <p class="text-xs text-gray-500 mt-1">Deactivate PAGS for a token (requires creator signature)</p>
+                            <p class="text-xs text-gray-500 mt-1">Deactivate PAGS for a token (admin override)</p>
                         </div>
                         <div class="space-y-3 mt-4">
                             <div>
@@ -2699,20 +2783,28 @@
             log('Fetching PAGS beneficiaries...');
 
             try {
-                // For now, we'll use the stats endpoint with a workaround
-                // In production, you'd have a dedicated /api/admin/pags/beneficiaries endpoint
-                const data = await apiCall('/api/pags/stats');
+                const response = await fetch(`${backendUrl}/api/admin/pags/beneficiaries`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
 
-                if (data.success && data.stats && data.stats.beneficiaries) {
-                    const beneficiaries = data.stats.beneficiaries || [];
+                const data = await response.json();
+
+                if (data.success) {
+                    const beneficiaries = data.beneficiaries || [];
                     if (beneficiaries.length > 0) {
                         tbody.innerHTML = beneficiaries.map(b => {
                             const pending = (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0);
+                            const tokenDisplay = b.ticker ? `${b.ticker}` : shortenPubkey(b.mint);
+                            const hasMultiRecipients = b.hasMultipleRecipients ? '<span class="text-yellow-500 text-xs ml-1" title="Multiple fee recipients">(multi)</span>' : '';
                             return `
                                 <tr onclick="document.getElementById('pags-lookup-mint').value='${b.mint}'; lookupPagsStatus();" style="cursor: pointer;">
-                                    <td class="text-gray-300">${shortenPubkey(b.mint)}</td>
+                                    <td class="text-gray-300" title="${b.mint}">${tokenDisplay}${hasMultiRecipients}</td>
                                     <td class="text-purple-400">@${b.twitterUsername}</td>
-                                    <td class="text-orange-400">${(b.feeShareBps || 10000) / 100}%</td>
+                                    <td class="text-orange-400">${(b.feeSharePercent || 100).toFixed(1)}%</td>
                                     <td class="text-green-400">${(b.totalFeesAccumulated || 0).toFixed(6)}</td>
                                     <td class="text-cyan-400">${(b.totalFeesClaimed || 0).toFixed(6)}</td>
                                     <td class="text-yellow-400">${pending.toFixed(6)}</td>
@@ -2726,9 +2818,8 @@
                         log('No beneficiaries found', 'info');
                     }
                 } else {
-                    // Stats doesn't include full beneficiary list - show placeholder
-                    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray-500">Use token lookup to check individual tokens</td></tr>';
-                    log('Beneficiary list not available via stats endpoint', 'info');
+                    tbody.innerHTML = `<tr><td colspan="7" class="text-center text-red-400">Error: ${data.error}</td></tr>`;
+                    log(`Beneficiaries error: ${data.error}`, 'error');
                 }
             } catch (e) {
                 tbody.innerHTML = `<tr><td colspan="7" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
@@ -2797,15 +2888,12 @@
             log(`Deactivating PAGS for ${shortenPubkey(mint)}...`);
 
             try {
-                const response = await fetch(`${backendUrl}/api/pags/deactivate/${mint}`, {
-                    method: 'DELETE',
+                const response = await fetch(`${backendUrl}/api/admin/pags/deactivate/${mint}`, {
+                    method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'x-admin-key': adminToken
-                    },
-                    body: JSON.stringify({
-                        signerPubkey: 'admin-skip-verification'
-                    })
+                    }
                 });
 
                 const data = await response.json();
@@ -2824,6 +2912,144 @@
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Deactivation error: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchPagsUsers() {
+            const tbody = document.getElementById('pags-users-table-body');
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500">Loading...</td></tr>';
+            log('Fetching verified Twitter users...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/pags/users`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const users = data.users || [];
+                    if (users.length > 0) {
+                        tbody.innerHTML = users.map(u => {
+                            const verifiedDate = u.lastVerified ? new Date(u.lastVerified).toLocaleDateString() : 'Never';
+                            return `
+                                <tr>
+                                    <td class="text-purple-400">@${u.twitterUsername}</td>
+                                    <td class="text-gray-300">${u.displayName || '--'}</td>
+                                    <td class="text-orange-300 text-xs">${u.linkedWallet ? shortenPubkey(u.linkedWallet) : '<span class="text-gray-500">Not linked</span>'}</td>
+                                    <td class="text-gray-400">${verifiedDate}</td>
+                                    <td>${u.isActive ? '<span class="text-green-400">Active</span>' : '<span class="text-red-400">Inactive</span>'}</td>
+                                </tr>
+                            `;
+                        }).join('');
+                        log(`Loaded ${users.length} verified users`, 'success');
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500">No verified users yet</td></tr>';
+                        log('No verified users found', 'info');
+                    }
+                } else {
+                    tbody.innerHTML = `<tr><td colspan="5" class="text-center text-red-400">Error: ${data.error}</td></tr>`;
+                    log(`Users fetch error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="5" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
+                log(`Users fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchPagsClaimsHistory() {
+            const tbody = document.getElementById('pags-claims-history-body');
+            const statusFilter = document.getElementById('pags-claims-status-filter').value;
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray-500">Loading...</td></tr>';
+            log(`Fetching claims history (filter: ${statusFilter})...`);
+
+            try {
+                const url = statusFilter === 'all'
+                    ? `${backendUrl}/api/admin/pags/claims`
+                    : `${backendUrl}/api/admin/pags/claims?status=${statusFilter}`;
+
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const claims = data.claims || [];
+                    if (claims.length > 0) {
+                        tbody.innerHTML = claims.map(c => {
+                            const statusColors = {
+                                'pending': 'text-yellow-400',
+                                'completed': 'text-green-400',
+                                'failed': 'text-red-400'
+                            };
+                            const statusColor = statusColors[c.status] || 'text-gray-400';
+                            const txLink = c.signature
+                                ? `<a href="https://solscan.io/tx/${c.signature}" target="_blank" class="text-blue-400 hover:underline">${shortenPubkey(c.signature, 4)}</a>`
+                                : '<span class="text-gray-500">--</span>';
+                            return `
+                                <tr>
+                                    <td class="text-orange-500">${c.id}</td>
+                                    <td class="text-purple-400">@${c.twitterUsername}</td>
+                                    <td class="text-gray-300 text-xs">${shortenPubkey(c.recipientWallet)}</td>
+                                    <td class="text-green-400">${(c.amount || 0).toFixed(6)}</td>
+                                    <td class="${statusColor}">${c.status}</td>
+                                    <td>${txLink}</td>
+                                    <td class="text-gray-500 text-xs">${new Date(c.createdAt).toLocaleString()}</td>
+                                </tr>
+                            `;
+                        }).join('');
+                        log(`Loaded ${claims.length} claims`, 'success');
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray-500">No claims found</td></tr>';
+                        log('No claims found', 'info');
+                    }
+                } else {
+                    tbody.innerHTML = `<tr><td colspan="7" class="text-center text-red-400">Error: ${data.error}</td></tr>`;
+                    log(`Claims history error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="7" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
+                log(`Claims history fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchPagsWalletBalance() {
+            log('Fetching PAGS wallet balance...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/pags/wallet`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const wallet = data.wallet || {};
+                    document.getElementById('pags-wallet-address').textContent = shortenPubkey(wallet.address, 8);
+                    document.getElementById('pags-wallet-address').title = wallet.address || '';
+                    document.getElementById('pags-wallet-balance').textContent = (wallet.balance || 0).toFixed(6) + ' SOL';
+                    document.getElementById('pags-wallet-pending').textContent = (wallet.pendingClaims || 0).toFixed(6) + ' SOL';
+                    const available = (wallet.balance || 0) - (wallet.pendingClaims || 0);
+                    document.getElementById('pags-wallet-available').textContent = available.toFixed(6) + ' SOL';
+                    log('PAGS wallet info loaded', 'success');
+                } else {
+                    log(`Wallet info error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                log(`Wallet info fetch failed: ${e.message}`, 'error');
             }
         }
 

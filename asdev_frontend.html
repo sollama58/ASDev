@@ -1767,7 +1767,29 @@
                         </button>
                         <p id="pags-claim-status" class="text-purple-300/70 text-xs mt-2">Link your wallet and have pending rewards to claim</p>
                     </div>
+
+                    <!-- My Tokens Section -->
+                    <div class="mt-6 bg-purple-900/20 rounded-lg p-4 border border-purple-700/30">
+                        <div class="flex justify-between items-center mb-3">
+                            <h4 class="text-purple-300 font-mono text-xs uppercase tracking-wider flex items-center gap-2">
+                                <i data-lucide="coins" class="w-4 h-4"></i> My Registered Tokens
+                            </h4>
+                            <button onclick="pagsRefreshMyTokens()" class="text-purple-400 hover:text-purple-300 text-xs flex items-center gap-1">
+                                <i data-lucide="refresh-cw" class="w-3 h-3"></i> Refresh
+                            </button>
+                        </div>
+                        <div id="pags-my-tokens" class="max-h-64 overflow-y-auto">
+                            <div class="text-purple-200/50 text-sm text-center py-4">Loading your tokens...</div>
+                        </div>
+                    </div>
                 </div>
+            </div>
+
+            <!-- PAGS Leaderboard Button -->
+            <div class="mt-4 text-center">
+                <button onclick="openPagsLeaderboard()" class="bg-gradient-to-r from-purple-700 to-purple-600 hover:from-purple-600 hover:to-purple-500 text-white px-6 py-2 rounded-lg font-bold text-sm transition flex items-center gap-2 mx-auto">
+                    <i data-lucide="trophy" class="w-4 h-4"></i> PAGS Leaderboard
+                </button>
             </div>
         </div>
 
@@ -2496,6 +2518,85 @@
                     Learn how KOTH works →
                 </button>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- PAGS Leaderboard Modal -->
+<div id="pags-leaderboard-modal" class="modal">
+    <div class="modal-content border-purple-600" style="max-width: 700px;">
+        <span class="close-btn text-purple-400" onclick="closePagsLeaderboard()">&times;</span>
+        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2 font-normal flex items-center gap-2">
+            <i data-lucide="trophy" class="w-5 h-5"></i> PAGS Leaderboard
+        </h3>
+
+        <!-- Stats Overview -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+            <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 text-center">
+                <p class="text-purple-300 text-[10px] uppercase mb-1">Total Tokens</p>
+                <p id="pags-lb-total-tokens" class="text-white font-mono text-lg font-bold">--</p>
+            </div>
+            <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 text-center">
+                <p class="text-purple-300 text-[10px] uppercase mb-1">Active Beneficiaries</p>
+                <p id="pags-lb-active" class="text-green-400 font-mono text-lg font-bold">--</p>
+            </div>
+            <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 text-center">
+                <p class="text-purple-300 text-[10px] uppercase mb-1">Total Distributed</p>
+                <p id="pags-lb-distributed" class="text-cyan-400 font-mono text-lg font-bold">-- SOL</p>
+            </div>
+            <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 text-center">
+                <p class="text-purple-300 text-[10px] uppercase mb-1">Pending Claims</p>
+                <p id="pags-lb-pending" class="text-yellow-400 font-mono text-lg font-bold">-- SOL</p>
+            </div>
+        </div>
+
+        <!-- Leaderboard Tabs -->
+        <div class="flex gap-2 mb-4">
+            <button id="pags-lb-tab-tokens" onclick="switchPagsLeaderboardTab('tokens')" class="px-4 py-2 rounded text-xs font-bold bg-purple-700 text-white">Top Tokens</button>
+            <button id="pags-lb-tab-users" onclick="switchPagsLeaderboardTab('users')" class="px-4 py-2 rounded text-xs font-bold bg-purple-900/50 text-purple-300 hover:bg-purple-800/50">Top Users</button>
+        </div>
+
+        <!-- Tokens Leaderboard -->
+        <div id="pags-lb-tokens-content" class="max-h-[400px] overflow-y-auto">
+            <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-gray-900">
+                    <tr class="text-purple-400 text-xs">
+                        <th class="text-left p-2">#</th>
+                        <th class="text-left p-2">Token</th>
+                        <th class="text-left p-2">Beneficiary</th>
+                        <th class="text-right p-2">Fee %</th>
+                        <th class="text-right p-2">Accumulated</th>
+                        <th class="text-right p-2">Pending</th>
+                        <th class="text-center p-2">Link</th>
+                    </tr>
+                </thead>
+                <tbody id="pags-lb-tokens-body">
+                    <tr><td colspan="7" class="text-center text-gray-500 py-8">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Users Leaderboard -->
+        <div id="pags-lb-users-content" class="hidden max-h-[400px] overflow-y-auto">
+            <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-gray-900">
+                    <tr class="text-purple-400 text-xs">
+                        <th class="text-left p-2">#</th>
+                        <th class="text-left p-2">Twitter User</th>
+                        <th class="text-right p-2">Tokens</th>
+                        <th class="text-right p-2">Total Accumulated</th>
+                        <th class="text-right p-2">Total Pending</th>
+                    </tr>
+                </thead>
+                <tbody id="pags-lb-users-body">
+                    <tr><td colspan="5" class="text-center text-gray-500 py-8">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Footer -->
+        <div class="mt-4 pt-3 border-t border-purple-800/50 text-center">
+            <p class="text-purple-300/60 text-xs">PAGS allows token developers to share trading fees with Twitter/X users</p>
         </div>
     </div>
 </div>
@@ -5218,6 +5319,11 @@
             } else {
                 claimStatus.textContent = `Ready to claim ${pending.toFixed(4)} SOL!`;
             }
+
+            // Refresh My Tokens section
+            if (typeof pagsRefreshMyTokens === 'function') {
+                pagsRefreshMyTokens();
+            }
         } else {
             // Show login prompt
             loginPrompt.classList.remove('hidden');
@@ -5464,6 +5570,203 @@
         }
     };
     window.pagsPublicLookup = pagsPublicLookup;
+
+    // Refresh My Tokens section
+    const pagsRefreshMyTokens = async () => {
+        const container = document.getElementById('pags-my-tokens');
+        if (!container) return;
+
+        if (!pagsUser || !pagsUser.username) {
+            container.innerHTML = '<div class="text-purple-200/50 text-sm text-center py-4">Login to see your tokens</div>';
+            return;
+        }
+
+        container.innerHTML = '<div class="text-purple-200/50 text-sm text-center py-4">Loading your tokens...</div>';
+
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/pags/lookup/${encodeURIComponent(pagsUser.username)}`);
+            const data = await res.json();
+
+            if (data.success && data.breakdown && data.breakdown.length > 0) {
+                let html = '';
+                for (const token of data.breakdown) {
+                    const pending = (token.totalFeesAccumulated || 0) - (token.totalFeesClaimed || 0);
+                    const shortMint = token.mint ? (token.mint.slice(0, 6) + '...' + token.mint.slice(-4)) : 'Unknown';
+                    const tokenName = token.ticker || shortMint;
+                    const feePercent = token.feeShareBps ? (token.feeShareBps / 100).toFixed(1) : '100.0';
+
+                    html += `
+                        <div class="flex items-center justify-between py-3 border-b border-purple-800/30 last:border-0 hover:bg-purple-900/20 px-2 rounded">
+                            <div class="flex-1">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-purple-300 font-bold text-sm">${DOMPurify.sanitize(tokenName)}</span>
+                                    <span class="text-purple-500 text-xs">${feePercent}% share</span>
+                                </div>
+                                <div class="text-purple-400/50 font-mono text-[10px]">${token.mint || 'Unknown'}</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-green-400 font-bold">${(token.pending || pending || 0).toFixed(6)} SOL</div>
+                                <div class="text-cyan-400/70 text-xs">Total: ${(token.totalFeesAccumulated || 0).toFixed(6)}</div>
+                            </div>
+                            <a href="https://pump.fun/coin/${token.mint}" target="_blank" class="ml-3 text-purple-400 hover:text-purple-300 transition" title="View on Pump.fun">
+                                <i data-lucide="external-link" class="w-4 h-4"></i>
+                            </a>
+                        </div>
+                    `;
+                }
+                container.innerHTML = html;
+                // Re-render Lucide icons
+                if (typeof lucide !== 'undefined') lucide.createIcons();
+            } else {
+                container.innerHTML = '<div class="text-purple-200/50 text-sm text-center py-4">No tokens registered for your username yet</div>';
+            }
+        } catch (e) {
+            console.error('Error fetching my tokens:', e);
+            container.innerHTML = `<div class="text-red-400 text-sm text-center py-4">Error loading tokens: ${DOMPurify.sanitize(e.message)}</div>`;
+        }
+    };
+    window.pagsRefreshMyTokens = pagsRefreshMyTokens;
+
+    // PAGS Leaderboard Modal
+    let pagsLeaderboardData = null;
+
+    const openPagsLeaderboard = async () => {
+        const modal = document.getElementById('pags-leaderboard-modal');
+        modal.style.display = 'flex';
+
+        // Fetch leaderboard data
+        await fetchPagsLeaderboard();
+    };
+    window.openPagsLeaderboard = openPagsLeaderboard;
+
+    const closePagsLeaderboard = () => {
+        document.getElementById('pags-leaderboard-modal').style.display = 'none';
+    };
+    window.closePagsLeaderboard = closePagsLeaderboard;
+
+    const fetchPagsLeaderboard = async () => {
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/pags/leaderboard`);
+            const data = await res.json();
+
+            if (data.success) {
+                pagsLeaderboardData = data;
+                updatePagsLeaderboardStats(data.stats);
+                renderPagsLeaderboardTokens(data.tokens || []);
+                renderPagsLeaderboardUsers(data.users || []);
+            } else {
+                document.getElementById('pags-lb-tokens-body').innerHTML = `<tr><td colspan="7" class="text-center text-red-400 py-8">Error: ${DOMPurify.sanitize(data.error || 'Unknown error')}</td></tr>`;
+            }
+        } catch (e) {
+            console.error('Error fetching PAGS leaderboard:', e);
+            document.getElementById('pags-lb-tokens-body').innerHTML = `<tr><td colspan="7" class="text-center text-red-400 py-8">Error: ${DOMPurify.sanitize(e.message)}</td></tr>`;
+        }
+    };
+
+    const updatePagsLeaderboardStats = (stats) => {
+        if (!stats) return;
+        document.getElementById('pags-lb-total-tokens').textContent = stats.totalTokens || 0;
+        document.getElementById('pags-lb-active').textContent = stats.activeBeneficiaries || 0;
+        document.getElementById('pags-lb-distributed').textContent = (stats.totalClaimed || 0).toFixed(4) + ' SOL';
+        document.getElementById('pags-lb-pending').textContent = (stats.totalPending || 0).toFixed(4) + ' SOL';
+    };
+
+    const renderPagsLeaderboardTokens = (tokens) => {
+        const tbody = document.getElementById('pags-lb-tokens-body');
+
+        if (!tokens || tokens.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray-500 py-8">No PAGS tokens registered yet</td></tr>';
+            return;
+        }
+
+        // Sort by accumulated (descending)
+        tokens.sort((a, b) => (b.totalFeesAccumulated || 0) - (a.totalFeesAccumulated || 0));
+
+        let html = '';
+        tokens.forEach((token, index) => {
+            const pending = (token.totalFeesAccumulated || 0) - (token.totalFeesClaimed || 0);
+            const shortMint = token.mint ? (token.mint.slice(0, 4) + '...' + token.mint.slice(-4)) : '???';
+            const tokenName = token.ticker || shortMint;
+            const feePercent = token.feeShareBps ? (token.feeShareBps / 100).toFixed(1) : '100.0';
+
+            html += `
+                <tr class="border-b border-purple-800/20 hover:bg-purple-900/20">
+                    <td class="p-2 text-purple-400">${index + 1}</td>
+                    <td class="p-2">
+                        <span class="text-white font-bold">${DOMPurify.sanitize(tokenName)}</span>
+                        <div class="text-purple-400/50 font-mono text-[10px]">${shortMint}</div>
+                    </td>
+                    <td class="p-2 text-purple-300">@${DOMPurify.sanitize(token.twitterUsername || '???')}</td>
+                    <td class="p-2 text-right text-orange-400">${feePercent}%</td>
+                    <td class="p-2 text-right text-green-400 font-mono">${(token.totalFeesAccumulated || 0).toFixed(4)}</td>
+                    <td class="p-2 text-right text-yellow-400 font-mono">${pending.toFixed(4)}</td>
+                    <td class="p-2 text-center">
+                        <a href="https://pump.fun/coin/${token.mint}" target="_blank" class="text-purple-400 hover:text-purple-300 transition">
+                            <i data-lucide="external-link" class="w-4 h-4 inline"></i>
+                        </a>
+                    </td>
+                </tr>
+            `;
+        });
+
+        tbody.innerHTML = html;
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    };
+
+    const renderPagsLeaderboardUsers = (users) => {
+        const tbody = document.getElementById('pags-lb-users-body');
+
+        if (!users || users.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500 py-8">No users with PAGS tokens yet</td></tr>';
+            return;
+        }
+
+        // Sort by total accumulated (descending)
+        users.sort((a, b) => (b.totalAccumulated || 0) - (a.totalAccumulated || 0));
+
+        let html = '';
+        users.forEach((user, index) => {
+            html += `
+                <tr class="border-b border-purple-800/20 hover:bg-purple-900/20">
+                    <td class="p-2 text-purple-400">${index + 1}</td>
+                    <td class="p-2">
+                        <a href="https://twitter.com/${user.twitterUsername}" target="_blank" class="text-purple-300 hover:text-purple-200 font-bold">
+                            @${DOMPurify.sanitize(user.twitterUsername || '???')}
+                        </a>
+                    </td>
+                    <td class="p-2 text-right text-cyan-400">${user.tokenCount || 0}</td>
+                    <td class="p-2 text-right text-green-400 font-mono">${(user.totalAccumulated || 0).toFixed(4)} SOL</td>
+                    <td class="p-2 text-right text-yellow-400 font-mono">${(user.totalPending || 0).toFixed(4)} SOL</td>
+                </tr>
+            `;
+        });
+
+        tbody.innerHTML = html;
+    };
+
+    const switchPagsLeaderboardTab = (tab) => {
+        const tokensTab = document.getElementById('pags-lb-tab-tokens');
+        const usersTab = document.getElementById('pags-lb-tab-users');
+        const tokensContent = document.getElementById('pags-lb-tokens-content');
+        const usersContent = document.getElementById('pags-lb-users-content');
+
+        if (tab === 'tokens') {
+            tokensTab.classList.remove('bg-purple-900/50', 'text-purple-300');
+            tokensTab.classList.add('bg-purple-700', 'text-white');
+            usersTab.classList.remove('bg-purple-700', 'text-white');
+            usersTab.classList.add('bg-purple-900/50', 'text-purple-300');
+            tokensContent.classList.remove('hidden');
+            usersContent.classList.add('hidden');
+        } else {
+            usersTab.classList.remove('bg-purple-900/50', 'text-purple-300');
+            usersTab.classList.add('bg-purple-700', 'text-white');
+            tokensTab.classList.remove('bg-purple-700', 'text-white');
+            tokensTab.classList.add('bg-purple-900/50', 'text-purple-300');
+            usersContent.classList.remove('hidden');
+            tokensContent.classList.add('hidden');
+        }
+    };
+    window.switchPagsLeaderboardTab = switchPagsLeaderboardTab;
 
     // Update PAGS register wallet display when wallet connects
     const updatePagsRegisterWalletDisplay = () => {

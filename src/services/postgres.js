@@ -436,7 +436,7 @@ async function createSchema() {
         CREATE TABLE IF NOT EXISTS pags_beneficiaries (
             id SERIAL PRIMARY KEY,
             mint TEXT NOT NULL UNIQUE,
-            "creatorPubkey" TEXT NOT NULL,
+            "creatorPubkey" TEXT,
             "twitterUsername" TEXT NOT NULL,
             "feeShareBps" INTEGER NOT NULL DEFAULT 10000,
             "totalFeesAccumulated" REAL DEFAULT 0,
@@ -446,6 +446,12 @@ async function createSchema() {
             "lastFeeUpdate" BIGINT
         )
     `);
+    // v25.50: Make creatorPubkey nullable for existing databases
+    try {
+        await pool.query(`ALTER TABLE pags_beneficiaries ALTER COLUMN "creatorPubkey" DROP NOT NULL`);
+    } catch (e) {
+        // Ignore error if column is already nullable or doesn't exist
+    }
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_twitter ON pags_beneficiaries("twitterUsername")`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_active ON pags_beneficiaries("isActive") WHERE "isActive" = 1`);
 
