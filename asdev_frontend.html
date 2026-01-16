@@ -5214,13 +5214,17 @@
         }
 
         try {
-            // Create message to sign
-            const message = `PAGS Link Wallet\nTwitter: @${pagsUser.username}\nWallet: ${userPubkey}\nTimestamp: ${Date.now()}`;
+            // Create message in expected format: action:timestamp:nonce
+            const timestamp = Date.now();
+            const nonce = Math.random().toString(36).substring(2, 15);
+            const message = `pags-link-wallet:${timestamp}:${nonce}`;
             const encodedMessage = new TextEncoder().encode(message);
 
             // Sign message
             const signedMessage = await activeWalletProvider.signMessage(encodedMessage, 'utf8');
-            const signature = btoa(String.fromCharCode(...new Uint8Array(signedMessage.signature || signedMessage)));
+            const signatureBytes = new Uint8Array(signedMessage.signature || signedMessage);
+            // Convert signature to base58 (backend expects base58, not base64)
+            const signature = bs58.encode(signatureBytes);
 
             // Send to backend (include Authorization header for cross-origin support)
             const headers = { 'Content-Type': 'application/json' };
@@ -5276,11 +5280,14 @@
             claimBtn.disabled = true;
             claimBtn.textContent = 'Processing...';
 
-            // Create claim signature
-            const message = `PAGS Claim\nTwitter: @${pagsUser.username}\nWallet: ${pagsUser.linkedWallet}\nTimestamp: ${Date.now()}`;
+            // Create claim signature in expected format: action:timestamp:nonce
+            const timestamp = Date.now();
+            const nonce = Math.random().toString(36).substring(2, 15);
+            const message = `pags-claim:${timestamp}:${nonce}`;
             const encodedMessage = new TextEncoder().encode(message);
             const signedMessage = await activeWalletProvider.signMessage(encodedMessage, 'utf8');
-            const signature = btoa(String.fromCharCode(...new Uint8Array(signedMessage.signature || signedMessage)));
+            const signatureBytes = new Uint8Array(signedMessage.signature || signedMessage);
+            const signature = bs58.encode(signatureBytes);
 
             // Send claim request (include Authorization header for cross-origin support)
             const headers = { 'Content-Type': 'application/json' };

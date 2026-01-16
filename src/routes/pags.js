@@ -549,6 +549,14 @@ function init(deps) {
 
             // Verify wallet ownership via signature
             if (config.NODE_ENV === 'production' || process.env.SKIP_SIGNATURE_VERIFICATION !== 'true') {
+                logger.info('[PAGS API] Verifying wallet signature', {
+                    walletPubkey: sanitizedWalletPubkey,
+                    hasSignedMessage: !!signedMessage,
+                    messageLength: signedMessage ? signedMessage.length : 0,
+                    hasSignature: !!signature,
+                    signatureLength: signature ? signature.length : 0
+                });
+
                 const sigResult = signatureVerifier.verifySignature({
                     message: signedMessage,
                     signature,
@@ -557,6 +565,10 @@ function init(deps) {
                 });
 
                 if (!sigResult.valid) {
+                    logger.warn('[PAGS API] Wallet signature verification failed', {
+                        error: sigResult.error,
+                        walletPubkey: sanitizedWalletPubkey
+                    });
                     return errorResponse(res, 401, 'Wallet signature verification failed', 'SIGNATURE_INVALID');
                 }
             }
