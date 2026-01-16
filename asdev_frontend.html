@@ -5172,13 +5172,23 @@
     // Logout
     const pagsLogout = async () => {
         try {
+            // Include Authorization header for cross-origin support
+            const headers = {};
+            const storedToken = localStorage.getItem('pags_token');
+            if (storedToken) {
+                headers['Authorization'] = `Bearer ${storedToken}`;
+            }
+
             await fetch(`${BACKEND_URL}/api/auth/twitter/logout`, {
                 method: 'POST',
+                headers,
                 credentials: 'include'
             });
         } catch (e) {
             console.error('Logout error:', e);
         }
+        // Clear local token
+        setPagsToken(null);
         pagsUser = null;
         pagsSession = null;
         pagsUpdateUI();
@@ -5206,10 +5216,16 @@
             const signedMessage = await activeWalletProvider.signMessage(encodedMessage, 'utf8');
             const signature = btoa(String.fromCharCode(...new Uint8Array(signedMessage.signature || signedMessage)));
 
-            // Send to backend
+            // Send to backend (include Authorization header for cross-origin support)
+            const headers = { 'Content-Type': 'application/json' };
+            const storedToken = localStorage.getItem('pags_token');
+            if (storedToken) {
+                headers['Authorization'] = `Bearer ${storedToken}`;
+            }
+
             const res = await fetch(`${BACKEND_URL}/api/pags/link-wallet`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 credentials: 'include',
                 body: JSON.stringify({
                     walletPubkey: userPubkey,
@@ -5256,10 +5272,16 @@
             const signedMessage = await activeWalletProvider.signMessage(encodedMessage, 'utf8');
             const signature = btoa(String.fromCharCode(...new Uint8Array(signedMessage.signature || signedMessage)));
 
-            // Send claim request
+            // Send claim request (include Authorization header for cross-origin support)
+            const headers = { 'Content-Type': 'application/json' };
+            const storedToken = localStorage.getItem('pags_token');
+            if (storedToken) {
+                headers['Authorization'] = `Bearer ${storedToken}`;
+            }
+
             const res = await fetch(`${BACKEND_URL}/api/pags/claim`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 credentials: 'include',
                 body: JSON.stringify({
                     signedMessage: message,
@@ -5295,8 +5317,16 @@
         }
 
         try {
+            // Include Authorization header for cross-origin support
+            const headers = {};
+            const storedToken = localStorage.getItem('pags_token');
+            if (storedToken) {
+                headers['Authorization'] = `Bearer ${storedToken}`;
+            }
+
             const res = await fetch(`${BACKEND_URL}/api/pags/me`, {
-                credentials: 'include'
+                credentials: 'include',
+                headers
             });
             if (res.ok) {
                 const data = await res.json();

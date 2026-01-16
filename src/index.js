@@ -155,15 +155,31 @@ async function main() {
 
     // v24.0 SECURITY FIX: Stricter CORS configuration
     // In production, reject wildcard CORS and require explicit origins
+    // v25.49: Auto-include FRONTEND_URL in allowed origins for cross-origin setups
     let corsOrigins;
     if (config.NODE_ENV === 'production') {
         if (config.CORS_ORIGINS.includes('*') || !config.CORS_ORIGINS || config.CORS_ORIGINS.length === 0) {
-            // Default to same-origin only in production if not configured
-            logger.warn('SECURITY: CORS wildcard rejected in production. Using same-origin policy.');
-            logger.warn('Set CORS_ORIGINS environment variable to allow specific origins.');
-            corsOrigins = false; // Disables CORS (same-origin only)
+            // Check if FRONTEND_URL is configured (cross-origin setup)
+            if (config.FRONTEND_URL && config.FRONTEND_URL.startsWith('http')) {
+                const frontendOrigin = new URL(config.FRONTEND_URL).origin;
+                corsOrigins = [frontendOrigin];
+                logger.info(`CORS: Auto-allowing frontend origin from FRONTEND_URL: ${frontendOrigin}`);
+            } else {
+                // Default to same-origin only in production if not configured
+                logger.warn('SECURITY: CORS wildcard rejected in production. Using same-origin policy.');
+                logger.warn('Set CORS_ORIGINS or FRONTEND_URL environment variable to allow specific origins.');
+                corsOrigins = false; // Disables CORS (same-origin only)
+            }
         } else {
             corsOrigins = config.CORS_ORIGINS;
+            // Also include FRONTEND_URL origin if not already in the list
+            if (config.FRONTEND_URL && config.FRONTEND_URL.startsWith('http')) {
+                const frontendOrigin = new URL(config.FRONTEND_URL).origin;
+                if (!corsOrigins.includes(frontendOrigin)) {
+                    corsOrigins = [...corsOrigins, frontendOrigin];
+                    logger.info(`CORS: Added frontend origin from FRONTEND_URL: ${frontendOrigin}`);
+                }
+            }
         }
     } else {
         // In development, allow wildcard for convenience
