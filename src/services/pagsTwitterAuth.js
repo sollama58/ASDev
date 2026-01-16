@@ -197,11 +197,12 @@ function generatePKCE() {
 
 /**
  * Validate redirect URL to prevent open redirect attacks
- * Only allows relative paths or same-origin URLs
+ * Allows relative paths, same-origin URLs, or the configured FRONTEND_URL
  */
 function validateRedirectUrl(url, baseUrl) {
-    // Default to FRONTEND_PATH if no URL provided
-    if (!url) return config.FRONTEND_PATH || '/';
+    // Default to FRONTEND_URL if no URL provided
+    const defaultRedirect = config.FRONTEND_URL || config.FRONTEND_PATH || '/';
+    if (!url) return defaultRedirect;
 
     // Allow relative paths starting with /
     if (url.startsWith('/') && !url.startsWith('//')) {
@@ -212,20 +213,29 @@ function validateRedirectUrl(url, baseUrl) {
         }
     }
 
-    // If it's an absolute URL, verify same origin
+    // If it's an absolute URL, verify it's allowed
     try {
         const redirectUrl = new URL(url);
         const base = new URL(baseUrl || config.BASE_URL || 'http://localhost:3000');
 
+        // Allow same origin as backend
         if (redirectUrl.origin === base.origin) {
             return url;
+        }
+
+        // Also allow the configured FRONTEND_URL origin (for cross-origin setups)
+        if (config.FRONTEND_URL && config.FRONTEND_URL.startsWith('http')) {
+            const frontendUrl = new URL(config.FRONTEND_URL);
+            if (redirectUrl.origin === frontendUrl.origin) {
+                return url;
+            }
         }
     } catch (e) {
         // Invalid URL, fall through to default
     }
 
     logger.warn('[PAGS Twitter Auth] Invalid redirect URL blocked', { url: url.slice(0, 100) });
-    return config.FRONTEND_PATH || '/';
+    return defaultRedirect;
 }
 
 /**
@@ -251,8 +261,8 @@ async function getAuthorizationUrl(redirectAfterAuth = '/') {
         ? config.TWITTER_OAUTH_CALLBACK_URL
         : `${config.BASE_URL}${config.TWITTER_OAUTH_CALLBACK_URL}`;
 
-    // Validate redirect URL - default to FRONTEND_PATH if not specified
-    const defaultRedirect = config.FRONTEND_PATH || '/';
+    // Validate redirect URL - default to FRONTEND_URL if not specified
+    const defaultRedirect = config.FRONTEND_URL || config.FRONTEND_PATH || '/';
     const safeRedirect = validateRedirectUrl(redirectAfterAuth || defaultRedirect, config.BASE_URL);
 
     // Generate auth link with OAuth 2.0

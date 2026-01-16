@@ -14,14 +14,17 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.48-PAGS-COOKIE-FIX",
+    VERSION: "v25.49-PAGS-CROSS-ORIGIN",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
-    // v25.48: Base URL for OAuth callbacks and redirects (REQUIRED for production)
-    // Example: https://alonisthe.dev (without trailing slash)
+    // v25.49: Base URL where the BACKEND API is hosted (for OAuth callbacks)
+    // Example: https://your-app.onrender.com (without trailing slash)
     BASE_URL: process.env.BASE_URL || 'http://localhost:3000',
-    // v25.48: Frontend path (for redirects after OAuth - the path where frontend is served)
-    // Example: /ignition for https://alonisthe.dev/ignition
+    // v25.49: Full URL where the FRONTEND is hosted (for redirects after OAuth)
+    // Can be a full URL (https://alonisthe.dev/ignition) or a relative path (/ignition)
+    // If on a different domain than BASE_URL, use full URL
+    FRONTEND_URL: process.env.FRONTEND_URL || process.env.FRONTEND_PATH || '/',
+    // Legacy alias for backwards compatibility
     FRONTEND_PATH: process.env.FRONTEND_PATH || '/',
 
     // Solana RPC

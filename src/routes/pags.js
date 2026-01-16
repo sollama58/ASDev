@@ -433,8 +433,8 @@ function init(deps) {
      * Sets session token via httpOnly cookie instead of URL parameter
      */
     router.get('/auth/twitter/callback', async (req, res) => {
-        // Default redirect path for errors (use FRONTEND_PATH from config)
-        const errorRedirectBase = config.FRONTEND_PATH || '/';
+        // Default redirect path for errors (use FRONTEND_URL for cross-origin support)
+        const errorRedirectBase = config.FRONTEND_URL || config.FRONTEND_PATH || '/';
 
         try {
             const { code, state, error, error_description } = req.query;
@@ -446,13 +446,26 @@ function init(deps) {
 
             const result = await pagsTwitterAuth.handleCallback(code, state);
 
-            // Set session token as httpOnly cookie instead of URL parameter
-            pagsTwitterAuth.setSessionCookie(res, result.sessionToken);
+            // For cross-origin setups, we can't use httpOnly cookies
+            // Instead, pass the session token via URL parameter (will be stored in localStorage by frontend)
+            const redirectUrl = result.redirectAfterAuth || config.FRONTEND_URL || config.FRONTEND_PATH || '/';
+            const separator = redirectUrl.includes('?') ? '&' : '?';
 
-            // Redirect to frontend without session token in URL
-            // Use the stored redirect path from OAuth flow, or default to FRONTEND_PATH
-            const redirectUrl = result.redirectAfterAuth || config.FRONTEND_PATH || '/';
-            res.redirect(`${redirectUrl}${redirectUrl.includes('?') ? '&' : '?'}auth_success=true`);
+            // Check if this is a cross-origin redirect
+            const isCrossOrigin = redirectUrl.startsWith('http') &&
+                !redirectUrl.startsWith(config.BASE_URL);
+
+            if (isCrossOrigin) {
+                // Cross-origin: pass token in URL (frontend will store in localStorage)
+                logger.info('[PAGS API] Cross-origin OAuth redirect', {
+                    redirectUrl: redirectUrl.slice(0, 50) + '...'
+                });
+                res.redirect(`${redirectUrl}${separator}auth_success=true&pags_token=${encodeURIComponent(result.sessionToken)}`);
+            } else {
+                // Same-origin: use httpOnly cookie (more secure)
+                pagsTwitterAuth.setSessionCookie(res, result.sessionToken);
+                res.redirect(`${redirectUrl}${separator}auth_success=true`);
+            }
         } catch (e) {
             logger.error('[PAGS API] OAuth callback error', { error: e.message });
             res.redirect(`${errorRedirectBase}${errorRedirectBase.includes('?') ? '&' : '?'}auth_error=${encodeURIComponent('Authentication failed')}`);

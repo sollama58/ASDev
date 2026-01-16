@@ -5028,26 +5028,71 @@
     let pagsSession = null;
     let pagsUser = null;
 
-    // Check for PAGS session on page load (from cookie or URL callback)
+    // Get stored PAGS token from localStorage (for cross-origin setups)
+    const getPagsToken = () => {
+        return localStorage.getItem('pags_token');
+    };
+
+    // Store PAGS token in localStorage
+    const setPagsToken = (token) => {
+        if (token) {
+            localStorage.setItem('pags_token', token);
+        } else {
+            localStorage.removeItem('pags_token');
+        }
+    };
+
+    // Check for PAGS session on page load (from cookie, localStorage, or URL callback)
     const checkPagsSession = async () => {
         // Check URL for auth_success parameter (after OAuth callback)
         const urlParams = new URLSearchParams(window.location.search);
+
         if (urlParams.get('auth_success') === 'true') {
-            // Clear the URL parameter
+            // Check if we got a token in the URL (cross-origin flow)
+            const urlToken = urlParams.get('pags_token');
+            if (urlToken) {
+                // Store the token from URL in localStorage
+                setPagsToken(urlToken);
+                console.log('PAGS: Stored token from OAuth callback');
+            }
+            // Clear the URL parameters (security: don't leave token in URL)
             window.history.replaceState({}, document.title, window.location.pathname);
         }
 
-        // Try to get user data (cookie-based session)
+        // Check for auth error
+        if (urlParams.get('auth_error')) {
+            console.error('PAGS OAuth error:', urlParams.get('auth_error'));
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+
+        // Try to get user data using stored token or cookie
+        const storedToken = getPagsToken();
+
         try {
+            const headers = {};
+            if (storedToken) {
+                // Use Authorization header for cross-origin requests
+                headers['Authorization'] = `Bearer ${storedToken}`;
+            }
+
             const res = await fetch(`${BACKEND_URL}/api/pags/me`, {
-                credentials: 'include'
+                credentials: 'include', // Also send cookies for same-origin
+                headers
             });
+
             if (res.ok) {
                 const data = await res.json();
                 if (data.success && data.user) {
                     pagsUser = data.user;
+                    pagsSession = storedToken; // Keep track of session
                     pagsUpdateUI();
                 }
+            } else if (res.status === 401) {
+                // Token expired or invalid - clear it
+                setPagsToken(null);
+                pagsUser = null;
+                pagsSession = null;
+                pagsUpdateUI();
             }
         } catch (e) {
             console.log('PAGS session check:', e.message);
