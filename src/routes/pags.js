@@ -177,6 +177,9 @@ function init(deps) {
      * POST /api/pags/register
      * Register a token with a Twitter username as beneficiary
      *
+     * No wallet signature required - anyone can register a token.
+     * The on-chain fee recipient configuration is the source of truth.
+     *
      * IMPORTANT: Fee share percentage is AUTO-DETECTED from on-chain Pump.fun
      * fee sharing configuration. Users cannot set this manually.
      *
@@ -192,30 +195,15 @@ function init(deps) {
                 return errorResponse(res, 503, 'PAGS wallet not configured');
             }
 
-            const { mint, twitterUsername, signedMessage, signature, signerPubkey } = req.body;
+            const { mint, twitterUsername } = req.body;
 
             // Sanitize inputs
             const sanitizedMint = sanitizeString(mint, 64);
             const sanitizedUsername = sanitizeUsername(twitterUsername);
-            const sanitizedSignerPubkey = sanitizeString(signerPubkey, 64);
 
             // Validate required fields
-            if (!sanitizedMint || !sanitizedUsername || !sanitizedSignerPubkey) {
-                return errorResponse(res, 400, 'Missing required fields: mint, twitterUsername, signerPubkey');
-            }
-
-            // Verify signature (optional in development)
-            if (config.NODE_ENV === 'production' || process.env.SKIP_SIGNATURE_VERIFICATION !== 'true') {
-                const sigResult = signatureVerifier.verifySignature({
-                    message: signedMessage,
-                    signature,
-                    publicKey: sanitizedSignerPubkey,
-                    expectedAction: 'pags-register'
-                });
-
-                if (!sigResult.valid) {
-                    return errorResponse(res, 401, 'Signature verification failed', 'SIGNATURE_INVALID');
-                }
+            if (!sanitizedMint || !sanitizedUsername) {
+                return errorResponse(res, 400, 'Missing required fields: mint, twitterUsername');
             }
 
             // AUTO-DETECT fee share from on-chain Pump.fun fee sharing configuration
@@ -270,9 +258,10 @@ function init(deps) {
             });
 
             // Register beneficiary with auto-detected fee share
+            // creatorPubkey is set from on-chain data if available
             const result = await pags.registerBeneficiary({
                 mint: sanitizedMint,
-                creatorPubkey: sanitizedSignerPubkey,
+                creatorPubkey: feeRecipientResult.originalCreator || 'unknown',
                 twitterUsername: sanitizedUsername,
                 feeShareBps: detectedFeeShareBps
             });

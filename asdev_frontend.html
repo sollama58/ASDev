@@ -6,6 +6,64 @@
     <title>IGNITION - ASDev Launcher</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
+    <script>
+        // Base58 encoder/decoder (compatible with Solana)
+        const bs58 = (function() {
+            const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+            const ALPHABET_MAP = {};
+            for (let i = 0; i < ALPHABET.length; i++) {
+                ALPHABET_MAP[ALPHABET[i]] = i;
+            }
+            return {
+                encode: function(buffer) {
+                    if (buffer.length === 0) return '';
+                    const digits = [0];
+                    for (let i = 0; i < buffer.length; i++) {
+                        let carry = buffer[i];
+                        for (let j = 0; j < digits.length; j++) {
+                            carry += digits[j] << 8;
+                            digits[j] = carry % 58;
+                            carry = (carry / 58) | 0;
+                        }
+                        while (carry > 0) {
+                            digits.push(carry % 58);
+                            carry = (carry / 58) | 0;
+                        }
+                    }
+                    let str = '';
+                    for (let i = 0; i < buffer.length && buffer[i] === 0; i++) {
+                        str += ALPHABET[0];
+                    }
+                    for (let i = digits.length - 1; i >= 0; i--) {
+                        str += ALPHABET[digits[i]];
+                    }
+                    return str;
+                },
+                decode: function(str) {
+                    if (str.length === 0) return new Uint8Array(0);
+                    const bytes = [0];
+                    for (let i = 0; i < str.length; i++) {
+                        const c = str[i];
+                        if (!(c in ALPHABET_MAP)) throw new Error('Invalid base58 character');
+                        let carry = ALPHABET_MAP[c];
+                        for (let j = 0; j < bytes.length; j++) {
+                            carry += bytes[j] * 58;
+                            bytes[j] = carry & 0xff;
+                            carry >>= 8;
+                        }
+                        while (carry > 0) {
+                            bytes.push(carry & 0xff);
+                            carry >>= 8;
+                        }
+                    }
+                    for (let i = 0; i < str.length && str[i] === ALPHABET[0]; i++) {
+                        bytes.push(0);
+                    }
+                    return new Uint8Array(bytes.reverse());
+                }
+            };
+        })();
+    </script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -5432,6 +5490,7 @@
 
     // Register token for PAGS
     // Fee share percentage is AUTO-DETECTED from on-chain Pump.fun configuration
+    // No wallet signature required - just mint address and Twitter username
     const pagsRegisterToken = async () => {
         const mintInput = document.getElementById('pags-register-mint');
         const twitterInput = document.getElementById('pags-register-twitter');
@@ -5458,44 +5517,22 @@
             return;
         }
 
-        if (!userPubkey) {
-            resultEl.innerHTML = '<span class="text-yellow-400">Please connect your wallet first</span>';
-            resultEl.classList.remove('hidden');
-            resultEl.classList.remove('border-green-700', 'border-red-700');
-            resultEl.classList.add('border-yellow-700');
-            return;
-        }
-
         // Show loading
-        resultEl.innerHTML = '<span class="text-purple-400">Preparing registration...</span>';
+        resultEl.innerHTML = '<span class="text-purple-400">Verifying on-chain fee configuration...</span>';
         resultEl.classList.remove('hidden', 'border-green-700', 'border-red-700', 'border-yellow-700');
         resultEl.classList.add('border-purple-700');
         registerBtn.disabled = true;
-        registerBtn.textContent = 'SIGNING...';
+        registerBtn.textContent = 'VERIFYING...';
 
         try {
-            // Create message to sign (fee share is auto-detected from on-chain)
-            const timestamp = Date.now();
-            const message = `PAGS Register Token\nMint: ${mint}\nTwitter: @${twitterUsername}\nSigner: ${userPubkey}\nTimestamp: ${timestamp}`;
-
-            // Sign the message
-            const encodedMessage = new TextEncoder().encode(message);
-            const signedMessage = await walletProvider.signMessage(encodedMessage, 'utf8');
-            const signature = bs58.encode(signedMessage);
-
-            resultEl.innerHTML = '<span class="text-purple-400">Verifying on-chain fee configuration...</span>';
-            registerBtn.textContent = 'VERIFYING...';
-
             // Send registration request (fee share will be auto-detected from on-chain)
+            // No wallet signature required
             const res = await fetch(`${BACKEND_URL}/api/pags/register`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     mint,
-                    twitterUsername,
-                    signedMessage: message,
-                    signature,
-                    signerPubkey: userPubkey
+                    twitterUsername
                 })
             });
 
