@@ -425,8 +425,14 @@ function init(deps) {
      * POST /api/pags/register
      * Register a token with a Twitter username as beneficiary
      *
-     * No wallet signature required - anyone can register a token.
-     * The on-chain fee recipient configuration is the source of truth.
+     * v25.60: SECURITY - Requires wallet signature to verify caller is the token creator
+     *
+     * Required fields:
+     * - mint: Token mint address
+     * - twitterUsername: Twitter username to receive fees
+     * - signedMessage: Message signed by wallet (format: "pags-register:timestamp:nonce")
+     * - signature: Base58 encoded Ed25519 signature
+     * - signerPubkey: Public key of the signer (must be token creator)
      *
      * IMPORTANT: Fee share percentage is AUTO-DETECTED from on-chain Pump.fun
      * fee sharing configuration. Users cannot set this manually.
@@ -443,7 +449,7 @@ function init(deps) {
                 return errorResponse(res, 503, 'PAGS wallet not configured');
             }
 
-            const { mint, twitterUsername } = req.body;
+            const { mint, twitterUsername, signedMessage, signature, signerPubkey } = req.body;
 
             // Sanitize inputs
             const sanitizedMint = sanitizeString(mint, 64);
@@ -454,11 +460,37 @@ function init(deps) {
                 return errorResponse(res, 400, 'Missing required fields: mint, twitterUsername');
             }
 
+            // v25.60: Verify wallet signature
+            if (!signedMessage || !signature || !signerPubkey) {
+                return errorResponse(
+                    res, 401,
+                    'Wallet signature required. Please connect your wallet and sign the registration request.',
+                    'SIGNATURE_REQUIRED'
+                );
+            }
+
+            const sigResult = signatureVerifier.verifySignature({
+                message: signedMessage,
+                signature,
+                publicKey: signerPubkey,
+                expectedAction: 'pags-register'
+            });
+
+            if (!sigResult.valid) {
+                logger.warn('[PAGS API] Signature verification failed', {
+                    mint: sanitizedMint,
+                    error: sigResult.error,
+                    signerPubkey: signerPubkey?.slice(0, 8)
+                });
+                return errorResponse(res, 401, `Signature verification failed: ${sigResult.error}`, 'SIGNATURE_INVALID');
+            }
+
             // AUTO-DETECT fee share from on-chain Pump.fun fee sharing configuration
             // This verifies that PAGS_WALLET is actually configured as a fee recipient
             logger.info('[PAGS API] Verifying fee recipient on-chain', {
                 mint: sanitizedMint,
-                pagsWallet: config.PAGS_WALLET.slice(0, 8) + '...'
+                pagsWallet: config.PAGS_WALLET.slice(0, 8) + '...',
+                signerPubkey: signerPubkey.slice(0, 8) + '...'
             });
 
             const feeRecipientResult = await mintExtractor.verifyFeeRecipient(
@@ -494,6 +526,33 @@ function init(deps) {
                 );
             }
 
+            // v25.60: SECURITY - Verify signer is the original token creator
+            const originalCreator = feeRecipientResult.originalCreator;
+            if (!originalCreator) {
+                logger.warn('[PAGS API] Could not determine original creator', {
+                    mint: sanitizedMint
+                });
+                return errorResponse(
+                    res, 400,
+                    'Could not determine the original token creator from on-chain data.',
+                    'CREATOR_NOT_FOUND'
+                );
+            }
+
+            if (signerPubkey !== originalCreator) {
+                logger.warn('[PAGS API] Signer is not the token creator', {
+                    mint: sanitizedMint,
+                    signerPubkey: signerPubkey.slice(0, 8) + '...',
+                    originalCreator: originalCreator.slice(0, 8) + '...'
+                });
+                return errorResponse(
+                    res, 403,
+                    'Only the original token creator can register a token for PAGS. ' +
+                    'Please connect the wallet that created this token.',
+                    'NOT_TOKEN_CREATOR'
+                );
+            }
+
             // Use the on-chain detected fee share percentage
             const detectedFeeShareBps = feeRecipientResult.feeShareBps || 10000;
 
@@ -502,14 +561,15 @@ function init(deps) {
                 feeShareBps: detectedFeeShareBps,
                 feeSharePercent: detectedFeeShareBps / 100,
                 source: feeRecipientResult.source,
-                originalCreator: feeRecipientResult.originalCreator
+                originalCreator: originalCreator,
+                verifiedCreator: true
             });
 
             // Register beneficiary with auto-detected fee share
-            // creatorPubkey is set from on-chain data if available
+            // creatorPubkey is verified to be the signer
             const result = await pags.registerBeneficiary({
                 mint: sanitizedMint,
-                creatorPubkey: feeRecipientResult.originalCreator || 'unknown',
+                creatorPubkey: originalCreator,
                 twitterUsername: sanitizedUsername,
                 feeShareBps: detectedFeeShareBps
             });
@@ -522,7 +582,7 @@ function init(deps) {
                 if (tokenMetadata && tokenMetadata.ticker && tokenMetadata.name) {
                     const postgres = require('../services/postgres');
                     await postgres.saveTokenData(
-                        feeRecipientResult.originalCreator || 'unknown',
+                        originalCreator,
                         sanitizedMint,
                         {
                             ticker: tokenMetadata.ticker,
@@ -562,7 +622,8 @@ function init(deps) {
                     feeShareBps: detectedFeeShareBps,
                     feeSharePercent: detectedFeeShareBps / 100,
                     isDirectCreator: detectedFeeShareBps === 10000,
-                    originalCreator: feeRecipientResult.originalCreator || null
+                    originalCreator: originalCreator,
+                    creatorVerified: true
                 }
             });
         } catch (e) {
