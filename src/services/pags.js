@@ -7,10 +7,11 @@
  * Allows token developers to share fees with Twitter/X users.
  * Twitter users can verify their identity via OAuth and claim accumulated rewards.
  */
-const { PublicKey, SystemProgram, Transaction } = require('@solana/web3.js');
+const { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const logger = require('./logger');
 const config = require('../config/env');
 const { PAGS } = require('../config/constants');
+const pump = require('./pump');
 
 // Dependencies injected at init
 let db = null;
@@ -275,26 +276,87 @@ async function getPendingRewardsByUsername(twitterUsername) {
         WHERE b."twitterUsername" = $1 AND b."isActive" = 1
     `, [normalizedUsername]);
 
-    // Calculate total pending
+    // Calculate total pending (DB + on-chain vaults)
     let totalPending = 0;
     const breakdown = [];
 
     for (const b of beneficiaries) {
-        const pending = (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0);
-        if (pending > 0) {
-            totalPending += pending;
+        const dbPending = (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0);
+        const feeShareBps = b.feeShareBps || 10000;
+
+        // Check on-chain vault balances if we have a valid creatorPubkey
+        let onChainPending = 0;
+        let vaultInfo = null;
+
+        if (connection && b.creatorPubkey && b.creatorPubkey !== 'unknown') {
+            try {
+                const creatorPubkey = new PublicKey(b.creatorPubkey);
+                const { bcVault, ammVaultAta } = pump.getCreatorFeeVaults(creatorPubkey);
+
+                // Check BC vault (native SOL)
+                let bcFeesLamports = 0;
+                try {
+                    const bcInfo = await connection.getAccountInfo(bcVault);
+                    if (bcInfo && bcInfo.lamports > 5000) {
+                        bcFeesLamports = bcInfo.lamports - 5000; // Subtract rent-exempt minimum
+                    }
+                } catch (e) {
+                    // Vault doesn't exist or error - that's ok
+                }
+
+                // Check AMM vault (wSOL)
+                let ammFeesLamports = 0;
+                try {
+                    const ammVaultAtaKey = await ammVaultAta;
+                    const bal = await connection.getTokenAccountBalance(ammVaultAtaKey)
+                        .catch(() => ({ value: { amount: "0" } }));
+                    ammFeesLamports = parseInt(bal.value.amount) || 0;
+                } catch (e) {
+                    // Vault doesn't exist or error - that's ok
+                }
+
+                const totalVaultLamports = bcFeesLamports + ammFeesLamports;
+                const ourShareLamports = Math.floor(totalVaultLamports * (feeShareBps / 10000));
+                onChainPending = ourShareLamports / LAMPORTS_PER_SOL;
+
+                if (totalVaultLamports > 0) {
+                    vaultInfo = {
+                        bcVault: bcVault.toString(),
+                        bcFeesLamports,
+                        ammFeesLamports,
+                        totalVaultLamports,
+                        ourShareLamports,
+                        onChainPendingSol: onChainPending
+                    };
+                }
+            } catch (e) {
+                logger.debug('[PAGS] Failed to check vault for beneficiary', {
+                    mint: b.mint,
+                    error: e.message
+                });
+            }
+        }
+
+        const combinedPending = dbPending + onChainPending;
+
+        if (combinedPending > 0) {
+            totalPending += combinedPending;
             breakdown.push({
                 mint: b.mint,
                 ticker: b.ticker,
                 name: b.name,
                 image: b.image,
-                pendingAmount: pending,
+                pendingAmount: combinedPending,
+                dbPending,
+                onChainPending,
+                vaultInfo,
                 totalAccumulated: b.totalFeesAccumulated || 0,
                 totalClaimed: b.totalFeesClaimed || 0,
                 // Include fee share info for transparency
-                feeShareBps: b.feeShareBps || 10000,
-                feeSharePercent: (b.feeShareBps || 10000) / 100,
-                hasMultipleRecipients: b.feeShareBps && b.feeShareBps < 10000
+                feeShareBps,
+                feeSharePercent: feeShareBps / 100,
+                hasMultipleRecipients: feeShareBps < 10000,
+                creatorPubkey: b.creatorPubkey
             });
         }
     }
@@ -438,13 +500,53 @@ async function processClaim(twitterId, executeTransfer = false) {
         // If we should execute the transfer immediately
         if (executeTransfer && pagsKeypair && connection) {
             try {
-                const signature = await executeClaimTransfer(claimId, claimInfo.linkedWallet, claimInfo.claimable);
+                // Step 1: Claim fees from Pump.fun vaults first (if any)
+                let vaultClaimResult = null;
+                if (claimInfo.breakdown && claimInfo.breakdown.length > 0) {
+                    const hasVaultFees = claimInfo.breakdown.some(b => b.vaultInfo && b.vaultInfo.ourShareLamports > 0);
+                    if (hasVaultFees) {
+                        logger.info('[PAGS] Claiming from vaults before transfer', {
+                            claimId,
+                            twitterUsername: user.twitterUsername
+                        });
+                        vaultClaimResult = await claimFromVaults(user.twitterUsername, claimInfo.breakdown);
+                        logger.info('[PAGS] Vault claim complete', {
+                            claimId,
+                            claimedFromVaults: vaultClaimResult.claimed,
+                            claimCount: vaultClaimResult.claimResults.length
+                        });
+                    }
+                }
+
+                // Step 2: Re-fetch claimable amount (now includes newly claimed vault fees in DB)
+                const updatedClaimInfo = await getClaimableAmount(twitterId);
+                const transferAmount = updatedClaimInfo.claimable;
+
+                if (transferAmount < config.PAGS_MIN_CLAIM_SOL) {
+                    // Update the claim record with the actual amount if vault claim succeeded but total is still low
+                    if (vaultClaimResult && vaultClaimResult.claimed > 0) {
+                        await db.run(`
+                            UPDATE pags_claims SET amount = $1 WHERE id = $2
+                        `, [transferAmount, claimId]);
+                    }
+                    throw new Error(`Minimum claim amount is ${config.PAGS_MIN_CLAIM_SOL} SOL`);
+                }
+
+                // Update claim record with potentially updated amount
+                await db.run(`
+                    UPDATE pags_claims SET amount = $1 WHERE id = $2
+                `, [transferAmount, claimId]);
+
+                // Step 3: Execute the transfer to user's wallet
+                const signature = await executeClaimTransfer(claimId, claimInfo.linkedWallet, transferAmount);
                 return {
                     success: true,
                     claimId,
-                    amount: claimInfo.claimable,
+                    amount: transferAmount,
                     signature,
-                    status: 'completed'
+                    status: 'completed',
+                    vaultsClaimed: vaultClaimResult ? vaultClaimResult.claimResults.length : 0,
+                    vaultsClaimedAmount: vaultClaimResult ? vaultClaimResult.claimed : 0
                 };
             } catch (e) {
                 // Mark claim as failed
@@ -577,6 +679,204 @@ async function executeClaimTransfer(claimId, recipientWallet, amount) {
     }
 
     throw new Error(`Transfer failed after ${MAX_RETRIES} attempts: ${lastError?.message}`);
+}
+
+/**
+ * Claim fees from Pump.fun vaults for all beneficiaries of a user
+ * This should be called before executing a user's claim transfer
+ *
+ * @param {string} twitterUsername - The Twitter username to claim for
+ * @param {Array} breakdown - The breakdown of pending rewards (from getClaimableAmount)
+ * @returns {Object} Result with claimed amounts and signatures
+ */
+async function claimFromVaults(twitterUsername, breakdown) {
+    if (!pagsKeypair || !connection) {
+        logger.debug('[PAGS] Vault claiming skipped - no keypair/connection');
+        return { claimed: 0, claimResults: [] };
+    }
+
+    const { TransactionInstruction } = require('@solana/web3.js');
+    const { PROGRAMS } = require('../config/constants');
+
+    let totalClaimedSol = 0;
+    const claimResults = [];
+
+    for (const item of breakdown) {
+        // Skip if no on-chain pending fees
+        if (!item.vaultInfo || item.vaultInfo.ourShareLamports <= 0) {
+            continue;
+        }
+
+        // Skip if no valid creatorPubkey
+        if (!item.creatorPubkey || item.creatorPubkey === 'unknown') {
+            continue;
+        }
+
+        // Only claim if there's a meaningful amount (> 0.001 SOL = 1M lamports)
+        if (item.vaultInfo.ourShareLamports < 1000000) {
+            continue;
+        }
+
+        try {
+            const creatorPubkey = new PublicKey(item.creatorPubkey);
+            const pagsWalletStr = pagsKeypair.publicKey.toString();
+            const isDirectCreator = creatorPubkey.toString() === pagsWalletStr;
+
+            const { bcVault } = pump.getCreatorFeeVaults(creatorPubkey);
+
+            // Only process BC vault for now (AMM vault requires different handling)
+            if (item.vaultInfo.bcFeesLamports <= 0) {
+                continue;
+            }
+
+            const tx = new Transaction();
+
+            const [eventAuthority] = PublicKey.findProgramAddressSync(
+                [Buffer.from("__event_authority")],
+                PROGRAMS.PUMP
+            );
+
+            if (isDirectCreator) {
+                // Direct creator - claim_creator_fees
+                const claimDiscriminator = pump.buildClaimFeesData();
+
+                const claimKeys = [
+                    { pubkey: pagsKeypair.publicKey, isSigner: false, isWritable: true },
+                    { pubkey: bcVault, isSigner: false, isWritable: true },
+                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+                ];
+
+                tx.add(new TransactionInstruction({
+                    keys: claimKeys,
+                    programId: PROGRAMS.PUMP,
+                    data: claimDiscriminator
+                }));
+
+                logger.info('[PAGS] Claiming from vault as direct creator', {
+                    mint: item.mint,
+                    bcFeesLamports: item.vaultInfo.bcFeesLamports
+                });
+
+            } else {
+                // Shareholder - need distribute_creator_fees
+                // This requires fetching the fee_sharing_config which has all shareholders
+                const mintExtractor = require('./mintExtractor');
+
+                const verifyResult = await mintExtractor.verifyFeeRecipient(
+                    item.mint,
+                    pagsWalletStr,
+                    connection
+                );
+
+                if (!verifyResult.isRecipient || !verifyResult.allShareholders) {
+                    logger.warn('[PAGS] Cannot claim from vault - not a verified recipient', {
+                        mint: item.mint
+                    });
+                    continue;
+                }
+
+                const configData = {
+                    shareholders: verifyResult.allShareholders.map(s => ({
+                        pubkey: new PublicKey(s.pubkey),
+                        shareBps: s.bps
+                    }))
+                };
+
+                const { sharingConfigPDA } = pump.getShareholderFeeVaults(creatorPubkey);
+                const distributeDiscriminator = pump.buildDistributeFeesData();
+
+                const distributeKeys = [
+                    { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
+                    { pubkey: bcVault, isSigner: false, isWritable: true },
+                ];
+
+                // Add ALL shareholders as writable accounts
+                for (const shareholder of configData.shareholders) {
+                    distributeKeys.push({
+                        pubkey: shareholder.pubkey,
+                        isSigner: false,
+                        isWritable: true
+                    });
+                }
+
+                distributeKeys.push(
+                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+                );
+
+                tx.add(new TransactionInstruction({
+                    keys: distributeKeys,
+                    programId: PROGRAMS.PUMP,
+                    data: distributeDiscriminator
+                }));
+
+                logger.info('[PAGS] Distributing from vault as shareholder', {
+                    mint: item.mint,
+                    totalFees: item.vaultInfo.bcFeesLamports,
+                    ourShare: item.vaultInfo.ourShareLamports,
+                    shareholderCount: configData.shareholders.length
+                });
+            }
+
+            // Execute the transaction
+            tx.feePayer = pagsKeypair.publicKey;
+            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+            tx.recentBlockhash = blockhash;
+            tx.sign(pagsKeypair);
+
+            const signature = await connection.sendRawTransaction(tx.serialize(), {
+                skipPreflight: false,
+                preflightCommitment: 'confirmed'
+            });
+
+            await connection.confirmTransaction({
+                signature,
+                blockhash,
+                lastValidBlockHeight
+            }, 'confirmed');
+
+            const claimedSol = item.vaultInfo.ourShareLamports / LAMPORTS_PER_SOL;
+            totalClaimedSol += claimedSol;
+
+            claimResults.push({
+                mint: item.mint,
+                claimedSol,
+                signature,
+                isDirectCreator
+            });
+
+            // Record the claimed fee to the database
+            await recordFeeCollection(
+                item.mint,
+                claimedSol,
+                'vault_claim',
+                signature,
+                false // Don't apply fee share - ourShareLamports is already the correct amount
+            );
+
+            logger.info('[PAGS] Successfully claimed from vault', {
+                mint: item.mint,
+                twitterUsername,
+                claimedSol: claimedSol.toFixed(6),
+                signature
+            });
+
+        } catch (e) {
+            logger.warn('[PAGS] Failed to claim from vault', {
+                mint: item.mint,
+                error: e.message
+            });
+            // Continue with other vaults even if one fails
+        }
+    }
+
+    return {
+        claimed: totalClaimedSol,
+        claimResults
+    };
 }
 
 /**
@@ -776,6 +1076,7 @@ module.exports = {
     linkWallet,
     processClaim,
     executeClaimTransfer,
+    claimFromVaults,
     recordFeeCollection,
     deactivateBeneficiary,
     getStats,
