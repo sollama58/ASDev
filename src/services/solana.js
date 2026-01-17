@@ -8,8 +8,18 @@ const bs58 = require('bs58');
 const config = require('../config/env');
 const logger = require('./logger');
 
-// Initialize connection
-const connection = new Connection(config.RPC_URL, "confirmed");
+// Initialize connection with timeout
+// v25.47 STABILITY: Added timeout to prevent hanging RPC calls
+const connection = new Connection(config.RPC_URL, {
+    commitment: "confirmed",
+    confirmTransactionInitialTimeout: config.RPC_TIMEOUT_MS,
+    fetch: (url, options) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), config.RPC_TIMEOUT_MS);
+        return fetch(url, { ...options, signal: controller.signal })
+            .finally(() => clearTimeout(timeout));
+    }
+});
 
 // Initialize dev wallet
 let devKeypair = null;

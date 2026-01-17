@@ -4,6 +4,9 @@
  *
  * Processes claims from the pags_claims table and executes SOL transfers
  * from PAGS_WALLET to user wallets.
+ *
+ * v25.47 SECURITY: Added distributed locking via Redis
+ * v25.47 STABILITY: Added per-claim error handling to prevent queue blocking
  */
 const { PublicKey, SystemProgram, Transaction } = require('@solana/web3.js');
 const logger = require('../services/logger');
@@ -23,6 +26,10 @@ const CLAIM_PROCESS_INTERVAL = 30000;
 
 // Maximum claims to process per cycle
 const MAX_CLAIMS_PER_CYCLE = 10;
+
+// v25.47: Distributed lock settings
+const LOCK_KEY = 'pags:claim:processor:lock';
+const LOCK_TTL_SECONDS = 120; // 2 minute lock TTL (covers processing time)
 
 /**
  * Start the claim processor
@@ -79,20 +86,81 @@ function stop() {
 }
 
 /**
+ * v25.47: Acquire distributed lock using Redis
+ * Prevents multiple instances from processing claims simultaneously
+ */
+async function acquireDistributedLock() {
+    if (!redis) {
+        // No Redis, use local flag only (not safe for multi-instance)
+        if (isRunning) return false;
+        isRunning = true;
+        return true;
+    }
+
+    try {
+        const client = redis.getConnection();
+        if (!client) {
+            // Redis not connected, fall back to local flag
+            if (isRunning) return false;
+            isRunning = true;
+            return true;
+        }
+
+        // SET NX with TTL - atomic operation
+        const lockValue = `${process.pid}-${Date.now()}`;
+        const result = await client.set(LOCK_KEY, lockValue, {
+            NX: true,
+            EX: LOCK_TTL_SECONDS
+        });
+
+        if (result === 'OK') {
+            isRunning = true;
+            return true;
+        }
+        return false;
+    } catch (e) {
+        logger.debug('[PAGS Claim Processor] Lock acquisition error, using local flag', { error: e.message });
+        if (isRunning) return false;
+        isRunning = true;
+        return true;
+    }
+}
+
+/**
+ * v25.47: Release distributed lock
+ */
+async function releaseDistributedLock() {
+    isRunning = false;
+
+    if (!redis) return;
+
+    try {
+        const client = redis.getConnection();
+        if (client) {
+            await client.del(LOCK_KEY);
+        }
+    } catch (e) {
+        // Ignore release errors - TTL will handle cleanup
+    }
+}
+
+/**
  * Process all pending claims
+ * v25.47: Uses distributed locking and per-claim error handling
  */
 async function processPendingClaims() {
-    if (isRunning) {
-        logger.debug('[PAGS Claim Processor] Already processing, skipping cycle');
+    // v25.47: Acquire distributed lock
+    const lockAcquired = await acquireDistributedLock();
+    if (!lockAcquired) {
+        logger.debug('[PAGS Claim Processor] Could not acquire lock, skipping cycle');
         return;
     }
 
     if (!pagsKeypair) {
         // No keypair configured, skip processing
+        await releaseDistributedLock();
         return;
     }
-
-    isRunning = true;
 
     try {
         // Get pending claims
@@ -104,7 +172,7 @@ async function processPendingClaims() {
         `, [MAX_CLAIMS_PER_CYCLE]);
 
         if (pendingClaims.length === 0) {
-            isRunning = false;
+            await releaseDistributedLock();
             return;
         }
 
@@ -128,8 +196,17 @@ async function processPendingClaims() {
             let availableBalance = balanceSol - 0.01;
             for (const claim of pendingClaims) {
                 if (availableBalance >= claim.amount) {
-                    await processOneClaim(claim);
-                    availableBalance -= claim.amount;
+                    // v25.47: Per-claim try-catch prevents one failure from blocking others
+                    try {
+                        await processOneClaim(claim);
+                        availableBalance -= claim.amount;
+                    } catch (e) {
+                        logger.error('[PAGS Claim Processor] Claim failed, continuing to next', {
+                            claimId: claim.id,
+                            error: e.message
+                        });
+                        // Continue processing other claims
+                    }
                 } else {
                     logger.info('[PAGS Claim Processor] Skipping claim due to insufficient balance', {
                         claimId: claim.id,
@@ -139,16 +216,25 @@ async function processPendingClaims() {
                 }
             }
         } else {
-            // Process all claims
+            // Process all claims with per-claim error handling
             for (const claim of pendingClaims) {
-                await processOneClaim(claim);
+                // v25.47: Per-claim try-catch prevents one failure from blocking others
+                try {
+                    await processOneClaim(claim);
+                } catch (e) {
+                    logger.error('[PAGS Claim Processor] Claim failed, continuing to next', {
+                        claimId: claim.id,
+                        error: e.message
+                    });
+                    // Continue processing other claims
+                }
             }
         }
 
     } catch (e) {
         logger.error('[PAGS Claim Processor] Error processing claims', { error: e.message });
     } finally {
-        isRunning = false;
+        await releaseDistributedLock();
     }
 }
 

@@ -19,8 +19,25 @@ const imageUtils = require('./imageUtils');
 // Connection pool instance
 let pool = null;
 
-// Smart cache (same as before, for backwards compatibility)
+// v25.47 STABILITY: LRU cache with max size to prevent memory leaks
+const MAX_CACHE_SIZE = 1000;
 const cache = new Map();
+
+/**
+ * v25.47: Evict oldest entries when cache exceeds max size
+ */
+function evictOldestCacheEntries() {
+    if (cache.size <= MAX_CACHE_SIZE) return;
+
+    // Sort by timestamp and remove oldest entries
+    const entries = Array.from(cache.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp);
+
+    const toRemove = entries.slice(0, cache.size - MAX_CACHE_SIZE + 100); // Remove extra 100 for buffer
+    for (const [key] of toRemove) {
+        cache.delete(key);
+    }
+}
 
 async function smartCache(key, ttlSeconds, fetchFunction) {
     const now = Date.now();
@@ -34,6 +51,10 @@ async function smartCache(key, ttlSeconds, fetchFunction) {
         const value = await fetchFunction();
         if (value !== undefined && value !== null) {
             cache.set(key, { value, timestamp: now });
+            // v25.47: Evict old entries if cache is too large
+            if (cache.size > MAX_CACHE_SIZE) {
+                evictOldestCacheEntries();
+            }
         }
         return value;
     } catch (e) {
@@ -462,6 +483,10 @@ async function createSchema() {
     }
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_twitter ON pags_beneficiaries("twitterUsername")`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_active ON pags_beneficiaries("isActive") WHERE "isActive" = 1`);
+    // v25.47 SCALABILITY: Add missing indexes for high-frequency PAGS queries
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_mint ON pags_beneficiaries(mint)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_fees ON pags_beneficiaries("totalFeesAccumulated" DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_creator ON pags_beneficiaries("creatorPubkey")`);
 
     // PAGS Twitter users - Verified Twitter users who can claim rewards
     await pool.query(`
@@ -515,6 +540,8 @@ async function createSchema() {
         )
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_fee_logs_beneficiary ON pags_fee_logs("beneficiaryId")`);
+    // v25.47 SCALABILITY: Index for fee log lookups by mint (via beneficiary join)
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_fee_logs_collected ON pags_fee_logs("collectedAt" DESC)`);
 
     // ===========================================
     // Announcements Table

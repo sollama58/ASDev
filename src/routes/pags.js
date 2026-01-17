@@ -1246,10 +1246,13 @@ function init(deps) {
 
             const claims = await db.all(query, params);
 
-            const countQuery = status && ['pending', 'completed', 'failed'].includes(status)
-                ? `SELECT COUNT(*) as count FROM pags_claims WHERE status = '${status}'`
-                : 'SELECT COUNT(*) as count FROM pags_claims';
-            const totalCount = await db.get(countQuery);
+            // v25.47 SECURITY: Use parameterized query to prevent SQL injection
+            let totalCount;
+            if (status && ['pending', 'completed', 'failed'].includes(status)) {
+                totalCount = await db.get('SELECT COUNT(*) as count FROM pags_claims WHERE status = $1', [status]);
+            } else {
+                totalCount = await db.get('SELECT COUNT(*) as count FROM pags_claims');
+            }
 
             res.json({
                 success: true,

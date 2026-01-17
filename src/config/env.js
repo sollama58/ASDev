@@ -30,6 +30,8 @@ const config = {
     // Solana RPC
     HELIUS_API_KEY: process.env.HELIUS_API_KEY,
     SOLANA_NETWORK: process.env.SOLANA_NETWORK || 'mainnet',
+    // v25.47 STABILITY: RPC timeout to prevent hanging requests
+    RPC_TIMEOUT_MS: parseInt(process.env.RPC_TIMEOUT_MS) || 30000,
     get RPC_URL() {
         if (process.env.RPC_URL) return process.env.RPC_URL;
         if (this.SOLANA_NETWORK === 'devnet') return "https://api.devnet.solana.com";

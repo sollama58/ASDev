@@ -116,8 +116,18 @@ async function main() {
     // Initialize Twitter (v25.22: Now async to fetch username)
     await twitter.init();
 
-    // Initialize Solana connection
-    const connection = new Connection(config.RPC_URL, "confirmed");
+    // Initialize Solana connection with timeout
+    // v25.47 STABILITY: Added httpAgent with timeout to prevent hanging RPC calls
+    const connection = new Connection(config.RPC_URL, {
+        commitment: "confirmed",
+        confirmTransactionInitialTimeout: config.RPC_TIMEOUT_MS,
+        fetch: (url, options) => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), config.RPC_TIMEOUT_MS);
+            return fetch(url, { ...options, signal: controller.signal })
+                .finally(() => clearTimeout(timeout));
+        }
+    });
     const devKeypair = Keypair.fromSecretKey(bs58.decode(config.DEV_WALLET_PRIVATE_KEY));
     const wallet = new Wallet(devKeypair);
 
