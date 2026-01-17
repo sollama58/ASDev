@@ -1548,13 +1548,15 @@ function init(deps) {
             // Get counts before wiping
             const beforeStats = {
                 beneficiaries: (await db.get('SELECT COUNT(*) as count FROM pags_beneficiaries'))?.count || 0,
-                users: (await db.get('SELECT COUNT(*) as count FROM pags_users'))?.count || 0,
-                claims: (await db.get('SELECT COUNT(*) as count FROM pags_claims'))?.count || 0
+                users: (await db.get('SELECT COUNT(*) as count FROM pags_twitter_users'))?.count || 0,
+                claims: (await db.get('SELECT COUNT(*) as count FROM pags_claims'))?.count || 0,
+                feeLogs: (await db.get('SELECT COUNT(*) as count FROM pags_fee_logs'))?.count || 0
             };
 
-            // Wipe all PAGS tables
+            // Wipe all PAGS tables (in correct order due to foreign key constraints)
+            await db.run('DELETE FROM pags_fee_logs');
             await db.run('DELETE FROM pags_claims');
-            await db.run('DELETE FROM pags_users');
+            await db.run('DELETE FROM pags_twitter_users');
             await db.run('DELETE FROM pags_beneficiaries');
 
             logger.warn('[PAGS API] PAGS data wiped', beforeStats);
