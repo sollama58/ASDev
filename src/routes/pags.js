@@ -219,11 +219,30 @@ function init(deps) {
                 logger.warn('[PAGS API] Could not fetch on-chain pending for leaderboard', { error: e.message });
             }
 
-            // Process tokens to add pending calculation
-            const processedTokens = tokens.map(t => {
+            // Process tokens to add pending calculation and multi-beneficiary info
+            const processedTokens = [];
+            for (const t of tokens) {
                 const claimable = (t.totalFeesAccumulated || 0) - (t.totalFeesClaimed || 0);
                 const onChainPending = onChainPendingByMint[t.mint] || 0;
-                return {
+
+                // v25.68: Get beneficiary shares for multi-beneficiary support
+                const shares = await db.all(`
+                    SELECT * FROM pags_beneficiary_shares
+                    WHERE "beneficiaryId" = $1
+                    ORDER BY "shareBps" DESC
+                `, [t.id]);
+
+                const beneficiaries = shares.length > 0 ? shares.map(s => ({
+                    twitterUsername: s.twitterUsername,
+                    shareBps: s.shareBps,
+                    sharePercent: s.shareBps / 100
+                })) : [{
+                    twitterUsername: t.twitterUsername,
+                    shareBps: 10000,
+                    sharePercent: 100
+                }];
+
+                processedTokens.push({
                     mint: t.mint,
                     ticker: t.ticker || null,
                     name: t.name || null,
@@ -234,9 +253,12 @@ function init(deps) {
                     totalFeesClaimed: t.totalFeesClaimed || 0,
                     claimable,
                     onChainPending,
-                    pending: claimable + onChainPending
-                };
-            });
+                    pending: claimable + onChainPending,
+                    // v25.68: Multi-beneficiary support
+                    beneficiaries,
+                    isMultiBeneficiary: beneficiaries.length > 1
+                });
+            }
 
             // Aggregate by Twitter username for user leaderboard
             const userMap = new Map();
@@ -366,7 +388,9 @@ function init(deps) {
             let totalAccumulated = 0;
             let totalClaimed = 0;
 
-            const breakdown = tokens.map(t => {
+            // v25.68: Build breakdown with multi-beneficiary support
+            const breakdown = [];
+            for (const t of tokens) {
                 const claimable = (t.totalFeesAccumulated || 0) - (t.totalFeesClaimed || 0);
                 const onChainInfo = onChainPendingByMint[t.mint] || { pendingSol: 0 };
                 const onChainPending = onChainInfo.pendingSol || 0;
@@ -376,7 +400,24 @@ function init(deps) {
                 totalAccumulated += (t.totalFeesAccumulated || 0);
                 totalClaimed += (t.totalFeesClaimed || 0);
 
-                return {
+                // v25.68: Get all beneficiaries for this token
+                const shares = await db.all(`
+                    SELECT * FROM pags_beneficiary_shares
+                    WHERE "beneficiaryId" = $1
+                    ORDER BY "shareBps" DESC
+                `, [t.id]);
+
+                const beneficiaries = shares.length > 0 ? shares.map(s => ({
+                    twitterUsername: s.twitterUsername,
+                    shareBps: s.shareBps,
+                    sharePercent: s.shareBps / 100
+                })) : [{
+                    twitterUsername: t.twitterUsername,
+                    shareBps: 10000,
+                    sharePercent: 100
+                }];
+
+                breakdown.push({
                     mint: t.mint,
                     ticker: t.ticker || null,
                     name: t.name || null,
@@ -388,14 +429,17 @@ function init(deps) {
                     claimable,           // Ready to withdraw now
                     onChainPending,      // Still in vault
                     pending: claimable + onChainPending, // Total expected
+                    // v25.68: Multi-beneficiary support
+                    beneficiaries,
+                    isMultiBeneficiary: beneficiaries.length > 1,
                     // Additional on-chain details if available
                     ...(onChainInfo.pendingSol > 0 ? {
                         bcFeesSol: onChainInfo.bcFeesSol,
                         ammFeesSol: onChainInfo.ammFeesSol,
                         isDirectCreator: onChainInfo.isDirectCreator
                     } : {})
-                };
-            });
+                });
+            }
 
             res.json({
                 success: true,
