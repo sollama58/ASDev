@@ -44,6 +44,11 @@ let pags = null;
 const configCache = new Map();
 const CONFIG_CACHE_TTL = 10 * 60 * 1000;
 
+// v25.45: Cache for last known vault balances (to detect external claims)
+// Key: mint address, Value: { bcBalance, ammBalance, timestamp }
+const lastVaultBalances = new Map();
+const VAULT_BALANCE_TTL = 30 * 60 * 1000; // 30 min TTL
+
 // Minimum rent-exempt balance to leave in vaults
 const RENT_EXEMPT_MIN = 5000; // lamports
 
@@ -159,12 +164,95 @@ function findPagsShare(configData) {
 }
 
 /**
+ * v25.45: Re-verify fee share percentage on-chain
+ * Fee shares can change at any time on Pump.fun, so we verify before claiming
+ *
+ * @param {string} mint - Token mint address
+ * @param {string} creatorPubkey - Stored creator pubkey
+ * @param {number} storedFeeShareBps - Fee share stored in database
+ * @returns {Promise<{verified: boolean, currentFeeShareBps: number, changed: boolean, allShareholders?: Array}>}
+ */
+async function verifyCurrentFeeShare(mint, creatorPubkey, storedFeeShareBps) {
+    try {
+        const mintExtractor = require('../services/mintExtractor');
+        const pagsWalletStr = pagsKeypair ? pagsKeypair.publicKey.toString() : null;
+
+        if (!pagsWalletStr) {
+            return { verified: false, currentFeeShareBps: storedFeeShareBps, changed: false };
+        }
+
+        const result = await mintExtractor.verifyFeeRecipient(mint, pagsWalletStr, connection);
+
+        if (result.error) {
+            // RPC error - don't change anything, use stored value
+            logger.debug('[PAGS Fee Scanner] Fee share verification RPC error, using stored value', {
+                mint,
+                storedFeeShareBps,
+                error: result.error
+            });
+            return { verified: false, currentFeeShareBps: storedFeeShareBps, changed: false };
+        }
+
+        if (!result.isRecipient) {
+            // We're no longer a fee recipient! This is important to detect
+            logger.warn('[PAGS Fee Scanner] No longer a fee recipient for token', {
+                mint,
+                storedFeeShareBps,
+                note: 'Fee share may have been removed or changed on Pump.fun'
+            });
+            return { verified: true, currentFeeShareBps: 0, changed: true, removed: true };
+        }
+
+        const currentFeeShareBps = result.feeShareBps || 0;
+        const changed = currentFeeShareBps !== storedFeeShareBps;
+
+        if (changed) {
+            logger.info('[PAGS Fee Scanner] Fee share changed on-chain', {
+                mint,
+                storedFeeShareBps,
+                currentFeeShareBps,
+                delta: currentFeeShareBps - storedFeeShareBps
+            });
+        }
+
+        return {
+            verified: true,
+            currentFeeShareBps,
+            changed,
+            allShareholders: result.allShareholders
+        };
+
+    } catch (e) {
+        logger.warn('[PAGS Fee Scanner] Error verifying fee share', { mint, error: e.message });
+        return { verified: false, currentFeeShareBps: storedFeeShareBps, changed: false };
+    }
+}
+
+/**
+ * v25.45: Update fee share in database if it changed
+ */
+async function updateFeeShareIfChanged(mint, newFeeShareBps) {
+    try {
+        await db.run(`
+            UPDATE pags_beneficiaries
+            SET "feeShareBps" = $1, "lastFeeUpdate" = $2
+            WHERE mint = $3
+        `, [newFeeShareBps, Date.now(), mint]);
+
+        logger.info('[PAGS Fee Scanner] Updated fee share in database', {
+            mint,
+            newFeeShareBps
+        });
+    } catch (e) {
+        logger.error('[PAGS Fee Scanner] Failed to update fee share', { mint, error: e.message });
+    }
+}
+
+/**
  * Check pending fees for a single PAGS beneficiary
  *
- * v25.62 FIX: Simplified to use the feeShareBps stored in the database
- * (which was verified during registration) rather than re-fetching the
- * fee_sharing_config on-chain. This fixes the issue where the PDA derivation
- * didn't match the actual FEE program account structure.
+ * v25.45: Now re-verifies fee share on-chain before calculating pending fees
+ * Fee shares can change at any time on Pump.fun dashboard
  *
  * Handles two scenarios:
  * 1. Direct Creator (100% share): PAGS wallet IS the original creator
@@ -177,9 +265,9 @@ function findPagsShare(configData) {
  * For PAGS, the key insight is:
  * - creatorPubkey stored is the ORIGINAL token creator
  * - Fees accumulate in the original creator's vault (derived from their pubkey)
- * - feeShareBps stored tells us our percentage (already verified at registration)
+ * - feeShareBps is now RE-VERIFIED on each check (can change on Pump.fun)
  */
-async function checkPendingFeesForBeneficiary(beneficiary) {
+async function checkPendingFeesForBeneficiary(beneficiary, options = {}) {
     if (!beneficiary.creatorPubkey || beneficiary.creatorPubkey === 'unknown') {
         logger.debug('[PAGS Fee Scanner] Skipping beneficiary with unknown creatorPubkey', {
             mint: beneficiary.mint
@@ -195,9 +283,51 @@ async function checkPendingFeesForBeneficiary(beneficiary) {
         // This happens when creatorPubkey stored equals PAGS wallet
         const isDirectCreator = pagsWalletStr && creatorPubkey.toString() === pagsWalletStr;
 
-        // v25.62: Use feeShareBps from database (verified at registration)
-        // If not stored, default to 10000 (100%)
+        // v25.45: Re-verify fee share on-chain (can change at any time on Pump.fun)
         const storedFeeShareBps = beneficiary.feeShareBps || 10000;
+        let currentFeeShareBps = storedFeeShareBps;
+        let allShareholders = null;
+
+        // Only verify if requested (to save RPC calls during quick checks)
+        // Full verification happens during claim operations
+        if (options.verifyFeeShare !== false) {
+            const verification = await verifyCurrentFeeShare(
+                beneficiary.mint,
+                beneficiary.creatorPubkey,
+                storedFeeShareBps
+            );
+
+            if (verification.verified) {
+                currentFeeShareBps = verification.currentFeeShareBps;
+                allShareholders = verification.allShareholders;
+
+                // Update DB if fee share changed
+                if (verification.changed && currentFeeShareBps !== storedFeeShareBps) {
+                    await updateFeeShareIfChanged(beneficiary.mint, currentFeeShareBps);
+
+                    // If removed from fee sharing, return early
+                    if (verification.removed) {
+                        logger.warn('[PAGS Fee Scanner] Fee recipient removed - deactivating', {
+                            mint: beneficiary.mint
+                        });
+                        return {
+                            mint: beneficiary.mint,
+                            creatorPubkey: beneficiary.creatorPubkey,
+                            twitterUsername: beneficiary.twitterUsername,
+                            isDirectCreator: false,
+                            isShareHolder: false,
+                            feeShareRemoved: true,
+                            bcFeesLamports: 0,
+                            ammFeesLamports: 0,
+                            totalFeesLamports: 0,
+                            ourShareLamports: 0,
+                            shareBps: 0,
+                            sharePercent: 0
+                        };
+                    }
+                }
+            }
+        }
 
         // Derive vaults from the original creator's pubkey
         // Fees ALWAYS accumulate in the original creator's vault
@@ -208,6 +338,8 @@ async function checkPendingFeesForBeneficiary(beneficiary) {
             creatorPubkey: beneficiary.creatorPubkey.slice(0, 8) + '...',
             isDirectCreator,
             storedFeeShareBps,
+            currentFeeShareBps,
+            feeShareChanged: currentFeeShareBps !== storedFeeShareBps,
             bcVault: bcVault.toString().slice(0, 8) + '...'
         });
 
@@ -252,13 +384,14 @@ async function checkPendingFeesForBeneficiary(beneficiary) {
 
         const totalFeesLamports = bcFeesLamports + ammFeesLamports;
 
-        // Calculate our share based on stored feeShareBps
-        const ourShareLamports = Math.floor(totalFeesLamports * (storedFeeShareBps / 10000));
+        // v25.45: Calculate our share based on CURRENT (re-verified) feeShareBps
+        const ourShareLamports = Math.floor(totalFeesLamports * (currentFeeShareBps / 10000));
 
         logger.debug('[PAGS Fee Scanner] Fee calculation', {
             mint: beneficiary.mint,
             totalFeesLamports,
             storedFeeShareBps,
+            currentFeeShareBps,
             ourShareLamports,
             isDirectCreator
         });
@@ -270,14 +403,15 @@ async function checkPendingFeesForBeneficiary(beneficiary) {
                 creatorPubkey: beneficiary.creatorPubkey,
                 twitterUsername: beneficiary.twitterUsername,
                 isDirectCreator,
-                isShareHolder: storedFeeShareBps > 0,
+                isShareHolder: currentFeeShareBps > 0,
                 bcFeesLamports: 0,
                 ammFeesLamports: 0,
                 totalFeesLamports: 0,
                 ourShareLamports: 0,
-                shareBps: storedFeeShareBps,
-                sharePercent: storedFeeShareBps / 100,
-                bcVault
+                shareBps: currentFeeShareBps,
+                sharePercent: currentFeeShareBps / 100,
+                bcVault,
+                allShareholders // v25.45: Include for claim operations
             };
         }
 
@@ -291,10 +425,11 @@ async function checkPendingFeesForBeneficiary(beneficiary) {
             ammFeesLamports,
             totalFeesLamports,
             ourShareLamports,
-            shareBps: storedFeeShareBps,
-            sharePercent: storedFeeShareBps / 100,
+            shareBps: currentFeeShareBps,
+            sharePercent: currentFeeShareBps / 100,
             bcVault,
-            ammVaultAta
+            ammVaultAta,
+            allShareholders // v25.45: Include for claim operations
         };
     } catch (e) {
         logger.warn('[PAGS Fee Scanner] Error checking fees for beneficiary', {
@@ -551,8 +686,94 @@ async function claimFeesForBeneficiary(pendingInfo) {
 }
 
 /**
+ * v25.45: Detect if fees were claimed externally (by Robinhood, manual dashboard, etc.)
+ *
+ * This is important because:
+ * 1. Robinhood might claim fees for a token that's also registered in PAGS
+ * 2. Creator might manually claim via Pump.fun dashboard
+ * 3. Another shareholder might trigger distribute_creator_fees
+ *
+ * When external claims happen, the vault balance decreases without us claiming.
+ * We track this to avoid recording fees that were never actually received.
+ *
+ * @param {string} mint - Token mint
+ * @param {number} currentBcBalance - Current BC vault balance (lamports)
+ * @param {number} currentAmmBalance - Current AMM vault balance (lamports)
+ * @returns {{externalClaim: boolean, bcClaimedExternally: number, ammClaimedExternally: number}}
+ */
+function detectExternalClaim(mint, currentBcBalance, currentAmmBalance) {
+    const lastBalance = lastVaultBalances.get(mint);
+
+    if (!lastBalance) {
+        // First time seeing this token, no external claim detection possible
+        lastVaultBalances.set(mint, {
+            bcBalance: currentBcBalance,
+            ammBalance: currentAmmBalance,
+            timestamp: Date.now()
+        });
+        return { externalClaim: false, bcClaimedExternally: 0, ammClaimedExternally: 0 };
+    }
+
+    // Check if cache is stale
+    if (Date.now() - lastBalance.timestamp > VAULT_BALANCE_TTL) {
+        // Cache expired, refresh it
+        lastVaultBalances.set(mint, {
+            bcBalance: currentBcBalance,
+            ammBalance: currentAmmBalance,
+            timestamp: Date.now()
+        });
+        return { externalClaim: false, bcClaimedExternally: 0, ammClaimedExternally: 0 };
+    }
+
+    // Detect if balance decreased (external claim happened)
+    const bcDecrease = Math.max(0, lastBalance.bcBalance - currentBcBalance);
+    const ammDecrease = Math.max(0, lastBalance.ammBalance - currentAmmBalance);
+
+    const externalClaim = bcDecrease > 0 || ammDecrease > 0;
+
+    if (externalClaim) {
+        logger.info('[PAGS Fee Scanner] External claim detected', {
+            mint,
+            bcDecrease: bcDecrease / 1e9,
+            ammDecrease: ammDecrease / 1e9,
+            previousBc: lastBalance.bcBalance / 1e9,
+            currentBc: currentBcBalance / 1e9,
+            previousAmm: lastBalance.ammBalance / 1e9,
+            currentAmm: currentAmmBalance / 1e9,
+            note: 'Fees claimed by Robinhood, dashboard, or another mechanism'
+        });
+    }
+
+    // Update cached balance
+    lastVaultBalances.set(mint, {
+        bcBalance: currentBcBalance,
+        ammBalance: currentAmmBalance,
+        timestamp: Date.now()
+    });
+
+    return {
+        externalClaim,
+        bcClaimedExternally: bcDecrease,
+        ammClaimedExternally: ammDecrease
+    };
+}
+
+/**
+ * v25.45: Update vault balance cache after successful claim
+ */
+function updateVaultBalanceAfterClaim(mint, newBcBalance, newAmmBalance) {
+    lastVaultBalances.set(mint, {
+        bcBalance: newBcBalance,
+        ammBalance: newAmmBalance,
+        timestamp: Date.now()
+    });
+}
+
+/**
  * Run full fee collection cycle for all PAGS beneficiaries
  * This should be called periodically (e.g., every 5 minutes)
+ *
+ * v25.45: Now detects external claims and re-verifies fee shares
  */
 async function collectAllFees() {
     if (!config.PAGS_ENABLED || !pagsKeypair || !db || !connection) {
@@ -576,8 +797,29 @@ async function collectAllFees() {
 
         const claims = [];
         let totalClaimedSol = 0;
+        let externalClaimsDetected = 0;
 
         for (const beneficiary of pending.beneficiaries) {
+            // v25.45: Check for external claims (Robinhood, manual dashboard claims)
+            const externalCheck = detectExternalClaim(
+                beneficiary.mint,
+                beneficiary.bcFeesLamports,
+                beneficiary.ammFeesLamports
+            );
+
+            if (externalCheck.externalClaim) {
+                externalClaimsDetected++;
+                // Log but continue - the current balance is what we can claim now
+            }
+
+            // v25.45: Skip if fee sharing was removed
+            if (beneficiary.feeShareRemoved) {
+                logger.info('[PAGS Fee Scanner] Skipping - fee share removed', {
+                    mint: beneficiary.mint
+                });
+                continue;
+            }
+
             // Only claim if there's a meaningful amount (> 0.001 SOL)
             if (beneficiary.ourShareLamports < 1000000) {
                 continue;
@@ -588,6 +830,10 @@ async function collectAllFees() {
             if (result) {
                 claims.push(result);
                 totalClaimedSol += result.claimedSol;
+
+                // v25.45: Update vault balance cache after successful claim
+                // Vault should now be near-empty (just rent-exempt minimum)
+                updateVaultBalanceAfterClaim(beneficiary.mint, RENT_EXEMPT_MIN, 0);
 
                 // Record the fee collection in the database
                 if (pags && pags.recordFeeCollection) {
@@ -611,13 +857,15 @@ async function collectAllFees() {
 
         logger.info('[PAGS Fee Scanner] Collection cycle complete', {
             claimedCount: claims.length,
-            totalClaimedSol: totalClaimedSol.toFixed(6)
+            totalClaimedSol: totalClaimedSol.toFixed(6),
+            externalClaimsDetected
         });
 
         return {
             totalClaimed: totalClaimedSol,
             claimedCount: claims.length,
-            claims
+            claims,
+            externalClaimsDetected
         };
 
     } catch (e) {
@@ -634,8 +882,18 @@ function getStatus() {
         enabled: config.PAGS_ENABLED,
         walletConfigured: !!pagsKeypair,
         pagsWallet: pagsKeypair ? pagsKeypair.publicKey.toString() : null,
-        cacheSize: configCache.size
+        configCacheSize: configCache.size,
+        vaultBalanceCacheSize: lastVaultBalances.size
     };
+}
+
+/**
+ * v25.45: Clear caches (for testing or reset)
+ */
+function clearCaches() {
+    configCache.clear();
+    lastVaultBalances.clear();
+    logger.info('[PAGS Fee Scanner] Caches cleared');
 }
 
 module.exports = {
@@ -646,5 +904,9 @@ module.exports = {
     collectAllFees,
     getStatus,
     parseFeeSharingConfig,
-    findPagsShare
+    findPagsShare,
+    // v25.45: New exports
+    verifyCurrentFeeShare,
+    detectExternalClaim,
+    clearCaches
 };

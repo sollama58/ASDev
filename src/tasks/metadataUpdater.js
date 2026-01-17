@@ -7,6 +7,11 @@
  * v25.13 - Tiered updates: Top 10 every 1 min, all tokens every 5 min
  *        - Images/metadata only fetched on token creation or admin request
  * v25.22 - SECURITY: Added price bounds validation to prevent oracle manipulation
+ * v25.46 - Added periodic image updates for ALL token types:
+ *        - Platform tokens (tokens table)
+ *        - Robinhood tokens (robinhood_tokens table)
+ *        - PAGS tokens (pags_beneficiaries table)
+ *        - Runs every 10 minutes to fill missing images
  */
 const axios = require('axios');
 const config = require('../config/env');
@@ -601,24 +606,332 @@ async function fillMissingImagesFromMetadata(deps) {
 }
 
 /**
+ * v25.46: Update metadata for Robinhood tokens (robinhood_tokens table)
+ * Fetches images and market data from multiple sources
+ */
+async function updateRobinhoodTokenMetadata(deps) {
+    const { db } = deps;
+
+    try {
+        // Get Robinhood tokens missing images or needing metadata updates
+        const tokens = await db.all(`
+            SELECT id, mint, ticker, name, image FROM robinhood_tokens
+            WHERE "isActive" = 1 AND mint IS NOT NULL
+            LIMIT 100
+        `);
+
+        if (tokens.length === 0) return;
+
+        const tokensMissingImages = tokens.filter(t => !t.image || t.image === '' || t.image === 'null');
+        if (tokensMissingImages.length === 0) {
+            if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] Robinhood: All ${tokens.length} tokens have images`);
+            return;
+        }
+
+        logger.info(`[MetadataUpdater] Robinhood: ${tokensMissingImages.length}/${tokens.length} tokens missing images`);
+
+        let imagesUpdated = 0;
+        for (const token of tokensMissingImages) {
+            try {
+                // Try DexScreener first
+                let imageUrl = null;
+                let name = token.name;
+                let ticker = token.ticker;
+
+                const dexRes = await axios.get(
+                    `https://api.dexscreener.com/latest/dex/tokens/${token.mint}`,
+                    { timeout: 5000 }
+                );
+                const pairs = dexRes.data?.pairs || [];
+                if (pairs.length > 0) {
+                    const pair = pairs[0];
+                    imageUrl = pair.info?.imageUrl || null;
+                    name = pair.baseToken?.name || name;
+                    ticker = pair.baseToken?.symbol || ticker;
+                }
+
+                // Try GeckoTerminal if no image
+                if (!imageUrl) {
+                    const geckoData = await fetchGeckoTerminalMetadata(token.mint);
+                    if (geckoData?.image) {
+                        imageUrl = geckoData.image;
+                        name = geckoData.name || name;
+                        ticker = geckoData.ticker || ticker;
+                    }
+                }
+
+                // Try Helius if still no image
+                if (!imageUrl && config.HELIUS_API_KEY) {
+                    const heliusData = await fetchHeliusMarketDataBatch([token.mint]);
+                    const data = heliusData.get(token.mint);
+                    if (data?.image) {
+                        imageUrl = data.image;
+                        name = data.name || name;
+                        ticker = data.ticker || ticker;
+                    }
+                }
+
+                // Try Pump.fun API as last resort
+                if (!imageUrl) {
+                    try {
+                        const pumpRes = await axios.get(
+                            `https://frontend-api.pump.fun/coins/${token.mint}`,
+                            { timeout: 5000 }
+                        );
+                        if (pumpRes.data) {
+                            imageUrl = pumpRes.data.image_uri || pumpRes.data.image || null;
+                            name = pumpRes.data.name || name;
+                            ticker = pumpRes.data.symbol || ticker;
+                        }
+                    } catch (e) { /* Silent */ }
+                }
+
+                // Update if we found an image
+                if (imageUrl) {
+                    const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+                    await db.run(
+                        `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
+                        [normalizedImage, name, ticker, token.id]
+                    );
+                    imagesUpdated++;
+                    if (DEBUG_METADATA) {
+                        logger.debug(`[MetadataUpdater] Robinhood: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
+                    }
+                }
+
+                await delay(500); // Rate limiting
+            } catch (e) {
+                // Silent fail for individual tokens
+            }
+        }
+
+        if (imagesUpdated > 0) {
+            logger.info(`[MetadataUpdater] Robinhood: Updated ${imagesUpdated} token images`);
+        }
+    } catch (e) {
+        logger.warn(`[MetadataUpdater] Robinhood metadata update error: ${e.message}`);
+    }
+}
+
+/**
+ * v25.46: Update metadata for PAGS beneficiary tokens (pags_beneficiaries table)
+ * Fetches images and metadata from multiple sources
+ */
+async function updatePagsTokenMetadata(deps) {
+    const { db } = deps;
+
+    try {
+        // Get PAGS tokens missing images
+        const tokens = await db.all(`
+            SELECT id, mint, ticker, name, image FROM pags_beneficiaries
+            WHERE "isActive" = 1 AND mint IS NOT NULL
+            LIMIT 100
+        `);
+
+        if (tokens.length === 0) return;
+
+        const tokensMissingImages = tokens.filter(t => !t.image || t.image === '' || t.image === 'null');
+        if (tokensMissingImages.length === 0) {
+            if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] PAGS: All ${tokens.length} tokens have images`);
+            return;
+        }
+
+        logger.info(`[MetadataUpdater] PAGS: ${tokensMissingImages.length}/${tokens.length} tokens missing images`);
+
+        let imagesUpdated = 0;
+        for (const token of tokensMissingImages) {
+            try {
+                let imageUrl = null;
+                let name = token.name;
+                let ticker = token.ticker;
+
+                // Try DexScreener first
+                const dexRes = await axios.get(
+                    `https://api.dexscreener.com/latest/dex/tokens/${token.mint}`,
+                    { timeout: 5000 }
+                );
+                const pairs = dexRes.data?.pairs || [];
+                if (pairs.length > 0) {
+                    const pair = pairs[0];
+                    imageUrl = pair.info?.imageUrl || null;
+                    name = pair.baseToken?.name || name;
+                    ticker = pair.baseToken?.symbol || ticker;
+                }
+
+                // Try GeckoTerminal if no image
+                if (!imageUrl) {
+                    const geckoData = await fetchGeckoTerminalMetadata(token.mint);
+                    if (geckoData?.image) {
+                        imageUrl = geckoData.image;
+                        name = geckoData.name || name;
+                        ticker = geckoData.ticker || ticker;
+                    }
+                }
+
+                // Try Pump.fun API
+                if (!imageUrl) {
+                    try {
+                        const pumpRes = await axios.get(
+                            `https://frontend-api.pump.fun/coins/${token.mint}`,
+                            { timeout: 5000 }
+                        );
+                        if (pumpRes.data) {
+                            imageUrl = pumpRes.data.image_uri || pumpRes.data.image || null;
+                            name = pumpRes.data.name || name;
+                            ticker = pumpRes.data.symbol || ticker;
+                        }
+                    } catch (e) { /* Silent */ }
+                }
+
+                // Update if we found an image
+                if (imageUrl) {
+                    const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+                    await db.run(
+                        `UPDATE pags_beneficiaries SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
+                        [normalizedImage, name, ticker, token.id]
+                    );
+                    imagesUpdated++;
+                    if (DEBUG_METADATA) {
+                        logger.debug(`[MetadataUpdater] PAGS: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
+                    }
+                }
+
+                await delay(500); // Rate limiting
+            } catch (e) {
+                // Silent fail for individual tokens
+            }
+        }
+
+        if (imagesUpdated > 0) {
+            logger.info(`[MetadataUpdater] PAGS: Updated ${imagesUpdated} token images`);
+        }
+    } catch (e) {
+        logger.warn(`[MetadataUpdater] PAGS metadata update error: ${e.message}`);
+    }
+}
+
+/**
+ * v25.46: Update metadata for platform tokens missing images (tokens table)
+ * Specifically targets tokens that have metadataUri but no image
+ */
+async function updatePlatformTokenImages(deps) {
+    const { db } = deps;
+
+    try {
+        // Get platform tokens missing images
+        const tokens = await db.all(`
+            SELECT mint, ticker, image, "metadataUri" FROM tokens
+            WHERE (image IS NULL OR image = '' OR image = 'null')
+            LIMIT 50
+        `);
+
+        if (tokens.length === 0) {
+            if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] Platform: All tokens have images`);
+            return;
+        }
+
+        logger.info(`[MetadataUpdater] Platform: ${tokens.length} tokens missing images`);
+
+        let imagesUpdated = 0;
+        for (const token of tokens) {
+            try {
+                let imageUrl = null;
+
+                // Try DexScreener first
+                const dexRes = await axios.get(
+                    `https://api.dexscreener.com/latest/dex/tokens/${token.mint}`,
+                    { timeout: 5000 }
+                );
+                const pairs = dexRes.data?.pairs || [];
+                if (pairs.length > 0) {
+                    imageUrl = pairs[0].info?.imageUrl || null;
+                }
+
+                // Try metadataUri if available and no image from DexScreener
+                if (!imageUrl && token.metadataUri) {
+                    imageUrl = await imageUtils.fetchImageFromMetadataUri(token.metadataUri, 5000);
+                }
+
+                // Try GeckoTerminal
+                if (!imageUrl) {
+                    const geckoData = await fetchGeckoTerminalMetadata(token.mint);
+                    if (geckoData?.image) {
+                        imageUrl = geckoData.image;
+                    }
+                }
+
+                // Try Helius
+                if (!imageUrl && config.HELIUS_API_KEY) {
+                    const heliusData = await fetchHeliusMarketDataBatch([token.mint]);
+                    const data = heliusData.get(token.mint);
+                    if (data?.image) {
+                        imageUrl = data.image;
+                    }
+                }
+
+                // Update if we found an image
+                if (imageUrl) {
+                    const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+                    await db.run(
+                        `UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = '' OR image = 'null')`,
+                        [normalizedImage, token.mint]
+                    );
+                    imagesUpdated++;
+                    if (DEBUG_METADATA) {
+                        logger.debug(`[MetadataUpdater] Platform: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
+                    }
+                }
+
+                await delay(500); // Rate limiting
+            } catch (e) {
+                // Silent fail for individual tokens
+            }
+        }
+
+        if (imagesUpdated > 0) {
+            logger.info(`[MetadataUpdater] Platform: Updated ${imagesUpdated} token images`);
+        }
+    } catch (e) {
+        logger.warn(`[MetadataUpdater] Platform image update error: ${e.message}`);
+    }
+}
+
+/**
+ * v25.46: Combined image update for all token types
+ * Runs periodically to fill in missing images across all tables
+ */
+async function updateAllMissingImages(deps) {
+    logger.info(`[MetadataUpdater] Starting missing images update for all token types...`);
+
+    await updatePlatformTokenImages(deps);
+    await updateRobinhoodTokenMetadata(deps);
+    await updatePagsTokenMetadata(deps);
+
+    logger.info(`[MetadataUpdater] Missing images update complete`);
+}
+
+/**
  * v25.13: Start the tiered metadata updater
  * - Top 10 + KOTH prices: every 1 minute
  * - All token prices: every 5 minutes
- * - Images/metadata: only on token creation or admin request
+ * - v25.46: Missing images for all token types: every 10 minutes
  */
 function start(deps) {
     const priceInterval = config.METADATA_PRICE_INTERVAL || 60000; // 1 minute
     const fullInterval = config.METADATA_FULL_INTERVAL || 300000; // 5 minutes
+    const imageInterval = config.METADATA_IMAGE_INTERVAL || 600000; // 10 minutes
 
     // Initial runs with staggered delays
     setTimeout(() => updateTopTokenPrices(deps), 5000);
     setTimeout(() => updateAllTokenPrices(deps), 15000);
+    setTimeout(() => updateAllMissingImages(deps), 30000); // v25.46: Fill missing images on startup
 
     // Set up intervals
     setInterval(() => updateTopTokenPrices(deps), priceInterval);
     setInterval(() => updateAllTokenPrices(deps), fullInterval);
+    setInterval(() => updateAllMissingImages(deps), imageInterval); // v25.46: Periodic image updates
 
-    logger.info(`[MetadataUpdater] Started - Top tokens: ${priceInterval/1000}s, All tokens: ${fullInterval/1000}s`);
+    logger.info(`[MetadataUpdater] Started - Top tokens: ${priceInterval/1000}s, All tokens: ${fullInterval/1000}s, Images: ${imageInterval/1000}s`);
 }
 
 module.exports = {
@@ -630,5 +943,10 @@ module.exports = {
     fetchGeckoTerminalMetadata,
     fetchGeckoTerminalBatch,
     fetchHeliusMarketDataBatch,
-    fillMissingImagesFromMetadata
+    fillMissingImagesFromMetadata,
+    // v25.46: New functions for all token type image updates
+    updateRobinhoodTokenMetadata,
+    updatePagsTokenMetadata,
+    updatePlatformTokenImages,
+    updateAllMissingImages
 };

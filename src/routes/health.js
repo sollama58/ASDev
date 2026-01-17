@@ -653,23 +653,32 @@ function init(deps) {
     /**
      * POST /admin/trigger-metadata-update
      * Force an immediate metadata update cycle for all tokens
+     * v25.46: Also triggers image updates for robinhood_tokens and pags_beneficiaries
      */
     router.post('/admin/trigger-metadata-update', adminAuth, async (req, res) => {
         try {
             const metadataUpdater = require('../tasks/metadataUpdater');
 
-            logger.info('[Admin] Triggering manual metadata update...');
+            logger.info('[Admin] Triggering manual metadata update for all token types...');
 
-            // Run the update (async, don't wait for completion)
+            // v25.46: Run both metadata and image updates for all token types
+            // Run the platform token metadata update
             metadataUpdater.updateMetadata(deps).then(() => {
-                logger.info('[Admin] Manual metadata update completed');
+                logger.info('[Admin] Platform token metadata update completed');
             }).catch(e => {
-                logger.error('[Admin] Manual metadata update failed', { error: e.message });
+                logger.error('[Admin] Platform token metadata update failed', { error: e.message });
+            });
+
+            // Run image updates for all token types (platform, robinhood, pags)
+            metadataUpdater.updateAllMissingImages(deps).then(() => {
+                logger.info('[Admin] All token types image update completed');
+            }).catch(e => {
+                logger.error('[Admin] All token types image update failed', { error: e.message });
             });
 
             res.json({
                 success: true,
-                message: 'Metadata update triggered. Check logs for progress.'
+                message: 'Metadata update triggered for all token types (platform, robinhood, pags). Check logs for progress.'
             });
         } catch (e) {
             logger.error('[Admin] Trigger metadata update error', { error: e.message });
