@@ -1865,12 +1865,23 @@
                         </div>
                     </div>
 
-                    <!-- Fee Share Info -->
+                    <!-- Creator Verification Info -->
                     <div class="bg-orange-900/20 rounded p-3 border border-orange-700/30">
                         <div class="flex items-start gap-2">
-                            <i data-lucide="info" class="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5"></i>
+                            <i data-lucide="shield-check" class="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5"></i>
                             <div class="text-xs text-orange-200/70">
-                                <p class="font-semibold text-orange-300">Fee share is auto-detected from on-chain</p>
+                                <p class="font-semibold text-orange-300">Creator Verification Required</p>
+                                <p class="mt-1">You must connect the wallet that <strong>created the token</strong> and sign a message to prove ownership. Only the original token creator can register a token for PAGS.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Fee Share Info -->
+                    <div class="bg-purple-900/20 rounded p-3 border border-purple-700/30">
+                        <div class="flex items-start gap-2">
+                            <i data-lucide="info" class="w-4 h-4 text-purple-400 flex-shrink-0 mt-0.5"></i>
+                            <div class="text-xs text-purple-200/70">
+                                <p class="font-semibold text-purple-300">Fee share is auto-detected from on-chain</p>
                                 <p class="mt-1">We verify that the PAGS wallet above is configured as a fee recipient for your token. The fee percentage you set on Pump.fun will be automatically detected.</p>
                             </div>
                         </div>
@@ -1879,14 +1890,15 @@
                     <!-- Wallet Connection Status -->
                     <div id="pags-register-wallet-status" class="bg-black/30 rounded p-3 border border-orange-700/30">
                         <div class="flex items-center justify-between">
-                            <span class="text-orange-300/70 text-xs">Your Wallet:</span>
+                            <span class="text-orange-300/70 text-xs">Creator Wallet:</span>
                             <span id="pags-register-wallet-display" class="text-orange-400 font-mono text-xs">Not Connected</span>
                         </div>
+                        <p id="pags-register-wallet-hint" class="text-orange-300/50 text-[10px] mt-1">Connect the wallet that created your token</p>
                     </div>
 
                     <!-- Register Button -->
                     <button id="pags-register-btn" onclick="pagsRegisterToken()" class="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-3 rounded font-bold text-sm transition">
-                        REGISTER TOKEN FOR PAGS
+                        CONNECT WALLET & REGISTER
                     </button>
 
                     <!-- Status/Result -->
@@ -5812,15 +5824,34 @@
     // Update PAGS register wallet display when wallet connects
     const updatePagsRegisterWalletDisplay = () => {
         const walletDisplay = document.getElementById('pags-register-wallet-display');
+        const walletHint = document.getElementById('pags-register-wallet-hint');
+        const registerBtn = document.getElementById('pags-register-btn');
+
         if (walletDisplay) {
             if (userPubkey) {
                 walletDisplay.textContent = userPubkey.slice(0, 4) + '...' + userPubkey.slice(-4);
-                walletDisplay.classList.remove('text-red-400');
+                walletDisplay.classList.remove('text-red-400', 'text-orange-400');
                 walletDisplay.classList.add('text-green-400');
+                if (walletHint) {
+                    walletHint.textContent = 'Wallet connected - ready to sign';
+                    walletHint.classList.remove('text-orange-300/50');
+                    walletHint.classList.add('text-green-300/50');
+                }
+                if (registerBtn) {
+                    registerBtn.textContent = 'SIGN & REGISTER TOKEN';
+                }
             } else {
                 walletDisplay.textContent = 'Not Connected';
                 walletDisplay.classList.remove('text-green-400');
                 walletDisplay.classList.add('text-orange-400');
+                if (walletHint) {
+                    walletHint.textContent = 'Connect the wallet that created your token';
+                    walletHint.classList.remove('text-green-300/50');
+                    walletHint.classList.add('text-orange-300/50');
+                }
+                if (registerBtn) {
+                    registerBtn.textContent = 'CONNECT WALLET & REGISTER';
+                }
             }
         }
     };
@@ -5833,8 +5864,8 @@
     };
 
     // Register token for PAGS
+    // v25.62: Now requires wallet signature to verify creator ownership
     // Fee share percentage is AUTO-DETECTED from on-chain Pump.fun configuration
-    // No wallet signature required - just mint address and Twitter username
     const pagsRegisterToken = async () => {
         const mintInput = document.getElementById('pags-register-mint');
         const twitterInput = document.getElementById('pags-register-twitter');
@@ -5861,22 +5892,84 @@
             return;
         }
 
-        // Show loading
-        resultEl.innerHTML = '<span class="text-purple-400">Verifying on-chain fee configuration...</span>';
+        // Check if wallet is connected - if not, connect first
+        if (!userPubkey) {
+            resultEl.innerHTML = '<span class="text-purple-400">Connecting wallet...</span>';
+            resultEl.classList.remove('hidden', 'border-green-700', 'border-red-700', 'border-yellow-700');
+            resultEl.classList.add('border-purple-700');
+            registerBtn.disabled = true;
+            registerBtn.textContent = 'CONNECTING...';
+
+            try {
+                // Try to connect wallet
+                if (window.solana && window.solana.isPhantom) {
+                    const resp = await window.solana.connect();
+                    userPubkey = resp.publicKey.toString();
+                    updatePagsRegisterWalletDisplay();
+                } else if (window.solflare && window.solflare.isSolflare) {
+                    await window.solflare.connect();
+                    userPubkey = window.solflare.publicKey.toString();
+                    updatePagsRegisterWalletDisplay();
+                } else {
+                    resultEl.innerHTML = '<span class="text-red-400">No Solana wallet detected. Please install Phantom or Solflare.</span>';
+                    resultEl.classList.remove('border-purple-700', 'border-yellow-700', 'border-green-700');
+                    resultEl.classList.add('border-red-700');
+                    registerBtn.disabled = false;
+                    registerBtn.textContent = 'CONNECT WALLET & REGISTER';
+                    return;
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Wallet connection failed: ${DOMPurify.sanitize(e.message)}</span>`;
+                resultEl.classList.remove('border-purple-700', 'border-yellow-700', 'border-green-700');
+                resultEl.classList.add('border-red-700');
+                registerBtn.disabled = false;
+                registerBtn.textContent = 'CONNECT WALLET & REGISTER';
+                return;
+            }
+        }
+
+        // Show signing prompt
+        resultEl.innerHTML = '<span class="text-purple-400">Please sign the message in your wallet to verify creator ownership...</span>';
         resultEl.classList.remove('hidden', 'border-green-700', 'border-red-700', 'border-yellow-700');
         resultEl.classList.add('border-purple-700');
         registerBtn.disabled = true;
-        registerBtn.textContent = 'VERIFYING...';
+        registerBtn.textContent = 'AWAITING SIGNATURE...';
 
         try {
-            // Send registration request (fee share will be auto-detected from on-chain)
-            // No wallet signature required
+            // Generate the message to sign (matching backend format: action:timestamp:nonce)
+            const timestamp = Date.now();
+            const nonce = Math.random().toString(36).substring(2, 15);
+            const signedMessage = `pags-register:${timestamp}:${nonce}`;
+
+            // Request signature from wallet
+            let signature;
+            const messageBytes = new TextEncoder().encode(signedMessage);
+
+            if (window.solana && window.solana.isPhantom) {
+                const signedData = await window.solana.signMessage(messageBytes, 'utf8');
+                // Convert Uint8Array to base58
+                signature = bs58.encode(signedData.signature);
+            } else if (window.solflare && window.solflare.isSolflare) {
+                const signedData = await window.solflare.signMessage(messageBytes, 'utf8');
+                signature = bs58.encode(signedData.signature);
+            } else {
+                throw new Error('No compatible wallet found');
+            }
+
+            // Update status
+            resultEl.innerHTML = '<span class="text-purple-400">Verifying creator ownership and on-chain fee configuration...</span>';
+            registerBtn.textContent = 'VERIFYING...';
+
+            // Send registration request with signature
             const res = await fetch(`${BACKEND_URL}/api/pags/register`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     mint,
-                    twitterUsername
+                    twitterUsername,
+                    signedMessage,
+                    signature,
+                    signerPubkey: userPubkey
                 })
             });
 
@@ -5920,22 +6013,66 @@
             } else {
                 // Handle specific error codes
                 let errorMsg = data.error || 'Registration failed';
-                if (data.code === 'NOT_FEE_RECIPIENT') {
-                    errorMsg = 'PAGS wallet is not configured as a fee recipient for this token. Please add the PAGS wallet as a fee sharing recipient on Pump.fun first.';
-                } else if (data.code === 'VERIFICATION_FAILED') {
-                    errorMsg = 'Could not verify on-chain fee configuration. Please try again later.';
+                let errorHint = '';
+
+                switch (data.code) {
+                    case 'NOT_FEE_RECIPIENT':
+                        errorMsg = 'PAGS wallet is not configured as a fee recipient for this token.';
+                        errorHint = 'Please add the PAGS wallet as a fee sharing recipient on Pump.fun first.';
+                        break;
+                    case 'VERIFICATION_FAILED':
+                        errorMsg = 'Could not verify on-chain fee configuration.';
+                        errorHint = 'Please try again later or check if the token exists.';
+                        break;
+                    case 'SIGNATURE_REQUIRED':
+                        errorMsg = 'Wallet signature is required to register.';
+                        errorHint = 'Please sign the message when prompted by your wallet.';
+                        break;
+                    case 'SIGNATURE_INVALID':
+                        errorMsg = 'Signature verification failed.';
+                        errorHint = 'Please try again and sign the message correctly.';
+                        break;
+                    case 'NOT_TOKEN_CREATOR':
+                        errorMsg = 'Only the original token creator can register for PAGS.';
+                        errorHint = 'Please connect the wallet that created this token.';
+                        break;
+                    case 'CREATOR_NOT_FOUND':
+                        errorMsg = 'Could not determine the original token creator.';
+                        errorHint = 'The token may not be a valid Pump.fun token.';
+                        break;
                 }
-                resultEl.innerHTML = `<span class="text-red-400">Error: ${DOMPurify.sanitize(errorMsg)}</span>`;
+
+                resultEl.innerHTML = `
+                    <div class="text-red-400 font-bold mb-1">Registration Failed</div>
+                    <p class="text-red-300/80 text-xs">${DOMPurify.sanitize(errorMsg)}</p>
+                    ${errorHint ? `<p class="text-yellow-300/70 text-xs mt-2">${DOMPurify.sanitize(errorHint)}</p>` : ''}
+                `;
                 resultEl.classList.remove('border-purple-700', 'border-yellow-700', 'border-green-700');
                 resultEl.classList.add('border-red-700');
             }
         } catch (e) {
-            resultEl.innerHTML = `<span class="text-red-400">Error: ${DOMPurify.sanitize(e.message)}</span>`;
+            // Handle wallet signing errors or network errors
+            let errorMsg = e.message || 'Unknown error';
+            let errorHint = '';
+
+            if (errorMsg.includes('User rejected') || errorMsg.includes('rejected')) {
+                errorMsg = 'Signature request was rejected.';
+                errorHint = 'Please approve the signature request in your wallet to continue.';
+            } else if (errorMsg.includes('not found') || errorMsg.includes('wallet')) {
+                errorHint = 'Please make sure your wallet extension is installed and unlocked.';
+            }
+
+            resultEl.innerHTML = `
+                <div class="text-red-400 font-bold mb-1">Error</div>
+                <p class="text-red-300/80 text-xs">${DOMPurify.sanitize(errorMsg)}</p>
+                ${errorHint ? `<p class="text-yellow-300/70 text-xs mt-2">${DOMPurify.sanitize(errorHint)}</p>` : ''}
+            `;
             resultEl.classList.remove('border-purple-700', 'border-yellow-700', 'border-green-700');
             resultEl.classList.add('border-red-700');
         } finally {
             registerBtn.disabled = false;
-            registerBtn.textContent = 'REGISTER TOKEN FOR PAGS';
+            // Update button text based on wallet connection status
+            registerBtn.textContent = userPubkey ? 'SIGN & REGISTER TOKEN' : 'CONNECT WALLET & REGISTER';
         }
     };
     window.pagsRegisterToken = pagsRegisterToken;
