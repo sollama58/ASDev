@@ -452,6 +452,14 @@ async function createSchema() {
     } catch (e) {
         // Ignore error if column is already nullable or doesn't exist
     }
+    // v25.44: Add metadata columns to pags_beneficiaries (separate from main tokens table)
+    try {
+        await pool.query(`ALTER TABLE pags_beneficiaries ADD COLUMN IF NOT EXISTS ticker TEXT`);
+        await pool.query(`ALTER TABLE pags_beneficiaries ADD COLUMN IF NOT EXISTS name TEXT`);
+        await pool.query(`ALTER TABLE pags_beneficiaries ADD COLUMN IF NOT EXISTS image TEXT`);
+    } catch (e) {
+        // Ignore if columns already exist
+    }
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_twitter ON pags_beneficiaries("twitterUsername")`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_active ON pags_beneficiaries("isActive") WHERE "isActive" = 1`);
 
@@ -762,6 +770,53 @@ async function healthCheck() {
     }
 }
 
+// ===========================================
+// v25.44: PAGS Beneficiary Metadata
+// Save metadata directly to pags_beneficiaries table (NOT tokens table)
+// This keeps PAGS tokens separate from the main leaderboard
+// ===========================================
+
+async function savePagsBeneficiaryMetadata(mint, metadata) {
+    const db = getDB();
+
+    if (!mint) {
+        logger.error("[PostgreSQL] savePagsBeneficiaryMetadata: mint is required");
+        return null;
+    }
+
+    // Normalize image URL
+    const rawImage = metadata?.image || '';
+    const imageValue = rawImage ? (imageUtils.normalizeImageUrl(rawImage) || rawImage) : '';
+
+    try {
+        const result = await db.run(`
+            UPDATE pags_beneficiaries
+            SET ticker = $1, name = $2, image = $3
+            WHERE mint = $4
+        `, [
+            metadata?.ticker || null,
+            metadata?.name || null,
+            imageValue || null,
+            mint
+        ]);
+
+        logger.info("[PostgreSQL] PAGS beneficiary metadata saved", {
+            mint: mint.substring(0, 12),
+            ticker: metadata?.ticker,
+            hasImage: !!imageValue,
+            changes: result.changes
+        });
+
+        return result;
+    } catch (e) {
+        logger.error("[PostgreSQL] savePagsBeneficiaryMetadata error", {
+            error: e.message,
+            mint: mint.substring(0, 12)
+        });
+        return null;
+    }
+}
+
 module.exports = {
     initDB,
     getDB,
@@ -776,6 +831,7 @@ module.exports = {
     logFlywheelCycle,
     logPurchase,
     saveTokenData,
+    savePagsBeneficiaryMetadata, // v25.44: Save PAGS metadata to pags_beneficiaries (NOT tokens)
     healthCheck,
     refreshMaterializedViews, // v25.22 SCALABILITY
     // For backwards compatibility

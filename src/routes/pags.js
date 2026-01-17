@@ -195,11 +195,10 @@ function init(deps) {
                 return errorResponse(res, 503, 'PAGS is not enabled');
             }
 
-            // Get all active beneficiaries with token info
+            // v25.44: Get metadata directly from pags_beneficiaries (not tokens table)
             const tokens = await db.all(`
-                SELECT b.*, t.ticker, t.name, t.image
+                SELECT b.*
                 FROM pags_beneficiaries b
-                LEFT JOIN tokens t ON t.mint = b.mint
                 WHERE b."isActive" = 1
                 ORDER BY b."totalFeesAccumulated" DESC
                 LIMIT 50
@@ -324,11 +323,10 @@ function init(deps) {
 
             logger.info('[PAGS API] Username lookup', { username, lowered: username.toLowerCase() });
 
-            // Get full token details for the user's tokens
+            // v25.44: Get metadata directly from pags_beneficiaries (not tokens table)
             const tokens = await db.all(`
-                SELECT b.*, t.ticker, t.name, t.image
+                SELECT b.*
                 FROM pags_beneficiaries b
-                LEFT JOIN tokens t ON t.mint = b.mint
                 WHERE LOWER(b."twitterUsername") = LOWER($1)
                   AND b."isActive" = 1
                 ORDER BY b."totalFeesAccumulated" DESC
@@ -574,27 +572,20 @@ function init(deps) {
                 feeShareBps: detectedFeeShareBps
             });
 
-            // Fetch and store token metadata to ensure frontend displays correctly
-            // This runs async after registration to not block the response
+            // v25.44: Fetch and store token metadata to pags_beneficiaries (NOT tokens table)
+            // This keeps PAGS tokens SEPARATE from the main leaderboard
             let tokenMetadata = null;
             try {
                 tokenMetadata = await mintExtractor.fetchPumpFunTokenMetadata(sanitizedMint);
                 if (tokenMetadata && tokenMetadata.ticker && tokenMetadata.name) {
                     const postgres = require('../services/postgres');
-                    await postgres.saveTokenData(
-                        originalCreator,
-                        sanitizedMint,
-                        {
-                            ticker: tokenMetadata.ticker,
-                            name: tokenMetadata.name,
-                            image: tokenMetadata.image || '',
-                            description: tokenMetadata.description || '',
-                            twitter: tokenMetadata.twitter || '',
-                            website: tokenMetadata.website || '',
-                            metadataUri: tokenMetadata.metadataUri || ''
-                        }
-                    );
-                    logger.info('[PAGS API] Token metadata saved', {
+                    // Save to pags_beneficiaries table, NOT tokens table
+                    await postgres.savePagsBeneficiaryMetadata(sanitizedMint, {
+                        ticker: tokenMetadata.ticker,
+                        name: tokenMetadata.name,
+                        image: tokenMetadata.image || ''
+                    });
+                    logger.info('[PAGS API] Token metadata saved to pags_beneficiaries', {
                         mint: sanitizedMint,
                         ticker: tokenMetadata.ticker,
                         hasImage: !!tokenMetadata.image
@@ -1154,10 +1145,10 @@ function init(deps) {
             const limit = Math.min(parseInt(req.query.limit) || 50, 100);
             const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
+            // v25.44: Get metadata directly from pags_beneficiaries (not tokens table)
             const beneficiaries = await db.all(`
-                SELECT b.*, t.ticker, t.name
+                SELECT b.*
                 FROM pags_beneficiaries b
-                LEFT JOIN tokens t ON t.mint = b.mint
                 ORDER BY b."createdAt" DESC
                 LIMIT $1 OFFSET $2
             `, [limit, offset]);
@@ -1373,12 +1364,11 @@ function init(deps) {
                 return errorResponse(res, 401, 'Unauthorized');
             }
 
-            // Find PAGS beneficiaries without corresponding token metadata
+            // v25.44: Find PAGS beneficiaries without metadata in pags_beneficiaries table
             const beneficiariesWithoutMetadata = await db.all(`
                 SELECT b.mint, b."creatorPubkey"
                 FROM pags_beneficiaries b
-                LEFT JOIN tokens t ON t.mint = b.mint
-                WHERE b."isActive" = 1 AND (t.mint IS NULL OR t.ticker IS NULL)
+                WHERE b."isActive" = 1 AND (b.ticker IS NULL OR b.ticker = '')
                 LIMIT 50
             `);
 
@@ -1394,6 +1384,7 @@ function init(deps) {
                 count: beneficiariesWithoutMetadata.length
             });
 
+            // v25.44: Save to pags_beneficiaries table, NOT tokens table
             const postgres = require('../services/postgres');
             const results = { success: 0, failed: 0, details: [] };
 
@@ -1401,19 +1392,12 @@ function init(deps) {
                 try {
                     const metadata = await mintExtractor.fetchPumpFunTokenMetadata(b.mint);
                     if (metadata && metadata.ticker && metadata.name) {
-                        await postgres.saveTokenData(
-                            b.creatorPubkey || 'unknown',
-                            b.mint,
-                            {
-                                ticker: metadata.ticker,
-                                name: metadata.name,
-                                image: metadata.image || '',
-                                description: metadata.description || '',
-                                twitter: metadata.twitter || '',
-                                website: metadata.website || '',
-                                metadataUri: metadata.metadataUri || ''
-                            }
-                        );
+                        // Save to pags_beneficiaries, NOT tokens table
+                        await postgres.savePagsBeneficiaryMetadata(b.mint, {
+                            ticker: metadata.ticker,
+                            name: metadata.name,
+                            image: metadata.image || ''
+                        });
                         results.success++;
                         results.details.push({
                             mint: b.mint,
@@ -1440,7 +1424,7 @@ function init(deps) {
                 await new Promise(resolve => setTimeout(resolve, 200));
             }
 
-            logger.info('[PAGS API] Metadata backfill complete', {
+            logger.info('[PAGS API] Metadata backfill complete (saved to pags_beneficiaries)', {
                 success: results.success,
                 failed: results.failed
             });
@@ -1617,29 +1601,23 @@ function init(deps) {
             const beneficiariesWithoutMetadata = await db.all(`
                 SELECT b.mint, b."creatorPubkey"
                 FROM pags_beneficiaries b
-                LEFT JOIN tokens t ON t.mint = b.mint
-                WHERE b."isActive" = 1 AND (t.mint IS NULL OR t.ticker IS NULL)
+                WHERE b."isActive" = 1 AND (b.ticker IS NULL OR b.ticker = '')
                 LIMIT 100
             `);
 
             results.metadata.processed = beneficiariesWithoutMetadata.length;
 
+            // v25.44: Save to pags_beneficiaries table, NOT tokens table
             for (const b of beneficiariesWithoutMetadata) {
                 try {
                     const metadata = await mintExtractor.fetchPumpFunTokenMetadata(b.mint);
                     if (metadata && metadata.ticker && metadata.name) {
-                        await postgres.saveTokenData(
-                            b.creatorPubkey || 'unknown',
-                            b.mint,
-                            {
-                                ticker: metadata.ticker,
-                                name: metadata.name,
-                                image: metadata.image || '',
-                                description: metadata.description || '',
-                                twitter: metadata.twitter || '',
-                                website: metadata.website || ''
-                            }
-                        );
+                        // Save to pags_beneficiaries, NOT tokens table
+                        await postgres.savePagsBeneficiaryMetadata(b.mint, {
+                            ticker: metadata.ticker,
+                            name: metadata.name,
+                            image: metadata.image || ''
+                        });
                         results.metadata.success++;
                         results.details.push({ mint: b.mint, type: 'metadata', status: 'fixed', ticker: metadata.ticker });
                     } else {
@@ -1651,7 +1629,7 @@ function init(deps) {
                 await new Promise(resolve => setTimeout(resolve, 200));
             }
 
-            logger.info('[PAGS API] Full repair complete', results);
+            logger.info('[PAGS API] Full repair complete (metadata saved to pags_beneficiaries)', results);
 
             res.json({
                 success: true,
@@ -1727,10 +1705,10 @@ function init(deps) {
                 WHERE "isActive" = 1 AND ("creatorPubkey" IS NULL OR "creatorPubkey" = 'unknown')
             `))?.count || 0;
 
+            // v25.44: Check metadata in pags_beneficiaries, not tokens table
             const missingMetadataCount = (await db.get(`
                 SELECT COUNT(*) as count FROM pags_beneficiaries b
-                LEFT JOIN tokens t ON t.mint = b.mint
-                WHERE b."isActive" = 1 AND (t.mint IS NULL OR t.ticker IS NULL)
+                WHERE b."isActive" = 1 AND (b.ticker IS NULL OR b.ticker = '')
             `))?.count || 0;
 
             const totalBeneficiaries = (await db.get('SELECT COUNT(*) as count FROM pags_beneficiaries WHERE "isActive" = 1'))?.count || 0;
@@ -1907,6 +1885,111 @@ function init(deps) {
         } catch (e) {
             logger.error('[PAGS API] Debug vault error', { error: e.message });
             return errorResponse(res, 500, 'Failed to debug vault');
+        }
+    });
+
+    /**
+     * POST /api/admin/pags/cleanup-tokens-table
+     * v25.44: Remove PAGS-only tokens from the main tokens table
+     * This fixes the bug where PAGS tokens were incorrectly appearing in the leaderboard
+     * Only removes tokens that exist in pags_beneficiaries but NOT in robinhood_tokens
+     */
+    router.post('/admin/pags/cleanup-tokens-table', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            const { confirm, dryRun } = req.body;
+            const isDryRun = dryRun !== false; // Default to dry run for safety
+
+            // Find tokens that are ONLY in PAGS (not in robinhood_tokens)
+            const pagsOnlyTokens = await db.all(`
+                SELECT t.mint, t.ticker, t.name, pb."twitterUsername"
+                FROM tokens t
+                INNER JOIN pags_beneficiaries pb ON t.mint = pb.mint
+                LEFT JOIN robinhood_tokens rt ON t.mint = rt.mint
+                WHERE rt.mint IS NULL
+            `);
+
+            if (pagsOnlyTokens.length === 0) {
+                return res.json({
+                    success: true,
+                    message: 'No PAGS-only tokens found in the tokens table',
+                    dryRun: isDryRun,
+                    tokensFound: 0
+                });
+            }
+
+            logger.info('[PAGS API] Found PAGS-only tokens in tokens table', {
+                count: pagsOnlyTokens.length,
+                tokens: pagsOnlyTokens.map(t => ({ mint: t.mint.slice(0, 8), ticker: t.ticker })),
+                dryRun: isDryRun
+            });
+
+            if (isDryRun) {
+                return res.json({
+                    success: true,
+                    message: 'Dry run - no changes made. Set dryRun: false to actually delete.',
+                    dryRun: true,
+                    tokensFound: pagsOnlyTokens.length,
+                    tokensToRemove: pagsOnlyTokens.map(t => ({
+                        mint: t.mint,
+                        ticker: t.ticker,
+                        name: t.name,
+                        pagsUser: t.twitterUsername
+                    }))
+                });
+            }
+
+            if (confirm !== 'CLEANUP_PAGS_TOKENS') {
+                return errorResponse(res, 400, 'Confirmation required. Send { "confirm": "CLEANUP_PAGS_TOKENS", "dryRun": false }');
+            }
+
+            // Delete the PAGS-only tokens from the tokens table
+            const mintList = pagsOnlyTokens.map(t => t.mint);
+            let deleted = 0;
+
+            for (const mint of mintList) {
+                try {
+                    await db.run('DELETE FROM tokens WHERE mint = $1', [mint]);
+                    deleted++;
+                    logger.info('[PAGS API] Removed PAGS-only token from tokens table', { mint: mint.slice(0, 12) });
+                } catch (e) {
+                    logger.error('[PAGS API] Error removing token', { mint: mint.slice(0, 12), error: e.message });
+                }
+            }
+
+            // Also delete any token_holders entries for these tokens
+            for (const mint of mintList) {
+                try {
+                    await db.run('DELETE FROM token_holders WHERE mint = $1', [mint]);
+                } catch (e) {
+                    // Ignore errors for token_holders cleanup
+                }
+            }
+
+            logger.warn('[PAGS API] Cleaned up PAGS-only tokens from tokens table', {
+                deleted,
+                total: mintList.length
+            });
+
+            res.json({
+                success: true,
+                message: `Removed ${deleted} PAGS-only tokens from the tokens table`,
+                dryRun: false,
+                deleted,
+                removedTokens: pagsOnlyTokens.map(t => ({
+                    mint: t.mint,
+                    ticker: t.ticker,
+                    pagsUser: t.twitterUsername
+                }))
+            });
+
+        } catch (e) {
+            logger.error('[PAGS API] Cleanup tokens table error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to cleanup tokens table');
         }
     });
 

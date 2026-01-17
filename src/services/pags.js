@@ -268,11 +268,11 @@ async function getPendingRewardsByUsername(twitterUsername) {
 
     const normalizedUsername = normalizeUsername(twitterUsername);
 
-    // Get all active beneficiaries for this username
+    // v25.44: Get metadata directly from pags_beneficiaries (not tokens table)
+    // This keeps PAGS tokens SEPARATE from platform/robinhood tokens
     const beneficiaries = await db.all(`
-        SELECT b.*, t.ticker, t.name, t.image
+        SELECT b.*
         FROM pags_beneficiaries b
-        LEFT JOIN tokens t ON t.mint = b.mint
         WHERE b."twitterUsername" = $1 AND b."isActive" = 1
     `, [normalizedUsername]);
 

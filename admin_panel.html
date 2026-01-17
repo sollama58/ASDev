@@ -1399,13 +1399,21 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                             <!-- Repair Operations -->
                             <div class="bg-green-900/20 border border-green-700/50 rounded p-4">
                                 <h4 class="text-green-400 font-bold text-sm mb-2">🔄 Repair All Entries</h4>
                                 <p class="text-xs text-gray-400 mb-3">Fix unknown creator pubkeys and backfill missing token metadata. Safe to run multiple times.</p>
                                 <button onclick="repairAllPagsData()" id="pags-repair-btn" class="btn btn-success w-full">Run Repair</button>
                                 <div id="pags-repair-result" class="result-box mt-3 text-green-400 text-xs max-h-32 overflow-y-auto hidden"></div>
+                            </div>
+                            <!-- Cleanup Tokens Table (v25.44) -->
+                            <div class="bg-yellow-900/20 border border-yellow-700/50 rounded p-4">
+                                <h4 class="text-yellow-400 font-bold text-sm mb-2">🧹 Cleanup Leaderboard</h4>
+                                <p class="text-xs text-gray-400 mb-3">Remove PAGS-only tokens from the main tokens table (fixes leaderboard). Run dry first!</p>
+                                <button onclick="cleanupPagsFromTokensTable(true)" id="pags-cleanup-dry-btn" class="btn btn-warning w-full mb-2">Dry Run (Preview)</button>
+                                <button onclick="cleanupPagsFromTokensTable(false)" id="pags-cleanup-btn" class="btn btn-danger w-full">Execute Cleanup</button>
+                                <div id="pags-cleanup-result" class="result-box mt-3 text-yellow-400 text-xs max-h-32 overflow-y-auto hidden"></div>
                             </div>
                             <!-- Wipe Operations -->
                             <div class="bg-red-900/20 border border-red-700/50 rounded p-4">
@@ -3803,6 +3811,71 @@
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Run Repair';
+            }
+        }
+
+        // v25.44: Cleanup PAGS tokens from the main tokens table (leaderboard fix)
+        async function cleanupPagsFromTokensTable(dryRun = true) {
+            const resultEl = document.getElementById('pags-cleanup-result');
+            const dryBtn = document.getElementById('pags-cleanup-dry-btn');
+            const execBtn = document.getElementById('pags-cleanup-btn');
+
+            if (!dryRun) {
+                if (!confirm('⚠️ This will DELETE PAGS-only tokens from the main tokens table.\n\nThey will no longer appear in the leaderboard.\n\nAre you sure?')) {
+                    return;
+                }
+            }
+
+            dryBtn.disabled = true;
+            execBtn.disabled = true;
+            resultEl.classList.remove('hidden');
+            resultEl.innerHTML = `<span class="text-yellow-400">${dryRun ? 'Running dry run...' : 'Executing cleanup...'}</span>`;
+
+            log(`PAGS cleanup ${dryRun ? '(dry run)' : '(execute)'}...`, dryRun ? 'info' : 'warn');
+
+            try {
+                const body = dryRun ? { dryRun: true } : { dryRun: false, confirm: 'CLEANUP_PAGS_TOKENS' };
+                const response = await fetch(`${backendUrl}/api/admin/pags/cleanup-tokens-table`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    },
+                    body: JSON.stringify(body)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    if (dryRun) {
+                        if (data.tokensFound === 0) {
+                            resultEl.innerHTML = '<span class="text-green-400">✓ No PAGS-only tokens found in tokens table - leaderboard is clean!</span>';
+                        } else {
+                            const tokenList = (data.tokensToRemove || []).map(t => `<div class="ml-2">• ${t.ticker || t.mint.slice(0,8)} → @${t.pagsUser}</div>`).join('');
+                            resultEl.innerHTML = `
+                                <div class="text-yellow-400 font-bold mb-1">Found ${data.tokensFound} PAGS-only tokens:</div>
+                                <div class="text-gray-300 text-[10px] max-h-20 overflow-y-auto">${tokenList}</div>
+                                <div class="text-orange-400 text-[10px] mt-2">Click "Execute Cleanup" to remove them from the leaderboard.</div>
+                            `;
+                        }
+                        log(`Dry run: ${data.tokensFound} PAGS-only tokens found`, 'info');
+                    } else {
+                        resultEl.innerHTML = `
+                            <div class="text-green-400 font-bold mb-1">✓ Cleanup Complete</div>
+                            <div><span class="text-gray-400">Removed:</span> ${data.deleted || 0} tokens from tokens table</div>
+                        `;
+                        log(`Cleanup complete: ${data.deleted} tokens removed from leaderboard`, 'success');
+                    }
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`Cleanup error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Failed: ${e.message}</span>`;
+                log(`Cleanup failed: ${e.message}`, 'error');
+            } finally {
+                dryBtn.disabled = false;
+                execBtn.disabled = false;
             }
         }
 

@@ -1692,6 +1692,9 @@
                     <h3 class="text-purple-400 font-mono text-sm uppercase tracking-widest flex items-center gap-2">
                         <i data-lucide="twitter" class="w-5 h-5"></i>
                         PAGS - Pay-to-Twitter/X
+                        <button onclick="openPagsInfoModal()" class="text-purple-400 hover:text-purple-200 transition" title="About PAGS">
+                            <i data-lucide="info" class="w-4 h-4"></i>
+                        </button>
                     </h3>
                     <p class="text-purple-300/70 text-xs mt-1">Earn SOL rewards for being mentioned as a beneficiary by token developers</p>
                 </div>
@@ -1763,8 +1766,12 @@
 
                     <!-- Rewards Breakdown -->
                     <div class="mt-6 bg-purple-900/20 rounded-lg p-4 border border-purple-700/30">
-                        <h4 class="text-purple-300 font-mono text-xs uppercase tracking-wider mb-3">Rewards Breakdown by Token</h4>
-                        <div id="pags-rewards-breakdown" class="max-h-48 overflow-y-auto">
+                        <div class="flex justify-between items-center mb-3">
+                            <h4 class="text-purple-300 font-mono text-xs uppercase tracking-wider flex items-center gap-2">
+                                <i data-lucide="coins" class="w-4 h-4"></i> Your Registered Tokens
+                            </h4>
+                        </div>
+                        <div id="pags-rewards-breakdown" class="max-h-64 overflow-y-auto">
                             <div class="text-purple-200/50 text-sm text-center py-4">No rewards found</div>
                         </div>
                     </div>
@@ -1775,21 +1782,6 @@
                             🎉 CLAIM REWARDS
                         </button>
                         <p id="pags-claim-status" class="text-purple-300/70 text-xs mt-2">Link your wallet and have pending rewards to claim</p>
-                    </div>
-
-                    <!-- My Tokens Section -->
-                    <div class="mt-6 bg-purple-900/20 rounded-lg p-4 border border-purple-700/30">
-                        <div class="flex justify-between items-center mb-3">
-                            <h4 class="text-purple-300 font-mono text-xs uppercase tracking-wider flex items-center gap-2">
-                                <i data-lucide="coins" class="w-4 h-4"></i> My Registered Tokens
-                            </h4>
-                            <button onclick="pagsRefreshMyTokens()" class="text-purple-400 hover:text-purple-300 text-xs flex items-center gap-1">
-                                <i data-lucide="refresh-cw" class="w-3 h-3"></i> Refresh
-                            </button>
-                        </div>
-                        <div id="pags-my-tokens" class="max-h-64 overflow-y-auto">
-                            <div class="text-purple-200/50 text-sm text-center py-4">Loading your tokens...</div>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -2622,8 +2614,137 @@
     </div>
 </div>
 
+<!-- PAGS Info Modal -->
+<div id="pags-info-modal" class="modal">
+    <div class="modal-content border-purple-600" style="max-width: 650px;">
+        <span class="close-btn text-purple-400" onclick="closePagsInfoModal()">&times;</span>
+        <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2 font-normal flex items-center gap-2">
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+            About PAGS
+        </h3>
+
+        <div class="font-sans text-sm space-y-4">
+            <!-- What is PAGS -->
+            <div class="bg-purple-900/30 p-4 rounded border border-purple-700/50">
+                <p class="text-purple-400 text-xs uppercase mb-2 font-bold">What is PAGS?</p>
+                <p class="text-gray-300 text-sm">PAGS (Pay-to-Twitter/X) allows token developers to share their Pump.fun trading fees with Twitter/X influencers, community members, or anyone they want to reward. Beneficiaries can claim accumulated SOL rewards directly to their linked wallet.</p>
+            </div>
+
+            <!-- How It Works - Two Columns -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- For Twitter Users -->
+                <div class="bg-cyan-900/30 p-4 rounded border border-cyan-700/50">
+                    <p class="text-cyan-400 text-xs uppercase mb-2 font-bold flex items-center gap-2">
+                        <i data-lucide="user" class="w-3 h-3"></i> For Twitter/X Users
+                    </p>
+                    <ol class="text-xs text-gray-300 space-y-2">
+                        <li class="flex gap-2"><span class="text-cyan-400 font-bold">1.</span> Login with your Twitter/X account</li>
+                        <li class="flex gap-2"><span class="text-cyan-400 font-bold">2.</span> Check if any token has designated you as a beneficiary</li>
+                        <li class="flex gap-2"><span class="text-cyan-400 font-bold">3.</span> Link your Solana wallet</li>
+                        <li class="flex gap-2"><span class="text-cyan-400 font-bold">4.</span> Claim your SOL rewards anytime!</li>
+                    </ol>
+                </div>
+
+                <!-- For Developers -->
+                <div class="bg-orange-900/30 p-4 rounded border border-orange-700/50">
+                    <p class="text-orange-400 text-xs uppercase mb-2 font-bold flex items-center gap-2">
+                        <i data-lucide="rocket" class="w-3 h-3"></i> For Token Developers
+                    </p>
+                    <ol class="text-xs text-gray-300 space-y-2">
+                        <li class="flex gap-2"><span class="text-orange-400 font-bold">1.</span> Add PAGS wallet as fee recipient on Pump.fun</li>
+                        <li class="flex gap-2"><span class="text-orange-400 font-bold">2.</span> Register your token with the beneficiary's @username</li>
+                        <li class="flex gap-2"><span class="text-orange-400 font-bold">3.</span> Sign with your creator wallet to verify ownership</li>
+                        <li class="flex gap-2"><span class="text-orange-400 font-bold">4.</span> Fees automatically flow to the beneficiary!</li>
+                    </ol>
+                </div>
+            </div>
+
+            <!-- Fee Flow -->
+            <div class="bg-green-900/30 p-4 rounded border border-green-700/50">
+                <p class="text-green-400 text-xs uppercase mb-2 font-bold">How Fees Flow</p>
+                <div class="flex items-center justify-between text-xs text-gray-300 gap-2 flex-wrap">
+                    <div class="text-center">
+                        <div class="bg-black/30 p-2 rounded mb-1">
+                            <span class="text-yellow-400">Trading</span>
+                        </div>
+                        <span class="text-[10px] text-gray-500">Volume</span>
+                    </div>
+                    <span class="text-gray-600">→</span>
+                    <div class="text-center">
+                        <div class="bg-black/30 p-2 rounded mb-1">
+                            <span class="text-orange-400">Vault</span>
+                        </div>
+                        <span class="text-[10px] text-gray-500">On-chain</span>
+                    </div>
+                    <span class="text-gray-600">→</span>
+                    <div class="text-center">
+                        <div class="bg-black/30 p-2 rounded mb-1">
+                            <span class="text-purple-400">PAGS</span>
+                        </div>
+                        <span class="text-[10px] text-gray-500">Scanner</span>
+                    </div>
+                    <span class="text-gray-600">→</span>
+                    <div class="text-center">
+                        <div class="bg-black/30 p-2 rounded mb-1">
+                            <span class="text-cyan-400">Ready</span>
+                        </div>
+                        <span class="text-[10px] text-gray-500">To Claim</span>
+                    </div>
+                    <span class="text-gray-600">→</span>
+                    <div class="text-center">
+                        <div class="bg-black/30 p-2 rounded mb-1">
+                            <span class="text-green-400">User</span>
+                        </div>
+                        <span class="text-[10px] text-gray-500">Wallet</span>
+                    </div>
+                </div>
+                <p class="text-[10px] text-gray-400 mt-3">Fees accumulate in Pump.fun vaults (shown in <span class="text-orange-400">orange</span>). When you claim, the system first pulls from vaults, then transfers <span class="text-cyan-400">ready</span> funds to your wallet.</p>
+            </div>
+
+            <!-- Key Info -->
+            <div class="grid grid-cols-2 gap-3">
+                <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
+                    <p class="text-gray-400 text-[10px] uppercase mb-1">Fee Scanner</p>
+                    <p class="text-white font-mono text-sm">Every 2.5 Min</p>
+                    <p class="text-[10px] text-gray-500">Checks vaults automatically</p>
+                </div>
+                <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
+                    <p class="text-gray-400 text-[10px] uppercase mb-1">Minimum Claim</p>
+                    <p class="text-white font-mono text-sm">0.001 SOL</p>
+                    <p class="text-[10px] text-gray-500">Low threshold for claims</p>
+                </div>
+            </div>
+
+            <!-- Pending Types -->
+            <div class="bg-yellow-900/30 p-4 rounded border border-yellow-700/50">
+                <p class="text-yellow-400 text-xs uppercase mb-2 font-bold">Understanding Pending Rewards</p>
+                <div class="grid grid-cols-2 gap-4 text-xs">
+                    <div>
+                        <span class="text-orange-400 font-bold">In Vault</span>
+                        <p class="text-gray-400 text-[11px] mt-1">Fees sitting in Pump.fun vaults. Automatically claimed when you press Claim.</p>
+                    </div>
+                    <div>
+                        <span class="text-cyan-400 font-bold">Ready</span>
+                        <p class="text-gray-400 text-[11px] mt-1">Already pulled from vaults. Instantly transferred when you claim.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Requirements -->
+            <div class="bg-purple-900/20 p-3 rounded border border-purple-700/30">
+                <p class="text-purple-400 text-xs uppercase mb-1 font-bold">Requirements</p>
+                <ul class="text-[11px] text-gray-400 space-y-1">
+                    <li class="flex items-center gap-2"><span class="text-purple-400">•</span> Only the <span class="text-white">original token creator</span> can register a token</li>
+                    <li class="flex items-center gap-2"><span class="text-purple-400">•</span> PAGS wallet must be added as fee recipient on Pump.fun first</li>
+                    <li class="flex items-center gap-2"><span class="text-purple-400">•</span> Beneficiaries need a linked Solana wallet to claim</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
-    const FRONTEND_VERSION = "v25.41";
+    const FRONTEND_VERSION = "v25.44";
     const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     const WS_URL = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
     // Wallet address is fetched from backend API to ensure consistency
@@ -5409,29 +5530,56 @@
             const breakdownEl = document.getElementById('pags-rewards-breakdown');
             if (pagsUser.rewardBreakdown && pagsUser.rewardBreakdown.length > 0) {
                 breakdownEl.innerHTML = pagsUser.rewardBreakdown.map(b => {
-                    const shortMint = b.mint ? (b.mint.slice(0, 6) + '...' + b.mint.slice(-4)) : 'Unknown';
-                    const displayTicker = b.ticker ? `$${b.ticker}` : shortMint;
+                    const displayTicker = b.ticker ? `$${b.ticker}` : 'Unknown';
                     const feePercent = b.feeShareBps ? (b.feeShareBps / 100).toFixed(1) : '100.0';
                     const isShared = b.hasMultipleRecipients || (b.feeShareBps && b.feeShareBps < 10000);
-                    const tokenImage = b.image || 'https://placehold.co/28x28/1a1a2e/purple?text=%24';
+                    const tokenImage = b.image || 'https://placehold.co/40x40/1a1a2e/purple?text=%24';
+                    // Check for on-chain pending fees (from vault)
+                    const onChainPending = b.onChainPending || 0;
+                    const dbPending = b.dbPending || 0;
+                    const hasVaultFees = onChainPending > 0;
+                    const pendingAmount = b.pendingAmount || b.pending || 0;
+                    const totalAccumulated = b.totalFeesAccumulated || 0;
+                    const mintAddress = b.mint || 'Unknown';
 
                     return `
-                        <div class="flex items-center gap-2 py-2 border-b border-purple-800/30 last:border-0">
-                            <img src="${DOMPurify.sanitize(tokenImage)}" alt="${DOMPurify.sanitize(displayTicker)}" class="w-7 h-7 rounded-full border border-purple-600 object-cover flex-shrink-0" onerror="this.src='https://placehold.co/28x28/1a1a2e/purple?text=%24'">
-                            <div class="flex-1 min-w-0">
-                                <div class="flex items-center gap-1.5 flex-wrap">
-                                    <span class="text-purple-300 font-bold text-xs">${DOMPurify.sanitize(displayTicker)}</span>
-                                    ${b.name ? `<span class="text-purple-400/60 text-[10px] truncate max-w-[80px]">${DOMPurify.sanitize(b.name)}</span>` : ''}
-                                    ${isShared ? `<span class="text-orange-400 text-[10px]" title="You receive ${feePercent}% of fees from this token">${feePercent}%</span>` : ''}
+                        <div class="py-3 border-b border-purple-800/30 last:border-0 hover:bg-purple-900/20 px-2 rounded">
+                            <div class="flex items-center gap-3">
+                                <img src="${DOMPurify.sanitize(tokenImage)}" alt="${DOMPurify.sanitize(displayTicker)}" class="w-10 h-10 rounded-full border border-purple-600 object-cover flex-shrink-0" onerror="this.src='https://placehold.co/40x40/1a1a2e/purple?text=%24'">
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="text-purple-300 font-bold text-sm">${DOMPurify.sanitize(displayTicker)}</span>
+                                        ${b.name ? `<span class="text-purple-400/60 text-xs truncate">${DOMPurify.sanitize(b.name)}</span>` : ''}
+                                        <span class="text-purple-500 text-xs">${feePercent}% share</span>
+                                    </div>
                                 </div>
-                                <div class="text-purple-400/40 font-mono text-[9px]">${shortMint}</div>
+                                <div class="text-right flex-shrink-0">
+                                    <div class="text-green-400 font-bold">${pendingAmount.toFixed(6)} SOL</div>
+                                    ${hasVaultFees ? `
+                                        <div class="text-[10px]" title="In vault: ${onChainPending.toFixed(6)} SOL + Ready: ${dbPending.toFixed(6)} SOL">
+                                            <span class="text-orange-400">${onChainPending.toFixed(4)}</span> + <span class="text-cyan-400">${dbPending.toFixed(4)}</span>
+                                        </div>
+                                    ` : `
+                                        <div class="text-cyan-400/70 text-xs">Total: ${totalAccumulated.toFixed(6)}</div>
+                                    `}
+                                </div>
+                                <a href="https://pump.fun/coin/${mintAddress}" target="_blank" class="text-purple-400 hover:text-purple-300 transition flex-shrink-0" title="View on Pump.fun">
+                                    <i data-lucide="external-link" class="w-4 h-4"></i>
+                                </a>
                             </div>
-                            <div class="text-green-400 font-bold text-sm flex-shrink-0">${(b.pendingAmount || b.pending || 0).toFixed(6)} SOL</div>
+                            <div class="mt-1 ml-13 flex items-center gap-2">
+                                <code class="text-purple-400/50 font-mono text-[10px] break-all select-all">${mintAddress}</code>
+                                <button onclick="navigator.clipboard.writeText('${mintAddress}'); this.innerHTML='<i data-lucide=\\'check\\' class=\\'w-3 h-3\\'></i>'; setTimeout(() => { this.innerHTML='<i data-lucide=\\'copy\\' class=\\'w-3 h-3\\'></i>'; lucide.createIcons(); }, 1500); lucide.createIcons();" class="text-purple-500 hover:text-purple-300 transition flex-shrink-0" title="Copy address">
+                                    <i data-lucide="copy" class="w-3 h-3"></i>
+                                </button>
+                            </div>
                         </div>
                     `;
                 }).join('');
+                // Re-render Lucide icons
+                if (typeof lucide !== 'undefined') lucide.createIcons();
             } else {
-                breakdownEl.innerHTML = '<div class="text-purple-200/50 text-sm text-center py-4">No rewards found</div>';
+                breakdownEl.innerHTML = '<div class="text-purple-200/50 text-sm text-center py-4">No tokens registered for your username yet</div>';
             }
 
             // Update claim button state
@@ -5443,11 +5591,6 @@
                 claimStatus.textContent = 'Minimum 0.01 SOL required to claim';
             } else {
                 claimStatus.textContent = `Ready to claim ${pending.toFixed(4)} SOL!`;
-            }
-
-            // Refresh My Tokens section
-            if (typeof pagsRefreshMyTokens === 'function') {
-                pagsRefreshMyTokens();
             }
         } else {
             // Show login prompt
@@ -5667,7 +5810,13 @@
 
             if (data.success) {
                 let html = `<div class="text-purple-400 font-bold mb-2">@${DOMPurify.sanitize(username)}</div>`;
-                html += `<div class="text-green-400 font-bold text-lg mb-3">Pending: ${(data.totalPending || 0).toFixed(6)} SOL</div>`;
+                html += `<div class="text-green-400 font-bold text-lg mb-1">Pending: ${(data.totalPending || 0).toFixed(6)} SOL</div>`;
+                // Show breakdown of vault vs ready if there are on-chain fees
+                if (data.onChainPending > 0) {
+                    html += `<div class="text-xs mb-3"><span class="text-orange-400">${(data.onChainPending || 0).toFixed(4)} in vault</span> + <span class="text-cyan-400">${(data.claimable || 0).toFixed(4)} ready</span></div>`;
+                } else {
+                    html += '<div class="mb-3"></div>';
+                }
 
                 if (data.breakdown && data.breakdown.length > 0) {
                     html += '<div class="text-gray-400 text-xs mb-2">Tokens:</div>';
@@ -5678,6 +5827,7 @@
                         const feePercent = b.feeShareBps ? (b.feeShareBps / 100).toFixed(1) : '100.0';
                         const isShared = b.feeShareBps && b.feeShareBps < 10000;
                         const tokenImage = b.image || 'https://placehold.co/24x24/1a1a2e/purple?text=%24';
+                        const hasVaultFees = (b.onChainPending || 0) > 0;
 
                         html += `
                             <div class="flex items-center gap-2 text-xs">
@@ -5686,7 +5836,10 @@
                                     <span class="text-purple-300 font-bold">${DOMPurify.sanitize(displayTicker)}</span>
                                     ${isShared ? `<span class="text-orange-400 ml-1">(${feePercent}%)</span>` : ''}
                                 </div>
-                                <span class="text-green-400 font-mono">${(b.pending || 0).toFixed(6)} SOL</span>
+                                <div class="text-right">
+                                    <span class="text-green-400 font-mono">${(b.pending || 0).toFixed(6)} SOL</span>
+                                    ${hasVaultFees ? `<div class="text-[9px]"><span class="text-orange-400">${(b.onChainPending).toFixed(4)}</span>+<span class="text-cyan-400">${(b.claimable || 0).toFixed(4)}</span></div>` : ''}
+                                </div>
                             </div>`;
                     }
                     if (data.breakdown.length > 5) {
@@ -5707,66 +5860,6 @@
     };
     window.pagsPublicLookup = pagsPublicLookup;
 
-    // Refresh My Tokens section
-    const pagsRefreshMyTokens = async () => {
-        const container = document.getElementById('pags-my-tokens');
-        if (!container) return;
-
-        if (!pagsUser || !pagsUser.username) {
-            container.innerHTML = '<div class="text-purple-200/50 text-sm text-center py-4">Login to see your tokens</div>';
-            return;
-        }
-
-        container.innerHTML = '<div class="text-purple-200/50 text-sm text-center py-4">Loading your tokens...</div>';
-
-        try {
-            const res = await fetch(`${BACKEND_URL}/api/pags/lookup/${encodeURIComponent(pagsUser.username)}`);
-            const data = await res.json();
-
-            if (data.success && data.breakdown && data.breakdown.length > 0) {
-                let html = '';
-                for (const token of data.breakdown) {
-                    const pending = (token.totalFeesAccumulated || 0) - (token.totalFeesClaimed || 0);
-                    const shortMint = token.mint ? (token.mint.slice(0, 6) + '...' + token.mint.slice(-4)) : 'Unknown';
-                    const displayTicker = token.ticker ? `$${token.ticker}` : shortMint;
-                    const displayName = token.name || '';
-                    const feePercent = token.feeShareBps ? (token.feeShareBps / 100).toFixed(1) : '100.0';
-                    const tokenImage = token.image || 'https://placehold.co/40x40/1a1a2e/purple?text=%24';
-
-                    html += `
-                        <div class="flex items-center gap-3 py-3 border-b border-purple-800/30 last:border-0 hover:bg-purple-900/20 px-2 rounded">
-                            <img src="${DOMPurify.sanitize(tokenImage)}" alt="${DOMPurify.sanitize(displayTicker)}" class="w-10 h-10 rounded-full border border-purple-600 object-cover flex-shrink-0" onerror="this.src='https://placehold.co/40x40/1a1a2e/purple?text=%24'">
-                            <div class="flex-1 min-w-0">
-                                <div class="flex items-center gap-2 flex-wrap">
-                                    <span class="text-purple-300 font-bold text-sm">${DOMPurify.sanitize(displayTicker)}</span>
-                                    ${displayName ? `<span class="text-purple-400/60 text-xs truncate">${DOMPurify.sanitize(displayName)}</span>` : ''}
-                                    <span class="text-purple-500 text-xs">${feePercent}% share</span>
-                                </div>
-                                <div class="text-purple-400/50 font-mono text-[10px] truncate">${token.mint || 'Unknown'}</div>
-                            </div>
-                            <div class="text-right flex-shrink-0">
-                                <div class="text-green-400 font-bold">${(token.pending || pending || 0).toFixed(6)} SOL</div>
-                                <div class="text-cyan-400/70 text-xs">Total: ${(token.totalFeesAccumulated || 0).toFixed(6)}</div>
-                            </div>
-                            <a href="https://pump.fun/coin/${token.mint}" target="_blank" class="text-purple-400 hover:text-purple-300 transition flex-shrink-0" title="View on Pump.fun">
-                                <i data-lucide="external-link" class="w-4 h-4"></i>
-                            </a>
-                        </div>
-                    `;
-                }
-                container.innerHTML = html;
-                // Re-render Lucide icons
-                if (typeof lucide !== 'undefined') lucide.createIcons();
-            } else {
-                container.innerHTML = '<div class="text-purple-200/50 text-sm text-center py-4">No tokens registered for your username yet</div>';
-            }
-        } catch (e) {
-            console.error('Error fetching my tokens:', e);
-            container.innerHTML = `<div class="text-red-400 text-sm text-center py-4">Error loading tokens: ${DOMPurify.sanitize(e.message)}</div>`;
-        }
-    };
-    window.pagsRefreshMyTokens = pagsRefreshMyTokens;
-
     // PAGS Leaderboard Modal
     let pagsLeaderboardData = null;
 
@@ -5783,6 +5876,18 @@
         document.getElementById('pags-leaderboard-modal').style.display = 'none';
     };
     window.closePagsLeaderboard = closePagsLeaderboard;
+
+    // PAGS Info Modal
+    const openPagsInfoModal = () => {
+        document.getElementById('pags-info-modal').style.display = 'flex';
+        lucide.createIcons();
+    };
+    window.openPagsInfoModal = openPagsInfoModal;
+
+    const closePagsInfoModal = () => {
+        document.getElementById('pags-info-modal').style.display = 'none';
+    };
+    window.closePagsInfoModal = closePagsInfoModal;
 
     const fetchPagsLeaderboard = async () => {
         try {
