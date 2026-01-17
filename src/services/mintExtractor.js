@@ -1667,50 +1667,107 @@ async function filterMintsWeAreRecipientFor(mints, creatorPubkey, connection) {
 }
 
 /**
- * Fetch token metadata from Pump.fun API
+ * Fetch token metadata with multi-source fallback
  * Used when registering PAGS beneficiaries to ensure token metadata is stored
+ *
+ * Sources tried in order:
+ * 1. Pump.fun API (best for new pump.fun tokens)
+ * 2. DexScreener API (reliable for traded tokens, has images)
+ * 3. GeckoTerminal (fallback for images)
+ *
+ * v25.58: Enhanced to use DexScreener as fallback source for name/ticker/image
  *
  * @param {string} mint - Token mint address
  * @returns {Promise<{ticker: string, name: string, image: string, description: string, twitter: string, website: string, metadataUri: string}|null>}
  */
 async function fetchPumpFunTokenMetadata(mint) {
+    let ticker = null;
+    let name = null;
+    let image = null;
+    let description = '';
+    let twitter = '';
+    let website = '';
+    let metadataUri = null;
+    let creator = null;
+    let source = null;
+
+    // Source 1: Try Pump.fun API first (best for new pump.fun tokens)
     try {
         const pumpMetaUrl = `https://frontend-api.pump.fun/coins/${mint}`;
         const response = await axios.get(pumpMetaUrl, { timeout: 5000 });
 
-        if (!response.data) {
-            logger.debug(`[MintExtractor] No data from pump.fun API for ${mint.slice(0, 8)}...`);
-            return null;
+        if (response.data) {
+            const pumpData = response.data;
+            ticker = pumpData.symbol || null;
+            name = pumpData.name || null;
+            image = imageUtils.normalizeImageUrl(pumpData.image_uri || pumpData.image);
+            description = pumpData.description || '';
+            twitter = pumpData.twitter || '';
+            website = pumpData.website || '';
+            metadataUri = pumpData.metadata_uri || null;
+            creator = pumpData.creator || null;
+            source = 'pump.fun';
+
+            logger.debug(`[MintExtractor] Pump.fun data for ${mint.slice(0, 8)}...: ticker=${ticker}, name=${name}, image=${image ? 'YES' : 'NO'}`);
         }
+    } catch (e) {
+        logger.debug(`[MintExtractor] Pump.fun API failed for ${mint.slice(0, 8)}...: ${e.message}`);
+    }
 
-        const pumpData = response.data;
-        let image = imageUtils.normalizeImageUrl(pumpData.image_uri || pumpData.image);
+    // Source 2: Try DexScreener if missing data (has name/ticker/image for traded tokens)
+    if (!ticker || !name || !image) {
+        try {
+            const dexData = await fetchDexScreenerData(mint);
+            if (dexData) {
+                if (!ticker && dexData.dexTicker) {
+                    ticker = dexData.dexTicker;
+                    source = source ? `${source}+dexscreener` : 'dexscreener';
+                }
+                if (!name && dexData.dexName) {
+                    name = dexData.dexName;
+                    source = source ? `${source}+dexscreener` : 'dexscreener';
+                }
+                if (!image && dexData.dexImage) {
+                    image = dexData.dexImage;
+                    logger.info(`[MintExtractor] Using DexScreener image for ${mint.slice(0, 8)}...`);
+                }
+            }
+        } catch (e) {
+            logger.debug(`[MintExtractor] DexScreener API failed for ${mint.slice(0, 8)}...: ${e.message}`);
+        }
+    }
 
-        // Try GeckoTerminal if Pump.fun doesn't have image
-        if (!image) {
+    // Source 3: Try GeckoTerminal for image as final fallback
+    if (!image) {
+        try {
             const geckoImage = await fetchGeckoTerminalImage(mint);
             if (geckoImage) {
                 image = geckoImage;
-                logger.info(`[MintExtractor] Using GeckoTerminal image for ${mint.slice(0, 8)}... (fetchPumpFunTokenMetadata)`);
+                logger.info(`[MintExtractor] Using GeckoTerminal image for ${mint.slice(0, 8)}...`);
             }
+        } catch (e) {
+            // Silent fail
         }
+    }
 
-        logger.info(`[MintExtractor] Fetched metadata for ${mint.slice(0, 8)}... from pump.fun: ticker=${pumpData.symbol}, name=${pumpData.name}, image=${image ? 'YES' : 'NO'}`);
-
-        return {
-            ticker: pumpData.symbol || 'UNKNOWN',
-            name: pumpData.name || 'Unknown Token',
-            image: image || null,
-            description: pumpData.description || '',
-            twitter: pumpData.twitter || '',
-            website: pumpData.website || '',
-            metadataUri: pumpData.metadata_uri || null,
-            creator: pumpData.creator || null
-        };
-    } catch (e) {
-        logger.debug(`[MintExtractor] Failed to fetch pump.fun metadata for ${mint.slice(0, 8)}...: ${e.message}`);
+    // If we have no meaningful data at all, return null
+    if (!ticker && !name) {
+        logger.debug(`[MintExtractor] No metadata found for ${mint.slice(0, 8)}... from any source`);
         return null;
     }
+
+    logger.info(`[MintExtractor] Fetched metadata for ${mint.slice(0, 8)}... from ${source || 'unknown'}: ticker=${ticker}, name=${name}, image=${image ? 'YES' : 'NO'}`);
+
+    return {
+        ticker: ticker || 'UNKNOWN',
+        name: name || 'Unknown Token',
+        image: image || null,
+        description,
+        twitter,
+        website,
+        metadataUri,
+        creator
+    };
 }
 
 module.exports = {
