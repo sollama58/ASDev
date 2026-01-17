@@ -1594,7 +1594,7 @@ function init(deps) {
             `))?.count || 0;
 
             const totalBeneficiaries = (await db.get('SELECT COUNT(*) as count FROM pags_beneficiaries WHERE "isActive" = 1'))?.count || 0;
-            const totalUsers = (await db.get('SELECT COUNT(*) as count FROM pags_users'))?.count || 0;
+            const totalUsers = (await db.get('SELECT COUNT(*) as count FROM pags_twitter_users'))?.count || 0;
             const pendingClaims = (await db.get('SELECT COUNT(*) as count FROM pags_claims WHERE status = $1', ['pending']))?.count || 0;
 
             res.json({
