@@ -1121,7 +1121,8 @@ async function recordFeeCollection(mint, amount, source = 'manual', txSignature 
 }
 
 /**
- * Deactivate PAGS for a token
+ * Fully delete PAGS registration for a token
+ * v25.68: Changed from deactivation to full deletion
  */
 async function deactivateBeneficiary(mint) {
     if (!db) throw new Error('PAGS service not initialized');
@@ -1131,11 +1132,27 @@ async function deactivateBeneficiary(mint) {
         throw new Error('Invalid mint address');
     }
 
-    await db.run(`
-        UPDATE pags_beneficiaries SET "isActive" = 0 WHERE mint = $1
+    // First get the beneficiary ID
+    const beneficiary = await db.get(`
+        SELECT id FROM pags_beneficiaries WHERE mint = $1
     `, [mint]);
 
-    logger.info('[PAGS] Beneficiary deactivated', { mint });
+    if (!beneficiary) {
+        logger.warn('[PAGS] Beneficiary not found for deletion', { mint });
+        return { success: true, message: 'Token was not registered' };
+    }
+
+    // Delete from child table first (beneficiary shares)
+    await db.run(`
+        DELETE FROM pags_beneficiary_shares WHERE "beneficiaryId" = $1
+    `, [beneficiary.id]);
+
+    // Delete from main table
+    await db.run(`
+        DELETE FROM pags_beneficiaries WHERE mint = $1
+    `, [mint]);
+
+    logger.info('[PAGS] Beneficiary fully deleted', { mint, beneficiaryId: beneficiary.id });
 
     return { success: true };
 }

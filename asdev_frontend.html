@@ -1863,7 +1863,7 @@
                         <div id="pags-token-preview" class="hidden">
                             <div class="bg-black/30 p-3 rounded border border-orange-700/50">
                                 <div class="flex items-center gap-3">
-                                    <img id="pags-preview-img" src="https://placehold.co/48x48/1a1a2e/f59e0b?text=%24" class="w-12 h-12 rounded border border-orange-600 object-cover" onerror="this.src='https://placehold.co/48x48/1a1a2e/f59e0b?text=%24'">
+                                    <img id="pags-preview-img" src="https://placehold.co/48x48/1a1a2e/f59e0b?text=%24" class="w-12 h-12 rounded border border-orange-600 object-cover" onerror="if(!this.dataset.errorHandled){this.dataset.errorHandled='1';this.src='https://placehold.co/48x48/1a1a2e/f59e0b?text=%24';}">
                                     <div class="flex-1 min-w-0">
                                         <div id="pags-preview-ticker" class="text-lg font-bold text-white font-mono truncate">$TOKEN</div>
                                         <div id="pags-preview-name" class="text-sm text-orange-400 truncate">Token Name</div>
@@ -1889,8 +1889,11 @@
                                 <div class="pags-beneficiary-row flex items-center gap-2" data-index="0">
                                     <span class="text-cyan-500 text-sm w-4">@</span>
                                     <input type="text" class="pags-beneficiary-username input-field flex-1 mb-0 text-sm" placeholder="username" maxlength="15">
-                                    <div class="flex items-center gap-1 w-28">
-                                        <input type="range" class="pags-beneficiary-slider w-14 accent-cyan-500" min="1" max="100" value="100" oninput="pagsUpdateSliders(this)">
+                                    <div class="flex items-center gap-1 w-32">
+                                        <button class="pags-lock-btn text-cyan-600 hover:text-cyan-400 text-xs p-0.5 transition" onclick="pagsToggleLock(this)" title="Lock percentage">
+                                            <i data-lucide="unlock" class="w-3 h-3"></i>
+                                        </button>
+                                        <input type="range" class="pags-beneficiary-slider w-12 accent-cyan-500" min="1" max="100" value="100" oninput="pagsUpdateSliders(this)">
                                         <input type="number" class="pags-beneficiary-percent-input w-10 bg-transparent border border-cyan-700/50 rounded text-cyan-400 text-xs font-mono text-center p-0.5" value="100" min="1" max="100" oninput="pagsUpdateFromInput(this)">
                                         <span class="text-cyan-400 text-xs">%</span>
                                     </div>
@@ -2855,9 +2858,10 @@
             }
         }
 
-        // v25.8: Handle IPFS protocol - use reliable Cloudflare gateway
+        // v25.8: Handle IPFS protocol
+        // v25.68: Switched from deprecated cloudflare-ipfs.com to ipfs.io gateway
         if (cleanUrl.startsWith('ipfs://')) {
-            cleanUrl = cleanUrl.replace('ipfs://', 'https://cloudflare-ipfs.com/ipfs/');
+            cleanUrl = cleanUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
         }
 
         // v25.8: Handle Arweave protocol
@@ -2883,10 +2887,11 @@
         // Format: https://assets.geckoterminal.com/<asset-id>
         // These don't need transformation, just pass through
 
-        // v25.42: Normalize various IPFS gateways to Cloudflare (more reliable than ipfs.io)
+        // v25.68: Normalize various IPFS gateways to ipfs.io (cloudflare-ipfs.com is deprecated)
         const ipfsGateways = [
             'gateway.pinata.cloud',
-            'ipfs.io',
+            'cloudflare-ipfs.com',
+            'cf-ipfs.com',
             'dweb.link',
             'nftstorage.link',
             'ipfs.infura.io',
@@ -2895,7 +2900,7 @@
         ];
         for (const gateway of ipfsGateways) {
             if (cleanUrl.includes(gateway)) {
-                cleanUrl = cleanUrl.replace(gateway, 'cloudflare-ipfs.com');
+                cleanUrl = cleanUrl.replace(gateway, 'ipfs.io');
                 break;
             }
         }
@@ -2903,7 +2908,7 @@
         // v25.8: Handle relative IPFS paths (just the CID)
         // CIDs typically start with Qm (v0) or bafy (v1)
         if (/^(Qm[a-zA-Z0-9]{44}|bafy[a-zA-Z0-9]{50,})/.test(cleanUrl)) {
-            cleanUrl = `https://cloudflare-ipfs.com/ipfs/${cleanUrl}`;
+            cleanUrl = `https://ipfs.io/ipfs/${cleanUrl}`;
         }
 
         // v25.8: Validate URL format before proxying
@@ -2914,15 +2919,17 @@
             return fallback;
         }
 
-        // v25.42: Direct URLs for known reliable hosts (no proxy needed)
-        // Imgur, Cloudflare, and GeckoTerminal serve images directly with CORS
+        // v25.68: Direct URLs for known reliable hosts (no proxy needed)
+        // Imgur, Cloudflare CDN, GeckoTerminal, IPFS gateways, and Arweave serve images directly with CORS
         if (cleanUrl.includes('i.imgur.com') ||
             cleanUrl.includes('imagedelivery.net') ||
-            cleanUrl.includes('assets.geckoterminal.com')) {
+            cleanUrl.includes('assets.geckoterminal.com') ||
+            cleanUrl.includes('ipfs.io') ||
+            cleanUrl.includes('arweave.net')) {
             return cleanUrl;
         }
 
-        // Use wsrv.nl proxy for resizing and CORS for other URLs (IPFS, etc.)
+        // Use wsrv.nl proxy for resizing and CORS for other URLs
         return `https://wsrv.nl/?url=${encodeURIComponent(cleanUrl)}&w=64&output=webp&q=80&default=${encodeURIComponent(fallback)}`;
     };
 
@@ -6000,6 +6007,25 @@
             const feePercent = token.feeShareBps ? (token.feeShareBps / 100).toFixed(1) : '100.0';
             const tokenImage = token.image || 'https://placehold.co/32x32/1a1a2e/purple?text=%24';
 
+            // v25.68: Support multiple beneficiaries display
+            let beneficiaryHtml = '';
+            if (token.beneficiaries && token.beneficiaries.length > 1) {
+                // Multiple beneficiaries - show each with their share
+                beneficiaryHtml = token.beneficiaries.map(b =>
+                    `<div class="flex items-center gap-1">
+                        <span class="text-purple-300">@${DOMPurify.sanitize(b.twitterUsername || '???')}</span>
+                        <span class="text-cyan-400/70 text-[10px]">${b.sharePercent || Math.round((b.shareBps || 10000) / 100)}%</span>
+                    </div>`
+                ).join('');
+                beneficiaryHtml = `<div class="space-y-0.5">${beneficiaryHtml}</div>`;
+            } else if (token.beneficiaries && token.beneficiaries.length === 1) {
+                // Single beneficiary from array
+                beneficiaryHtml = `@${DOMPurify.sanitize(token.beneficiaries[0].twitterUsername || '???')}`;
+            } else {
+                // Legacy single beneficiary field
+                beneficiaryHtml = `@${DOMPurify.sanitize(token.twitterUsername || '???')}`;
+            }
+
             html += `
                 <tr class="border-b border-purple-800/20 hover:bg-purple-900/20">
                     <td class="p-2 text-purple-400">${index + 1}</td>
@@ -6015,7 +6041,7 @@
                             </div>
                         </div>
                     </td>
-                    <td class="p-2 text-purple-300">@${DOMPurify.sanitize(token.twitterUsername || '???')}</td>
+                    <td class="p-2 text-purple-300">${beneficiaryHtml}</td>
                     <td class="p-2 text-right text-orange-400">${feePercent}%</td>
                     <td class="p-2 text-right text-green-400 font-mono">${(token.totalFeesAccumulated || 0).toFixed(4)}</td>
                     <td class="p-2 text-right text-yellow-400 font-mono">${pending.toFixed(4)}</td>
@@ -6105,8 +6131,11 @@
         newRow.innerHTML = `
             <span class="text-cyan-500 text-sm w-4">@</span>
             <input type="text" class="pags-beneficiary-username input-field flex-1 mb-0 text-sm" placeholder="username" maxlength="15">
-            <div class="flex items-center gap-1 w-28">
-                <input type="range" class="pags-beneficiary-slider w-14 accent-cyan-500" min="1" max="100" value="25" oninput="pagsUpdateSliders(this)">
+            <div class="flex items-center gap-1 w-32">
+                <button class="pags-lock-btn text-cyan-600 hover:text-cyan-400 text-xs p-0.5 transition" onclick="pagsToggleLock(this)" title="Lock percentage">
+                    <i data-lucide="unlock" class="w-3 h-3"></i>
+                </button>
+                <input type="range" class="pags-beneficiary-slider w-12 accent-cyan-500" min="1" max="100" value="25" oninput="pagsUpdateSliders(this)">
                 <input type="number" class="pags-beneficiary-percent-input w-10 bg-transparent border border-cyan-700/50 rounded text-cyan-400 text-xs font-mono text-center p-0.5" value="25" min="1" max="100" oninput="pagsUpdateFromInput(this)">
                 <span class="text-cyan-400 text-xs">%</span>
             </div>
@@ -6159,6 +6188,45 @@
     };
     window.pagsRemoveBeneficiary = pagsRemoveBeneficiary;
 
+    // v25.67: Toggle lock on a beneficiary slider
+    const pagsToggleLock = (btn) => {
+        const row = btn.closest('.pags-beneficiary-row');
+        const isLocked = row.dataset.locked === 'true';
+        const slider = row.querySelector('.pags-beneficiary-slider');
+        const percentInput = row.querySelector('.pags-beneficiary-percent-input');
+        const icon = btn.querySelector('i');
+
+        if (isLocked) {
+            // Unlock
+            row.dataset.locked = 'false';
+            slider.disabled = false;
+            percentInput.disabled = false;
+            slider.classList.remove('opacity-50', 'cursor-not-allowed');
+            percentInput.classList.remove('opacity-50', 'cursor-not-allowed');
+            btn.classList.remove('text-orange-400');
+            btn.classList.add('text-cyan-600', 'hover:text-cyan-400');
+            btn.title = 'Lock percentage';
+            // Update icon to unlock
+            icon.setAttribute('data-lucide', 'unlock');
+        } else {
+            // Lock
+            row.dataset.locked = 'true';
+            slider.disabled = true;
+            percentInput.disabled = true;
+            slider.classList.add('opacity-50', 'cursor-not-allowed');
+            percentInput.classList.add('opacity-50', 'cursor-not-allowed');
+            btn.classList.remove('text-cyan-600', 'hover:text-cyan-400');
+            btn.classList.add('text-orange-400');
+            btn.title = 'Unlock percentage';
+            // Update icon to lock
+            icon.setAttribute('data-lucide', 'lock');
+        }
+
+        // Reinitialize Lucide icons for the updated icon
+        if (window.lucide) lucide.createIcons();
+    };
+    window.pagsToggleLock = pagsToggleLock;
+
     const pagsUpdateSliders = (changedSlider) => {
         const container = document.getElementById('pags-beneficiaries-container');
         const rows = container.querySelectorAll('.pags-beneficiary-row');
@@ -6177,34 +6245,44 @@
         const changedValue = parseInt(changedSlider.value) || 0;
         const changedRow = changedSlider.closest('.pags-beneficiary-row');
 
-        // Get all other sliders (not the one being changed)
-        const otherSliders = [];
+        // v25.67: Get all other sliders, separating locked and unlocked
+        const unlockedSliders = [];
+        let lockedTotal = 0;
         rows.forEach(row => {
             if (row !== changedRow) {
-                otherSliders.push({
-                    slider: row.querySelector('.pags-beneficiary-slider'),
-                    percentInput: row.querySelector('.pags-beneficiary-percent-input')
-                });
+                const isLocked = row.dataset.locked === 'true';
+                const slider = row.querySelector('.pags-beneficiary-slider');
+                const percentInput = row.querySelector('.pags-beneficiary-percent-input');
+                const currentVal = parseInt(slider.value) || 0;
+
+                if (isLocked) {
+                    lockedTotal += currentVal;
+                } else {
+                    unlockedSliders.push({
+                        slider,
+                        percentInput,
+                        currentVal
+                    });
+                }
             }
         });
 
-        // Calculate how much is left for others
-        const remaining = 100 - changedValue;
-        const otherCount = otherSliders.length;
+        // Calculate how much is left for unlocked sliders
+        const remaining = 100 - changedValue - lockedTotal;
+        const unlockedCount = unlockedSliders.length;
 
-        if (otherCount > 0) {
-            // Distribute remaining percentage among other sliders proportionally
-            // First, get current values of other sliders
-            let otherTotal = 0;
-            otherSliders.forEach(item => {
-                otherTotal += parseInt(item.slider.value) || 0;
+        if (unlockedCount > 0 && remaining > 0) {
+            // Distribute remaining percentage among unlocked sliders proportionally
+            let unlockedTotal = 0;
+            unlockedSliders.forEach(item => {
+                unlockedTotal += item.currentVal;
             });
 
-            if (otherTotal === 0) {
-                // If all others are at 0, distribute evenly
-                const baseShare = Math.floor(remaining / otherCount);
-                const remainder = remaining - (baseShare * otherCount);
-                otherSliders.forEach((item, index) => {
+            if (unlockedTotal === 0) {
+                // If all unlocked are at 0, distribute evenly
+                const baseShare = Math.floor(remaining / unlockedCount);
+                const remainder = remaining - (baseShare * unlockedCount);
+                unlockedSliders.forEach((item, index) => {
                     const share = index === 0 ? baseShare + remainder : baseShare;
                     const finalShare = Math.max(1, share);
                     item.slider.value = finalShare;
@@ -6213,15 +6291,14 @@
             } else {
                 // Distribute proportionally based on current ratios
                 let distributed = 0;
-                otherSliders.forEach((item, index) => {
-                    const currentVal = parseInt(item.slider.value) || 0;
+                unlockedSliders.forEach((item, index) => {
                     let newVal;
-                    if (index === otherCount - 1) {
+                    if (index === unlockedCount - 1) {
                         // Last slider gets whatever is left to ensure exactly 100%
                         newVal = remaining - distributed;
                     } else {
                         // Proportional distribution
-                        newVal = Math.round((currentVal / otherTotal) * remaining);
+                        newVal = Math.round((item.currentVal / unlockedTotal) * remaining);
                     }
                     // Ensure minimum of 1%
                     newVal = Math.max(1, Math.min(99, newVal));
@@ -6230,6 +6307,12 @@
                     distributed += newVal;
                 });
             }
+        } else if (unlockedCount > 0 && remaining <= 0) {
+            // Not enough room - set unlocked sliders to minimum
+            unlockedSliders.forEach(item => {
+                item.slider.value = 1;
+                item.percentInput.value = 1;
+            });
         }
 
         // Update the percentage input for the changed slider
@@ -6241,6 +6324,7 @@
     window.pagsUpdateSliders = pagsUpdateSliders;
 
     // Handle direct input of percentage values
+    // v25.67: Updated to respect locked sliders
     const pagsUpdateFromInput = (changedInput) => {
         const container = document.getElementById('pags-beneficiaries-container');
         const rows = container.querySelectorAll('.pags-beneficiary-row');
@@ -6266,33 +6350,44 @@
         changedInput.value = inputValue;
         changedSlider.value = inputValue;
 
-        // Get all other sliders (not the one being changed)
-        const otherSliders = [];
+        // v25.67: Get all other sliders, separating locked and unlocked
+        const unlockedSliders = [];
+        let lockedTotal = 0;
         rows.forEach(row => {
             if (row !== changedRow) {
-                otherSliders.push({
-                    slider: row.querySelector('.pags-beneficiary-slider'),
-                    percentInput: row.querySelector('.pags-beneficiary-percent-input')
-                });
+                const isLocked = row.dataset.locked === 'true';
+                const slider = row.querySelector('.pags-beneficiary-slider');
+                const percentInput = row.querySelector('.pags-beneficiary-percent-input');
+                const currentVal = parseInt(slider.value) || 0;
+
+                if (isLocked) {
+                    lockedTotal += currentVal;
+                } else {
+                    unlockedSliders.push({
+                        slider,
+                        percentInput,
+                        currentVal
+                    });
+                }
             }
         });
 
-        // Calculate how much is left for others
-        const remaining = 100 - inputValue;
-        const otherCount = otherSliders.length;
+        // Calculate how much is left for unlocked sliders
+        const remaining = 100 - inputValue - lockedTotal;
+        const unlockedCount = unlockedSliders.length;
 
-        if (otherCount > 0) {
-            // Distribute remaining percentage among other sliders proportionally
-            let otherTotal = 0;
-            otherSliders.forEach(item => {
-                otherTotal += parseInt(item.slider.value) || 0;
+        if (unlockedCount > 0 && remaining > 0) {
+            // Distribute remaining percentage among unlocked sliders proportionally
+            let unlockedTotal = 0;
+            unlockedSliders.forEach(item => {
+                unlockedTotal += item.currentVal;
             });
 
-            if (otherTotal === 0) {
-                // If all others are at 0, distribute evenly
-                const baseShare = Math.floor(remaining / otherCount);
-                const remainder = remaining - (baseShare * otherCount);
-                otherSliders.forEach((item, index) => {
+            if (unlockedTotal === 0) {
+                // If all unlocked are at 0, distribute evenly
+                const baseShare = Math.floor(remaining / unlockedCount);
+                const remainder = remaining - (baseShare * unlockedCount);
+                unlockedSliders.forEach((item, index) => {
                     const share = index === 0 ? baseShare + remainder : baseShare;
                     const finalShare = Math.max(1, share);
                     item.slider.value = finalShare;
@@ -6301,15 +6396,14 @@
             } else {
                 // Distribute proportionally based on current ratios
                 let distributed = 0;
-                otherSliders.forEach((item, index) => {
-                    const currentVal = parseInt(item.slider.value) || 0;
+                unlockedSliders.forEach((item, index) => {
                     let newVal;
-                    if (index === otherCount - 1) {
+                    if (index === unlockedCount - 1) {
                         // Last slider gets whatever is left to ensure exactly 100%
                         newVal = remaining - distributed;
                     } else {
                         // Proportional distribution
-                        newVal = Math.round((currentVal / otherTotal) * remaining);
+                        newVal = Math.round((item.currentVal / unlockedTotal) * remaining);
                     }
                     // Ensure minimum of 1%
                     newVal = Math.max(1, Math.min(99, newVal));
@@ -6318,6 +6412,12 @@
                     distributed += newVal;
                 });
             }
+        } else if (unlockedCount > 0 && remaining <= 0) {
+            // Not enough room - set unlocked sliders to minimum
+            unlockedSliders.forEach(item => {
+                item.slider.value = 1;
+                item.percentInput.value = 1;
+            });
         }
 
         // Calculate total and update display
@@ -6325,25 +6425,50 @@
     };
     window.pagsUpdateFromInput = pagsUpdateFromInput;
 
+    // v25.67: Updated to respect locked sliders
     const pagsAutoBalanceSliders = () => {
         const container = document.getElementById('pags-beneficiaries-container');
         const rows = container.querySelectorAll('.pags-beneficiary-row');
-        const count = rows.length;
 
-        if (count === 0) return;
+        if (rows.length === 0) return;
 
-        // Distribute evenly
-        const baseShare = Math.floor(100 / count);
-        const remainder = 100 - (baseShare * count);
+        // Separate locked and unlocked rows
+        const unlockedRows = [];
+        let lockedTotal = 0;
 
-        rows.forEach((row, index) => {
+        rows.forEach(row => {
+            const isLocked = row.dataset.locked === 'true';
             const slider = row.querySelector('.pags-beneficiary-slider');
             const percentInput = row.querySelector('.pags-beneficiary-percent-input');
-            // First row gets any remainder
-            const share = index === 0 ? baseShare + remainder : baseShare;
-            slider.value = share;
-            percentInput.value = share;
+
+            if (isLocked) {
+                lockedTotal += parseInt(slider.value) || 0;
+            } else {
+                unlockedRows.push({ row, slider, percentInput });
+            }
         });
+
+        // Distribute remaining percentage among unlocked rows
+        const remaining = Math.max(0, 100 - lockedTotal);
+        const unlockedCount = unlockedRows.length;
+
+        if (unlockedCount > 0 && remaining > 0) {
+            const baseShare = Math.floor(remaining / unlockedCount);
+            const remainder = remaining - (baseShare * unlockedCount);
+
+            unlockedRows.forEach((item, index) => {
+                // First unlocked row gets any remainder
+                const share = index === 0 ? baseShare + remainder : baseShare;
+                item.slider.value = share;
+                item.percentInput.value = share;
+            });
+        } else if (unlockedCount > 0) {
+            // Not enough remaining - set all unlocked to minimum
+            unlockedRows.forEach(item => {
+                item.slider.value = 1;
+                item.percentInput.value = 1;
+            });
+        }
 
         pagsUpdateTotal();
     };
@@ -6430,11 +6555,15 @@
 
     // Token preview for PAGS registration
     // v25.64: Fetches token metadata from on-chain via backend, extracts image from metadata URI
+    // v25.65: Fixed race condition - don't overwrite good image data with loading placeholder
+    // v25.67: Fixed image not updating when switching tokens - reset cache on new mint
     let pagsPreviewTimeout = null;
     let pagsLastPreviewedMint = null;
     const pagsPreviewToken = async (mintValue) => {
         const mint = mintValue.trim();
         const previewEl = document.getElementById('pags-token-preview');
+        const imgEl = document.getElementById('pags-preview-img');
+        const fallbackImg = 'https://placehold.co/48x48/1a1a2e/f59e0b?text=%24';
 
         // Clear previous timeout
         if (pagsPreviewTimeout) {
@@ -6446,6 +6575,7 @@
         if (!mint || mint.length < 32) {
             previewEl.classList.add('hidden');
             pagsLastPreviewedMint = null;
+            imgEl.src = fallbackImg; // Reset image when cleared
             return;
         }
 
@@ -6454,13 +6584,15 @@
             return;
         }
 
+        // v25.67: Reset image immediately when switching to a new token
+        imgEl.dataset.errorHandled = ''; // Reset error flag
+        imgEl.src = fallbackImg;
+
         // Debounce the API call
-        const fallbackImg = 'https://placehold.co/48x48/1a1a2e/f59e0b?text=%24';
         pagsPreviewTimeout = setTimeout(async () => {
             try {
-                // Show loading state
+                // Show preview panel
                 previewEl.classList.remove('hidden');
-                document.getElementById('pags-preview-img').src = fallbackImg;
                 document.getElementById('pags-preview-ticker').textContent = 'Loading...';
                 document.getElementById('pags-preview-name').textContent = '';
                 document.getElementById('pags-preview-mcap').textContent = '';
@@ -6471,12 +6603,16 @@
                 // v25.64: Use backend to fetch on-chain token metadata
                 // This fetches the metadata URI from on-chain, then retrieves the JSON to get the image
                 try {
+                    console.log('[PAGS Preview] Fetching metadata for:', mint);
                     const metadataRes = await fetch(`${BACKEND_URL}/api/token-metadata/${mint}`);
+                    console.log('[PAGS Preview] Metadata response status:', metadataRes.status);
                     if (metadataRes.ok) {
                         const metadataData = await metadataRes.json();
+                        console.log('[PAGS Preview] Metadata response:', metadataData);
                         if (metadataData.success && metadataData.metadata) {
                             // Extract image directly from on-chain metadata
                             imageUrl = metadataData.metadata.image || '';
+                            console.log('[PAGS Preview] Image from metadata:', imageUrl);
                             tokenData = {
                                 symbol: metadataData.metadata.symbol,
                                 name: metadataData.metadata.name,
@@ -6485,7 +6621,7 @@
                         }
                     }
                 } catch (metadataErr) {
-                    console.warn('Backend metadata fetch failed', metadataErr);
+                    console.warn('[PAGS Preview] Backend metadata fetch failed', metadataErr);
                 }
 
                 // Fallback: Check if token is in our leaderboard/database
@@ -6497,7 +6633,10 @@
                             const tokens = lbData.tokens || [];
                             const found = tokens.find(t => t.mint === mint);
                             if (found) {
-                                imageUrl = found.image || '';
+                                // Prefer leaderboard image if we don't have one from metadata
+                                if (!imageUrl && found.image) {
+                                    imageUrl = found.image;
+                                }
                                 tokenData = {
                                     symbol: found.ticker,
                                     name: found.name,
@@ -6510,18 +6649,60 @@
                     }
                 }
 
+                // v25.67: Check if mint changed during async fetch (user typed a different address)
+                const currentMintValue = document.getElementById('pags-register-mint').value.trim();
+                if (currentMintValue !== mint) {
+                    console.log('[PAGS Preview] Mint changed during fetch, ignoring result');
+                    return;
+                }
+
                 if (tokenData) {
-                    const resolvedImg = imageUrl ? resolveTokenImage(imageUrl) : fallbackImg;
-                    document.getElementById('pags-preview-img').src = resolvedImg;
+                    // v25.66: Check if resolveTokenImage returned its internal fallback (means URL was invalid)
+                    const resolveTokenFallback = 'https://placehold.co/32x32/333/fff?text=?';
+                    if (imageUrl) {
+                        console.log('[PAGS Preview] Raw image URL from API:', imageUrl);
+                        const resolvedImg = resolveTokenImage(imageUrl);
+                        console.log('[PAGS Preview] Resolved image URL:', resolvedImg);
+
+                        // If resolveTokenImage returned its fallback, the URL was invalid - use our fallback
+                        if (resolvedImg === resolveTokenFallback) {
+                            console.log('[PAGS Preview] URL was invalid, using PAGS fallback');
+                            imgEl.src = fallbackImg;
+                        } else {
+                            // v25.65: Preload image before setting src to avoid flash
+                            const testImg = new Image();
+                            testImg.onload = () => {
+                                // v25.67: Verify mint hasn't changed before updating image
+                                const finalMintValue = document.getElementById('pags-register-mint').value.trim();
+                                if (finalMintValue === mint) {
+                                    console.log('[PAGS Preview] Image loaded successfully:', resolvedImg);
+                                    imgEl.dataset.errorHandled = ''; // Reset error flag for new image
+                                    imgEl.src = resolvedImg;
+                                }
+                            };
+                            testImg.onerror = (err) => {
+                                console.warn('[PAGS Preview] Image preload failed:', resolvedImg, err);
+                                // Verify mint hasn't changed before updating fallback
+                                const finalMintValue = document.getElementById('pags-register-mint').value.trim();
+                                if (finalMintValue === mint) {
+                                    imgEl.src = fallbackImg;
+                                }
+                            };
+                            testImg.src = resolvedImg;
+                        }
+                    } else {
+                        console.log('[PAGS Preview] No image URL returned from API');
+                        imgEl.src = fallbackImg;
+                    }
                     document.getElementById('pags-preview-ticker').textContent = `$${tokenData.symbol || 'TOKEN'}`;
                     document.getElementById('pags-preview-name').textContent = tokenData.name || 'Unknown Token';
                     document.getElementById('pags-preview-mcap').textContent = tokenData.marketCap ? `MCAP: ${formatMcap(tokenData.marketCap)}` : '';
                     pagsLastPreviewedMint = mint;
                 } else {
-                    // Token not found - show mint address preview
-                    document.getElementById('pags-preview-img').src = fallbackImg;
+                    // Token not found in any source - show mint address preview
+                    imgEl.src = fallbackImg;
                     document.getElementById('pags-preview-ticker').textContent = `${mint.slice(0, 4)}...${mint.slice(-4)}`;
-                    document.getElementById('pags-preview-name').textContent = 'Token found - metadata loading...';
+                    document.getElementById('pags-preview-name').textContent = 'Token not found in database';
                     document.getElementById('pags-preview-mcap').textContent = '';
                     pagsLastPreviewedMint = mint;
                 }
@@ -6644,13 +6825,14 @@
 
             // Send registration request with signature
             // v25.48: Send beneficiaries array for multi-beneficiary support
+            // v25.68: Always send beneficiaries array for consistency
             const res = await fetch(`${BACKEND_URL}/api/pags/register`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     mint,
-                    beneficiaries: beneficiaries.length > 1 ? beneficiaries : null,
-                    twitterUsername: beneficiaries.length === 1 ? beneficiaries[0].twitterUsername : beneficiaries[0].twitterUsername,
+                    beneficiaries, // Always send full array
+                    twitterUsername: beneficiaries[0].twitterUsername, // Legacy field for backward compatibility
                     signedMessage,
                     signature,
                     signerPubkey: userPubkey
@@ -6713,8 +6895,11 @@
                     <div class="pags-beneficiary-row flex items-center gap-2" data-index="0">
                         <span class="text-cyan-500 text-sm w-4">@</span>
                         <input type="text" class="pags-beneficiary-username input-field flex-1 mb-0 text-sm" placeholder="username" maxlength="15">
-                        <div class="flex items-center gap-1 w-28">
-                            <input type="range" class="pags-beneficiary-slider w-14 accent-cyan-500" min="1" max="100" value="100" oninput="pagsUpdateSliders(this)">
+                        <div class="flex items-center gap-1 w-32">
+                            <button class="pags-lock-btn text-cyan-600 hover:text-cyan-400 text-xs p-0.5 transition" onclick="pagsToggleLock(this)" title="Lock percentage">
+                                <i data-lucide="unlock" class="w-3 h-3"></i>
+                            </button>
+                            <input type="range" class="pags-beneficiary-slider w-12 accent-cyan-500" min="1" max="100" value="100" oninput="pagsUpdateSliders(this)">
                             <input type="number" class="pags-beneficiary-percent-input w-10 bg-transparent border border-cyan-700/50 rounded text-cyan-400 text-xs font-mono text-center p-0.5" value="100" min="1" max="100" oninput="pagsUpdateFromInput(this)">
                             <span class="text-cyan-400 text-xs">%</span>
                         </div>
@@ -6723,6 +6908,7 @@
                         </button>
                     </div>
                 `;
+                if (window.lucide) lucide.createIcons(); // Reinitialize icons for new lock button
                 document.getElementById('pags-beneficiaries-total').textContent = '100%';
                 document.getElementById('pags-add-beneficiary-btn').classList.remove('hidden');
             } else {
@@ -6851,33 +7037,67 @@
             const data = await res.json();
 
             if (data.success) {
-                if (data.isRegistered && data.beneficiary) {
-                    const b = data.beneficiary;
-                    resultEl.innerHTML = `
-                        <div class="text-green-400 font-bold mb-2">PAGS Registered</div>
-                        <div class="space-y-1 text-xs">
+                // v25.68: Support multiple beneficiaries in status display
+                const hasBeneficiaries = data.isRegistered && (data.beneficiaries || data.beneficiary);
+                if (hasBeneficiaries) {
+                    // Handle both array and single beneficiary format
+                    const beneficiaries = data.beneficiaries || [data.beneficiary];
+                    const isMulti = beneficiaries.length > 1;
+
+                    // Build beneficiary list HTML
+                    let beneficiaryListHtml = '';
+                    if (isMulti) {
+                        beneficiaryListHtml = `
+                            <div class="text-gray-400 mb-1">Beneficiaries:</div>
+                            <div class="pl-2 border-l border-purple-700/50 space-y-1 mb-2">
+                                ${beneficiaries.map(b => `
+                                    <div class="flex justify-between">
+                                        <span class="text-purple-400">@${DOMPurify.sanitize(b.twitterUsername || '???')}</span>
+                                        <span class="text-cyan-400">${b.sharePercent || Math.round((b.shareBps || 10000) / 100)}%</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        `;
+                    } else {
+                        const b = beneficiaries[0];
+                        beneficiaryListHtml = `
                             <div class="flex justify-between">
                                 <span class="text-gray-400">Beneficiary:</span>
-                                <span class="text-purple-400">@${DOMPurify.sanitize(b.twitterUsername)}</span>
+                                <span class="text-purple-400">@${DOMPurify.sanitize(b.twitterUsername || '???')}</span>
                             </div>
+                        `;
+                    }
+
+                    // Get aggregate stats (from first beneficiary or aggregated data)
+                    const b = beneficiaries[0];
+                    const totalAccumulated = data.totalFeesAccumulated || b.totalFeesAccumulated || 0;
+                    const pendingFees = data.pendingFees || b.pendingFees || 0;
+                    const feeSharePercent = data.feeSharePercent || b.feeSharePercent || 100;
+                    const isActive = data.isActive !== undefined ? data.isActive : (b.isActive !== undefined ? b.isActive : true);
+                    const hasMultipleRecipients = data.hasMultipleRecipients || b.hasMultipleRecipients;
+
+                    resultEl.innerHTML = `
+                        <div class="text-green-400 font-bold mb-2">PAGS Registered${isMulti ? ` (${beneficiaries.length} beneficiaries)` : ''}</div>
+                        <div class="space-y-1 text-xs">
+                            ${beneficiaryListHtml}
                             <div class="flex justify-between">
                                 <span class="text-gray-400">Fee Share:</span>
-                                <span class="text-orange-400">${b.feeSharePercent}%${b.hasMultipleRecipients ? ' (multiple recipients)' : ''}</span>
+                                <span class="text-orange-400">${feeSharePercent}%${hasMultipleRecipients ? ' (multiple recipients)' : ''}</span>
                             </div>
                             <div class="flex justify-between">
                                 <span class="text-gray-400">Total Accumulated:</span>
-                                <span class="text-cyan-400">${(b.totalFeesAccumulated || 0).toFixed(6)} SOL</span>
+                                <span class="text-cyan-400">${totalAccumulated.toFixed(6)} SOL</span>
                             </div>
                             <div class="flex justify-between">
                                 <span class="text-gray-400">Pending:</span>
-                                <span class="text-green-400">${(b.pendingFees || 0).toFixed(6)} SOL</span>
+                                <span class="text-green-400">${pendingFees.toFixed(6)} SOL</span>
                             </div>
                             <div class="flex justify-between">
                                 <span class="text-gray-400">Status:</span>
-                                <span class="${b.isActive ? 'text-green-400' : 'text-red-400'}">${b.isActive ? 'Active' : 'Inactive'}</span>
+                                <span class="${isActive ? 'text-green-400' : 'text-red-400'}">${isActive ? 'Active' : 'Inactive'}</span>
                             </div>
                         </div>
-                        ${b.feeShareDescription ? `<p class="text-orange-300/70 text-xs mt-2">${DOMPurify.sanitize(b.feeShareDescription)}</p>` : ''}
+                        ${data.feeShareDescription || b.feeShareDescription ? `<p class="text-orange-300/70 text-xs mt-2">${DOMPurify.sanitize(data.feeShareDescription || b.feeShareDescription)}</p>` : ''}
                     `;
                     resultEl.classList.remove('border-orange-700', 'border-yellow-700', 'border-red-700');
                     resultEl.classList.add('border-green-700');

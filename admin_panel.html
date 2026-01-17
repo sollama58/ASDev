@@ -1128,24 +1128,34 @@
                     <div class="panel">
                         <div class="panel-header">
                             <h3 class="text-orange-500 font-bold">🎯 Register Token</h3>
-                            <p class="text-xs text-gray-500 mt-1">Register a token with a Twitter/X username as fee beneficiary</p>
+                            <p class="text-xs text-gray-500 mt-1">Register a token with one or more Twitter/X usernames as fee beneficiaries</p>
                         </div>
                         <div class="space-y-3 mt-4">
                             <div>
                                 <label class="text-xs text-gray-400 block mb-1">Token Mint Address *</label>
                                 <input type="text" id="pags-register-mint" class="input-field w-full" placeholder="Enter token mint address...">
                             </div>
+                            <!-- v25.68: Multi-beneficiary support -->
                             <div>
-                                <label class="text-xs text-gray-400 block mb-1">Twitter/X Username *</label>
-                                <div class="flex items-center gap-2">
-                                    <span class="text-gray-500">@</span>
-                                    <input type="text" id="pags-register-username" class="input-field flex-1" placeholder="username (without @)">
+                                <div class="flex justify-between items-center mb-1">
+                                    <label class="text-xs text-gray-400">Twitter/X Beneficiaries * (max 4)</label>
+                                    <button onclick="addAdminPagsBeneficiary()" class="text-cyan-400 text-xs hover:text-cyan-300">+ Add</button>
                                 </div>
+                                <div id="admin-pags-beneficiaries" class="space-y-2">
+                                    <div class="admin-pags-beneficiary-row flex items-center gap-2">
+                                        <span class="text-gray-500">@</span>
+                                        <input type="text" class="admin-pags-username input-field flex-1" placeholder="username">
+                                        <input type="number" class="admin-pags-share input-field w-20" placeholder="%" value="100" min="1" max="100">
+                                        <span class="text-gray-500 text-xs">%</span>
+                                        <button class="text-red-400 hover:text-red-300 hidden admin-pags-remove" onclick="removeAdminPagsBeneficiary(this)">×</button>
+                                    </div>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">Percentages must sum to 100%</p>
                             </div>
                             <div>
-                                <label class="text-xs text-gray-400 block mb-1">Fee Share (BPS) - Default: 10000 = 100%</label>
+                                <label class="text-xs text-gray-400 block mb-1">On-Chain Fee Share (BPS) - Default: 10000 = 100%</label>
                                 <input type="number" id="pags-register-feeshare" class="input-field w-full" placeholder="10000" value="10000" min="0" max="10000">
-                                <p class="text-xs text-gray-500 mt-1">10000 = 100%, 5000 = 50%, etc.</p>
+                                <p class="text-xs text-gray-500 mt-1">This is the on-chain fee share configured on Pump.fun (10000 = 100%)</p>
                             </div>
                             <div>
                                 <label class="text-xs text-gray-400 block mb-1">Creator Wallet (for signature verification)</label>
@@ -3086,22 +3096,117 @@
             }
         }
 
-        async function registerPagsBeneficiary() {
-            const mint = document.getElementById('pags-register-mint').value.trim();
-            const username = document.getElementById('pags-register-username').value.trim();
-            const feeShareBps = parseInt(document.getElementById('pags-register-feeshare').value) || 10000;
-            const creatorPubkey = document.getElementById('pags-register-creator').value.trim();
-
-            const resultEl = document.getElementById('pags-register-result');
-
-            if (!mint || !username) {
-                resultEl.innerHTML = '<span class="text-red-400">Token mint and Twitter username are required</span>';
-                log('Missing required fields for PAGS registration', 'warning');
+        // v25.68: Multi-beneficiary support for admin panel
+        function addAdminPagsBeneficiary() {
+            const container = document.getElementById('admin-pags-beneficiaries');
+            const rows = container.querySelectorAll('.admin-pags-beneficiary-row');
+            if (rows.length >= 4) {
+                log('Maximum 4 beneficiaries allowed', 'warning');
                 return;
             }
 
+            const newRow = document.createElement('div');
+            newRow.className = 'admin-pags-beneficiary-row flex items-center gap-2';
+            newRow.innerHTML = `
+                <span class="text-gray-500">@</span>
+                <input type="text" class="admin-pags-username input-field flex-1" placeholder="username">
+                <input type="number" class="admin-pags-share input-field w-20" placeholder="%" value="25" min="1" max="100">
+                <span class="text-gray-500 text-xs">%</span>
+                <button class="text-red-400 hover:text-red-300 admin-pags-remove" onclick="removeAdminPagsBeneficiary(this)">×</button>
+            `;
+            container.appendChild(newRow);
+
+            // Show remove button on first row if there's more than one
+            if (rows.length >= 1) {
+                rows[0].querySelector('.admin-pags-remove').classList.remove('hidden');
+            }
+
+            // Auto-balance percentages
+            autoBalanceAdminPagsShares();
+        }
+
+        function removeAdminPagsBeneficiary(btn) {
+            const container = document.getElementById('admin-pags-beneficiaries');
+            const row = btn.closest('.admin-pags-beneficiary-row');
+            row.remove();
+
+            const rows = container.querySelectorAll('.admin-pags-beneficiary-row');
+            // Hide remove button if only one row left
+            if (rows.length === 1) {
+                rows[0].querySelector('.admin-pags-remove').classList.add('hidden');
+            }
+
+            // Auto-balance percentages
+            autoBalanceAdminPagsShares();
+        }
+
+        function autoBalanceAdminPagsShares() {
+            const container = document.getElementById('admin-pags-beneficiaries');
+            const rows = container.querySelectorAll('.admin-pags-beneficiary-row');
+            const count = rows.length;
+            if (count === 0) return;
+
+            const baseShare = Math.floor(100 / count);
+            const remainder = 100 - (baseShare * count);
+
+            rows.forEach((row, index) => {
+                const shareInput = row.querySelector('.admin-pags-share');
+                shareInput.value = index === 0 ? baseShare + remainder : baseShare;
+            });
+        }
+
+        function getAdminPagsBeneficiaries() {
+            const container = document.getElementById('admin-pags-beneficiaries');
+            const rows = container.querySelectorAll('.admin-pags-beneficiary-row');
+            const beneficiaries = [];
+
+            rows.forEach(row => {
+                const username = row.querySelector('.admin-pags-username').value.trim().replace('@', '');
+                const sharePercent = parseInt(row.querySelector('.admin-pags-share').value) || 0;
+                if (username) {
+                    beneficiaries.push({
+                        twitterUsername: username,
+                        shareBps: sharePercent * 100 // Convert % to basis points
+                    });
+                }
+            });
+
+            return beneficiaries;
+        }
+
+        async function registerPagsBeneficiary() {
+            const mint = document.getElementById('pags-register-mint').value.trim();
+            const feeShareBps = parseInt(document.getElementById('pags-register-feeshare').value) || 10000;
+            const creatorPubkey = document.getElementById('pags-register-creator').value.trim();
+
+            // v25.68: Get beneficiaries from the multi-beneficiary form
+            const beneficiaries = getAdminPagsBeneficiaries();
+
+            const resultEl = document.getElementById('pags-register-result');
+
+            if (!mint) {
+                resultEl.innerHTML = '<span class="text-red-400">Token mint address is required</span>';
+                log('Missing mint address for PAGS registration', 'warning');
+                return;
+            }
+
+            if (beneficiaries.length === 0) {
+                resultEl.innerHTML = '<span class="text-red-400">At least one Twitter username is required</span>';
+                log('No beneficiaries specified for PAGS registration', 'warning');
+                return;
+            }
+
+            // Validate total shares = 100%
+            const totalShares = beneficiaries.reduce((sum, b) => sum + b.shareBps, 0);
+            if (totalShares !== 10000) {
+                resultEl.innerHTML = `<span class="text-red-400">Beneficiary shares must sum to 100% (currently ${totalShares / 100}%)</span>`;
+                log(`Invalid share total: ${totalShares / 100}%`, 'warning');
+                return;
+            }
+
+            const beneficiaryList = beneficiaries.map(b => `@${b.twitterUsername} (${b.shareBps / 100}%)`).join(', ');
             resultEl.innerHTML = '<span class="text-blue-400">Registering beneficiary...</span>';
-            log(`Registering PAGS for ${shortenPubkey(mint)} -> @${username}...`);
+            log(`Registering PAGS for ${shortenPubkey(mint)} -> ${beneficiaryList}...`);
 
             try {
                 const response = await fetch(`${backendUrl}/api/pags/register`, {
@@ -3112,7 +3217,8 @@
                     },
                     body: JSON.stringify({
                         mint,
-                        twitterUsername: username,
+                        beneficiaries, // Send full array
+                        twitterUsername: beneficiaries[0].twitterUsername, // Legacy field
                         feeShareBps,
                         signerPubkey: creatorPubkey || 'admin-skip-verification'
                     })
@@ -3121,15 +3227,29 @@
                 const data = await response.json();
 
                 if (data.success) {
+                    // v25.68: Show all registered beneficiaries
+                    const registeredList = (data.beneficiaries || beneficiaries).map(b =>
+                        `@${b.twitterUsername} (${b.sharePercent || (b.shareBps / 100)}%)`
+                    ).join('\n');
+
                     resultEl.innerHTML = `<span class="text-green-400">✓ Registration successful!</span>\n\n` +
                         `Token: ${shortenPubkey(mint)}\n` +
-                        `Beneficiary: @${username}\n` +
-                        `Fee Share: ${feeShareBps / 100}%`;
-                    log(`PAGS registered: ${shortenPubkey(mint)} -> @${username}`, 'success');
+                        `On-Chain Fee Share: ${feeShareBps / 100}%\n` +
+                        `Beneficiaries:\n${registeredList}`;
+                    log(`PAGS registered: ${shortenPubkey(mint)} -> ${beneficiaryList}`, 'success');
 
-                    // Clear inputs
+                    // Clear inputs and reset form
                     document.getElementById('pags-register-mint').value = '';
-                    document.getElementById('pags-register-username').value = '';
+                    const container = document.getElementById('admin-pags-beneficiaries');
+                    container.innerHTML = `
+                        <div class="admin-pags-beneficiary-row flex items-center gap-2">
+                            <span class="text-gray-500">@</span>
+                            <input type="text" class="admin-pags-username input-field flex-1" placeholder="username">
+                            <input type="number" class="admin-pags-share input-field w-20" placeholder="%" value="100" min="1" max="100">
+                            <span class="text-gray-500 text-xs">%</span>
+                            <button class="text-red-400 hover:text-red-300 hidden admin-pags-remove" onclick="removeAdminPagsBeneficiary(this)">×</button>
+                        </div>
+                    `;
 
                     // Refresh beneficiaries list
                     fetchPagsBeneficiaries();
@@ -3162,12 +3282,26 @@
                 if (data.success) {
                     if (data.isRegistered) {
                         const b = data.beneficiary;
-                        resultEl.innerHTML = `<span class="text-green-400">✓ PAGS Registered</span>\n\n` +
-                            `Twitter: <span class="text-purple-400">@${b.twitterUsername}</span>\n` +
-                            `Fee Share: <span class="text-orange-400">${b.feeSharePercent}%</span>\n` +
-                            `Accumulated: <span class="text-green-400">${(b.totalFeesAccumulated || 0).toFixed(6)} SOL</span>\n` +
-                            `Claimed: <span class="text-cyan-400">${(b.totalFeesClaimed || 0).toFixed(6)} SOL</span>\n` +
-                            `Pending: <span class="text-yellow-400">${(b.pendingFees || 0).toFixed(6)} SOL</span>\n` +
+
+                        // v25.68: Show all beneficiaries if multi-beneficiary
+                        let beneficiaryDisplay = '';
+                        if (data.isMultiBeneficiary && data.beneficiaries && data.beneficiaries.length > 1) {
+                            beneficiaryDisplay = 'Beneficiaries:\n' + data.beneficiaries.map(s =>
+                                `  <span class="text-purple-400">@${s.twitterUsername}</span> - <span class="text-cyan-400">${s.sharePercent.toFixed(0)}%</span>` +
+                                ` (pending: ${(s.pendingFees || 0).toFixed(6)} SOL)`
+                            ).join('\n');
+                        } else {
+                            beneficiaryDisplay = `Twitter: <span class="text-purple-400">@${b.twitterUsername}</span>`;
+                        }
+
+                        const multiBadge = data.isMultiBeneficiary ? ' <span class="text-cyan-400">(multi-user)</span>' : '';
+
+                        resultEl.innerHTML = `<span class="text-green-400">✓ PAGS Registered${multiBadge}</span>\n\n` +
+                            `${beneficiaryDisplay}\n` +
+                            `On-Chain Fee Share: <span class="text-orange-400">${b.feeSharePercent}%</span>\n` +
+                            `Total Accumulated: <span class="text-green-400">${(b.totalFeesAccumulated || 0).toFixed(6)} SOL</span>\n` +
+                            `Total Claimed: <span class="text-cyan-400">${(b.totalFeesClaimed || 0).toFixed(6)} SOL</span>\n` +
+                            `Total Pending: <span class="text-yellow-400">${(b.pendingFees || 0).toFixed(6)} SOL</span>\n` +
                             `Status: ${b.isActive ? '<span class="text-green-400">Active</span>' : '<span class="text-red-400">Inactive</span>'}`;
                         log(`PAGS found for ${shortenPubkey(mint)}`, 'success');
                     } else {
@@ -3348,13 +3482,30 @@
                         tbody.innerHTML = beneficiaries.map(b => {
                             const pending = (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0);
                             const tokenDisplay = b.ticker ? `${b.ticker}` : shortenPubkey(b.mint);
-                            const hasMultiRecipients = b.hasMultipleRecipients ? '<span class="text-yellow-500 text-xs ml-1" title="Multiple fee recipients">(multi)</span>' : '';
+                            const hasMultiRecipients = b.hasMultipleRecipients ? '<span class="text-yellow-500 text-xs ml-1" title="Multiple on-chain fee recipients">(on-chain multi)</span>' : '';
                             const hasCreatorPubkey = b.creatorPubkey && b.creatorPubkey !== 'unknown';
                             const creatorWarning = !hasCreatorPubkey ? '<span class="text-red-400 text-xs ml-1" title="Missing creatorPubkey - vault derivation will fail">⚠️</span>' : '';
+
+                            // v25.68: Show all beneficiary shares
+                            let beneficiaryDisplay = '';
+                            if (b.isMultiBeneficiary && b.shares && b.shares.length > 1) {
+                                beneficiaryDisplay = b.shares.map(s =>
+                                    `<div class="flex justify-between text-xs">
+                                        <span class="text-purple-400">@${s.twitterUsername}</span>
+                                        <span class="text-cyan-400 ml-2">${s.sharePercent.toFixed(0)}%</span>
+                                    </div>`
+                                ).join('');
+                                beneficiaryDisplay = `<div class="space-y-0.5">${beneficiaryDisplay}</div>`;
+                            } else {
+                                beneficiaryDisplay = `<span class="text-purple-400">@${b.twitterUsername}</span>`;
+                            }
+
+                            const multiBeneficiaryBadge = b.isMultiBeneficiary ? '<span class="text-cyan-500 text-xs ml-1" title="Multiple Twitter beneficiaries">(multi-user)</span>' : '';
+
                             return `
                                 <tr style="cursor: pointer;" title="Click to debug vault">
-                                    <td class="text-gray-300" title="${b.mint}" onclick="document.getElementById('pags-debug-mint').value='${b.mint}'; debugRewardVault();">${tokenDisplay}${hasMultiRecipients}${creatorWarning}</td>
-                                    <td class="text-purple-400">@${b.twitterUsername}</td>
+                                    <td class="text-gray-300" title="${b.mint}" onclick="document.getElementById('pags-debug-mint').value='${b.mint}'; debugRewardVault();">${tokenDisplay}${hasMultiRecipients}${multiBeneficiaryBadge}${creatorWarning}</td>
+                                    <td>${beneficiaryDisplay}</td>
                                     <td class="text-orange-400">${(b.feeSharePercent || 100).toFixed(1)}%</td>
                                     <td class="text-green-400">${(b.totalFeesAccumulated || 0).toFixed(6)}</td>
                                     <td class="text-cyan-400">${(b.totalFeesClaimed || 0).toFixed(6)}</td>

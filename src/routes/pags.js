@@ -698,9 +698,20 @@ function init(deps) {
             const isMultiBeneficiary = beneficiary.isMultiBeneficiary || false;
             const shares = beneficiary.shares || [];
 
+            // v25.68: Build beneficiaries array for frontend compatibility
+            const beneficiariesArray = shares.map(s => ({
+                twitterUsername: s.twitterUsername,
+                shareBps: s.shareBps,
+                sharePercent: s.shareBps / 100,
+                totalFeesAccumulated: s.totalFeesAccumulated || 0,
+                totalFeesClaimed: s.totalFeesClaimed || 0,
+                pendingFees: (s.totalFeesAccumulated || 0) - (s.totalFeesClaimed || 0)
+            }));
+
             res.json({
                 success: true,
                 isRegistered: true,
+                // v25.68: Include both legacy beneficiary object and new beneficiaries array
                 beneficiary: {
                     mint: beneficiary.mint,
                     twitterUsername: beneficiary.twitterUsername,
@@ -718,15 +729,16 @@ function init(deps) {
                     isActive: beneficiary.isActive === 1,
                     createdAt: beneficiary.createdAt,
                     // v25.48: Include all beneficiary shares
-                    shares: shares.map(s => ({
-                        twitterUsername: s.twitterUsername,
-                        shareBps: s.shareBps,
-                        sharePercent: s.shareBps / 100,
-                        totalFeesAccumulated: s.totalFeesAccumulated || 0,
-                        totalFeesClaimed: s.totalFeesClaimed || 0,
-                        pendingFees: (s.totalFeesAccumulated || 0) - (s.totalFeesClaimed || 0)
-                    }))
-                }
+                    shares: beneficiariesArray
+                },
+                // v25.68: New beneficiaries array for frontend
+                beneficiaries: beneficiariesArray,
+                isMultiBeneficiary,
+                // Aggregate stats
+                totalFeesAccumulated: beneficiary.totalFeesAccumulated || 0,
+                pendingFees: (beneficiary.totalFeesAccumulated || 0) - (beneficiary.totalFeesClaimed || 0),
+                feeSharePercent: feeShareBps / 100,
+                isActive: beneficiary.isActive === 1
             });
         } catch (e) {
             logger.error('[PAGS API] Status error', { error: e.message });
@@ -1187,7 +1199,7 @@ function init(deps) {
     /**
      * GET /api/admin/pags/beneficiaries
      * Get all beneficiaries with their fee share info (admin only)
-     * Shows which tokens have multiple recipients configured
+     * v25.68: Now includes all beneficiary shares for multi-beneficiary tokens
      */
     router.get('/admin/pags/beneficiaries', adminLimiter, async (req, res) => {
         try {
@@ -1210,13 +1222,41 @@ function init(deps) {
 
             const totalCount = await db.get('SELECT COUNT(*) as count FROM pags_beneficiaries');
 
-            // Enhance with fee share info
-            const enhancedBeneficiaries = beneficiaries.map(b => ({
-                ...b,
-                feeSharePercent: (b.feeShareBps || 10000) / 100,
-                hasMultipleRecipients: b.feeShareBps && b.feeShareBps < 10000,
-                pendingFees: (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0)
-            }));
+            // v25.68: Get all beneficiary shares for each token
+            const enhancedBeneficiaries = [];
+            for (const b of beneficiaries) {
+                // Get shares for this beneficiary
+                const shares = await db.all(`
+                    SELECT * FROM pags_beneficiary_shares
+                    WHERE "beneficiaryId" = $1
+                    ORDER BY "shareBps" DESC
+                `, [b.id]);
+
+                const isMultiBeneficiary = shares.length > 1;
+
+                enhancedBeneficiaries.push({
+                    ...b,
+                    feeSharePercent: (b.feeShareBps || 10000) / 100,
+                    hasMultipleRecipients: b.feeShareBps && b.feeShareBps < 10000,
+                    pendingFees: (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0),
+                    // v25.68: Include all beneficiary shares
+                    isMultiBeneficiary,
+                    shares: shares.length > 0 ? shares.map(s => ({
+                        twitterUsername: s.twitterUsername,
+                        shareBps: s.shareBps,
+                        sharePercent: s.shareBps / 100,
+                        totalFeesAccumulated: s.totalFeesAccumulated || 0,
+                        totalFeesClaimed: s.totalFeesClaimed || 0
+                    })) : [{
+                        // Legacy single beneficiary fallback
+                        twitterUsername: b.twitterUsername,
+                        shareBps: 10000,
+                        sharePercent: 100,
+                        totalFeesAccumulated: b.totalFeesAccumulated || 0,
+                        totalFeesClaimed: b.totalFeesClaimed || 0
+                    }]
+                });
+            }
 
             res.json({
                 success: true,
