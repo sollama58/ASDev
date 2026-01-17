@@ -1318,6 +1318,107 @@ function init(deps) {
         }
     });
 
+    /**
+     * POST /api/admin/pags/fix-creator-pubkeys
+     * Re-verify and fix PAGS beneficiaries that have 'unknown' as creatorPubkey
+     * This is needed for tokens registered before v25.54 when originalCreator wasn't
+     * being returned for direct creators
+     */
+    router.post('/admin/pags/fix-creator-pubkeys', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            // Find PAGS beneficiaries with unknown creatorPubkey
+            const beneficiariesWithUnknown = await db.all(`
+                SELECT mint, "twitterUsername", "feeShareBps"
+                FROM pags_beneficiaries
+                WHERE "isActive" = 1 AND ("creatorPubkey" IS NULL OR "creatorPubkey" = 'unknown')
+                LIMIT 50
+            `);
+
+            if (beneficiariesWithUnknown.length === 0) {
+                return res.json({
+                    success: true,
+                    message: 'All PAGS tokens already have valid creatorPubkey',
+                    processed: 0
+                });
+            }
+
+            logger.info('[PAGS API] Fixing creatorPubkeys for beneficiaries', {
+                count: beneficiariesWithUnknown.length
+            });
+
+            const results = { success: 0, failed: 0, details: [] };
+
+            for (const b of beneficiariesWithUnknown) {
+                try {
+                    // Re-verify fee recipient to get the correct originalCreator
+                    const feeRecipientResult = await mintExtractor.verifyFeeRecipient(
+                        b.mint,
+                        config.PAGS_WALLET,
+                        connection
+                    );
+
+                    if (feeRecipientResult.isRecipient && feeRecipientResult.originalCreator) {
+                        // Update the beneficiary with correct creatorPubkey
+                        await db.run(
+                            'UPDATE pags_beneficiaries SET "creatorPubkey" = $1, "feeShareBps" = $2 WHERE mint = $3',
+                            [feeRecipientResult.originalCreator, feeRecipientResult.feeShareBps, b.mint]
+                        );
+
+                        results.success++;
+                        results.details.push({
+                            mint: b.mint,
+                            creatorPubkey: feeRecipientResult.originalCreator,
+                            feeShareBps: feeRecipientResult.feeShareBps,
+                            status: 'fixed'
+                        });
+
+                        logger.info('[PAGS API] Fixed creatorPubkey', {
+                            mint: b.mint,
+                            creatorPubkey: feeRecipientResult.originalCreator.slice(0, 8) + '...',
+                            feeShareBps: feeRecipientResult.feeShareBps
+                        });
+                    } else {
+                        results.failed++;
+                        results.details.push({
+                            mint: b.mint,
+                            status: 'not_recipient',
+                            error: feeRecipientResult.error || 'Not a fee recipient'
+                        });
+                    }
+                } catch (e) {
+                    results.failed++;
+                    results.details.push({
+                        mint: b.mint,
+                        status: 'error',
+                        error: e.message
+                    });
+                }
+
+                // Rate limit RPC calls
+                await new Promise(resolve => setTimeout(resolve, 300));
+            }
+
+            logger.info('[PAGS API] CreatorPubkey fix complete', {
+                success: results.success,
+                failed: results.failed
+            });
+
+            res.json({
+                success: true,
+                processed: beneficiariesWithUnknown.length,
+                results
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Fix creatorPubkeys error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to fix creatorPubkeys');
+        }
+    });
+
     return router;
 }
 

@@ -1083,7 +1083,9 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
         // Step 2: Check if we ARE the direct creator (100% share)
         if (coinCreator.equals(walletKey)) {
             logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Direct creator via ${source} (100% fee share)`);
-            return { isRecipient: true, source, feeShareBps: 10000, feeSharePercent: 100 };
+            // v25.54: Return originalCreator as the wallet address for direct creators
+            // This is needed to derive the creator fee vault correctly
+            return { isRecipient: true, source, feeShareBps: 10000, feeSharePercent: 100, originalCreator: walletKey.toString() };
         }
 
         // Step 3: coin_creator is not us - check if it's a fee_sharing_config PDA
