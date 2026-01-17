@@ -463,6 +463,58 @@
                             // Result will appear here
                         </div>
                     </div>
+
+                    <!-- Token Removal Section -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-red-500 font-bold">⚠️ Token Removal</h3>
+                            <button onclick="loadAllTokensForRemoval()" class="btn btn-secondary text-xs">Load Tokens</button>
+                        </div>
+                        <p class="text-xs text-gray-400 mb-3">
+                            Remove tokens from the database. <span class="text-red-400">This action cannot be undone.</span>
+                            Use deactivate for Robinhood tokens to preserve historical data.
+                        </p>
+
+                        <!-- Token List for Removal -->
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                            <!-- Platform Tokens -->
+                            <div>
+                                <h4 class="text-orange-400 text-sm font-bold mb-2">Platform Tokens</h4>
+                                <div id="platform-tokens-list" class="max-h-64 overflow-y-auto bg-black/30 rounded p-2">
+                                    <p class="text-gray-500 text-sm">Click "Load Tokens" to view</p>
+                                </div>
+                            </div>
+                            <!-- Robinhood Tokens -->
+                            <div>
+                                <h4 class="text-pink-400 text-sm font-bold mb-2">Robinhood Tokens</h4>
+                                <div id="robinhood-tokens-list" class="max-h-64 overflow-y-auto bg-black/30 rounded p-2">
+                                    <p class="text-gray-500 text-sm">Click "Load Tokens" to view</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Manual Token Removal by Mint -->
+                        <div class="border-t border-gray-700 pt-4">
+                            <h4 class="text-orange-400 text-sm font-bold mb-2">Manual Token Removal</h4>
+                            <div class="flex gap-2 mb-2">
+                                <input type="text" id="remove-token-mint" class="input-field flex-1" placeholder="Enter mint address to remove...">
+                                <select id="remove-token-source" class="input-field w-32">
+                                    <option value="">Both</option>
+                                    <option value="platform">Platform</option>
+                                    <option value="robinhood">Robinhood</option>
+                                </select>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="removeToken()" class="btn btn-danger flex-1">🗑️ Delete Token</button>
+                                <button onclick="deactivateToken()" class="btn btn-warning flex-1">⏸️ Deactivate (RH only)</button>
+                                <button onclick="reactivateToken()" class="btn btn-success flex-1">▶️ Reactivate (RH only)</button>
+                            </div>
+                        </div>
+
+                        <div id="token-removal-result" class="result-box text-cyan-400 mt-4">
+                            // Token removal result will appear here
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -855,6 +907,7 @@
                         <div class="space-y-2">
                             <button onclick="triggerMetadataUpdate()" class="btn btn-secondary w-full">Force Metadata Update</button>
                             <button onclick="triggerHolderScan()" class="btn btn-secondary w-full">Force Holder Scan</button>
+                            <button onclick="triggerRobinhoodScan()" class="btn btn-secondary w-full">Force Robinhood Scan</button>
                             <button onclick="triggerFeeClaim()" class="btn btn-success w-full">Trigger Fee Claim</button>
                             <button onclick="triggerAirdrop()" class="btn btn-primary w-full">Trigger Airdrop</button>
                         </div>
@@ -900,10 +953,18 @@
                             <h3 class="text-orange-500 font-bold">API Endpoint Tester</h3>
                         </div>
                         <div class="space-y-2">
-                            <select id="api-method" class="input-field w-full">
-                                <option value="GET">GET</option>
-                                <option value="POST">POST</option>
-                            </select>
+                            <div class="flex gap-2">
+                                <select id="api-method" class="input-field w-24">
+                                    <option value="GET">GET</option>
+                                    <option value="POST">POST</option>
+                                    <option value="DELETE">DELETE</option>
+                                    <option value="PUT">PUT</option>
+                                </select>
+                                <label class="flex items-center gap-1 text-xs text-gray-400">
+                                    <input type="checkbox" id="api-include-auth" checked>
+                                    Include Admin Auth
+                                </label>
+                            </div>
                             <input type="text" id="api-endpoint" class="input-field w-full" placeholder="/api/health">
                             <textarea id="api-body" class="input-field w-full h-20" placeholder='{"key": "value"}'></textarea>
                             <button onclick="testApiEndpoint()" class="btn btn-primary w-full">Send Request</button>
@@ -1870,6 +1931,240 @@
             }
         }
 
+        // ===== TOKEN REMOVAL FUNCTIONS =====
+        async function loadAllTokensForRemoval() {
+            const platformList = document.getElementById('platform-tokens-list');
+            const robinhoodList = document.getElementById('robinhood-tokens-list');
+
+            platformList.innerHTML = '<p class="text-blue-400 text-sm">Loading...</p>';
+            robinhoodList.innerHTML = '<p class="text-blue-400 text-sm">Loading...</p>';
+            log('Loading tokens for removal...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/tokens`, {
+                    headers: { 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error || 'Failed to load tokens');
+                }
+
+                // Render platform tokens
+                if (data.platformTokens && data.platformTokens.length > 0) {
+                    platformList.innerHTML = data.platformTokens.map(t => `
+                        <div class="flex justify-between items-center p-2 hover:bg-gray-800 rounded text-xs border-b border-gray-700">
+                            <div class="flex-1">
+                                <span class="text-white font-bold">${t.ticker || '???'}</span>
+                                <span class="text-gray-500 ml-1">${shortenPubkey(t.mint)}</span>
+                            </div>
+                            <div class="flex gap-1">
+                                <button onclick="selectTokenForRemoval('${t.mint}', 'platform')" class="text-blue-400 hover:text-blue-300">Select</button>
+                                <button onclick="quickDeleteToken('${t.mint}', 'platform', '${t.ticker}')" class="text-red-400 hover:text-red-300 ml-2">🗑️</button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    platformList.innerHTML = '<p class="text-gray-500 text-sm">No platform tokens found</p>';
+                }
+
+                // Render robinhood tokens
+                if (data.robinhoodTokens && data.robinhoodTokens.length > 0) {
+                    robinhoodList.innerHTML = data.robinhoodTokens.map(t => `
+                        <div class="flex justify-between items-center p-2 hover:bg-gray-800 rounded text-xs border-b border-gray-700">
+                            <div class="flex-1">
+                                <span class="text-white font-bold">${t.ticker || '???'}</span>
+                                <span class="text-gray-500 ml-1">${shortenPubkey(t.mint)}</span>
+                                <span class="text-pink-400 ml-1">${t.feeShareBps ? (t.feeShareBps / 100) + '%' : ''}</span>
+                            </div>
+                            <div class="flex gap-1">
+                                <button onclick="selectTokenForRemoval('${t.mint}', 'robinhood')" class="text-blue-400 hover:text-blue-300">Select</button>
+                                <button onclick="quickDeactivateToken('${t.mint}', '${t.ticker}')" class="text-yellow-400 hover:text-yellow-300 ml-1">⏸️</button>
+                                <button onclick="quickDeleteToken('${t.mint}', 'robinhood', '${t.ticker}')" class="text-red-400 hover:text-red-300 ml-1">🗑️</button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    robinhoodList.innerHTML = '<p class="text-gray-500 text-sm">No robinhood tokens found</p>';
+                }
+
+                log(`Loaded ${data.totalPlatform} platform + ${data.totalRobinhood} robinhood tokens`, 'success');
+            } catch (e) {
+                platformList.innerHTML = `<p class="text-red-400 text-sm">Error: ${e.message}</p>`;
+                robinhoodList.innerHTML = `<p class="text-red-400 text-sm">Error: ${e.message}</p>`;
+                log(`Failed to load tokens: ${e.message}`, 'error');
+            }
+        }
+
+        function selectTokenForRemoval(mint, source) {
+            document.getElementById('remove-token-mint').value = mint;
+            document.getElementById('remove-token-source').value = source || '';
+            log(`Selected token ${shortenPubkey(mint)} for ${source || 'both'} removal`);
+        }
+
+        async function quickDeleteToken(mint, source, ticker) {
+            if (!confirm(`Are you sure you want to DELETE "${ticker}" (${shortenPubkey(mint)}) from ${source}?\n\nThis cannot be undone!`)) {
+                return;
+            }
+
+            const resultEl = document.getElementById('token-removal-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Deleting token...</span>';
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/tokens/${mint}?source=${source}&confirm=true`, {
+                    method: 'DELETE',
+                    headers: { 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Token "${data.ticker}" deleted successfully!</span>\n\n` + formatJson(data.deleted);
+                    log(`Token ${ticker} deleted successfully`, 'success');
+                    loadAllTokensForRemoval(); // Refresh the list
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Delete failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Delete error: ${e.message}`, 'error');
+            }
+        }
+
+        async function quickDeactivateToken(mint, ticker) {
+            if (!confirm(`Are you sure you want to DEACTIVATE "${ticker}" (${shortenPubkey(mint)})?\n\nThe token data will be preserved but it will be excluded from fee collection.`)) {
+                return;
+            }
+
+            const resultEl = document.getElementById('token-removal-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Deactivating token...</span>';
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/tokens/${mint}/deactivate`, {
+                    method: 'POST',
+                    headers: { 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-yellow-400">✓ Token "${data.ticker}" deactivated!</span>\n\n${data.message}`;
+                    log(`Token ${ticker} deactivated`, 'success');
+                    loadAllTokensForRemoval(); // Refresh the list
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Deactivate failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Deactivate error: ${e.message}`, 'error');
+            }
+        }
+
+        async function removeToken() {
+            const mint = document.getElementById('remove-token-mint').value.trim();
+            const source = document.getElementById('remove-token-source').value;
+
+            if (!mint) {
+                log('Please enter a mint address', 'warning');
+                return;
+            }
+
+            if (!confirm(`Are you sure you want to DELETE this token?\n\nMint: ${mint}\nSource: ${source || 'Both platform and robinhood'}\n\nThis cannot be undone!`)) {
+                return;
+            }
+
+            const resultEl = document.getElementById('token-removal-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Deleting token...</span>';
+
+            try {
+                let url = `${backendUrl}/api/admin/tokens/${mint}?confirm=true`;
+                if (source) url += `&source=${source}`;
+
+                const response = await fetch(url, {
+                    method: 'DELETE',
+                    headers: { 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Token deleted successfully!</span>\n\n` + formatJson(data);
+                    log(`Token ${data.ticker || mint} deleted`, 'success');
+                    document.getElementById('remove-token-mint').value = '';
+                    loadAllTokensForRemoval();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>\n${data.hint || ''}`;
+                    log(`Delete failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Delete error: ${e.message}`, 'error');
+            }
+        }
+
+        async function deactivateToken() {
+            const mint = document.getElementById('remove-token-mint').value.trim();
+
+            if (!mint) {
+                log('Please enter a mint address', 'warning');
+                return;
+            }
+
+            const resultEl = document.getElementById('token-removal-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Deactivating token...</span>';
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/tokens/${mint}/deactivate`, {
+                    method: 'POST',
+                    headers: { 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-yellow-400">✓ Token deactivated!</span>\n\n${formatJson(data)}`;
+                    log(`Token ${data.ticker || mint} deactivated`, 'success');
+                    loadAllTokensForRemoval();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Deactivate failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Deactivate error: ${e.message}`, 'error');
+            }
+        }
+
+        async function reactivateToken() {
+            const mint = document.getElementById('remove-token-mint').value.trim();
+
+            if (!mint) {
+                log('Please enter a mint address', 'warning');
+                return;
+            }
+
+            const resultEl = document.getElementById('token-removal-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Reactivating token...</span>';
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/tokens/${mint}/reactivate`, {
+                    method: 'POST',
+                    headers: { 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Token reactivated!</span>\n\n${formatJson(data)}`;
+                    log(`Token ${data.ticker || mint} reactivated`, 'success');
+                    loadAllTokensForRemoval();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Reactivate failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Reactivate error: ${e.message}`, 'error');
+            }
+        }
+
         // ===== REGISTRATION DEBUG =====
         async function verifyFeeSharing() {
             const mint = document.getElementById('verify-mint').value.trim();
@@ -2152,23 +2447,61 @@
         async function testApiEndpoint() {
             const method = document.getElementById('api-method').value;
             const endpoint = document.getElementById('api-endpoint').value.trim();
+            const includeAuth = document.getElementById('api-include-auth').checked;
+            const resultEl = document.getElementById('api-result');
             let body = null;
 
-            if (method === 'POST') {
-                try {
-                    body = JSON.parse(document.getElementById('api-body').value || '{}');
-                } catch (e) {
-                    document.getElementById('api-result').textContent = 'Invalid JSON body';
-                    return;
+            if (!endpoint) {
+                resultEl.textContent = 'Please enter an endpoint';
+                return;
+            }
+
+            if (method === 'POST' || method === 'PUT') {
+                const bodyText = document.getElementById('api-body').value.trim();
+                if (bodyText) {
+                    try {
+                        body = JSON.parse(bodyText);
+                    } catch (e) {
+                        resultEl.textContent = 'Invalid JSON body: ' + e.message;
+                        return;
+                    }
                 }
             }
 
+            resultEl.innerHTML = '<span class="text-blue-400">Sending request...</span>';
+            log(`Testing API: ${method} ${endpoint}${includeAuth ? ' (with auth)' : ''}`);
+
             try {
-                const data = await apiCall(endpoint, method, body);
-                document.getElementById('api-result').textContent = formatJson(data);
-                log(`API ${method} ${endpoint} completed`, 'success');
+                const options = {
+                    method,
+                    headers: { 'Content-Type': 'application/json' }
+                };
+
+                if (includeAuth && adminToken) {
+                    options.headers['x-admin-key'] = adminToken;
+                }
+
+                if (body && (method === 'POST' || method === 'PUT')) {
+                    options.body = JSON.stringify(body);
+                }
+
+                const response = await fetch(`${backendUrl}${endpoint}`, options);
+                const contentType = response.headers.get('content-type');
+
+                let data;
+                if (contentType && contentType.includes('application/json')) {
+                    data = await response.json();
+                } else {
+                    data = await response.text();
+                }
+
+                const statusColor = response.ok ? 'text-green-400' : 'text-yellow-400';
+                resultEl.innerHTML = `<span class="${statusColor}">HTTP ${response.status} ${response.statusText}</span>\n\n` +
+                    (typeof data === 'string' ? data : formatJson(data));
+                log(`API ${method} ${endpoint} returned ${response.status}`, response.ok ? 'success' : 'warning');
             } catch (e) {
-                document.getElementById('api-result').textContent = `Error: ${e.message}`;
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`API error: ${e.message}`, 'error');
             }
         }
 
@@ -2299,6 +2632,34 @@
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Airdrop error: ${e.message}`, 'error');
+            }
+        }
+
+        async function triggerRobinhoodScan() {
+            const resultEl = document.getElementById('action-result');
+            resultEl.innerHTML = '<span class="text-blue-400">Triggering Robinhood scan...</span>';
+            log('Triggering Robinhood scan...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/trigger-robinhood-scan`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ ${data.message}</span>`;
+                    log('Robinhood scan triggered successfully', 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error || data.message}</span>`;
+                    log(`Robinhood scan failed: ${data.error || data.message}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Robinhood scan error: ${e.message}`, 'error');
             }
         }
 

@@ -1417,6 +1417,201 @@ function init(deps) {
         }
     });
 
+    // ===== TOKEN MANAGEMENT ENDPOINTS =====
+
+    /**
+     * GET /admin/tokens
+     * List all tokens from both tokens and robinhood_tokens tables
+     */
+    router.get('/admin/tokens', adminAuth, async (req, res) => {
+        try {
+            const platformTokens = await db.all(`
+                SELECT mint, ticker, name, image, "marketCap", volume24h, "holderCount", timestamp as "createdAt", 'platform' as source
+                FROM tokens
+                ORDER BY volume24h DESC
+                LIMIT 100
+            `);
+
+            const robinhoodTokens = await db.all(`
+                SELECT mint, ticker, name, image, "marketCap", volume24h, "holderCount", "discoveredAt" as "createdAt", 'robinhood' as source, "feeShareBps"
+                FROM robinhood_tokens
+                WHERE "isActive" = 1
+                ORDER BY volume24h DESC
+                LIMIT 100
+            `);
+
+            res.json({
+                success: true,
+                platformTokens: platformTokens || [],
+                robinhoodTokens: robinhoodTokens || [],
+                totalPlatform: platformTokens?.length || 0,
+                totalRobinhood: robinhoodTokens?.length || 0
+            });
+        } catch (e) {
+            logger.error('[Admin] List tokens error', { error: e.message });
+            res.status(500).json({ error: 'Failed to list tokens' });
+        }
+    });
+
+    /**
+     * DELETE /admin/tokens/:mint
+     * Remove a token from the database (platform or robinhood)
+     */
+    router.delete('/admin/tokens/:mint', adminAuth, async (req, res) => {
+        try {
+            const { mint } = req.params;
+            const { source, confirm } = req.query;
+
+            if (confirm !== 'true') {
+                return res.status(400).json({
+                    error: 'Confirmation required. Add ?confirm=true to the request.',
+                    hint: 'This action cannot be undone.'
+                });
+            }
+
+            if (!mint || mint.length < 32) {
+                return res.status(400).json({ error: 'Invalid mint address' });
+            }
+
+            let deleted = { platform: 0, robinhood: 0, holders: 0 };
+
+            // Check which tables the token exists in
+            const platformToken = await db.get('SELECT mint, ticker FROM tokens WHERE mint = $1', [mint]);
+            const robinhoodToken = await db.get('SELECT mint, ticker FROM robinhood_tokens WHERE mint = $1', [mint]);
+
+            if (!platformToken && !robinhoodToken) {
+                return res.status(404).json({
+                    error: 'Token not found in database',
+                    mint
+                });
+            }
+
+            // Delete based on source or both if not specified
+            if (!source || source === 'platform') {
+                if (platformToken) {
+                    // Delete holders first
+                    const holderResult = await db.run('DELETE FROM token_holders WHERE mint = $1', [mint]);
+                    deleted.holders += holderResult.changes || 0;
+
+                    // Delete token
+                    const tokenResult = await db.run('DELETE FROM tokens WHERE mint = $1', [mint]);
+                    deleted.platform = tokenResult.changes || 0;
+
+                    logger.info('[Admin] Deleted platform token', { mint, ticker: platformToken.ticker });
+                }
+            }
+
+            if (!source || source === 'robinhood') {
+                if (robinhoodToken) {
+                    // Delete holders first
+                    const holderResult = await db.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [mint]);
+                    deleted.holders += holderResult.changes || 0;
+
+                    // Delete token
+                    const tokenResult = await db.run('DELETE FROM robinhood_tokens WHERE mint = $1', [mint]);
+                    deleted.robinhood = tokenResult.changes || 0;
+
+                    logger.info('[Admin] Deleted robinhood token', { mint, ticker: robinhoodToken.ticker });
+                }
+            }
+
+            res.json({
+                success: true,
+                message: 'Token deleted successfully',
+                mint,
+                ticker: platformToken?.ticker || robinhoodToken?.ticker,
+                deleted
+            });
+        } catch (e) {
+            logger.error('[Admin] Delete token error', { error: e.message });
+            res.status(500).json({ error: 'Failed to delete token' });
+        }
+    });
+
+    /**
+     * POST /admin/tokens/:mint/deactivate
+     * Soft-deactivate a robinhood token (keeps data but marks as inactive)
+     */
+    router.post('/admin/tokens/:mint/deactivate', adminAuth, async (req, res) => {
+        try {
+            const { mint } = req.params;
+
+            const robinhoodToken = await db.get('SELECT mint, ticker, "isActive" FROM robinhood_tokens WHERE mint = $1', [mint]);
+
+            if (!robinhoodToken) {
+                return res.status(404).json({
+                    error: 'Token not found in robinhood_tokens table',
+                    mint
+                });
+            }
+
+            if (!robinhoodToken.isActive) {
+                return res.json({
+                    success: true,
+                    message: 'Token was already deactivated',
+                    mint,
+                    ticker: robinhoodToken.ticker
+                });
+            }
+
+            await db.run('UPDATE robinhood_tokens SET "isActive" = 0 WHERE mint = $1', [mint]);
+
+            logger.info('[Admin] Deactivated robinhood token', { mint, ticker: robinhoodToken.ticker });
+
+            res.json({
+                success: true,
+                message: 'Token deactivated successfully',
+                mint,
+                ticker: robinhoodToken.ticker
+            });
+        } catch (e) {
+            logger.error('[Admin] Deactivate token error', { error: e.message });
+            res.status(500).json({ error: 'Failed to deactivate token' });
+        }
+    });
+
+    /**
+     * POST /admin/tokens/:mint/reactivate
+     * Re-activate a deactivated robinhood token
+     */
+    router.post('/admin/tokens/:mint/reactivate', adminAuth, async (req, res) => {
+        try {
+            const { mint } = req.params;
+
+            const robinhoodToken = await db.get('SELECT mint, ticker, "isActive" FROM robinhood_tokens WHERE mint = $1', [mint]);
+
+            if (!robinhoodToken) {
+                return res.status(404).json({
+                    error: 'Token not found in robinhood_tokens table',
+                    mint
+                });
+            }
+
+            if (robinhoodToken.isActive) {
+                return res.json({
+                    success: true,
+                    message: 'Token is already active',
+                    mint,
+                    ticker: robinhoodToken.ticker
+                });
+            }
+
+            await db.run('UPDATE robinhood_tokens SET "isActive" = 1 WHERE mint = $1', [mint]);
+
+            logger.info('[Admin] Reactivated robinhood token', { mint, ticker: robinhoodToken.ticker });
+
+            res.json({
+                success: true,
+                message: 'Token reactivated successfully',
+                mint,
+                ticker: robinhoodToken.ticker
+            });
+        } catch (e) {
+            logger.error('[Admin] Reactivate token error', { error: e.message });
+            res.status(500).json({ error: 'Failed to reactivate token' });
+        }
+    });
+
     return router;
 }
 
