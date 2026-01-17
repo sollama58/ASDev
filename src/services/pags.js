@@ -695,6 +695,7 @@ async function processClaim(twitterId, executeTransfer = false) {
 
 /**
  * Execute the actual SOL transfer for a claim with retry logic
+ * v25.69 SECURITY: Added claim amount bounds validation
  */
 async function executeClaimTransfer(claimId, recipientWallet, amount) {
     if (!pagsKeypair || !connection) {
@@ -704,6 +705,20 @@ async function executeClaimTransfer(claimId, recipientWallet, amount) {
     // Validate recipient
     if (!isValidPublicKey(recipientWallet)) {
         throw new Error('Invalid recipient wallet address');
+    }
+
+    // v25.69 SECURITY: Validate claim amount to prevent overflow and excessive transfers
+    // Max single claim: 1000 SOL (reasonable limit, prevents draining wallet on manipulation)
+    const MAX_CLAIM_SOL = 1000;
+    if (typeof amount !== 'number' || isNaN(amount) || !Number.isFinite(amount)) {
+        throw new Error('Invalid claim amount');
+    }
+    if (amount <= 0) {
+        throw new Error('Claim amount must be positive');
+    }
+    if (amount > MAX_CLAIM_SOL) {
+        logger.error('[PAGS] Claim amount exceeds maximum', { claimId, amount, maxAllowed: MAX_CLAIM_SOL });
+        throw new Error(`Claim amount exceeds maximum allowed (${MAX_CLAIM_SOL} SOL)`);
     }
 
     const recipientPubkey = new PublicKey(recipientWallet);
@@ -1029,6 +1044,14 @@ async function recordFeeCollection(mint, amount, source = 'manual', txSignature 
     // Validate amount is a positive number
     if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
         throw new Error('Amount must be a positive number');
+    }
+
+    // v25.69 SECURITY: Amount bounds validation to prevent overflow/manipulation
+    // Max reasonable fee: 10,000 SOL per transaction (prevents integer overflow)
+    const MAX_FEE_SOL = 10000;
+    if (!Number.isFinite(amount) || amount > MAX_FEE_SOL) {
+        logger.warn('[PAGS] Fee amount exceeds maximum allowed', { mint, amount, maxAllowed: MAX_FEE_SOL });
+        throw new Error(`Fee amount exceeds maximum allowed (${MAX_FEE_SOL} SOL)`);
     }
 
     // Get beneficiary with shares

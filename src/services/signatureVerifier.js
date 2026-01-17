@@ -187,12 +187,17 @@ function requireSignature(action) {
  * Generate a message for the client to sign
  * Client-side helper (can be used to document expected format)
  *
+ * v25.69 SECURITY: Use crypto.randomBytes for nonce generation instead of Math.random()
+ * Math.random() is not cryptographically secure and could be predicted
+ *
  * @param {string} action - The action being performed
  * @returns {Object} { message, timestamp, nonce }
  */
 function generateSigningMessage(action) {
     const timestamp = Date.now();
-    const nonce = Math.random().toString(36).substring(2, 15);
+    // SECURITY: Use crypto.randomBytes for cryptographically secure nonce
+    const crypto = require('crypto');
+    const nonce = crypto.randomBytes(16).toString('hex');
     const message = `${action}:${timestamp}:${nonce}`;
     return { message, timestamp, nonce };
 }

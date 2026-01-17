@@ -927,9 +927,14 @@ function init(deps) {
 
     /**
      * POST /api/auth/twitter/logout
-     * Clear session cookie
+     * Clear session cookie and revoke token
+     * v25.69 SECURITY: Now revokes the session token to prevent reuse
      */
-    router.post('/auth/twitter/logout', pagsTwitterAuth.requireSession, (req, res) => {
+    router.post('/auth/twitter/logout', pagsTwitterAuth.requireSession, async (req, res) => {
+        // v25.69 SECURITY: Revoke the token so it can't be reused
+        if (req.pagsSession && req.pagsSession.token) {
+            await pagsTwitterAuth.revokeSessionToken(req.pagsSession.token);
+        }
         pagsTwitterAuth.clearSessionCookie(res);
         res.json({ success: true, message: 'Logged out' });
     });
@@ -1812,9 +1817,11 @@ function init(deps) {
             };
 
             // Wipe all PAGS tables (in correct order due to foreign key constraints)
+            // v25.69 SECURITY: Must delete pags_beneficiary_shares before pags_beneficiaries
             await db.run('DELETE FROM pags_fee_logs');
             await db.run('DELETE FROM pags_claims');
             await db.run('DELETE FROM pags_twitter_users');
+            await db.run('DELETE FROM pags_beneficiary_shares'); // Must come before beneficiaries (FK constraint)
             await db.run('DELETE FROM pags_beneficiaries');
 
             logger.warn('[PAGS API] PAGS data wiped', beforeStats);

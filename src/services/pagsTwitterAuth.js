@@ -653,8 +653,9 @@ async function verifyUsername(twitterId) {
 /**
  * Express middleware to require PAGS session
  * Supports both Authorization header and cookies
+ * v25.69 SECURITY: Now checks for revoked tokens
  */
-function requireSession(req, res, next) {
+async function requireSession(req, res, next) {
     let token = null;
 
     // Try Authorization header first
@@ -708,10 +709,25 @@ function requireSession(req, res, next) {
         });
     }
 
+    // v25.69 SECURITY: Check if token has been revoked
+    if (decoded.jti && await isTokenRevoked(decoded.jti)) {
+        logger.warn('[PAGS Session] Revoked token rejected', {
+            path: req.path,
+            jti: decoded.jti.slice(0, 8) + '...'
+        });
+        return res.status(401).json({
+            success: false,
+            error: 'Session has been revoked',
+            code: 'SESSION_REVOKED'
+        });
+    }
+
     // Attach session info to request
     req.pagsSession = {
         twitterId: decoded.twitterId,
-        username: decoded.username
+        username: decoded.username,
+        jti: decoded.jti,
+        token: token // v25.69: Store token for revocation on logout
     };
 
     next();
@@ -742,6 +758,57 @@ function clearSessionCookie(res) {
     });
 }
 
+/**
+ * v25.69 SECURITY: Revoke a session token by adding its jti to blacklist
+ * Tokens are stored in Redis with TTL matching token expiry
+ */
+async function revokeSessionToken(token) {
+    const decoded = verifySessionToken(token);
+    if (!decoded.valid || !decoded.jti) {
+        return { success: false, error: 'Invalid token' };
+    }
+
+    if (redis) {
+        try {
+            const client = redis.getConnection();
+            if (client) {
+                // Store revoked jti in Redis with 24h TTL (matches token expiry)
+                await client.set(`pags:revoked:${decoded.jti}`, '1', 'EX', 86400);
+                logger.info('[PAGS Twitter Auth] Session token revoked', {
+                    twitterId: decoded.twitterId,
+                    jti: decoded.jti.slice(0, 8) + '...'
+                });
+                return { success: true };
+            }
+        } catch (e) {
+            logger.error('[PAGS Twitter Auth] Failed to revoke token in Redis', { error: e.message });
+        }
+    }
+
+    // If Redis unavailable, we can't reliably revoke - log warning
+    logger.warn('[PAGS Twitter Auth] Cannot revoke token - Redis unavailable');
+    return { success: false, error: 'Token revocation unavailable' };
+}
+
+/**
+ * v25.69 SECURITY: Check if a session token has been revoked
+ */
+async function isTokenRevoked(jti) {
+    if (!redis || !jti) return false;
+
+    try {
+        const client = redis.getConnection();
+        if (client) {
+            const revoked = await client.get(`pags:revoked:${jti}`);
+            return revoked === '1';
+        }
+    } catch (e) {
+        logger.debug('[PAGS Twitter Auth] Error checking revoked token', { error: e.message });
+    }
+
+    return false;
+}
+
 module.exports = {
     init,
     getAuthorizationUrl,
@@ -754,5 +821,7 @@ module.exports = {
     requireSession,
     setSessionCookie,
     clearSessionCookie,
-    validateRedirectUrl
+    validateRedirectUrl,
+    revokeSessionToken,
+    isTokenRevoked
 };
