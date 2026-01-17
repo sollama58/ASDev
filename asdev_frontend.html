@@ -1863,7 +1863,7 @@
                         <div id="pags-token-preview" class="hidden">
                             <div class="bg-black/30 p-3 rounded border border-orange-700/50">
                                 <div class="flex items-center gap-3">
-                                    <img id="pags-preview-img" src="" class="w-12 h-12 rounded border border-orange-600 object-cover">
+                                    <img id="pags-preview-img" src="https://placehold.co/48x48/1a1a2e/f59e0b?text=%24" class="w-12 h-12 rounded border border-orange-600 object-cover" onerror="this.src='https://placehold.co/48x48/1a1a2e/f59e0b?text=%24'">
                                     <div class="flex-1 min-w-0">
                                         <div id="pags-preview-ticker" class="text-lg font-bold text-white font-mono truncate">$TOKEN</div>
                                         <div id="pags-preview-name" class="text-sm text-orange-400 truncate">Token Name</div>
@@ -6429,6 +6429,7 @@
     };
 
     // Token preview for PAGS registration
+    // v25.64: Fetches token metadata from on-chain via backend, extracts image from metadata URI
     let pagsPreviewTimeout = null;
     let pagsLastPreviewedMint = null;
     const pagsPreviewToken = async (mintValue) => {
@@ -6454,31 +6455,73 @@
         }
 
         // Debounce the API call
+        const fallbackImg = 'https://placehold.co/48x48/1a1a2e/f59e0b?text=%24';
         pagsPreviewTimeout = setTimeout(async () => {
             try {
                 // Show loading state
                 previewEl.classList.remove('hidden');
-                document.getElementById('pags-preview-img').src = '';
+                document.getElementById('pags-preview-img').src = fallbackImg;
                 document.getElementById('pags-preview-ticker').textContent = 'Loading...';
                 document.getElementById('pags-preview-name').textContent = '';
                 document.getElementById('pags-preview-mcap').textContent = '';
 
-                // Fetch from DexScreener
-                const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
-                const data = await res.json();
-                const pair = data.pairs?.[0];
+                let tokenData = null;
+                let imageUrl = '';
 
-                if (pair) {
-                    document.getElementById('pags-preview-img').src = resolveTokenImage(pair.info?.imageUrl || '');
-                    document.getElementById('pags-preview-ticker').textContent = `$${pair.baseToken?.symbol || 'TOKEN'}`;
-                    document.getElementById('pags-preview-name').textContent = pair.baseToken?.name || 'Unknown Token';
-                    document.getElementById('pags-preview-mcap').textContent = `MCAP: ${formatMcap(pair.marketCap)}`;
+                // v25.64: Use backend to fetch on-chain token metadata
+                // This fetches the metadata URI from on-chain, then retrieves the JSON to get the image
+                try {
+                    const metadataRes = await fetch(`${BACKEND_URL}/api/token-metadata/${mint}`);
+                    if (metadataRes.ok) {
+                        const metadataData = await metadataRes.json();
+                        if (metadataData.success && metadataData.metadata) {
+                            // Extract image directly from on-chain metadata
+                            imageUrl = metadataData.metadata.image || '';
+                            tokenData = {
+                                symbol: metadataData.metadata.symbol,
+                                name: metadataData.metadata.name,
+                                marketCap: metadataData.marketCap || 0
+                            };
+                        }
+                    }
+                } catch (metadataErr) {
+                    console.warn('Backend metadata fetch failed', metadataErr);
+                }
+
+                // Fallback: Check if token is in our leaderboard/database
+                if (!tokenData) {
+                    try {
+                        const leaderboardRes = await fetch(`${BACKEND_URL}/api/leaderboard`);
+                        if (leaderboardRes.ok) {
+                            const lbData = await leaderboardRes.json();
+                            const tokens = lbData.tokens || [];
+                            const found = tokens.find(t => t.mint === mint);
+                            if (found) {
+                                imageUrl = found.image || '';
+                                tokenData = {
+                                    symbol: found.ticker,
+                                    name: found.name,
+                                    marketCap: found.marketCap || 0
+                                };
+                            }
+                        }
+                    } catch (lbErr) {
+                        console.warn('Leaderboard lookup failed', lbErr);
+                    }
+                }
+
+                if (tokenData) {
+                    const resolvedImg = imageUrl ? resolveTokenImage(imageUrl) : fallbackImg;
+                    document.getElementById('pags-preview-img').src = resolvedImg;
+                    document.getElementById('pags-preview-ticker').textContent = `$${tokenData.symbol || 'TOKEN'}`;
+                    document.getElementById('pags-preview-name').textContent = tokenData.name || 'Unknown Token';
+                    document.getElementById('pags-preview-mcap').textContent = tokenData.marketCap ? `MCAP: ${formatMcap(tokenData.marketCap)}` : '';
                     pagsLastPreviewedMint = mint;
                 } else {
-                    // Token not found on DexScreener
-                    document.getElementById('pags-preview-img').src = '';
-                    document.getElementById('pags-preview-ticker').textContent = 'Token not found';
-                    document.getElementById('pags-preview-name').textContent = 'Not listed on DexScreener yet';
+                    // Token not found - show mint address preview
+                    document.getElementById('pags-preview-img').src = fallbackImg;
+                    document.getElementById('pags-preview-ticker').textContent = `${mint.slice(0, 4)}...${mint.slice(-4)}`;
+                    document.getElementById('pags-preview-name').textContent = 'Token found - metadata loading...';
                     document.getElementById('pags-preview-mcap').textContent = '';
                     pagsLastPreviewedMint = mint;
                 }

@@ -9,6 +9,7 @@
  * v25.22 - SECURITY: Added signature verification for token registration
  * v25.36 - User holdings now uses supply-based point calculation (1B total supply)
  * v25.37 - Added token-lookup and token-lookup-batch endpoints for external integrations
+ * v25.64 - Added token-metadata endpoint for fetching on-chain metadata (PAGS preview)
  */
 const express = require('express');
 const axios = require('axios');
@@ -1293,6 +1294,101 @@ function init(deps) {
             res.status(500).json({
                 registered: false,
                 error: 'Database error',
+                details: e.message
+            });
+        }
+    });
+
+    /**
+     * GET /token-metadata/:mint
+     * v25.64: Fetch token metadata directly from on-chain via Helius DAS API
+     *
+     * Used by frontend for PAGS registration preview to extract image from metadata
+     * without relying on external APIs like DexScreener or Pump.fun
+     *
+     * Returns:
+     * - success: boolean
+     * - metadata: { name, symbol, image, description }
+     * - metadataUri: The raw metadata URI from on-chain
+     */
+    router.get('/token-metadata/:mint', async (req, res) => {
+        try {
+            const { mint } = req.params;
+
+            if (!isValidPubkey(mint)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid mint address'
+                });
+            }
+
+            // Check if Helius API key is configured
+            if (!config.HELIUS_API_KEY) {
+                return res.status(503).json({
+                    success: false,
+                    error: 'Metadata service not configured'
+                });
+            }
+
+            // Fetch from Helius DAS API
+            const heliusRes = await axios.post(
+                'https://mainnet.helius-rpc.com/',
+                {
+                    jsonrpc: '2.0',
+                    id: '1',
+                    method: 'getAsset',
+                    params: { id: mint, displayOptions: { showFungible: true } }
+                },
+                {
+                    timeout: 8000,
+                    headers: { 'Authorization': `Bearer ${config.HELIUS_API_KEY}` }
+                }
+            );
+
+            const asset = heliusRes.data?.result;
+            if (!asset) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Token not found on-chain'
+                });
+            }
+
+            const onChainMetadata = asset.content?.metadata || {};
+            const metadataUri = asset.content?.json_uri || null;
+
+            // Extract image using existing utility
+            let image = imageUtils.extractHeliusImage(asset);
+
+            // If no image from Helius response, try fetching from metadataUri
+            if (!image && metadataUri) {
+                try {
+                    image = await imageUtils.fetchImageFromMetadataUri(metadataUri, 5000);
+                } catch (e) {
+                    // Silent fail, proceed without image
+                }
+            }
+
+            // Normalize the image URL if we have one
+            if (image) {
+                image = imageUtils.normalizeImageUrl(image);
+            }
+
+            return res.json({
+                success: true,
+                metadata: {
+                    name: onChainMetadata.name || 'Unknown',
+                    symbol: onChainMetadata.symbol || 'UNKNOWN',
+                    image: image,
+                    description: onChainMetadata.description || ''
+                },
+                metadataUri: metadataUri
+            });
+
+        } catch (e) {
+            logger.error('[TokenMetadata] Error', { mint: req.params.mint, error: e.message });
+            res.status(500).json({
+                success: false,
+                error: 'Failed to fetch token metadata',
                 details: e.message
             });
         }
