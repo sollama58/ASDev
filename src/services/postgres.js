@@ -508,6 +508,26 @@ async function createSchema() {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_fee_logs_beneficiary ON pags_fee_logs("beneficiaryId")`);
 
+    // ===========================================
+    // Announcements Table
+    // ===========================================
+
+    // Admin announcements - displayed to all frontend users
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS announcements (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            type TEXT DEFAULT 'info',
+            "isActive" INTEGER DEFAULT 1,
+            "expiresAt" BIGINT,
+            "createdAt" BIGINT NOT NULL,
+            "createdBy" TEXT
+        )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements("isActive") WHERE "isActive" = 1`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_announcements_created ON announcements("createdAt" DESC)`);
+
     logger.info('[PostgreSQL] Schema created successfully');
 }
 

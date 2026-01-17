@@ -177,6 +177,7 @@ async function evaluateKothCandidates(db) {
 
     try {
         // Get all eligible tokens with their metrics (single query)
+        // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
         const candidates = await db.all(`
             SELECT
                 t.mint,

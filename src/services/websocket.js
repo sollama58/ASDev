@@ -141,6 +141,7 @@ function startBroadcasting(deps, intervalMs = 10000) {
                 kothToken,
                 recentLaunches,
                 robinhoodStats
+            // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
             ] = await Promise.all([
                 db.get('SELECT COUNT(*) as total FROM tokens'),
                 db.all(`
@@ -279,6 +280,21 @@ function broadcastAirdrop(airdrop) {
 }
 
 /**
+ * Broadcast an announcement to all connected clients
+ * @param {object} announcement - Announcement data
+ */
+function broadcastAnnouncement(announcement) {
+    broadcast('announcement', {
+        id: announcement.id,
+        title: announcement.title,
+        message: announcement.message,
+        type: announcement.type || 'info',
+        expiresAt: announcement.expiresAt,
+        createdAt: announcement.createdAt || Date.now()
+    });
+}
+
+/**
  * Get connected client count
  */
 function getClientCount() {
@@ -316,6 +332,7 @@ module.exports = {
     startBroadcasting,
     broadcastLaunch,
     broadcastAirdrop,
+    broadcastAnnouncement,
     getClientCount,
     close
 };

@@ -123,6 +123,7 @@ async function updateGlobalState(deps) {
     try {
         // v18.0: Get all tokens with >$100 24hr volume (no limit)
         // v25.4: Include volume24h for dynamic volume weighting
+        // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
         const eligibleTokens = await db.all(
             'SELECT mint, userPubkey, volume24h FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
             [MIN_VOLUME_USD]
@@ -312,6 +313,7 @@ async function updateGlobalState(deps) {
         // v16.0: Points are now scaled proportionally to our fee share percentage
         // v18.0: All robinhood tokens with >$100 volume are eligible (no limit)
         // v25.4: Also apply volume weighting to Robinhood tokens
+        // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
         try {
             const robinhoodTokens = await db.all(
                 'SELECT mint, "feeShareBps", ticker, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',

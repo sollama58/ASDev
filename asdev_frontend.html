@@ -722,6 +722,12 @@
         .tab-content.active { display: block; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
+        /* Announcement animations */
+        @keyframes slideInRight { from { opacity: 0; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes slideOutRight { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(100%); } }
+        .animate-slide-in-right { animation: slideInRight 0.3s ease forwards; }
+        .animate-slide-out-right { animation: slideOutRight 0.3s ease forwards; }
+
         /* Registration Panel */
         .register-panel {
             background: linear-gradient(135deg, rgba(34, 197, 94, 0.05) 0%, var(--bg-card) 100%);
@@ -1176,6 +1182,9 @@
     </style>
 </head>
 <body>
+
+<!-- Announcements Container -->
+<div id="announcements-container" class="fixed top-4 right-4 z-50 max-w-md space-y-2"></div>
 
 <div id="app-container">
     <div class="ticker-wrap"><div class="ticker" id="ticker-content"><span class="ticker-item text-orange-600">CONNECTING TO LAUNCH FEED...</span></div></div>
@@ -2874,6 +2883,90 @@
                 nextAirdropTime = Date.now() + AIRDROP_INTERVAL_MS;
             }
         }
+
+        if (msg.type === 'announcement') {
+            // Admin announcement received
+            console.log('[WS] Announcement received:', msg.data);
+            showAnnouncement(msg.data);
+        }
+    };
+
+    // Announcement display function
+    const showAnnouncement = (announcement) => {
+        const container = document.getElementById('announcements-container');
+        if (!container) return;
+
+        const typeStyles = {
+            info: { bg: 'bg-blue-900/95', border: 'border-blue-600', icon: 'info', iconColor: 'text-blue-400', titleColor: 'text-blue-300' },
+            success: { bg: 'bg-green-900/95', border: 'border-green-600', icon: 'check-circle', iconColor: 'text-green-400', titleColor: 'text-green-300' },
+            warning: { bg: 'bg-yellow-900/95', border: 'border-yellow-600', icon: 'alert-triangle', iconColor: 'text-yellow-400', titleColor: 'text-yellow-300' },
+            error: { bg: 'bg-red-900/95', border: 'border-red-600', icon: 'x-circle', iconColor: 'text-red-400', titleColor: 'text-red-300' },
+            announcement: { bg: 'bg-purple-900/95', border: 'border-purple-600', icon: 'megaphone', iconColor: 'text-purple-400', titleColor: 'text-purple-300' }
+        };
+
+        const style = typeStyles[announcement.type] || typeStyles.info;
+        const id = `announcement-${announcement.id || Date.now()}`;
+
+        // Don't show duplicate announcements
+        if (document.getElementById(id)) return;
+
+        const el = document.createElement('div');
+        el.id = id;
+        el.className = `${style.bg} border ${style.border} rounded-lg p-4 shadow-lg backdrop-blur-sm animate-slide-in-right`;
+        el.innerHTML = `
+            <div class="flex items-start gap-3">
+                <div class="${style.iconColor} flex-shrink-0 mt-0.5">
+                    <i data-lucide="${style.icon}" class="w-5 h-5"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="font-semibold ${style.titleColor}">${DOMPurify.sanitize(announcement.title)}</div>
+                    <div class="text-sm text-gray-300 mt-1">${DOMPurify.sanitize(announcement.message)}</div>
+                    <div class="text-xs text-gray-500 mt-2">${new Date(announcement.createdAt || Date.now()).toLocaleTimeString()}</div>
+                </div>
+                <button onclick="dismissAnnouncement('${id}')" class="text-gray-500 hover:text-white flex-shrink-0 p-1 rounded hover:bg-white/10 transition">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+        `;
+
+        container.insertBefore(el, container.firstChild);
+
+        // Initialize lucide icons on new element
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons({ icons: { info: lucide.icons.info, 'check-circle': lucide.icons.checkCircle, 'alert-triangle': lucide.icons.alertTriangle, 'x-circle': lucide.icons.xCircle, megaphone: lucide.icons.megaphone, x: lucide.icons.x } });
+        }
+
+        // Auto-dismiss after 30 seconds if not an error
+        if (announcement.type !== 'error') {
+            setTimeout(() => dismissAnnouncement(id), 30000);
+        }
+    };
+
+    // Dismiss announcement
+    window.dismissAnnouncement = (id) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.classList.add('animate-slide-out-right');
+            setTimeout(() => el.remove(), 300);
+        }
+    };
+
+    // Fetch active announcements on page load
+    const fetchActiveAnnouncements = async () => {
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/announcements`);
+            const data = await res.json();
+            if (data.success && data.announcements && data.announcements.length > 0) {
+                // Show most recent announcement that hasn't expired
+                const recent = data.announcements[0];
+                // Only show if created within the last hour
+                if (Date.now() - recent.createdAt < 3600000) {
+                    showAnnouncement(recent);
+                }
+            }
+        } catch (e) {
+            console.debug('[Announcements] Failed to fetch:', e.message);
+        }
     };
 
     // Helper functions to update UI from WebSocket data
@@ -3011,6 +3104,10 @@
 
     // Initialize WebSocket on load
     setTimeout(initWebSocket, 1000);
+
+    // Fetch any active announcements on page load
+    setTimeout(fetchActiveAnnouncements, 2000);
+
     const clearAllIntervals = () => { activeIntervals.forEach(id => clearInterval(id)); activeIntervals.length = 0; };
     window.addEventListener('beforeunload', clearAllIntervals);
 

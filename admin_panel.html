@@ -311,6 +311,7 @@
             <button class="tab-btn" onclick="switchTab('tools')">Tools</button>
             <button class="tab-btn" onclick="switchTab('koth')">KOTH AI</button>
             <button class="tab-btn" onclick="switchTab('pags')">PAGS</button>
+            <button class="tab-btn" onclick="switchTab('announcements')">Announcements</button>
         </div>
 
         <!-- Tab Content -->
@@ -1376,6 +1377,123 @@
                         </div>
                         <div id="pags-process-result" class="result-box mt-4 text-green-400">
                             // Processing result will appear here
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Announcements Tab -->
+            <div id="tab-announcements" class="tab-content hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Create Announcement -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Create Announcement</h3>
+                            <p class="text-xs text-gray-500 mt-1">Send announcements to all frontend users</p>
+                        </div>
+                        <div class="space-y-3 mt-4">
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Title *</label>
+                                <input type="text" id="announcement-title" class="input-field w-full" placeholder="Announcement title...">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Message *</label>
+                                <textarea id="announcement-message" class="input-field w-full h-24" placeholder="Enter your announcement message..."></textarea>
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Type</label>
+                                <select id="announcement-type" class="input-field w-full">
+                                    <option value="info">Info (Blue)</option>
+                                    <option value="success">Success (Green)</option>
+                                    <option value="warning">Warning (Yellow)</option>
+                                    <option value="error">Error (Red)</option>
+                                    <option value="announcement">Announcement (Purple)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1">Expiration (optional)</label>
+                                <input type="datetime-local" id="announcement-expires" class="input-field w-full">
+                                <p class="text-xs text-gray-500 mt-1">Leave empty for no expiration</p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <input type="checkbox" id="announcement-broadcast" checked class="rounded">
+                                <label for="announcement-broadcast" class="text-xs text-gray-400">Broadcast immediately via WebSocket</label>
+                            </div>
+                            <button onclick="createAnnouncement()" class="btn btn-primary w-full">Send Announcement</button>
+                        </div>
+                        <div id="announcement-create-result" class="result-box mt-4 text-green-400 hidden"></div>
+                    </div>
+
+                    <!-- Quick Announcements -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Quick Announcements</h3>
+                            <p class="text-xs text-gray-500 mt-1">One-click common announcements</p>
+                        </div>
+                        <div class="space-y-2 mt-4">
+                            <button onclick="sendQuickAnnouncement('maintenance', 'Scheduled Maintenance', 'We will be performing scheduled maintenance shortly. Please save your work.')" class="btn btn-secondary w-full text-left flex items-center gap-2">
+                                <span class="text-yellow-400">&#9888;</span> Maintenance Warning
+                            </button>
+                            <button onclick="sendQuickAnnouncement('success', 'Airdrop Complete', 'The SOL airdrop has been successfully distributed! Check your wallet.')" class="btn btn-secondary w-full text-left flex items-center gap-2">
+                                <span class="text-green-400">&#10003;</span> Airdrop Complete
+                            </button>
+                            <button onclick="sendQuickAnnouncement('info', 'New Feature', 'A new feature has been added! Check it out.')" class="btn btn-secondary w-full text-left flex items-center gap-2">
+                                <span class="text-blue-400">&#9432;</span> New Feature
+                            </button>
+                            <button onclick="sendQuickAnnouncement('warning', 'High Network Activity', 'Solana network is experiencing high activity. Transactions may be delayed.')" class="btn btn-secondary w-full text-left flex items-center gap-2">
+                                <span class="text-orange-400">&#9889;</span> Network Warning
+                            </button>
+                            <button onclick="sendQuickAnnouncement('error', 'Service Disruption', 'We are currently experiencing technical difficulties. Our team is working on it.')" class="btn btn-secondary w-full text-left flex items-center gap-2">
+                                <span class="text-red-400">&#10006;</span> Service Disruption
+                            </button>
+                        </div>
+                        <div id="quick-announcement-result" class="result-box mt-4 text-green-400 hidden"></div>
+                    </div>
+
+                    <!-- Active Announcements List -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">All Announcements</h3>
+                            <button onclick="fetchAnnouncements()" class="btn btn-secondary text-xs">Refresh</button>
+                        </div>
+                        <div id="announcements-list" class="max-h-96 overflow-y-auto mt-4">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Title</th>
+                                        <th>Type</th>
+                                        <th>Status</th>
+                                        <th>Created</th>
+                                        <th>Expires</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="announcements-table-body">
+                                    <tr><td colspan="7" class="text-center text-gray-500">Click "Refresh" to load announcements...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Announcement Preview -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">Live Preview</h3>
+                            <p class="text-xs text-gray-500 mt-1">Preview how your announcement will appear to users</p>
+                        </div>
+                        <div id="announcement-preview" class="mt-4 space-y-3">
+                            <div class="bg-blue-900/30 border border-blue-700/50 rounded-lg p-4">
+                                <div class="flex items-start gap-3">
+                                    <div class="text-blue-400 text-xl">&#9432;</div>
+                                    <div class="flex-1">
+                                        <div id="preview-title" class="font-bold text-blue-300">Announcement Title</div>
+                                        <div id="preview-message" class="text-sm text-gray-300 mt-1">Your message will appear here...</div>
+                                        <div id="preview-time" class="text-xs text-gray-500 mt-2">Just now</div>
+                                    </div>
+                                    <button class="text-gray-500 hover:text-white">&#10005;</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -3252,6 +3370,288 @@
                 btn.disabled = false;
                 btn.textContent = 'WIPE';
                 confirmInput.value = '';
+            }
+        }
+
+        // ===== ANNOUNCEMENTS =====
+
+        // Live preview update
+        document.addEventListener('DOMContentLoaded', () => {
+            const titleInput = document.getElementById('announcement-title');
+            const messageInput = document.getElementById('announcement-message');
+            const typeSelect = document.getElementById('announcement-type');
+
+            function updatePreview() {
+                const title = titleInput?.value || 'Announcement Title';
+                const message = messageInput?.value || 'Your message will appear here...';
+                const type = typeSelect?.value || 'info';
+
+                const previewEl = document.getElementById('announcement-preview');
+                if (!previewEl) return;
+
+                const typeStyles = {
+                    info: { bg: 'bg-blue-900/30', border: 'border-blue-700/50', icon: '&#9432;', iconColor: 'text-blue-400', titleColor: 'text-blue-300' },
+                    success: { bg: 'bg-green-900/30', border: 'border-green-700/50', icon: '&#10003;', iconColor: 'text-green-400', titleColor: 'text-green-300' },
+                    warning: { bg: 'bg-yellow-900/30', border: 'border-yellow-700/50', icon: '&#9888;', iconColor: 'text-yellow-400', titleColor: 'text-yellow-300' },
+                    error: { bg: 'bg-red-900/30', border: 'border-red-700/50', icon: '&#10006;', iconColor: 'text-red-400', titleColor: 'text-red-300' },
+                    announcement: { bg: 'bg-purple-900/30', border: 'border-purple-700/50', icon: '&#128227;', iconColor: 'text-purple-400', titleColor: 'text-purple-300' }
+                };
+
+                const style = typeStyles[type] || typeStyles.info;
+
+                previewEl.innerHTML = `
+                    <div class="${style.bg} border ${style.border} rounded-lg p-4">
+                        <div class="flex items-start gap-3">
+                            <div class="${style.iconColor} text-xl">${style.icon}</div>
+                            <div class="flex-1">
+                                <div class="font-bold ${style.titleColor}">${title}</div>
+                                <div class="text-sm text-gray-300 mt-1">${message}</div>
+                                <div class="text-xs text-gray-500 mt-2">Just now</div>
+                            </div>
+                            <button class="text-gray-500 hover:text-white">&#10005;</button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            titleInput?.addEventListener('input', updatePreview);
+            messageInput?.addEventListener('input', updatePreview);
+            typeSelect?.addEventListener('change', updatePreview);
+        });
+
+        async function createAnnouncement() {
+            const title = document.getElementById('announcement-title').value.trim();
+            const message = document.getElementById('announcement-message').value.trim();
+            const type = document.getElementById('announcement-type').value;
+            const expiresAt = document.getElementById('announcement-expires').value;
+            const broadcast = document.getElementById('announcement-broadcast').checked;
+            const resultEl = document.getElementById('announcement-create-result');
+
+            if (!title || !message) {
+                resultEl.classList.remove('hidden');
+                resultEl.innerHTML = '<span class="text-yellow-400">Title and message are required</span>';
+                return;
+            }
+
+            resultEl.classList.remove('hidden');
+            resultEl.innerHTML = '<span class="text-blue-400">Creating announcement...</span>';
+            log(`Creating announcement: "${title}"...`);
+
+            try {
+                const body = { title, message, type, broadcast };
+                if (expiresAt) {
+                    body.expiresAt = new Date(expiresAt).getTime();
+                }
+
+                const response = await fetch(`${backendUrl}/api/admin/announcements`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    },
+                    body: JSON.stringify(body)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Announcement created${data.broadcast ? ' and broadcast to all clients' : ''}!</span>`;
+                    log(`Announcement created: "${title}"${data.broadcast ? ' (broadcast)' : ''}`, 'success');
+
+                    // Clear form
+                    document.getElementById('announcement-title').value = '';
+                    document.getElementById('announcement-message').value = '';
+                    document.getElementById('announcement-type').value = 'info';
+                    document.getElementById('announcement-expires').value = '';
+
+                    // Refresh list
+                    fetchAnnouncements();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`Create failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Create error: ${e.message}`, 'error');
+            }
+        }
+
+        async function sendQuickAnnouncement(type, title, message) {
+            const resultEl = document.getElementById('quick-announcement-result');
+            resultEl.classList.remove('hidden');
+            resultEl.innerHTML = '<span class="text-blue-400">Sending announcement...</span>';
+            log(`Quick announcement: "${title}"...`);
+
+            // Map maintenance type to warning
+            const announcementType = type === 'maintenance' ? 'warning' : type;
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/announcements`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    },
+                    body: JSON.stringify({ title, message, type: announcementType, broadcast: true })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ "${title}" sent to all users!</span>`;
+                    log(`Quick announcement sent: "${title}"`, 'success');
+                    fetchAnnouncements();
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`Quick announcement failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Quick announcement error: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchAnnouncements() {
+            const tbody = document.getElementById('announcements-table-body');
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray-500">Loading...</td></tr>';
+            log('Fetching announcements...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/announcements`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const announcements = data.announcements || [];
+                    if (announcements.length > 0) {
+                        tbody.innerHTML = announcements.map(a => {
+                            const typeColors = {
+                                info: 'text-blue-400',
+                                success: 'text-green-400',
+                                warning: 'text-yellow-400',
+                                error: 'text-red-400',
+                                announcement: 'text-purple-400'
+                            };
+                            const typeColor = typeColors[a.type] || 'text-gray-400';
+                            const statusColor = a.isActive ? 'text-green-400' : 'text-gray-500';
+                            const expiresStr = a.expiresAt ? new Date(a.expiresAt).toLocaleString() : '<span class="text-gray-500">Never</span>';
+                            const isExpired = a.expiresAt && a.expiresAt < Date.now();
+
+                            return `
+                                <tr class="${isExpired ? 'opacity-50' : ''}">
+                                    <td class="text-orange-500">${a.id}</td>
+                                    <td class="text-white" title="${a.message}">${a.title.substring(0, 30)}${a.title.length > 30 ? '...' : ''}</td>
+                                    <td class="${typeColor}">${a.type}</td>
+                                    <td class="${statusColor}">${a.isActive ? 'Active' : 'Inactive'}${isExpired ? ' (expired)' : ''}</td>
+                                    <td class="text-gray-400 text-xs">${new Date(a.createdAt).toLocaleString()}</td>
+                                    <td class="text-xs">${expiresStr}</td>
+                                    <td>
+                                        <div class="flex gap-1">
+                                            <button onclick="rebroadcastAnnouncement(${a.id})" class="btn btn-secondary text-xs py-1 px-2" title="Broadcast again">&#128227;</button>
+                                            <button onclick="toggleAnnouncementActive(${a.id}, ${a.isActive ? 0 : 1})" class="btn ${a.isActive ? 'btn-danger' : 'btn-success'} text-xs py-1 px-2" title="${a.isActive ? 'Deactivate' : 'Activate'}">
+                                                ${a.isActive ? '&#10074;&#10074;' : '&#9654;'}
+                                            </button>
+                                            <button onclick="deleteAnnouncement(${a.id})" class="btn btn-danger text-xs py-1 px-2" title="Delete">&#10005;</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            `;
+                        }).join('');
+                        log(`Loaded ${announcements.length} announcements`, 'success');
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray-500">No announcements yet</td></tr>';
+                        log('No announcements found', 'info');
+                    }
+                } else {
+                    tbody.innerHTML = `<tr><td colspan="7" class="text-center text-red-400">Error: ${data.error}</td></tr>`;
+                    log(`Fetch failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="7" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
+                log(`Fetch error: ${e.message}`, 'error');
+            }
+        }
+
+        async function rebroadcastAnnouncement(id) {
+            log(`Re-broadcasting announcement #${id}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/announcements/${id}/broadcast`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    log(`Announcement #${id} broadcast to all clients`, 'success');
+                } else {
+                    log(`Broadcast failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                log(`Broadcast error: ${e.message}`, 'error');
+            }
+        }
+
+        async function toggleAnnouncementActive(id, isActive) {
+            log(`${isActive ? 'Activating' : 'Deactivating'} announcement #${id}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/announcements/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    },
+                    body: JSON.stringify({ isActive: !!isActive })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    log(`Announcement #${id} ${isActive ? 'activated' : 'deactivated'}`, 'success');
+                    fetchAnnouncements();
+                } else {
+                    log(`Toggle failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                log(`Toggle error: ${e.message}`, 'error');
+            }
+        }
+
+        async function deleteAnnouncement(id) {
+            if (!confirm(`Delete announcement #${id}?`)) return;
+
+            log(`Deleting announcement #${id}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/announcements/${id}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    log(`Announcement #${id} deleted`, 'success');
+                    fetchAnnouncements();
+                } else {
+                    log(`Delete failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                log(`Delete error: ${e.message}`, 'error');
             }
         }
 

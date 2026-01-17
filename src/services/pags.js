@@ -154,6 +154,10 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
     }
 
     try {
+        // v25.63: Note - tokens CAN be registered for both PAGS and platform (Robinhood)
+        // This allows creators to split fees (e.g., 50% to Robinhood holders, 50% to Twitter via PAGS)
+        // The exclusion logic in leaderboard/KOTH/airdrop ensures no double-dipping
+
         // Check if already registered
         const existing = await db.get(
             'SELECT * FROM pags_beneficiaries WHERE mint = $1',

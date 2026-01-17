@@ -249,6 +249,8 @@ function init(deps) {
                 // Use UNION ALL to merge both sources, preserving creator info
                 // v18.0: Removed LIMIT 10 to show all tokens, eligibility determined by volume threshold
                 // v24.0: Added LIMIT 500 for scalability (prevents unbounded queries)
+                // v25.63: Tokens can be registered for both platform AND PAGS (fee splitting)
+                // Only tokens in tokens/robinhood_tokens tables appear here - PAGS-only tokens won't
                 return await db.all(`
                     SELECT mint, "userPubkey" as creator, name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'launched' as source
                     FROM tokens
@@ -998,6 +1000,11 @@ function init(deps) {
                     mint
                 });
             }
+
+            // v25.63: Note - tokens CAN be registered for both PAGS and platform
+            // This allows creators to split fees (e.g., 50% to Robinhood holders, 50% to Twitter via PAGS)
+            // However, if a token is ALSO registered for PAGS, it will be excluded from
+            // leaderboard/KOTH/airdrop points to keep the reward systems separate
 
             // Get our platform wallet address
             const platformWallet = devKeypair.publicKey.toString();

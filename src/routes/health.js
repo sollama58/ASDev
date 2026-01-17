@@ -1185,6 +1185,238 @@ function init(deps) {
         res.json({ valid: true });
     });
 
+    // ===== ANNOUNCEMENT ENDPOINTS =====
+
+    /**
+     * GET /announcements
+     * Public endpoint to get active announcements for the frontend
+     */
+    router.get('/announcements', async (req, res) => {
+        try {
+            const now = Date.now();
+            const announcements = await db.all(`
+                SELECT id, title, message, type, "expiresAt", "createdAt"
+                FROM announcements
+                WHERE "isActive" = 1 AND ("expiresAt" IS NULL OR "expiresAt" > $1)
+                ORDER BY "createdAt" DESC
+                LIMIT 10
+            `, [now]);
+
+            res.json({
+                success: true,
+                announcements: announcements || []
+            });
+        } catch (e) {
+            logger.error('[Announcements] Fetch error', { error: e.message });
+            res.status(500).json({ error: 'Failed to fetch announcements' });
+        }
+    });
+
+    /**
+     * GET /admin/announcements
+     * Admin endpoint to get all announcements (including inactive)
+     */
+    router.get('/admin/announcements', adminAuth, async (req, res) => {
+        try {
+            const announcements = await db.all(`
+                SELECT id, title, message, type, "isActive", "expiresAt", "createdAt", "createdBy"
+                FROM announcements
+                ORDER BY "createdAt" DESC
+                LIMIT 50
+            `);
+
+            res.json({
+                success: true,
+                announcements: announcements || [],
+                count: announcements?.length || 0
+            });
+        } catch (e) {
+            logger.error('[Admin] Announcements fetch error', { error: e.message });
+            res.status(500).json({ error: 'Failed to fetch announcements' });
+        }
+    });
+
+    /**
+     * POST /admin/announcements
+     * Create a new announcement and broadcast to all connected clients
+     */
+    router.post('/admin/announcements', adminAuth, async (req, res) => {
+        const websocket = require('../services/websocket');
+
+        try {
+            const { title, message, type, expiresAt, broadcast: shouldBroadcast } = req.body;
+
+            if (!title || !message) {
+                return res.status(400).json({ error: 'Title and message are required' });
+            }
+
+            // Validate type
+            const validTypes = ['info', 'warning', 'success', 'error', 'announcement'];
+            const announcementType = validTypes.includes(type) ? type : 'info';
+
+            // Validate expiresAt if provided
+            let expiresAtTimestamp = null;
+            if (expiresAt) {
+                expiresAtTimestamp = typeof expiresAt === 'number' ? expiresAt : new Date(expiresAt).getTime();
+                if (isNaN(expiresAtTimestamp)) {
+                    return res.status(400).json({ error: 'Invalid expiresAt format' });
+                }
+            }
+
+            const createdAt = Date.now();
+
+            // Insert announcement
+            const result = await db.run(`
+                INSERT INTO announcements (title, message, type, "expiresAt", "createdAt", "createdBy", "isActive")
+                VALUES ($1, $2, $3, $4, $5, $6, 1)
+                RETURNING id
+            `, [title, message, announcementType, expiresAtTimestamp, createdAt, 'admin']);
+
+            const announcementId = result.lastID;
+
+            const announcement = {
+                id: announcementId,
+                title,
+                message,
+                type: announcementType,
+                expiresAt: expiresAtTimestamp,
+                createdAt
+            };
+
+            // Broadcast to all connected WebSocket clients
+            if (shouldBroadcast !== false) {
+                websocket.broadcastAnnouncement(announcement);
+                logger.info('[Admin] Announcement created and broadcast', { id: announcementId, title });
+            } else {
+                logger.info('[Admin] Announcement created (no broadcast)', { id: announcementId, title });
+            }
+
+            res.json({
+                success: true,
+                announcement,
+                broadcast: shouldBroadcast !== false
+            });
+        } catch (e) {
+            logger.error('[Admin] Create announcement error', { error: e.message });
+            res.status(500).json({ error: 'Failed to create announcement' });
+        }
+    });
+
+    /**
+     * PUT /admin/announcements/:id
+     * Update an existing announcement
+     */
+    router.put('/admin/announcements/:id', adminAuth, async (req, res) => {
+        try {
+            const { id } = req.params;
+            const { title, message, type, isActive, expiresAt } = req.body;
+
+            // Build update query dynamically based on provided fields
+            const updates = [];
+            const params = [];
+            let paramIndex = 1;
+
+            if (title !== undefined) {
+                updates.push(`title = $${paramIndex++}`);
+                params.push(title);
+            }
+            if (message !== undefined) {
+                updates.push(`message = $${paramIndex++}`);
+                params.push(message);
+            }
+            if (type !== undefined) {
+                const validTypes = ['info', 'warning', 'success', 'error', 'announcement'];
+                updates.push(`type = $${paramIndex++}`);
+                params.push(validTypes.includes(type) ? type : 'info');
+            }
+            if (isActive !== undefined) {
+                updates.push(`"isActive" = $${paramIndex++}`);
+                params.push(isActive ? 1 : 0);
+            }
+            if (expiresAt !== undefined) {
+                updates.push(`"expiresAt" = $${paramIndex++}`);
+                params.push(expiresAt ? (typeof expiresAt === 'number' ? expiresAt : new Date(expiresAt).getTime()) : null);
+            }
+
+            if (updates.length === 0) {
+                return res.status(400).json({ error: 'No fields to update' });
+            }
+
+            params.push(id);
+            const result = await db.run(`
+                UPDATE announcements
+                SET ${updates.join(', ')}
+                WHERE id = $${paramIndex}
+            `, params);
+
+            if (result.changes === 0) {
+                return res.status(404).json({ error: 'Announcement not found' });
+            }
+
+            logger.info('[Admin] Announcement updated', { id });
+            res.json({ success: true, updated: result.changes });
+        } catch (e) {
+            logger.error('[Admin] Update announcement error', { error: e.message });
+            res.status(500).json({ error: 'Failed to update announcement' });
+        }
+    });
+
+    /**
+     * DELETE /admin/announcements/:id
+     * Delete an announcement
+     */
+    router.delete('/admin/announcements/:id', adminAuth, async (req, res) => {
+        try {
+            const { id } = req.params;
+
+            const result = await db.run('DELETE FROM announcements WHERE id = $1', [id]);
+
+            if (result.changes === 0) {
+                return res.status(404).json({ error: 'Announcement not found' });
+            }
+
+            logger.info('[Admin] Announcement deleted', { id });
+            res.json({ success: true, deleted: result.changes });
+        } catch (e) {
+            logger.error('[Admin] Delete announcement error', { error: e.message });
+            res.status(500).json({ error: 'Failed to delete announcement' });
+        }
+    });
+
+    /**
+     * POST /admin/announcements/:id/broadcast
+     * Re-broadcast an existing announcement to all connected clients
+     */
+    router.post('/admin/announcements/:id/broadcast', adminAuth, async (req, res) => {
+        const websocket = require('../services/websocket');
+
+        try {
+            const { id } = req.params;
+
+            const announcement = await db.get(`
+                SELECT id, title, message, type, "expiresAt", "createdAt"
+                FROM announcements
+                WHERE id = $1
+            `, [id]);
+
+            if (!announcement) {
+                return res.status(404).json({ error: 'Announcement not found' });
+            }
+
+            websocket.broadcastAnnouncement(announcement);
+            logger.info('[Admin] Announcement re-broadcast', { id, title: announcement.title });
+
+            res.json({
+                success: true,
+                message: 'Announcement broadcast to all connected clients',
+                announcement
+            });
+        } catch (e) {
+            logger.error('[Admin] Broadcast announcement error', { error: e.message });
+            res.status(500).json({ error: 'Failed to broadcast announcement' });
+        }
+    });
+
     return router;
 }
 
