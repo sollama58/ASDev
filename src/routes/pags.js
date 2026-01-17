@@ -1756,6 +1756,160 @@ function init(deps) {
         }
     });
 
+    /**
+     * GET /api/admin/pags/debug-vault/:mint
+     * Debug reward vault detection for a specific token
+     * Shows how the vault addresses are derived and their current balances
+     */
+    router.get('/admin/pags/debug-vault/:mint', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            const mint = sanitizeString(req.params.mint, 64);
+            if (!mint) {
+                return errorResponse(res, 400, 'Invalid mint address');
+            }
+
+            const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+            const pump = require('../services/pump');
+            const pagsFeeScanner = require('../tasks/pagsFeeScanner');
+
+            // Get beneficiary info from database
+            const beneficiary = await db.get(
+                'SELECT * FROM pags_beneficiaries WHERE mint = $1',
+                [mint]
+            );
+
+            if (!beneficiary) {
+                return res.json({
+                    success: true,
+                    debug: {
+                        error: 'Beneficiary not found in database',
+                        mint,
+                        registered: false
+                    }
+                });
+            }
+
+            const debug = {
+                mint,
+                registered: true,
+                database: {
+                    twitterUsername: beneficiary.twitterUsername,
+                    creatorPubkey: beneficiary.creatorPubkey,
+                    feeShareBps: beneficiary.feeShareBps,
+                    feeSharePercent: (beneficiary.feeShareBps || 10000) / 100,
+                    totalFeesAccumulated: beneficiary.totalFeesAccumulated || 0,
+                    totalFeesClaimed: beneficiary.totalFeesClaimed || 0,
+                    dbPending: (beneficiary.totalFeesAccumulated || 0) - (beneficiary.totalFeesClaimed || 0),
+                    isActive: beneficiary.isActive === 1,
+                    createdAt: beneficiary.createdAt
+                },
+                vaultDerivation: null,
+                onChainBalances: null,
+                issues: []
+            };
+
+            // Check if creatorPubkey is valid
+            if (!beneficiary.creatorPubkey || beneficiary.creatorPubkey === 'unknown') {
+                debug.issues.push('creatorPubkey is missing or unknown - cannot derive vault addresses');
+                return res.json({ success: true, debug });
+            }
+
+            try {
+                const creatorPubkey = new PublicKey(beneficiary.creatorPubkey);
+                const pagsWallet = config.PAGS_WALLET ? new PublicKey(config.PAGS_WALLET) : null;
+
+                // Derive vault addresses
+                const { bcVault, ammVaultAuth, ammVaultAta } = pump.getCreatorFeeVaults(creatorPubkey);
+                const ammVaultAtaResolved = await ammVaultAta;
+
+                debug.vaultDerivation = {
+                    creatorPubkey: beneficiary.creatorPubkey,
+                    pagsWallet: config.PAGS_WALLET || 'NOT CONFIGURED',
+                    isDirectCreator: pagsWallet ? creatorPubkey.equals(pagsWallet) : false,
+                    bcVault: bcVault.toString(),
+                    ammVaultAuth: ammVaultAuth.toString(),
+                    ammVaultAta: ammVaultAtaResolved.toString(),
+                    derivationNote: 'Vaults are derived from creatorPubkey using PDA seeds "creator-vault" (BC) and "creator_vault" (AMM)'
+                };
+
+                // Fetch on-chain balances
+                debug.onChainBalances = {
+                    bcVault: { address: bcVault.toString(), balance: 0, balanceSol: 0, exists: false },
+                    ammVault: { address: ammVaultAtaResolved.toString(), balance: 0, balanceSol: 0, exists: false }
+                };
+
+                // Check BC vault balance (native SOL)
+                try {
+                    const bcInfo = await connection.getAccountInfo(bcVault);
+                    if (bcInfo) {
+                        debug.onChainBalances.bcVault.exists = true;
+                        debug.onChainBalances.bcVault.balance = bcInfo.lamports;
+                        debug.onChainBalances.bcVault.balanceSol = bcInfo.lamports / LAMPORTS_PER_SOL;
+                        debug.onChainBalances.bcVault.rentExemptMin = 5000;
+                        debug.onChainBalances.bcVault.claimableBalance = Math.max(0, bcInfo.lamports - 5000);
+                        debug.onChainBalances.bcVault.claimableSol = Math.max(0, bcInfo.lamports - 5000) / LAMPORTS_PER_SOL;
+                    }
+                } catch (e) {
+                    debug.onChainBalances.bcVault.error = e.message;
+                }
+
+                // Check AMM vault balance (wSOL token account)
+                try {
+                    const ammBalance = await connection.getTokenAccountBalance(ammVaultAtaResolved)
+                        .catch(() => ({ value: { amount: "0" } }));
+                    const ammLamports = parseInt(ammBalance.value.amount) || 0;
+                    debug.onChainBalances.ammVault.exists = ammLamports > 0;
+                    debug.onChainBalances.ammVault.balance = ammLamports;
+                    debug.onChainBalances.ammVault.balanceSol = ammLamports / LAMPORTS_PER_SOL;
+                } catch (e) {
+                    debug.onChainBalances.ammVault.error = e.message;
+                }
+
+                // Calculate totals
+                const bcClaimable = debug.onChainBalances.bcVault.claimableBalance || 0;
+                const ammClaimable = debug.onChainBalances.ammVault.balance || 0;
+                const totalOnChainLamports = bcClaimable + ammClaimable;
+                const feeShareBps = beneficiary.feeShareBps || 10000;
+                const ourShareLamports = Math.floor(totalOnChainLamports * (feeShareBps / 10000));
+
+                debug.summary = {
+                    totalOnChainLamports,
+                    totalOnChainSol: totalOnChainLamports / LAMPORTS_PER_SOL,
+                    feeShareBps,
+                    ourShareLamports,
+                    ourShareSol: ourShareLamports / LAMPORTS_PER_SOL,
+                    dbPendingSol: debug.database.dbPending,
+                    combinedPendingSol: (ourShareLamports / LAMPORTS_PER_SOL) + debug.database.dbPending
+                };
+
+                // Check for issues
+                if (totalOnChainLamports === 0 && debug.database.dbPending === 0) {
+                    debug.issues.push('Both on-chain vaults and database show 0 pending fees');
+                }
+                if (!debug.onChainBalances.bcVault.exists && !debug.onChainBalances.ammVault.exists) {
+                    debug.issues.push('Neither vault account exists on-chain yet (no fees accumulated)');
+                }
+                if (debug.vaultDerivation.isDirectCreator && feeShareBps !== 10000) {
+                    debug.issues.push('Mismatch: isDirectCreator but feeShareBps is not 10000');
+                }
+
+            } catch (e) {
+                debug.issues.push(`Vault derivation error: ${e.message}`);
+            }
+
+            res.json({ success: true, debug });
+
+        } catch (e) {
+            logger.error('[PAGS API] Debug vault error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to debug vault');
+        }
+    });
+
     return router;
 }
 

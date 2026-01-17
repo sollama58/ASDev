@@ -1274,6 +1274,21 @@
                         </div>
                     </div>
 
+                    <!-- Reward Vault Debugger -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header">
+                            <h3 class="text-orange-500 font-bold">🔍 Reward Vault Debugger</h3>
+                            <p class="text-xs text-gray-400 mt-1">Debug how creator reward vaults are derived and check on-chain balances</p>
+                        </div>
+                        <div class="flex items-center gap-2 mt-4">
+                            <input type="text" id="pags-debug-mint" placeholder="Token mint address" class="input-field flex-1">
+                            <button onclick="debugRewardVault()" class="btn btn-primary">Debug Vault</button>
+                        </div>
+                        <div id="pags-vault-debug-result" class="mt-4 text-xs bg-gray-900/50 p-4 rounded max-h-96 overflow-y-auto hidden">
+                            <!-- Debug results will appear here -->
+                        </div>
+                    </div>
+
                     <!-- Verified Twitter Users -->
                     <div class="panel lg:col-span-2">
                         <div class="panel-header flex justify-between items-center">
@@ -3326,14 +3341,16 @@
                             const pending = (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0);
                             const tokenDisplay = b.ticker ? `${b.ticker}` : shortenPubkey(b.mint);
                             const hasMultiRecipients = b.hasMultipleRecipients ? '<span class="text-yellow-500 text-xs ml-1" title="Multiple fee recipients">(multi)</span>' : '';
+                            const hasCreatorPubkey = b.creatorPubkey && b.creatorPubkey !== 'unknown';
+                            const creatorWarning = !hasCreatorPubkey ? '<span class="text-red-400 text-xs ml-1" title="Missing creatorPubkey - vault derivation will fail">⚠️</span>' : '';
                             return `
-                                <tr onclick="document.getElementById('pags-lookup-mint').value='${b.mint}'; lookupPagsStatus();" style="cursor: pointer;">
-                                    <td class="text-gray-300" title="${b.mint}">${tokenDisplay}${hasMultiRecipients}</td>
+                                <tr style="cursor: pointer;" title="Click to debug vault">
+                                    <td class="text-gray-300" title="${b.mint}" onclick="document.getElementById('pags-debug-mint').value='${b.mint}'; debugRewardVault();">${tokenDisplay}${hasMultiRecipients}${creatorWarning}</td>
                                     <td class="text-purple-400">@${b.twitterUsername}</td>
                                     <td class="text-orange-400">${(b.feeSharePercent || 100).toFixed(1)}%</td>
                                     <td class="text-green-400">${(b.totalFeesAccumulated || 0).toFixed(6)}</td>
                                     <td class="text-cyan-400">${(b.totalFeesClaimed || 0).toFixed(6)}</td>
-                                    <td class="text-yellow-400">${pending.toFixed(6)}</td>
+                                    <td class="text-yellow-400" title="Database pending (fees claimed by scanner)">${pending.toFixed(6)}</td>
                                     <td>${b.isActive ? '<span class="text-green-400">Active</span>' : '<span class="text-red-400">Inactive</span>'}</td>
                                 </tr>
                             `;
@@ -3438,6 +3455,126 @@
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Deactivation error: ${e.message}`, 'error');
+            }
+        }
+
+        async function debugRewardVault() {
+            const mint = document.getElementById('pags-debug-mint').value.trim();
+            const resultEl = document.getElementById('pags-vault-debug-result');
+
+            if (!mint) {
+                resultEl.classList.remove('hidden');
+                resultEl.innerHTML = '<span class="text-yellow-400">Please enter a token mint address</span>';
+                return;
+            }
+
+            resultEl.classList.remove('hidden');
+            resultEl.innerHTML = '<span class="text-blue-400">Debugging reward vault...</span>';
+            log(`Debugging reward vault for ${shortenPubkey(mint)}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/pags/debug-vault/${mint}`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success && data.debug) {
+                    const d = data.debug;
+                    let html = '';
+
+                    // Registration status
+                    if (!d.registered) {
+                        html = `<span class="text-red-400">⚠️ Token not registered: ${d.error || 'Not found'}</span>`;
+                    } else {
+                        // Database info
+                        html += `<div class="mb-4">
+                            <div class="text-purple-400 font-bold mb-2">📊 Database Info</div>
+                            <div class="grid grid-cols-2 gap-2 text-gray-300">
+                                <span>Twitter:</span><span class="text-purple-300">@${d.database.twitterUsername}</span>
+                                <span>Creator Pubkey:</span><span class="text-orange-300 break-all">${shortenPubkey(d.database.creatorPubkey, 12)}</span>
+                                <span>Fee Share:</span><span class="text-cyan-300">${d.database.feeSharePercent}% (${d.database.feeShareBps} bps)</span>
+                                <span>Accumulated:</span><span class="text-green-300">${d.database.totalFeesAccumulated.toFixed(6)} SOL</span>
+                                <span>Claimed:</span><span class="text-cyan-300">${d.database.totalFeesClaimed.toFixed(6)} SOL</span>
+                                <span>DB Pending:</span><span class="text-yellow-300">${d.database.dbPending.toFixed(6)} SOL</span>
+                                <span>Status:</span><span class="${d.database.isActive ? 'text-green-400' : 'text-red-400'}">${d.database.isActive ? 'Active' : 'Inactive'}</span>
+                            </div>
+                        </div>`;
+
+                        // Vault derivation
+                        if (d.vaultDerivation) {
+                            html += `<div class="mb-4">
+                                <div class="text-purple-400 font-bold mb-2">🔑 Vault Derivation</div>
+                                <div class="grid grid-cols-1 gap-1 text-gray-300 text-xs">
+                                    <div><span class="text-gray-500">Creator Pubkey:</span> <span class="text-orange-300 break-all">${d.vaultDerivation.creatorPubkey}</span></div>
+                                    <div><span class="text-gray-500">PAGS Wallet:</span> <span class="text-cyan-300">${d.vaultDerivation.pagsWallet}</span></div>
+                                    <div><span class="text-gray-500">Is Direct Creator:</span> <span class="${d.vaultDerivation.isDirectCreator ? 'text-green-400' : 'text-yellow-400'}">${d.vaultDerivation.isDirectCreator ? 'Yes (100% fee share)' : 'No (shared fees)'}</span></div>
+                                    <div class="mt-2"><span class="text-gray-500">BC Vault (native SOL):</span></div>
+                                    <div class="text-orange-300 break-all ml-4">${d.vaultDerivation.bcVault}</div>
+                                    <div><span class="text-gray-500">AMM Vault Auth:</span></div>
+                                    <div class="text-orange-300 break-all ml-4">${d.vaultDerivation.ammVaultAuth}</div>
+                                    <div><span class="text-gray-500">AMM Vault ATA (wSOL):</span></div>
+                                    <div class="text-orange-300 break-all ml-4">${d.vaultDerivation.ammVaultAta}</div>
+                                    <div class="mt-2 text-gray-500 italic">${d.vaultDerivation.derivationNote}</div>
+                                </div>
+                            </div>`;
+                        }
+
+                        // On-chain balances
+                        if (d.onChainBalances) {
+                            const bc = d.onChainBalances.bcVault;
+                            const amm = d.onChainBalances.ammVault;
+                            html += `<div class="mb-4">
+                                <div class="text-purple-400 font-bold mb-2">⛓️ On-Chain Vault Balances</div>
+                                <div class="grid grid-cols-2 gap-2 text-gray-300">
+                                    <span>BC Vault Exists:</span><span class="${bc.exists ? 'text-green-400' : 'text-gray-500'}">${bc.exists ? 'Yes' : 'No'}</span>
+                                    <span>BC Balance:</span><span class="text-yellow-300">${bc.balanceSol.toFixed(9)} SOL</span>
+                                    ${bc.exists ? `<span>BC Claimable:</span><span class="text-green-300">${bc.claimableSol?.toFixed(9) || '0'} SOL</span>` : ''}
+                                    <span>AMM Vault Exists:</span><span class="${amm.exists ? 'text-green-400' : 'text-gray-500'}">${amm.exists ? 'Yes' : 'No'}</span>
+                                    <span>AMM Balance:</span><span class="text-yellow-300">${amm.balanceSol.toFixed(9)} SOL</span>
+                                </div>
+                                ${bc.error ? `<div class="text-red-400 mt-1">BC Error: ${bc.error}</div>` : ''}
+                                ${amm.error ? `<div class="text-red-400 mt-1">AMM Error: ${amm.error}</div>` : ''}
+                            </div>`;
+                        }
+
+                        // Summary
+                        if (d.summary) {
+                            html += `<div class="mb-4">
+                                <div class="text-purple-400 font-bold mb-2">📈 Summary</div>
+                                <div class="grid grid-cols-2 gap-2 text-gray-300">
+                                    <span>Total On-Chain:</span><span class="text-yellow-300">${d.summary.totalOnChainSol.toFixed(9)} SOL</span>
+                                    <span>Our Share (${d.summary.feeShareBps/100}%):</span><span class="text-green-300">${d.summary.ourShareSol.toFixed(9)} SOL</span>
+                                    <span>DB Pending:</span><span class="text-cyan-300">${d.summary.dbPendingSol.toFixed(6)} SOL</span>
+                                    <span class="font-bold">Combined Pending:</span><span class="text-orange-400 font-bold">${d.summary.combinedPendingSol.toFixed(6)} SOL</span>
+                                </div>
+                            </div>`;
+                        }
+
+                        // Issues
+                        if (d.issues && d.issues.length > 0) {
+                            html += `<div class="mb-4">
+                                <div class="text-red-400 font-bold mb-2">⚠️ Issues Detected</div>
+                                <ul class="list-disc list-inside text-red-300">
+                                    ${d.issues.map(i => `<li>${i}</li>`).join('')}
+                                </ul>
+                            </div>`;
+                        }
+                    }
+
+                    resultEl.innerHTML = html;
+                    log(`Vault debug completed for ${shortenPubkey(mint)}`, 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error || 'Unknown error'}</span>`;
+                    log(`Vault debug failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Vault debug error: ${e.message}`, 'error');
             }
         }
 
