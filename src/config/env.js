@@ -14,7 +14,7 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.55-PAGS-VAULT-DERIVATION-FIX",
+    VERSION: "v25.56-PAGS-ADMIN-PANEL",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
     // v25.49: Base URL where the BACKEND API is hosted (for OAuth callbacks)

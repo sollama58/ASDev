@@ -1419,6 +1419,203 @@ function init(deps) {
         }
     });
 
+    /**
+     * POST /api/admin/pags/repair-all
+     * Run all repair operations: fix creator pubkeys, backfill metadata
+     * This is a combined endpoint for the admin panel
+     */
+    router.post('/admin/pags/repair-all', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            logger.info('[PAGS API] Starting full repair operation');
+
+            const results = {
+                creatorPubkeys: { success: 0, failed: 0, processed: 0 },
+                metadata: { success: 0, failed: 0, processed: 0 },
+                details: []
+            };
+
+            // Step 1: Fix creator pubkeys
+            const beneficiariesWithUnknown = await db.all(`
+                SELECT mint, "twitterUsername", "feeShareBps"
+                FROM pags_beneficiaries
+                WHERE "isActive" = 1 AND ("creatorPubkey" IS NULL OR "creatorPubkey" = 'unknown')
+                LIMIT 100
+            `);
+
+            results.creatorPubkeys.processed = beneficiariesWithUnknown.length;
+
+            for (const b of beneficiariesWithUnknown) {
+                try {
+                    const feeRecipientResult = await mintExtractor.verifyFeeRecipient(
+                        b.mint,
+                        config.PAGS_WALLET,
+                        connection
+                    );
+
+                    if (feeRecipientResult.isRecipient && feeRecipientResult.originalCreator) {
+                        await db.run(
+                            'UPDATE pags_beneficiaries SET "creatorPubkey" = $1, "feeShareBps" = $2 WHERE mint = $3',
+                            [feeRecipientResult.originalCreator, feeRecipientResult.feeShareBps, b.mint]
+                        );
+                        results.creatorPubkeys.success++;
+                        results.details.push({ mint: b.mint, type: 'creatorPubkey', status: 'fixed' });
+                    } else {
+                        results.creatorPubkeys.failed++;
+                        results.details.push({ mint: b.mint, type: 'creatorPubkey', status: 'failed' });
+                    }
+                } catch (e) {
+                    results.creatorPubkeys.failed++;
+                }
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+
+            // Step 2: Backfill metadata
+            const postgres = require('../services/postgres');
+            const beneficiariesWithoutMetadata = await db.all(`
+                SELECT b.mint, b."creatorPubkey"
+                FROM pags_beneficiaries b
+                LEFT JOIN tokens t ON t.mint = b.mint
+                WHERE b."isActive" = 1 AND (t.mint IS NULL OR t.ticker IS NULL)
+                LIMIT 100
+            `);
+
+            results.metadata.processed = beneficiariesWithoutMetadata.length;
+
+            for (const b of beneficiariesWithoutMetadata) {
+                try {
+                    const metadata = await mintExtractor.fetchPumpFunTokenMetadata(b.mint);
+                    if (metadata && metadata.ticker && metadata.name) {
+                        await postgres.saveTokenData(
+                            b.creatorPubkey || 'unknown',
+                            b.mint,
+                            {
+                                ticker: metadata.ticker,
+                                name: metadata.name,
+                                image: metadata.image || '',
+                                description: metadata.description || '',
+                                twitter: metadata.twitter || '',
+                                website: metadata.website || ''
+                            }
+                        );
+                        results.metadata.success++;
+                        results.details.push({ mint: b.mint, type: 'metadata', status: 'fixed', ticker: metadata.ticker });
+                    } else {
+                        results.metadata.failed++;
+                    }
+                } catch (e) {
+                    results.metadata.failed++;
+                }
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+
+            logger.info('[PAGS API] Full repair complete', results);
+
+            res.json({
+                success: true,
+                message: 'Repair operations completed',
+                results
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Repair all error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to run repair operations');
+        }
+    });
+
+    /**
+     * POST /api/admin/pags/wipe
+     * Wipe all PAGS data from the database (beneficiaries, users, claims)
+     * DANGEROUS: This is irreversible!
+     */
+    router.post('/admin/pags/wipe', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            const { confirm } = req.body;
+            if (confirm !== 'WIPE_ALL_PAGS_DATA') {
+                return errorResponse(res, 400, 'Confirmation required. Send { "confirm": "WIPE_ALL_PAGS_DATA" }');
+            }
+
+            logger.warn('[PAGS API] !!! WIPING ALL PAGS DATA !!!');
+
+            // Get counts before wiping
+            const beforeStats = {
+                beneficiaries: (await db.get('SELECT COUNT(*) as count FROM pags_beneficiaries'))?.count || 0,
+                users: (await db.get('SELECT COUNT(*) as count FROM pags_users'))?.count || 0,
+                claims: (await db.get('SELECT COUNT(*) as count FROM pags_claims'))?.count || 0
+            };
+
+            // Wipe all PAGS tables
+            await db.run('DELETE FROM pags_claims');
+            await db.run('DELETE FROM pags_users');
+            await db.run('DELETE FROM pags_beneficiaries');
+
+            logger.warn('[PAGS API] PAGS data wiped', beforeStats);
+
+            res.json({
+                success: true,
+                message: 'All PAGS data has been wiped',
+                wiped: beforeStats
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Wipe error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to wipe PAGS data');
+        }
+    });
+
+    /**
+     * GET /api/admin/pags/health
+     * Get PAGS system health and repair status
+     */
+    router.get('/admin/pags/health', adminLimiter, async (req, res) => {
+        try {
+            const adminKey = req.headers['x-admin-key'];
+            if (!config.ADMIN_API_KEY || !timingSafeEqual(adminKey, config.ADMIN_API_KEY)) {
+                return errorResponse(res, 401, 'Unauthorized');
+            }
+
+            // Get counts of issues
+            const unknownCreatorCount = (await db.get(`
+                SELECT COUNT(*) as count FROM pags_beneficiaries
+                WHERE "isActive" = 1 AND ("creatorPubkey" IS NULL OR "creatorPubkey" = 'unknown')
+            `))?.count || 0;
+
+            const missingMetadataCount = (await db.get(`
+                SELECT COUNT(*) as count FROM pags_beneficiaries b
+                LEFT JOIN tokens t ON t.mint = b.mint
+                WHERE b."isActive" = 1 AND (t.mint IS NULL OR t.ticker IS NULL)
+            `))?.count || 0;
+
+            const totalBeneficiaries = (await db.get('SELECT COUNT(*) as count FROM pags_beneficiaries WHERE "isActive" = 1'))?.count || 0;
+            const totalUsers = (await db.get('SELECT COUNT(*) as count FROM pags_users'))?.count || 0;
+            const pendingClaims = (await db.get('SELECT COUNT(*) as count FROM pags_claims WHERE status = $1', ['pending']))?.count || 0;
+
+            res.json({
+                success: true,
+                health: {
+                    totalBeneficiaries,
+                    totalUsers,
+                    pendingClaims,
+                    issues: {
+                        unknownCreatorPubkeys: unknownCreatorCount,
+                        missingMetadata: missingMetadataCount
+                    },
+                    needsRepair: unknownCreatorCount > 0 || missingMetadataCount > 0
+                }
+            });
+        } catch (e) {
+            logger.error('[PAGS API] Health check error', { error: e.message });
+            return errorResponse(res, 500, 'Failed to get health status');
+        }
+    });
+
     return router;
 }
 

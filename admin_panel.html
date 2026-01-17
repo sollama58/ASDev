@@ -1296,6 +1296,53 @@
                         </div>
                     </div>
 
+                    <!-- PAGS Database Operations (Admin) -->
+                    <div class="panel lg:col-span-2 border-2 border-yellow-600/50">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-yellow-400 font-bold">🔧 PAGS Database Operations</h3>
+                            <button onclick="fetchPagsHealth()" class="btn btn-secondary text-xs">Check Health</button>
+                        </div>
+                        <div id="pags-health-status" class="bg-gray-900/50 rounded p-3 mt-3 text-sm">
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <div>
+                                    <span class="text-gray-400">Total Beneficiaries:</span>
+                                    <span id="pags-health-beneficiaries" class="text-purple-400 font-bold ml-1">--</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-400">Unknown Creator Keys:</span>
+                                    <span id="pags-health-unknown" class="text-red-400 font-bold ml-1">--</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-400">Missing Metadata:</span>
+                                    <span id="pags-health-metadata" class="text-orange-400 font-bold ml-1">--</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-400">Status:</span>
+                                    <span id="pags-health-status-text" class="font-bold ml-1">--</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                            <!-- Repair Operations -->
+                            <div class="bg-green-900/20 border border-green-700/50 rounded p-4">
+                                <h4 class="text-green-400 font-bold text-sm mb-2">🔄 Repair All Entries</h4>
+                                <p class="text-xs text-gray-400 mb-3">Fix unknown creator pubkeys and backfill missing token metadata. Safe to run multiple times.</p>
+                                <button onclick="repairAllPagsData()" id="pags-repair-btn" class="btn btn-success w-full">Run Repair</button>
+                                <div id="pags-repair-result" class="result-box mt-3 text-green-400 text-xs max-h-32 overflow-y-auto hidden"></div>
+                            </div>
+                            <!-- Wipe Operations -->
+                            <div class="bg-red-900/20 border border-red-700/50 rounded p-4">
+                                <h4 class="text-red-400 font-bold text-sm mb-2">💥 Wipe All PAGS Data</h4>
+                                <p class="text-xs text-gray-400 mb-3">Delete all beneficiaries, users, and claims. This action is IRREVERSIBLE!</p>
+                                <div class="flex gap-2">
+                                    <input type="text" id="pags-wipe-confirm" class="input-field flex-1 text-xs" placeholder="Type WIPE to confirm...">
+                                    <button onclick="wipeAllPagsData()" id="pags-wipe-btn" class="btn btn-danger">WIPE</button>
+                                </div>
+                                <div id="pags-wipe-result" class="result-box mt-3 text-red-400 text-xs hidden"></div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Deactivate Token -->
                     <div class="panel">
                         <div class="panel-header">
@@ -3050,6 +3097,161 @@
                 }
             } catch (e) {
                 log(`Wallet info fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchPagsHealth() {
+            log('Checking PAGS database health...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/pags/health`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const health = data.health || {};
+                    const issues = health.issues || {};
+
+                    document.getElementById('pags-health-beneficiaries').textContent = health.totalBeneficiaries || 0;
+                    document.getElementById('pags-health-unknown').textContent = issues.unknownCreatorPubkeys || 0;
+                    document.getElementById('pags-health-metadata').textContent = issues.missingMetadata || 0;
+
+                    const statusEl = document.getElementById('pags-health-status-text');
+                    if (health.needsRepair) {
+                        statusEl.textContent = 'NEEDS REPAIR';
+                        statusEl.className = 'font-bold ml-1 text-red-400';
+                    } else {
+                        statusEl.textContent = 'HEALTHY';
+                        statusEl.className = 'font-bold ml-1 text-green-400';
+                    }
+
+                    log(`PAGS health check: ${health.needsRepair ? 'Needs repair' : 'Healthy'}`, health.needsRepair ? 'warn' : 'success');
+                } else {
+                    log(`Health check error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                log(`Health check failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function repairAllPagsData() {
+            const btn = document.getElementById('pags-repair-btn');
+            const resultEl = document.getElementById('pags-repair-result');
+
+            btn.disabled = true;
+            btn.textContent = 'Repairing...';
+            resultEl.classList.remove('hidden');
+            resultEl.innerHTML = '<span class="text-yellow-400">Running repair operations...</span>';
+
+            log('Starting PAGS repair operation...', 'warn');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/pags/repair-all`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const r = data.results || {};
+                    const cp = r.creatorPubkeys || {};
+                    const md = r.metadata || {};
+
+                    resultEl.innerHTML = `
+                        <div class="text-green-400 font-bold mb-2">✓ Repair Complete</div>
+                        <div><span class="text-gray-400">Creator Pubkeys:</span> ${cp.success || 0} fixed, ${cp.failed || 0} failed (${cp.processed || 0} processed)</div>
+                        <div><span class="text-gray-400">Metadata:</span> ${md.success || 0} fixed, ${md.failed || 0} failed (${md.processed || 0} processed)</div>
+                    `;
+
+                    log(`Repair complete: ${cp.success + md.success} fixes applied`, 'success');
+
+                    // Refresh health status
+                    setTimeout(() => fetchPagsHealth(), 500);
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`Repair error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Failed: ${e.message}</span>`;
+                log(`Repair failed: ${e.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Run Repair';
+            }
+        }
+
+        async function wipeAllPagsData() {
+            const confirmInput = document.getElementById('pags-wipe-confirm');
+            const btn = document.getElementById('pags-wipe-btn');
+            const resultEl = document.getElementById('pags-wipe-result');
+
+            if (confirmInput.value !== 'WIPE') {
+                resultEl.classList.remove('hidden');
+                resultEl.innerHTML = '<span class="text-yellow-400">Type WIPE in the input field to confirm</span>';
+                return;
+            }
+
+            // Double confirmation with browser dialog
+            if (!confirm('⚠️ WARNING: This will permanently delete ALL PAGS data (beneficiaries, users, claims).\n\nThis action is IRREVERSIBLE!\n\nAre you absolutely sure?')) {
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Wiping...';
+            resultEl.classList.remove('hidden');
+            resultEl.innerHTML = '<span class="text-yellow-400">Wiping data...</span>';
+
+            log('!!! WIPING ALL PAGS DATA !!!', 'error');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/pags/wipe`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    },
+                    body: JSON.stringify({ confirm: 'WIPE_ALL_PAGS_DATA' })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    const wiped = data.wiped || {};
+                    resultEl.innerHTML = `
+                        <div class="text-green-400 font-bold mb-2">✓ Wipe Complete</div>
+                        <div><span class="text-gray-400">Beneficiaries:</span> ${wiped.beneficiaries || 0} deleted</div>
+                        <div><span class="text-gray-400">Users:</span> ${wiped.users || 0} deleted</div>
+                        <div><span class="text-gray-400">Claims:</span> ${wiped.claims || 0} deleted</div>
+                    `;
+
+                    log(`PAGS wipe complete: ${wiped.beneficiaries + wiped.users + wiped.claims} records deleted`, 'success');
+
+                    // Refresh health status and stats
+                    setTimeout(() => {
+                        fetchPagsHealth();
+                        fetchPagsStats();
+                    }, 500);
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`Wipe error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Failed: ${e.message}</span>`;
+                log(`Wipe failed: ${e.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'WIPE';
+                confirmInput.value = '';
             }
         }
 
