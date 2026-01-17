@@ -123,14 +123,22 @@ function sleep(ms) {
 }
 
 /**
- * Register a token with a Twitter username as fee beneficiary
+ * Register a token with one or more Twitter usernames as fee beneficiaries
+ * v25.48: Now supports multiple beneficiaries with percentage splits
+ *
+ * @param {Object} params
+ * @param {string} params.mint - Token mint address
+ * @param {string} params.creatorPubkey - Creator's public key
+ * @param {string} params.twitterUsername - Primary Twitter username (for single beneficiary mode)
+ * @param {number} params.feeShareBps - Total fee share in basis points (from on-chain)
+ * @param {Array} params.beneficiaries - Optional array of {twitterUsername, shareBps} for multi-beneficiary mode
+ *                                        shareBps must sum to 10000 (100%)
  */
-async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeShareBps = 10000 }) {
+async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeShareBps = 10000, beneficiaries = null }) {
     if (!db) throw new Error('PAGS service not initialized');
 
     // Validate inputs
     if (!mint) throw new Error('mint is required');
-    if (!twitterUsername) throw new Error('twitterUsername is required');
 
     // Validate mint is a valid public key
     if (!isValidPublicKey(mint)) {
@@ -138,32 +146,72 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
     }
 
     // creatorPubkey is optional - may be 'unknown' if not available from on-chain
-    // Only validate if it looks like a pubkey (not 'unknown')
     const finalCreatorPubkey = creatorPubkey && creatorPubkey !== 'unknown' && isValidPublicKey(creatorPubkey)
         ? creatorPubkey
         : null;
 
-    const normalizedUsername = normalizeUsername(twitterUsername);
-    if (!isValidTwitterUsername(normalizedUsername)) {
-        throw new Error('Invalid Twitter username format');
-    }
-
     // Validate fee share (0-10000 basis points = 0-100%)
-    // Type check to prevent string comparison issues
     if (typeof feeShareBps !== 'number' || isNaN(feeShareBps) || feeShareBps < 0 || feeShareBps > 10000) {
         throw new Error('feeShareBps must be a number between 0 and 10000');
     }
 
-    try {
-        // v25.63: Note - tokens CAN be registered for both PAGS and platform (Robinhood)
-        // This allows creators to split fees (e.g., 50% to Robinhood holders, 50% to Twitter via PAGS)
-        // The exclusion logic in leaderboard/KOTH/airdrop ensures no double-dipping
+    // v25.48: Handle multi-beneficiary mode
+    let normalizedBeneficiaries = [];
+    let primaryUsername = null;
 
+    if (beneficiaries && Array.isArray(beneficiaries) && beneficiaries.length > 0) {
+        // Multi-beneficiary mode
+        if (beneficiaries.length > 4) {
+            throw new Error('Maximum 4 beneficiaries allowed');
+        }
+
+        let totalShareBps = 0;
+        for (const b of beneficiaries) {
+            if (!b.twitterUsername) {
+                throw new Error('Each beneficiary must have a twitterUsername');
+            }
+            const normalizedName = normalizeUsername(b.twitterUsername);
+            if (!isValidTwitterUsername(normalizedName)) {
+                throw new Error(`Invalid Twitter username format: ${b.twitterUsername}`);
+            }
+            const shareBps = parseInt(b.shareBps) || 0;
+            if (shareBps <= 0 || shareBps > 10000) {
+                throw new Error(`Invalid share percentage for ${normalizedName}: must be between 1 and 10000 basis points`);
+            }
+            totalShareBps += shareBps;
+            normalizedBeneficiaries.push({
+                twitterUsername: normalizedName,
+                shareBps: shareBps
+            });
+        }
+
+        // Verify shares sum to 100%
+        if (totalShareBps !== 10000) {
+            throw new Error(`Beneficiary shares must sum to 100% (10000 bps), got ${totalShareBps / 100}%`);
+        }
+
+        // Primary username is the first beneficiary (for backwards compatibility)
+        primaryUsername = normalizedBeneficiaries[0].twitterUsername;
+    } else {
+        // Single beneficiary mode (backwards compatible)
+        if (!twitterUsername) {
+            throw new Error('twitterUsername is required');
+        }
+        primaryUsername = normalizeUsername(twitterUsername);
+        if (!isValidTwitterUsername(primaryUsername)) {
+            throw new Error('Invalid Twitter username format');
+        }
+        normalizedBeneficiaries = [{ twitterUsername: primaryUsername, shareBps: 10000 }];
+    }
+
+    try {
         // Check if already registered
         const existing = await db.get(
             'SELECT * FROM pags_beneficiaries WHERE mint = $1',
             [mint]
         );
+
+        let beneficiaryId;
 
         if (existing) {
             // Update existing registration
@@ -171,61 +219,73 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
                 UPDATE pags_beneficiaries
                 SET "twitterUsername" = $1, "feeShareBps" = $2, "isActive" = 1, "lastFeeUpdate" = $3
                 WHERE mint = $4
-            `, [normalizedUsername, feeShareBps, Date.now(), mint]);
+            `, [primaryUsername, feeShareBps, Date.now(), mint]);
 
-            logger.info('[PAGS] Beneficiary updated', { mint, twitterUsername: normalizedUsername });
+            beneficiaryId = existing.id;
 
-            return {
-                id: existing.id,
+            // v25.48: Clear existing shares and re-create
+            await db.run('DELETE FROM pags_beneficiary_shares WHERE "beneficiaryId" = $1', [beneficiaryId]);
+
+            logger.info('[PAGS] Beneficiary updated', { mint, twitterUsername: primaryUsername, beneficiaryCount: normalizedBeneficiaries.length });
+        } else {
+            // Insert new registration
+            const creatorValue = finalCreatorPubkey || 'unknown';
+            const timestamp = Date.now();
+
+            logger.info('[PAGS] Attempting to insert beneficiary', {
                 mint,
-                twitterUsername: normalizedUsername,
+                creatorPubkey: creatorValue,
+                twitterUsername: primaryUsername,
                 feeShareBps,
-                feeSharePercent: feeShareBps / 100,
-                updated: true
-            };
+                beneficiaryCount: normalizedBeneficiaries.length,
+                timestamp
+            });
+
+            const result = await db.run(`
+                INSERT INTO pags_beneficiaries (mint, "creatorPubkey", "twitterUsername", "feeShareBps", "createdAt", "isActive")
+                VALUES ($1, $2, $3, $4, $5, 1)
+            `, [mint, creatorValue, primaryUsername, feeShareBps, timestamp]);
+
+            beneficiaryId = result.lastID;
         }
 
-        // Insert new registration
-        // Use 'unknown' as placeholder if creatorPubkey is null (column is NOT NULL in legacy schema)
-        const creatorValue = finalCreatorPubkey || 'unknown';
+        // v25.48: Insert beneficiary shares
         const timestamp = Date.now();
-
-        logger.info('[PAGS] Attempting to insert beneficiary', {
-            mint,
-            creatorPubkey: creatorValue,
-            twitterUsername: normalizedUsername,
-            feeShareBps,
-            timestamp
-        });
-
-        const result = await db.run(`
-            INSERT INTO pags_beneficiaries (mint, "creatorPubkey", "twitterUsername", "feeShareBps", "createdAt", "isActive")
-            VALUES ($1, $2, $3, $4, $5, 1)
-        `, [mint, creatorValue, normalizedUsername, feeShareBps, timestamp]);
+        for (const b of normalizedBeneficiaries) {
+            await db.run(`
+                INSERT INTO pags_beneficiary_shares ("beneficiaryId", "twitterUsername", "shareBps", "createdAt")
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT ("beneficiaryId", "twitterUsername") DO UPDATE SET "shareBps" = $3
+            `, [beneficiaryId, b.twitterUsername, b.shareBps, timestamp]);
+        }
 
         // Verify the insert succeeded by reading it back
         const verification = await db.get('SELECT * FROM pags_beneficiaries WHERE mint = $1', [mint]);
+        const shares = await db.all('SELECT * FROM pags_beneficiary_shares WHERE "beneficiaryId" = $1', [beneficiaryId]);
 
         logger.info('[PAGS] Beneficiary registered', {
             mint,
-            twitterUsername: normalizedUsername,
+            twitterUsername: primaryUsername,
             feeShareBps,
-            insertResult: result,
-            verified: !!verification,
-            verifiedData: verification ? {
-                id: verification.id,
-                isActive: verification.isActive,
-                username: verification.twitterUsername
-            } : null
+            beneficiaryCount: normalizedBeneficiaries.length,
+            shares: shares.map(s => ({ username: s.twitterUsername, shareBps: s.shareBps })),
+            verified: !!verification
         });
 
         return {
-            id: result.lastID,
+            id: beneficiaryId,
             mint,
-            twitterUsername: normalizedUsername,
+            twitterUsername: primaryUsername,
             feeShareBps,
             feeSharePercent: feeShareBps / 100,
-            updated: false
+            updated: !!existing,
+            // v25.48: Return all beneficiaries with their shares
+            beneficiaries: normalizedBeneficiaries.map(b => ({
+                twitterUsername: b.twitterUsername,
+                shareBps: b.shareBps,
+                sharePercent: b.shareBps / 100
+            })),
+            isMultiBeneficiary: normalizedBeneficiaries.length > 1
         };
     } catch (e) {
         logger.error('[PAGS] Register beneficiary error', { error: e.message, mint });
@@ -235,6 +295,7 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
 
 /**
  * Get beneficiary info by mint
+ * v25.48: Now includes shares data for multi-beneficiary tokens
  */
 async function getBeneficiaryByMint(mint) {
     if (!db) throw new Error('PAGS service not initialized');
@@ -250,10 +311,28 @@ async function getBeneficiaryByMint(mint) {
         [mint]
     );
 
+    if (!result) {
+        logger.debug('[PAGS] getBeneficiaryByMint: not found', { mint });
+        return null;
+    }
+
+    // v25.48: Get beneficiary shares
+    const shares = await db.all(
+        'SELECT * FROM pags_beneficiary_shares WHERE "beneficiaryId" = $1 ORDER BY "shareBps" DESC',
+        [result.id]
+    );
+
+    // Attach shares to result
+    result.shares = shares.length > 0 ? shares : [
+        // Fallback for legacy single-beneficiary registrations
+        { twitterUsername: result.twitterUsername, shareBps: 10000, totalFeesAccumulated: result.totalFeesAccumulated, totalFeesClaimed: result.totalFeesClaimed }
+    ];
+    result.isMultiBeneficiary = shares.length > 1;
+
     logger.debug('[PAGS] getBeneficiaryByMint result', {
         mint,
-        found: !!result,
-        data: result ? { id: result.id, username: result.twitterUsername, isActive: result.isActive } : null
+        found: true,
+        data: { id: result.id, username: result.twitterUsername, isActive: result.isActive, shareCount: result.shares.length }
     });
 
     return result;
@@ -261,6 +340,7 @@ async function getBeneficiaryByMint(mint) {
 
 /**
  * Get all pending rewards for a Twitter username
+ * v25.48: Now queries from pags_beneficiary_shares for multi-beneficiary support
  * Includes fee share percentage for transparency when there are multiple recipients
  */
 async function getPendingRewardsByUsername(twitterUsername) {
@@ -268,13 +348,46 @@ async function getPendingRewardsByUsername(twitterUsername) {
 
     const normalizedUsername = normalizeUsername(twitterUsername);
 
-    // v25.44: Get metadata directly from pags_beneficiaries (not tokens table)
-    // This keeps PAGS tokens SEPARATE from platform/robinhood tokens
-    const beneficiaries = await db.all(`
-        SELECT b.*
-        FROM pags_beneficiaries b
-        WHERE b."twitterUsername" = $1 AND b."isActive" = 1
+    // v25.48: Query from shares table to support multi-beneficiary tokens
+    // Join with beneficiaries to get token metadata and on-chain fee share
+    const shares = await db.all(`
+        SELECT s.*, b.mint, b."creatorPubkey", b."feeShareBps" as "onChainFeeShareBps",
+               b.ticker, b.name, b.image, b."isActive"
+        FROM pags_beneficiary_shares s
+        INNER JOIN pags_beneficiaries b ON s."beneficiaryId" = b.id
+        WHERE LOWER(s."twitterUsername") = LOWER($1) AND b."isActive" = 1
     `, [normalizedUsername]);
+
+    // Also check legacy registrations (beneficiaries without shares entries)
+    const legacyBeneficiaries = await db.all(`
+        SELECT b.*, b."feeShareBps" as "onChainFeeShareBps"
+        FROM pags_beneficiaries b
+        LEFT JOIN pags_beneficiary_shares s ON s."beneficiaryId" = b.id
+        WHERE LOWER(b."twitterUsername") = LOWER($1) AND b."isActive" = 1 AND s.id IS NULL
+    `, [normalizedUsername]);
+
+    // Combine and dedupe by mint
+    const beneficiaryMap = new Map();
+    for (const s of shares) {
+        beneficiaryMap.set(s.mint, {
+            ...s,
+            shareBps: s.shareBps,
+            totalFeesAccumulated: s.totalFeesAccumulated || 0,
+            totalFeesClaimed: s.totalFeesClaimed || 0
+        });
+    }
+    for (const b of legacyBeneficiaries) {
+        if (!beneficiaryMap.has(b.mint)) {
+            beneficiaryMap.set(b.mint, {
+                ...b,
+                shareBps: 10000, // Legacy = 100% share
+                totalFeesAccumulated: b.totalFeesAccumulated || 0,
+                totalFeesClaimed: b.totalFeesClaimed || 0
+            });
+        }
+    }
+
+    const beneficiaries = Array.from(beneficiaryMap.values());
 
     // Calculate total pending (DB + on-chain vaults)
     let totalPending = 0;
@@ -282,7 +395,9 @@ async function getPendingRewardsByUsername(twitterUsername) {
 
     for (const b of beneficiaries) {
         const dbPending = (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0);
-        const feeShareBps = b.feeShareBps || 10000;
+        // v25.48: onChainFeeShareBps is the total PAGS share from pump.fun, shareBps is this user's share of that
+        const onChainFeeShareBps = b.onChainFeeShareBps || 10000;
+        const userShareBps = b.shareBps || 10000;
 
         // Check on-chain vault balances if we have a valid creatorPubkey
         let onChainPending = 0;
@@ -316,7 +431,10 @@ async function getPendingRewardsByUsername(twitterUsername) {
                 }
 
                 const totalVaultLamports = bcFeesLamports + ammFeesLamports;
-                const ourShareLamports = Math.floor(totalVaultLamports * (feeShareBps / 10000));
+                // v25.48: Apply both on-chain fee share AND this user's share of that
+                // Example: 50% on-chain fee share * 25% user share = 12.5% of total vault fees
+                const pagsShareLamports = Math.floor(totalVaultLamports * (onChainFeeShareBps / 10000));
+                const ourShareLamports = Math.floor(pagsShareLamports * (userShareBps / 10000));
                 onChainPending = ourShareLamports / LAMPORTS_PER_SOL;
 
                 if (totalVaultLamports > 0) {
@@ -352,10 +470,15 @@ async function getPendingRewardsByUsername(twitterUsername) {
                 vaultInfo,
                 totalAccumulated: b.totalFeesAccumulated || 0,
                 totalClaimed: b.totalFeesClaimed || 0,
-                // Include fee share info for transparency
-                feeShareBps,
-                feeSharePercent: feeShareBps / 100,
-                hasMultipleRecipients: feeShareBps < 10000,
+                // v25.48: Include both on-chain fee share and user's share of that
+                onChainFeeShareBps,
+                onChainFeeSharePercent: onChainFeeShareBps / 100,
+                userShareBps,
+                userSharePercent: userShareBps / 100,
+                // Combined effective share (on-chain * user share)
+                effectiveShareBps: Math.floor((onChainFeeShareBps * userShareBps) / 10000),
+                effectiveSharePercent: (onChainFeeShareBps * userShareBps) / 1000000,
+                hasMultipleRecipients: onChainFeeShareBps < 10000 || userShareBps < 10000,
                 creatorPubkey: b.creatorPubkey
             });
         }
@@ -881,18 +1004,18 @@ async function claimFromVaults(twitterUsername, breakdown) {
 
 /**
  * Record fee collection for a beneficiary
+ * v25.48: Now distributes fees among multiple beneficiary shares
  *
  * IMPORTANT: Fee share percentage handling
  * - If applyFeeShare=true (default), the amount is the TOTAL fee and will be
  *   multiplied by the beneficiary's feeShareBps percentage before recording
- * - If applyFeeShare=false, the amount is already the beneficiary's share
- *   (e.g., when recording manual admin entries that are already calculated)
+ * - If applyFeeShare=false, the amount is already the PAGS share
+ *   (e.g., when recording from vault claims that are already calculated)
  *
- * Example with multiple Pump.fun recipients:
- * - Token has 2 recipients: Creator (70%) and PAGS beneficiary (30%)
- * - Total fee collected: 1.0 SOL
- * - If applyFeeShare=true: Records 1.0 * (3000/10000) = 0.3 SOL
- * - If applyFeeShare=false: Records 1.0 SOL as-is (caller already calculated)
+ * Example with multiple beneficiaries:
+ * - Total PAGS fee: 1.0 SOL (after on-chain split applied)
+ * - 2 beneficiaries: @user1 (60%), @user2 (40%)
+ * - @user1 receives: 0.6 SOL, @user2 receives: 0.4 SOL
  */
 async function recordFeeCollection(mint, amount, source = 'manual', txSignature = null, applyFeeShare = true) {
     if (!db) throw new Error('PAGS service not initialized');
@@ -907,46 +1030,78 @@ async function recordFeeCollection(mint, amount, source = 'manual', txSignature 
         throw new Error('Amount must be a positive number');
     }
 
-    // Get beneficiary
+    // Get beneficiary with shares
     const beneficiary = await getBeneficiaryByMint(mint);
     if (!beneficiary) {
         throw new Error('Beneficiary not found for mint');
     }
 
-    // Calculate the actual fee amount based on beneficiary's share percentage
-    // feeShareBps is in basis points (10000 = 100%)
-    let actualAmount = amount;
+    // Calculate the actual PAGS fee amount based on on-chain share percentage
+    let pagsAmount = amount;
     if (applyFeeShare && beneficiary.feeShareBps && beneficiary.feeShareBps < 10000) {
-        actualAmount = amount * (beneficiary.feeShareBps / 10000);
-        logger.info('[PAGS] Applying fee share percentage', {
+        pagsAmount = amount * (beneficiary.feeShareBps / 10000);
+        logger.info('[PAGS] Applying on-chain fee share percentage', {
             mint,
             totalFee: amount,
             feeShareBps: beneficiary.feeShareBps,
             feeSharePercent: beneficiary.feeShareBps / 100,
-            actualAmount
+            pagsAmount
         });
     }
 
-    // Update accumulated fees with the beneficiary's share
+    // v25.48: Distribute among beneficiary shares
+    const shares = beneficiary.shares || [{ twitterUsername: beneficiary.twitterUsername, shareBps: 10000 }];
+    const distributions = [];
+
+    for (const share of shares) {
+        const userAmount = pagsAmount * (share.shareBps / 10000);
+
+        // Update the share's accumulated fees
+        if (share.id) {
+            // Real share record exists
+            await db.run(`
+                UPDATE pags_beneficiary_shares
+                SET "totalFeesAccumulated" = "totalFeesAccumulated" + $1
+                WHERE id = $2
+            `, [userAmount, share.id]);
+        }
+
+        distributions.push({
+            twitterUsername: share.twitterUsername,
+            shareBps: share.shareBps,
+            sharePercent: share.shareBps / 100,
+            amount: userAmount
+        });
+
+        logger.debug('[PAGS] Fee distributed to share', {
+            mint,
+            twitterUsername: share.twitterUsername,
+            shareBps: share.shareBps,
+            amount: userAmount
+        });
+    }
+
+    // Update the main beneficiary total (for backwards compatibility)
     await db.run(`
         UPDATE pags_beneficiaries
         SET "totalFeesAccumulated" = "totalFeesAccumulated" + $1, "lastFeeUpdate" = $2
         WHERE id = $3
-    `, [actualAmount, Date.now(), beneficiary.id]);
+    `, [pagsAmount, Date.now(), beneficiary.id]);
 
-    // Log the fee collection (log both total and actual for transparency)
+    // Log the fee collection
     await db.run(`
         INSERT INTO pags_fee_logs ("beneficiaryId", amount, source, "txSignature", "collectedAt")
         VALUES ($1, $2, $3, $4, $5)
-    `, [beneficiary.id, actualAmount, source, txSignature, Date.now()]);
+    `, [beneficiary.id, pagsAmount, source, txSignature, Date.now()]);
 
-    logger.info('[PAGS] Fee recorded', {
+    logger.info('[PAGS] Fee recorded and distributed', {
         mint,
         beneficiaryId: beneficiary.id,
-        twitterUsername: beneficiary.twitterUsername,
+        primaryUsername: beneficiary.twitterUsername,
         totalFeeInput: amount,
-        actualAmountRecorded: actualAmount,
+        pagsAmountRecorded: pagsAmount,
         feeShareBps: beneficiary.feeShareBps,
+        distributions: distributions.map(d => ({ user: d.twitterUsername, amount: d.amount.toFixed(6) })),
         source
     });
 
@@ -956,8 +1111,11 @@ async function recordFeeCollection(mint, amount, source = 'manual', txSignature 
         feeShareBps: beneficiary.feeShareBps,
         feeSharePercent: beneficiary.feeShareBps / 100,
         totalFeeInput: amount,
-        actualAmountRecorded: actualAmount,
-        newTotal: (beneficiary.totalFeesAccumulated || 0) + actualAmount
+        actualAmountRecorded: pagsAmount,
+        newTotal: (beneficiary.totalFeesAccumulated || 0) + pagsAmount,
+        // v25.48: Return distribution breakdown
+        distributions,
+        isMultiBeneficiary: distributions.length > 1
     };
 }
 

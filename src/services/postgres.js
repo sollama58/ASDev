@@ -453,6 +453,7 @@ async function createSchema() {
     // ===========================================
 
     // PAGS beneficiaries - Token-to-Twitter username mapping
+    // v25.48: Now supports multiple beneficiaries per token via pags_beneficiary_shares junction table
     await pool.query(`
         CREATE TABLE IF NOT EXISTS pags_beneficiaries (
             id SERIAL PRIMARY KEY,
@@ -467,6 +468,23 @@ async function createSchema() {
             "lastFeeUpdate" BIGINT
         )
     `);
+
+    // v25.48: PAGS beneficiary shares - Multiple Twitter users can receive shares of a token's fees
+    // Each share has a percentage (in basis points) and its own accumulated/claimed tracking
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS pags_beneficiary_shares (
+            id SERIAL PRIMARY KEY,
+            "beneficiaryId" INTEGER NOT NULL REFERENCES pags_beneficiaries(id) ON DELETE CASCADE,
+            "twitterUsername" TEXT NOT NULL,
+            "shareBps" INTEGER NOT NULL DEFAULT 10000,
+            "totalFeesAccumulated" REAL DEFAULT 0,
+            "totalFeesClaimed" REAL DEFAULT 0,
+            "createdAt" BIGINT NOT NULL,
+            UNIQUE("beneficiaryId", "twitterUsername")
+        )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_shares_beneficiary ON pags_beneficiary_shares("beneficiaryId")`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_shares_twitter ON pags_beneficiary_shares("twitterUsername")`);
     // v25.50: Make creatorPubkey nullable for existing databases
     try {
         await pool.query(`ALTER TABLE pags_beneficiaries ALTER COLUMN "creatorPubkey" DROP NOT NULL`);

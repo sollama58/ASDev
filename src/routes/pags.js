@@ -421,16 +421,23 @@ function init(deps) {
 
     /**
      * POST /api/pags/register
-     * Register a token with a Twitter username as beneficiary
+     * Register a token with one or more Twitter usernames as beneficiaries
      *
      * v25.60: SECURITY - Requires wallet signature to verify caller is the token creator
+     * v25.48: Multi-beneficiary support - up to 4 Twitter users can share fees
      *
      * Required fields:
      * - mint: Token mint address
-     * - twitterUsername: Twitter username to receive fees
      * - signedMessage: Message signed by wallet (format: "pags-register:timestamp:nonce")
      * - signature: Base58 encoded Ed25519 signature
      * - signerPubkey: Public key of the signer (must be token creator)
+     *
+     * For single beneficiary (backwards compatible):
+     * - twitterUsername: Twitter username to receive fees
+     *
+     * For multiple beneficiaries:
+     * - beneficiaries: Array of {twitterUsername, shareBps} where shareBps must sum to 10000
+     *   Example: [{"twitterUsername": "user1", "shareBps": 6000}, {"twitterUsername": "user2", "shareBps": 4000}]
      *
      * IMPORTANT: Fee share percentage is AUTO-DETECTED from on-chain Pump.fun
      * fee sharing configuration. Users cannot set this manually.
@@ -447,15 +454,41 @@ function init(deps) {
                 return errorResponse(res, 503, 'PAGS wallet not configured');
             }
 
-            const { mint, twitterUsername, signedMessage, signature, signerPubkey } = req.body;
+            const { mint, twitterUsername, beneficiaries, signedMessage, signature, signerPubkey } = req.body;
 
             // Sanitize inputs
             const sanitizedMint = sanitizeString(mint, 64);
-            const sanitizedUsername = sanitizeUsername(twitterUsername);
+            const sanitizedUsername = twitterUsername ? sanitizeUsername(twitterUsername) : null;
 
-            // Validate required fields
-            if (!sanitizedMint || !sanitizedUsername) {
-                return errorResponse(res, 400, 'Missing required fields: mint, twitterUsername');
+            // v25.48: Validate and sanitize beneficiaries array if provided
+            let sanitizedBeneficiaries = null;
+            if (beneficiaries && Array.isArray(beneficiaries) && beneficiaries.length > 0) {
+                if (beneficiaries.length > 4) {
+                    return errorResponse(res, 400, 'Maximum 4 beneficiaries allowed');
+                }
+                sanitizedBeneficiaries = beneficiaries.map(b => ({
+                    twitterUsername: sanitizeUsername(b.twitterUsername || ''),
+                    shareBps: parseInt(b.shareBps) || 0
+                }));
+                // Validate all usernames are present
+                for (const b of sanitizedBeneficiaries) {
+                    if (!b.twitterUsername) {
+                        return errorResponse(res, 400, 'Each beneficiary must have a valid twitterUsername');
+                    }
+                }
+                // Validate shares sum to 100%
+                const totalBps = sanitizedBeneficiaries.reduce((sum, b) => sum + b.shareBps, 0);
+                if (totalBps !== 10000) {
+                    return errorResponse(res, 400, `Beneficiary shares must sum to 100% (10000 bps), got ${totalBps / 100}%`);
+                }
+            }
+
+            // Validate required fields - either single username or beneficiaries array
+            if (!sanitizedMint) {
+                return errorResponse(res, 400, 'Missing required field: mint');
+            }
+            if (!sanitizedUsername && !sanitizedBeneficiaries) {
+                return errorResponse(res, 400, 'Missing required field: twitterUsername or beneficiaries');
             }
 
             // v25.60: Verify wallet signature
@@ -565,11 +598,13 @@ function init(deps) {
 
             // Register beneficiary with auto-detected fee share
             // creatorPubkey is verified to be the signer
+            // v25.48: Pass beneficiaries array if provided for multi-beneficiary mode
             const result = await pags.registerBeneficiary({
                 mint: sanitizedMint,
                 creatorPubkey: originalCreator,
                 twitterUsername: sanitizedUsername,
-                feeShareBps: detectedFeeShareBps
+                feeShareBps: detectedFeeShareBps,
+                beneficiaries: sanitizedBeneficiaries
             });
 
             // v25.44: Fetch and store token metadata to pags_beneficiaries (NOT tokens table)
@@ -602,6 +637,13 @@ function init(deps) {
             res.json({
                 success: true,
                 beneficiary: result,
+                // v25.48: Include beneficiaries info if multi-beneficiary
+                beneficiaries: result.beneficiaries || [{
+                    twitterUsername: result.twitterUsername,
+                    shareBps: 10000,
+                    sharePercent: 100
+                }],
+                isMultiBeneficiary: result.isMultiBeneficiary || false,
                 tokenMetadata: tokenMetadata ? {
                     ticker: tokenMetadata.ticker,
                     name: tokenMetadata.name,
@@ -649,9 +691,12 @@ function init(deps) {
                 });
             }
 
-            // Determine if this beneficiary has multiple fee recipients (less than 100% share)
+            // Determine if this beneficiary has multiple fee recipients
             const feeShareBps = beneficiary.feeShareBps || 10000;
-            const hasMultipleRecipients = feeShareBps < 10000;
+            const hasMultipleOnChainRecipients = feeShareBps < 10000;
+            // v25.48: Check for multiple beneficiary shares
+            const isMultiBeneficiary = beneficiary.isMultiBeneficiary || false;
+            const shares = beneficiary.shares || [];
 
             res.json({
                 success: true,
@@ -662,15 +707,25 @@ function init(deps) {
                     feeShareBps: feeShareBps,
                     feeSharePercent: feeShareBps / 100,
                     // Clearly indicate if this is a partial share
-                    hasMultipleRecipients,
-                    feeShareDescription: hasMultipleRecipients
+                    hasMultipleOnChainRecipients,
+                    isMultiBeneficiary,
+                    feeShareDescription: hasMultipleOnChainRecipients
                         ? `Receives ${feeShareBps / 100}% of token fees (multiple recipients configured)`
                         : 'Receives 100% of token fees',
                     totalFeesAccumulated: beneficiary.totalFeesAccumulated || 0,
                     totalFeesClaimed: beneficiary.totalFeesClaimed || 0,
                     pendingFees: (beneficiary.totalFeesAccumulated || 0) - (beneficiary.totalFeesClaimed || 0),
                     isActive: beneficiary.isActive === 1,
-                    createdAt: beneficiary.createdAt
+                    createdAt: beneficiary.createdAt,
+                    // v25.48: Include all beneficiary shares
+                    shares: shares.map(s => ({
+                        twitterUsername: s.twitterUsername,
+                        shareBps: s.shareBps,
+                        sharePercent: s.shareBps / 100,
+                        totalFeesAccumulated: s.totalFeesAccumulated || 0,
+                        totalFeesClaimed: s.totalFeesClaimed || 0,
+                        pendingFees: (s.totalFeesAccumulated || 0) - (s.totalFeesClaimed || 0)
+                    }))
                 }
             });
         } catch (e) {

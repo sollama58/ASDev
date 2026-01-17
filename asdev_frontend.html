@@ -1858,11 +1858,37 @@
                             <label class="text-orange-300 text-xs font-mono block mb-1">Token Mint Address *</label>
                             <input type="text" id="pags-register-mint" class="input-field mb-0 text-sm" placeholder="Enter token mint address">
                         </div>
-                        <div>
-                            <label class="text-orange-300 text-xs font-mono block mb-1">Twitter/X Username *</label>
-                            <div class="flex items-center gap-2">
-                                <span class="text-orange-500">@</span>
-                                <input type="text" id="pags-register-twitter" class="input-field flex-1 mb-0 text-sm" placeholder="username (without @)">
+
+                        <!-- v25.48: Multi-beneficiary support -->
+                        <div class="bg-cyan-900/20 rounded p-3 border border-cyan-700/30">
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-cyan-300 text-xs font-mono">Fee Beneficiaries *</label>
+                                <button id="pags-add-beneficiary-btn" onclick="pagsAddBeneficiary()" class="text-cyan-400 text-xs hover:text-cyan-300 transition flex items-center gap-1" title="Add another beneficiary (max 4)">
+                                    <i data-lucide="plus-circle" class="w-3 h-3"></i> Add
+                                </button>
+                            </div>
+                            <p class="text-cyan-200/50 text-[10px] mb-3">Split rewards between up to 4 Twitter/X users. Percentages must total 100%.</p>
+
+                            <!-- Beneficiary entries container -->
+                            <div id="pags-beneficiaries-container" class="space-y-2">
+                                <!-- Beneficiary 1 (always visible) -->
+                                <div class="pags-beneficiary-row flex items-center gap-2" data-index="0">
+                                    <span class="text-cyan-500 text-sm w-4">@</span>
+                                    <input type="text" class="pags-beneficiary-username input-field flex-1 mb-0 text-sm" placeholder="username" maxlength="15">
+                                    <div class="flex items-center gap-1 w-24">
+                                        <input type="range" class="pags-beneficiary-slider w-16 accent-cyan-500" min="1" max="100" value="100" oninput="pagsUpdateSliders(this)">
+                                        <span class="pags-beneficiary-percent text-cyan-400 text-xs font-mono w-8 text-right">100%</span>
+                                    </div>
+                                    <button class="pags-remove-beneficiary hidden text-red-400 hover:text-red-300 text-xs p-1" onclick="pagsRemoveBeneficiary(this)" title="Remove">
+                                        <i data-lucide="x-circle" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Total indicator -->
+                            <div class="flex justify-between items-center mt-3 pt-2 border-t border-cyan-800/30">
+                                <span class="text-cyan-300/70 text-xs">Total:</span>
+                                <span id="pags-beneficiaries-total" class="text-cyan-400 font-mono text-sm font-bold">100%</span>
                             </div>
                         </div>
                     </div>
@@ -6046,6 +6072,161 @@
     };
     window.switchPagsLeaderboardTab = switchPagsLeaderboardTab;
 
+    // v25.48: Multi-beneficiary management functions
+    const MAX_BENEFICIARIES = 4;
+
+    const pagsAddBeneficiary = () => {
+        const container = document.getElementById('pags-beneficiaries-container');
+        const rows = container.querySelectorAll('.pags-beneficiary-row');
+
+        if (rows.length >= MAX_BENEFICIARIES) {
+            return; // Max reached
+        }
+
+        const newIndex = rows.length;
+        const newRow = document.createElement('div');
+        newRow.className = 'pags-beneficiary-row flex items-center gap-2';
+        newRow.dataset.index = newIndex;
+        newRow.innerHTML = `
+            <span class="text-cyan-500 text-sm w-4">@</span>
+            <input type="text" class="pags-beneficiary-username input-field flex-1 mb-0 text-sm" placeholder="username" maxlength="15">
+            <div class="flex items-center gap-1 w-24">
+                <input type="range" class="pags-beneficiary-slider w-16 accent-cyan-500" min="1" max="100" value="25" oninput="pagsUpdateSliders(this)">
+                <span class="pags-beneficiary-percent text-cyan-400 text-xs font-mono w-8 text-right">25%</span>
+            </div>
+            <button class="pags-remove-beneficiary text-red-400 hover:text-red-300 text-xs p-1" onclick="pagsRemoveBeneficiary(this)" title="Remove">
+                <i data-lucide="x-circle" class="w-4 h-4"></i>
+            </button>
+        `;
+        container.appendChild(newRow);
+
+        // Show remove buttons on all rows when more than 1
+        if (rows.length >= 1) {
+            container.querySelectorAll('.pags-remove-beneficiary').forEach(btn => {
+                btn.classList.remove('hidden');
+            });
+        }
+
+        // Update add button visibility
+        if (rows.length + 1 >= MAX_BENEFICIARIES) {
+            document.getElementById('pags-add-beneficiary-btn').classList.add('hidden');
+        }
+
+        // Reinitialize Lucide icons for new elements
+        if (window.lucide) lucide.createIcons();
+
+        // Auto-balance percentages
+        pagsAutoBalanceSliders();
+    };
+    window.pagsAddBeneficiary = pagsAddBeneficiary;
+
+    const pagsRemoveBeneficiary = (btn) => {
+        const row = btn.closest('.pags-beneficiary-row');
+        const container = document.getElementById('pags-beneficiaries-container');
+        const rows = container.querySelectorAll('.pags-beneficiary-row');
+
+        if (rows.length <= 1) return; // Can't remove last one
+
+        row.remove();
+
+        // Hide remove buttons if only 1 row left
+        const remainingRows = container.querySelectorAll('.pags-beneficiary-row');
+        if (remainingRows.length === 1) {
+            remainingRows[0].querySelector('.pags-remove-beneficiary').classList.add('hidden');
+        }
+
+        // Show add button again
+        document.getElementById('pags-add-beneficiary-btn').classList.remove('hidden');
+
+        // Auto-balance percentages
+        pagsAutoBalanceSliders();
+    };
+    window.pagsRemoveBeneficiary = pagsRemoveBeneficiary;
+
+    const pagsUpdateSliders = (changedSlider) => {
+        const container = document.getElementById('pags-beneficiaries-container');
+        const rows = container.querySelectorAll('.pags-beneficiary-row');
+
+        if (rows.length === 1) {
+            // Single beneficiary always gets 100%
+            changedSlider.value = 100;
+            changedSlider.closest('.pags-beneficiary-row').querySelector('.pags-beneficiary-percent').textContent = '100%';
+            document.getElementById('pags-beneficiaries-total').textContent = '100%';
+            document.getElementById('pags-beneficiaries-total').classList.remove('text-red-400');
+            document.getElementById('pags-beneficiaries-total').classList.add('text-cyan-400');
+            return;
+        }
+
+        // Update the percentage display for the changed slider
+        const changedRow = changedSlider.closest('.pags-beneficiary-row');
+        changedRow.querySelector('.pags-beneficiary-percent').textContent = changedSlider.value + '%';
+
+        // Calculate total and update display
+        pagsUpdateTotal();
+    };
+    window.pagsUpdateSliders = pagsUpdateSliders;
+
+    const pagsAutoBalanceSliders = () => {
+        const container = document.getElementById('pags-beneficiaries-container');
+        const rows = container.querySelectorAll('.pags-beneficiary-row');
+        const count = rows.length;
+
+        if (count === 0) return;
+
+        // Distribute evenly
+        const baseShare = Math.floor(100 / count);
+        const remainder = 100 - (baseShare * count);
+
+        rows.forEach((row, index) => {
+            const slider = row.querySelector('.pags-beneficiary-slider');
+            const percentDisplay = row.querySelector('.pags-beneficiary-percent');
+            // First row gets any remainder
+            const share = index === 0 ? baseShare + remainder : baseShare;
+            slider.value = share;
+            percentDisplay.textContent = share + '%';
+        });
+
+        pagsUpdateTotal();
+    };
+
+    const pagsUpdateTotal = () => {
+        const container = document.getElementById('pags-beneficiaries-container');
+        const sliders = container.querySelectorAll('.pags-beneficiary-slider');
+        const totalEl = document.getElementById('pags-beneficiaries-total');
+
+        let total = 0;
+        sliders.forEach(slider => {
+            total += parseInt(slider.value) || 0;
+        });
+
+        totalEl.textContent = total + '%';
+
+        if (total === 100) {
+            totalEl.classList.remove('text-red-400');
+            totalEl.classList.add('text-cyan-400');
+        } else {
+            totalEl.classList.remove('text-cyan-400');
+            totalEl.classList.add('text-red-400');
+        }
+    };
+
+    const pagsGetBeneficiaries = () => {
+        const container = document.getElementById('pags-beneficiaries-container');
+        const rows = container.querySelectorAll('.pags-beneficiary-row');
+        const beneficiaries = [];
+
+        rows.forEach(row => {
+            const username = row.querySelector('.pags-beneficiary-username').value.trim().replace('@', '');
+            const shareBps = parseInt(row.querySelector('.pags-beneficiary-slider').value) * 100; // Convert % to bps
+
+            if (username) {
+                beneficiaries.push({ twitterUsername: username, shareBps });
+            }
+        });
+
+        return beneficiaries;
+    };
+
     // Update PAGS register wallet display when wallet connects
     const updatePagsRegisterWalletDisplay = () => {
         const walletDisplay = document.getElementById('pags-register-wallet-display');
@@ -6090,15 +6271,17 @@
 
     // Register token for PAGS
     // v25.62: Now requires wallet signature to verify creator ownership
+    // v25.48: Now supports multiple beneficiaries with percentage splits
     // Fee share percentage is AUTO-DETECTED from on-chain Pump.fun configuration
     const pagsRegisterToken = async () => {
         const mintInput = document.getElementById('pags-register-mint');
-        const twitterInput = document.getElementById('pags-register-twitter');
         const resultEl = document.getElementById('pags-register-result');
         const registerBtn = document.getElementById('pags-register-btn');
 
         const mint = mintInput.value.trim();
-        const twitterUsername = twitterInput.value.trim().replace('@', '');
+
+        // v25.48: Get beneficiaries from multi-beneficiary UI
+        const beneficiaries = pagsGetBeneficiaries();
 
         // Validation
         if (!mint) {
@@ -6109,8 +6292,18 @@
             return;
         }
 
-        if (!twitterUsername) {
-            resultEl.innerHTML = '<span class="text-yellow-400">Please enter a Twitter/X username</span>';
+        if (beneficiaries.length === 0) {
+            resultEl.innerHTML = '<span class="text-yellow-400">Please enter at least one Twitter/X username</span>';
+            resultEl.classList.remove('hidden');
+            resultEl.classList.remove('border-green-700', 'border-red-700');
+            resultEl.classList.add('border-yellow-700');
+            return;
+        }
+
+        // Validate total shares = 100%
+        const totalBps = beneficiaries.reduce((sum, b) => sum + b.shareBps, 0);
+        if (totalBps !== 10000) {
+            resultEl.innerHTML = `<span class="text-yellow-400">Percentages must total 100% (currently ${totalBps / 100}%)</span>`;
             resultEl.classList.remove('hidden');
             resultEl.classList.remove('border-green-700', 'border-red-700');
             resultEl.classList.add('border-yellow-700');
@@ -6186,12 +6379,14 @@
             registerBtn.textContent = 'VERIFYING...';
 
             // Send registration request with signature
+            // v25.48: Send beneficiaries array for multi-beneficiary support
             const res = await fetch(`${BACKEND_URL}/api/pags/register`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     mint,
-                    twitterUsername,
+                    beneficiaries: beneficiaries.length > 1 ? beneficiaries : null,
+                    twitterUsername: beneficiaries.length === 1 ? beneficiaries[0].twitterUsername : beneficiaries[0].twitterUsername,
                     signedMessage,
                     signature,
                     signerPubkey: userPubkey
@@ -6204,7 +6399,21 @@
                 // Get fee share from on-chain verification result
                 const feeSharePercent = data.onChainVerification?.feeSharePercent || data.beneficiary?.feeSharePercent || 100;
                 const isDirectCreator = data.onChainVerification?.isDirectCreator || feeSharePercent === 100;
-                const verificationSource = data.onChainVerification?.source || 'unknown';
+                const isMultiBeneficiary = data.isMultiBeneficiary || false;
+                const registeredBeneficiaries = data.beneficiaries || [{twitterUsername: data.beneficiary?.twitterUsername, sharePercent: 100}];
+
+                // v25.48: Build beneficiary list for display
+                let beneficiaryHtml = '';
+                if (isMultiBeneficiary && registeredBeneficiaries.length > 1) {
+                    beneficiaryHtml = registeredBeneficiaries.map(b =>
+                        `<div class="flex justify-between">
+                            <span class="text-purple-400">@${DOMPurify.sanitize(b.twitterUsername)}</span>
+                            <span class="text-cyan-400">${b.sharePercent}%</span>
+                        </div>`
+                    ).join('');
+                } else {
+                    beneficiaryHtml = `<span class="text-purple-400">@${DOMPurify.sanitize(registeredBeneficiaries[0]?.twitterUsername || beneficiaries[0].twitterUsername)}</span>`;
+                }
 
                 resultEl.innerHTML = `
                     <div class="text-green-400 font-bold mb-2">Registration Successful!</div>
@@ -6213,12 +6422,12 @@
                             <span class="text-gray-400">Token:</span>
                             <span class="text-green-300 font-mono">${mint.slice(0, 8)}...${mint.slice(-4)}</span>
                         </div>
-                        <div class="flex justify-between">
-                            <span class="text-gray-400">Beneficiary:</span>
-                            <span class="text-purple-400">@${DOMPurify.sanitize(twitterUsername)}</span>
+                        <div class="${isMultiBeneficiary ? '' : 'flex justify-between'}">
+                            <span class="text-gray-400">Beneficiar${isMultiBeneficiary ? 'ies' : 'y'}:</span>
+                            ${isMultiBeneficiary ? '<div class="mt-1 pl-2 border-l border-purple-700/50 space-y-1">' + beneficiaryHtml + '</div>' : beneficiaryHtml}
                         </div>
                         <div class="flex justify-between">
-                            <span class="text-gray-400">Fee Share:</span>
+                            <span class="text-gray-400">On-chain Fee Share:</span>
                             <span class="text-orange-400">${feeSharePercent}%</span>
                             <span class="text-green-500 text-[10px] ml-1">(auto-detected)</span>
                         </div>
@@ -6227,14 +6436,30 @@
                             <span class="text-cyan-400">${isDirectCreator ? 'Direct Creator' : 'Fee Sharing Config'}</span>
                         </div>
                     </div>
-                    <p class="text-green-300/70 text-xs mt-3">The Twitter user can now claim ${feeSharePercent}% of fees from this token!</p>
+                    <p class="text-green-300/70 text-xs mt-3">${isMultiBeneficiary ? 'The Twitter users' : 'The Twitter user'} can now claim ${feeSharePercent}% of fees from this token!</p>
                 `;
                 resultEl.classList.remove('border-purple-700', 'border-yellow-700', 'border-red-700');
                 resultEl.classList.add('border-green-700');
 
                 // Clear form
                 mintInput.value = '';
-                twitterInput.value = '';
+                // Reset beneficiaries to single empty row
+                const container = document.getElementById('pags-beneficiaries-container');
+                container.innerHTML = `
+                    <div class="pags-beneficiary-row flex items-center gap-2" data-index="0">
+                        <span class="text-cyan-500 text-sm w-4">@</span>
+                        <input type="text" class="pags-beneficiary-username input-field flex-1 mb-0 text-sm" placeholder="username" maxlength="15">
+                        <div class="flex items-center gap-1 w-24">
+                            <input type="range" class="pags-beneficiary-slider w-16 accent-cyan-500" min="1" max="100" value="100" oninput="pagsUpdateSliders(this)">
+                            <span class="pags-beneficiary-percent text-cyan-400 text-xs font-mono w-8 text-right">100%</span>
+                        </div>
+                        <button class="pags-remove-beneficiary hidden text-red-400 hover:text-red-300 text-xs p-1" onclick="pagsRemoveBeneficiary(this)" title="Remove">
+                            <i data-lucide="x-circle" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                `;
+                document.getElementById('pags-beneficiaries-total').textContent = '100%';
+                document.getElementById('pags-add-beneficiary-btn').classList.remove('hidden');
             } else {
                 // Handle specific error codes
                 let errorMsg = data.error || 'Registration failed';
