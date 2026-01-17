@@ -1856,7 +1856,21 @@
                         </div>
                         <div>
                             <label class="text-orange-300 text-xs font-mono block mb-1">Token Mint Address *</label>
-                            <input type="text" id="pags-register-mint" class="input-field mb-0 text-sm" placeholder="Enter token mint address">
+                            <input type="text" id="pags-register-mint" class="input-field mb-0 text-sm" placeholder="Enter token mint address" oninput="pagsPreviewToken(this.value)">
+                        </div>
+
+                        <!-- Token Preview (shown after pasting CA) -->
+                        <div id="pags-token-preview" class="hidden">
+                            <div class="bg-black/30 p-3 rounded border border-orange-700/50">
+                                <div class="flex items-center gap-3">
+                                    <img id="pags-preview-img" src="" class="w-12 h-12 rounded border border-orange-600 object-cover">
+                                    <div class="flex-1 min-w-0">
+                                        <div id="pags-preview-ticker" class="text-lg font-bold text-white font-mono truncate">$TOKEN</div>
+                                        <div id="pags-preview-name" class="text-sm text-orange-400 truncate">Token Name</div>
+                                        <div id="pags-preview-mcap" class="text-xs text-gray-400 mt-0.5">MCAP: $0</div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- v25.48: Multi-beneficiary support -->
@@ -1875,9 +1889,10 @@
                                 <div class="pags-beneficiary-row flex items-center gap-2" data-index="0">
                                     <span class="text-cyan-500 text-sm w-4">@</span>
                                     <input type="text" class="pags-beneficiary-username input-field flex-1 mb-0 text-sm" placeholder="username" maxlength="15">
-                                    <div class="flex items-center gap-1 w-24">
-                                        <input type="range" class="pags-beneficiary-slider w-16 accent-cyan-500" min="1" max="100" value="100" oninput="pagsUpdateSliders(this)">
-                                        <span class="pags-beneficiary-percent text-cyan-400 text-xs font-mono w-8 text-right">100%</span>
+                                    <div class="flex items-center gap-1 w-28">
+                                        <input type="range" class="pags-beneficiary-slider w-14 accent-cyan-500" min="1" max="100" value="100" oninput="pagsUpdateSliders(this)">
+                                        <input type="number" class="pags-beneficiary-percent-input w-10 bg-transparent border border-cyan-700/50 rounded text-cyan-400 text-xs font-mono text-center p-0.5" value="100" min="1" max="100" oninput="pagsUpdateFromInput(this)">
+                                        <span class="text-cyan-400 text-xs">%</span>
                                     </div>
                                     <button class="pags-remove-beneficiary hidden text-red-400 hover:text-red-300 text-xs p-1" onclick="pagsRemoveBeneficiary(this)" title="Remove">
                                         <i data-lucide="x-circle" class="w-4 h-4"></i>
@@ -6090,9 +6105,10 @@
         newRow.innerHTML = `
             <span class="text-cyan-500 text-sm w-4">@</span>
             <input type="text" class="pags-beneficiary-username input-field flex-1 mb-0 text-sm" placeholder="username" maxlength="15">
-            <div class="flex items-center gap-1 w-24">
-                <input type="range" class="pags-beneficiary-slider w-16 accent-cyan-500" min="1" max="100" value="25" oninput="pagsUpdateSliders(this)">
-                <span class="pags-beneficiary-percent text-cyan-400 text-xs font-mono w-8 text-right">25%</span>
+            <div class="flex items-center gap-1 w-28">
+                <input type="range" class="pags-beneficiary-slider w-14 accent-cyan-500" min="1" max="100" value="25" oninput="pagsUpdateSliders(this)">
+                <input type="number" class="pags-beneficiary-percent-input w-10 bg-transparent border border-cyan-700/50 rounded text-cyan-400 text-xs font-mono text-center p-0.5" value="25" min="1" max="100" oninput="pagsUpdateFromInput(this)">
+                <span class="text-cyan-400 text-xs">%</span>
             </div>
             <button class="pags-remove-beneficiary text-red-400 hover:text-red-300 text-xs p-1" onclick="pagsRemoveBeneficiary(this)" title="Remove">
                 <i data-lucide="x-circle" class="w-4 h-4"></i>
@@ -6150,21 +6166,164 @@
         if (rows.length === 1) {
             // Single beneficiary always gets 100%
             changedSlider.value = 100;
-            changedSlider.closest('.pags-beneficiary-row').querySelector('.pags-beneficiary-percent').textContent = '100%';
+            changedSlider.closest('.pags-beneficiary-row').querySelector('.pags-beneficiary-percent-input').value = 100;
             document.getElementById('pags-beneficiaries-total').textContent = '100%';
             document.getElementById('pags-beneficiaries-total').classList.remove('text-red-400');
             document.getElementById('pags-beneficiaries-total').classList.add('text-cyan-400');
             return;
         }
 
-        // Update the percentage display for the changed slider
+        // Get the value of the changed slider
+        const changedValue = parseInt(changedSlider.value) || 0;
         const changedRow = changedSlider.closest('.pags-beneficiary-row');
-        changedRow.querySelector('.pags-beneficiary-percent').textContent = changedSlider.value + '%';
+
+        // Get all other sliders (not the one being changed)
+        const otherSliders = [];
+        rows.forEach(row => {
+            if (row !== changedRow) {
+                otherSliders.push({
+                    slider: row.querySelector('.pags-beneficiary-slider'),
+                    percentInput: row.querySelector('.pags-beneficiary-percent-input')
+                });
+            }
+        });
+
+        // Calculate how much is left for others
+        const remaining = 100 - changedValue;
+        const otherCount = otherSliders.length;
+
+        if (otherCount > 0) {
+            // Distribute remaining percentage among other sliders proportionally
+            // First, get current values of other sliders
+            let otherTotal = 0;
+            otherSliders.forEach(item => {
+                otherTotal += parseInt(item.slider.value) || 0;
+            });
+
+            if (otherTotal === 0) {
+                // If all others are at 0, distribute evenly
+                const baseShare = Math.floor(remaining / otherCount);
+                const remainder = remaining - (baseShare * otherCount);
+                otherSliders.forEach((item, index) => {
+                    const share = index === 0 ? baseShare + remainder : baseShare;
+                    const finalShare = Math.max(1, share);
+                    item.slider.value = finalShare;
+                    item.percentInput.value = finalShare;
+                });
+            } else {
+                // Distribute proportionally based on current ratios
+                let distributed = 0;
+                otherSliders.forEach((item, index) => {
+                    const currentVal = parseInt(item.slider.value) || 0;
+                    let newVal;
+                    if (index === otherCount - 1) {
+                        // Last slider gets whatever is left to ensure exactly 100%
+                        newVal = remaining - distributed;
+                    } else {
+                        // Proportional distribution
+                        newVal = Math.round((currentVal / otherTotal) * remaining);
+                    }
+                    // Ensure minimum of 1%
+                    newVal = Math.max(1, Math.min(99, newVal));
+                    item.slider.value = newVal;
+                    item.percentInput.value = newVal;
+                    distributed += newVal;
+                });
+            }
+        }
+
+        // Update the percentage input for the changed slider
+        changedRow.querySelector('.pags-beneficiary-percent-input').value = changedValue;
 
         // Calculate total and update display
         pagsUpdateTotal();
     };
     window.pagsUpdateSliders = pagsUpdateSliders;
+
+    // Handle direct input of percentage values
+    const pagsUpdateFromInput = (changedInput) => {
+        const container = document.getElementById('pags-beneficiaries-container');
+        const rows = container.querySelectorAll('.pags-beneficiary-row');
+        const changedRow = changedInput.closest('.pags-beneficiary-row');
+        const changedSlider = changedRow.querySelector('.pags-beneficiary-slider');
+
+        // Round to nearest whole number and clamp between 1 and 99 (or 100 for single beneficiary)
+        let inputValue = Math.round(parseFloat(changedInput.value) || 0);
+
+        if (rows.length === 1) {
+            // Single beneficiary always gets 100%
+            inputValue = 100;
+            changedInput.value = 100;
+            changedSlider.value = 100;
+            document.getElementById('pags-beneficiaries-total').textContent = '100%';
+            document.getElementById('pags-beneficiaries-total').classList.remove('text-red-400');
+            document.getElementById('pags-beneficiaries-total').classList.add('text-cyan-400');
+            return;
+        }
+
+        // Clamp value between 1 and 99 for multiple beneficiaries
+        inputValue = Math.max(1, Math.min(99, inputValue));
+        changedInput.value = inputValue;
+        changedSlider.value = inputValue;
+
+        // Get all other sliders (not the one being changed)
+        const otherSliders = [];
+        rows.forEach(row => {
+            if (row !== changedRow) {
+                otherSliders.push({
+                    slider: row.querySelector('.pags-beneficiary-slider'),
+                    percentInput: row.querySelector('.pags-beneficiary-percent-input')
+                });
+            }
+        });
+
+        // Calculate how much is left for others
+        const remaining = 100 - inputValue;
+        const otherCount = otherSliders.length;
+
+        if (otherCount > 0) {
+            // Distribute remaining percentage among other sliders proportionally
+            let otherTotal = 0;
+            otherSliders.forEach(item => {
+                otherTotal += parseInt(item.slider.value) || 0;
+            });
+
+            if (otherTotal === 0) {
+                // If all others are at 0, distribute evenly
+                const baseShare = Math.floor(remaining / otherCount);
+                const remainder = remaining - (baseShare * otherCount);
+                otherSliders.forEach((item, index) => {
+                    const share = index === 0 ? baseShare + remainder : baseShare;
+                    const finalShare = Math.max(1, share);
+                    item.slider.value = finalShare;
+                    item.percentInput.value = finalShare;
+                });
+            } else {
+                // Distribute proportionally based on current ratios
+                let distributed = 0;
+                otherSliders.forEach((item, index) => {
+                    const currentVal = parseInt(item.slider.value) || 0;
+                    let newVal;
+                    if (index === otherCount - 1) {
+                        // Last slider gets whatever is left to ensure exactly 100%
+                        newVal = remaining - distributed;
+                    } else {
+                        // Proportional distribution
+                        newVal = Math.round((currentVal / otherTotal) * remaining);
+                    }
+                    // Ensure minimum of 1%
+                    newVal = Math.max(1, Math.min(99, newVal));
+                    item.slider.value = newVal;
+                    item.percentInput.value = newVal;
+                    distributed += newVal;
+                });
+            }
+        }
+
+        // Calculate total and update display
+        pagsUpdateTotal();
+    };
+    window.pagsUpdateFromInput = pagsUpdateFromInput;
 
     const pagsAutoBalanceSliders = () => {
         const container = document.getElementById('pags-beneficiaries-container');
@@ -6179,11 +6338,11 @@
 
         rows.forEach((row, index) => {
             const slider = row.querySelector('.pags-beneficiary-slider');
-            const percentDisplay = row.querySelector('.pags-beneficiary-percent');
+            const percentInput = row.querySelector('.pags-beneficiary-percent-input');
             // First row gets any remainder
             const share = index === 0 ? baseShare + remainder : baseShare;
             slider.value = share;
-            percentDisplay.textContent = share + '%';
+            percentInput.value = share;
         });
 
         pagsUpdateTotal();
@@ -6268,6 +6427,68 @@
         if (originalOnWalletConnect) originalOnWalletConnect(pubkey);
         updatePagsRegisterWalletDisplay();
     };
+
+    // Token preview for PAGS registration
+    let pagsPreviewTimeout = null;
+    let pagsLastPreviewedMint = null;
+    const pagsPreviewToken = async (mintValue) => {
+        const mint = mintValue.trim();
+        const previewEl = document.getElementById('pags-token-preview');
+
+        // Clear previous timeout
+        if (pagsPreviewTimeout) {
+            clearTimeout(pagsPreviewTimeout);
+            pagsPreviewTimeout = null;
+        }
+
+        // Hide preview if input is empty or too short
+        if (!mint || mint.length < 32) {
+            previewEl.classList.add('hidden');
+            pagsLastPreviewedMint = null;
+            return;
+        }
+
+        // Don't re-fetch if same mint
+        if (mint === pagsLastPreviewedMint) {
+            return;
+        }
+
+        // Debounce the API call
+        pagsPreviewTimeout = setTimeout(async () => {
+            try {
+                // Show loading state
+                previewEl.classList.remove('hidden');
+                document.getElementById('pags-preview-img').src = '';
+                document.getElementById('pags-preview-ticker').textContent = 'Loading...';
+                document.getElementById('pags-preview-name').textContent = '';
+                document.getElementById('pags-preview-mcap').textContent = '';
+
+                // Fetch from DexScreener
+                const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+                const data = await res.json();
+                const pair = data.pairs?.[0];
+
+                if (pair) {
+                    document.getElementById('pags-preview-img').src = resolveTokenImage(pair.info?.imageUrl || '');
+                    document.getElementById('pags-preview-ticker').textContent = `$${pair.baseToken?.symbol || 'TOKEN'}`;
+                    document.getElementById('pags-preview-name').textContent = pair.baseToken?.name || 'Unknown Token';
+                    document.getElementById('pags-preview-mcap').textContent = `MCAP: ${formatMcap(pair.marketCap)}`;
+                    pagsLastPreviewedMint = mint;
+                } else {
+                    // Token not found on DexScreener
+                    document.getElementById('pags-preview-img').src = '';
+                    document.getElementById('pags-preview-ticker').textContent = 'Token not found';
+                    document.getElementById('pags-preview-name').textContent = 'Not listed on DexScreener yet';
+                    document.getElementById('pags-preview-mcap').textContent = '';
+                    pagsLastPreviewedMint = mint;
+                }
+            } catch (e) {
+                console.warn('Could not fetch PAGS token preview', e);
+                previewEl.classList.add('hidden');
+            }
+        }, 300); // 300ms debounce
+    };
+    window.pagsPreviewToken = pagsPreviewToken;
 
     // Register token for PAGS
     // v25.62: Now requires wallet signature to verify creator ownership
@@ -6449,9 +6670,10 @@
                     <div class="pags-beneficiary-row flex items-center gap-2" data-index="0">
                         <span class="text-cyan-500 text-sm w-4">@</span>
                         <input type="text" class="pags-beneficiary-username input-field flex-1 mb-0 text-sm" placeholder="username" maxlength="15">
-                        <div class="flex items-center gap-1 w-24">
-                            <input type="range" class="pags-beneficiary-slider w-16 accent-cyan-500" min="1" max="100" value="100" oninput="pagsUpdateSliders(this)">
-                            <span class="pags-beneficiary-percent text-cyan-400 text-xs font-mono w-8 text-right">100%</span>
+                        <div class="flex items-center gap-1 w-28">
+                            <input type="range" class="pags-beneficiary-slider w-14 accent-cyan-500" min="1" max="100" value="100" oninput="pagsUpdateSliders(this)">
+                            <input type="number" class="pags-beneficiary-percent-input w-10 bg-transparent border border-cyan-700/50 rounded text-cyan-400 text-xs font-mono text-center p-0.5" value="100" min="1" max="100" oninput="pagsUpdateFromInput(this)">
+                            <span class="text-cyan-400 text-xs">%</span>
                         </div>
                         <button class="pags-remove-beneficiary hidden text-red-400 hover:text-red-300 text-xs p-1" onclick="pagsRemoveBeneficiary(this)" title="Remove">
                             <i data-lucide="x-circle" class="w-4 h-4"></i>

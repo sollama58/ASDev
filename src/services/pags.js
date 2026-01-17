@@ -244,6 +244,7 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
             const result = await db.run(`
                 INSERT INTO pags_beneficiaries (mint, "creatorPubkey", "twitterUsername", "feeShareBps", "createdAt", "isActive")
                 VALUES ($1, $2, $3, $4, $5, 1)
+                RETURNING id
             `, [mint, creatorValue, primaryUsername, feeShareBps, timestamp]);
 
             beneficiaryId = result.lastID;
