@@ -186,6 +186,8 @@ function init(deps) {
      * GET /api/pags/leaderboard
      * Get PAGS leaderboard data for public display
      * Returns top tokens and users by fees accumulated
+     *
+     * v25.59: Enhanced to include on-chain pending fees in totals
      */
     router.get('/pags/leaderboard', lookupLimiter, async (req, res) => {
         try {
@@ -203,22 +205,43 @@ function init(deps) {
                 LIMIT 50
             `);
 
+            // Get on-chain pending fees for all tokens
+            let onChainPendingByMint = {};
+            let totalOnChainPending = 0;
+            try {
+                const pagsFeeScanner = require('../tasks/pagsFeeScanner');
+                const allPending = await pagsFeeScanner.getAllPendingFees();
+                totalOnChainPending = allPending.totalPendingSol || 0;
+
+                for (const b of (allPending.beneficiaries || [])) {
+                    onChainPendingByMint[b.mint] = b.ourShareLamports / 1e9;
+                }
+            } catch (e) {
+                logger.warn('[PAGS API] Could not fetch on-chain pending for leaderboard', { error: e.message });
+            }
+
             // Process tokens to add pending calculation
-            const processedTokens = tokens.map(t => ({
-                mint: t.mint,
-                ticker: t.ticker || null,
-                name: t.name || null,
-                image: t.image || null,
-                twitterUsername: t.twitterUsername,
-                feeShareBps: t.feeShareBps || 10000,
-                totalFeesAccumulated: t.totalFeesAccumulated || 0,
-                totalFeesClaimed: t.totalFeesClaimed || 0,
-                pending: (t.totalFeesAccumulated || 0) - (t.totalFeesClaimed || 0)
-            }));
+            const processedTokens = tokens.map(t => {
+                const claimable = (t.totalFeesAccumulated || 0) - (t.totalFeesClaimed || 0);
+                const onChainPending = onChainPendingByMint[t.mint] || 0;
+                return {
+                    mint: t.mint,
+                    ticker: t.ticker || null,
+                    name: t.name || null,
+                    image: t.image || null,
+                    twitterUsername: t.twitterUsername,
+                    feeShareBps: t.feeShareBps || 10000,
+                    totalFeesAccumulated: t.totalFeesAccumulated || 0,
+                    totalFeesClaimed: t.totalFeesClaimed || 0,
+                    claimable,
+                    onChainPending,
+                    pending: claimable + onChainPending
+                };
+            });
 
             // Aggregate by Twitter username for user leaderboard
             const userMap = new Map();
-            for (const token of tokens) {
+            for (const token of processedTokens) {
                 const username = token.twitterUsername;
                 if (!userMap.has(username)) {
                     userMap.set(username, {
@@ -226,6 +249,8 @@ function init(deps) {
                         tokenCount: 0,
                         totalAccumulated: 0,
                         totalClaimed: 0,
+                        totalClaimable: 0,
+                        totalOnChainPending: 0,
                         totalPending: 0
                     });
                 }
@@ -233,11 +258,13 @@ function init(deps) {
                 user.tokenCount++;
                 user.totalAccumulated += (token.totalFeesAccumulated || 0);
                 user.totalClaimed += (token.totalFeesClaimed || 0);
-                user.totalPending += (token.totalFeesAccumulated || 0) - (token.totalFeesClaimed || 0);
+                user.totalClaimable += token.claimable;
+                user.totalOnChainPending += token.onChainPending;
+                user.totalPending += token.pending;
             }
 
             const users = Array.from(userMap.values())
-                .sort((a, b) => b.totalAccumulated - a.totalAccumulated)
+                .sort((a, b) => b.totalPending - a.totalPending) // Sort by total pending (most relevant)
                 .slice(0, 50);
 
             // Get overall stats
@@ -250,6 +277,8 @@ function init(deps) {
                 FROM pags_beneficiaries
             `);
 
+            const dbClaimable = (stats?.totalAccumulated || 0) - (stats?.totalClaimed || 0);
+
             res.json({
                 success: true,
                 stats: {
@@ -257,7 +286,10 @@ function init(deps) {
                     activeBeneficiaries: stats?.activeBeneficiaries || 0,
                     totalAccumulated: stats?.totalAccumulated || 0,
                     totalClaimed: stats?.totalClaimed || 0,
-                    totalPending: (stats?.totalAccumulated || 0) - (stats?.totalClaimed || 0)
+                    // v25.59: Enhanced pending breakdown
+                    claimable: dbClaimable,           // Ready to withdraw
+                    onChainPending: totalOnChainPending, // Still in vaults
+                    totalPending: dbClaimable + totalOnChainPending // Combined
                 },
                 tokens: processedTokens,
                 users
@@ -272,6 +304,12 @@ function init(deps) {
      * GET /api/pags/lookup/:username
      * Lookup rewards for a Twitter username (public)
      * Also returns token details for the My Tokens section
+     *
+     * v25.59: Enhanced to include on-chain pending fees (fees in vault not yet claimed by scanner)
+     * This gives users a complete picture of their rewards:
+     * - onChainPending: Fees sitting in Pump.fun vaults (waiting for scanner to claim)
+     * - claimable: Fees claimed by scanner and ready for user to withdraw
+     * - totalPending: Sum of both (what user will eventually receive)
      */
     router.get('/pags/lookup/:username', lookupLimiter, async (req, res) => {
         try {
@@ -302,14 +340,41 @@ function init(deps) {
                 tokens: tokens.map(t => ({ mint: t.mint, user: t.twitterUsername, isActive: t.isActive }))
             });
 
+            // Get on-chain pending fees for this user's tokens
+            let onChainPendingByMint = {};
+            try {
+                const pagsFeeScanner = require('../tasks/pagsFeeScanner');
+                const allPending = await pagsFeeScanner.getAllPendingFees();
+
+                // Filter to only this user's tokens and create mint->pending map
+                for (const b of (allPending.beneficiaries || [])) {
+                    if (b.twitterUsername && b.twitterUsername.toLowerCase() === username.toLowerCase()) {
+                        onChainPendingByMint[b.mint] = {
+                            pendingSol: b.ourShareLamports / 1e9,
+                            bcFeesSol: b.bcFeesLamports / 1e9,
+                            ammFeesSol: b.ammFeesLamports / 1e9,
+                            shareBps: b.shareBps,
+                            isDirectCreator: b.isDirectCreator
+                        };
+                    }
+                }
+            } catch (e) {
+                logger.warn('[PAGS API] Could not fetch on-chain pending', { error: e.message });
+            }
+
             // Calculate totals
-            let totalPending = 0;
+            let totalClaimable = 0;      // Ready to withdraw (in PAGS wallet)
+            let totalOnChainPending = 0; // Still in vaults (not yet claimed by scanner)
             let totalAccumulated = 0;
             let totalClaimed = 0;
 
             const breakdown = tokens.map(t => {
-                const pending = (t.totalFeesAccumulated || 0) - (t.totalFeesClaimed || 0);
-                totalPending += pending;
+                const claimable = (t.totalFeesAccumulated || 0) - (t.totalFeesClaimed || 0);
+                const onChainInfo = onChainPendingByMint[t.mint] || { pendingSol: 0 };
+                const onChainPending = onChainInfo.pendingSol || 0;
+
+                totalClaimable += claimable;
+                totalOnChainPending += onChainPending;
                 totalAccumulated += (t.totalFeesAccumulated || 0);
                 totalClaimed += (t.totalFeesClaimed || 0);
 
@@ -321,14 +386,26 @@ function init(deps) {
                     feeShareBps: t.feeShareBps || 10000,
                     totalFeesAccumulated: t.totalFeesAccumulated || 0,
                     totalFeesClaimed: t.totalFeesClaimed || 0,
-                    pending
+                    // v25.59: Enhanced pending info
+                    claimable,           // Ready to withdraw now
+                    onChainPending,      // Still in vault
+                    pending: claimable + onChainPending, // Total expected
+                    // Additional on-chain details if available
+                    ...(onChainInfo.pendingSol > 0 ? {
+                        bcFeesSol: onChainInfo.bcFeesSol,
+                        ammFeesSol: onChainInfo.ammFeesSol,
+                        isDirectCreator: onChainInfo.isDirectCreator
+                    } : {})
                 };
             });
 
             res.json({
                 success: true,
                 twitterUsername: username,
-                totalPending,
+                // v25.59: More detailed pending breakdown
+                totalPending: totalClaimable + totalOnChainPending, // Combined total
+                claimable: totalClaimable,          // Ready to withdraw
+                onChainPending: totalOnChainPending, // Still in vaults
                 totalAccumulated,
                 totalClaimed,
                 tokenCount: tokens.length,
