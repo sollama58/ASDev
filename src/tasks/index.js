@@ -7,6 +7,7 @@
  * v25.67 - Fixed Helius DAS API response parsing for holder scanning
  * v25.68 - Admin trigger-robinhood-scan now includes holder updates
  * v25.69 - Enhanced KOTH logging for Robinhood token eligibility
+ * v25.70 - Claude KOTH now includes Robinhood tokens in candidates
  */
 const holderScanner = require('./holderScanner');
 const metadataUpdater = require('./metadataUpdater');
@@ -92,7 +93,7 @@ function startAll(deps) {
         }
     }
 
-    logger.info("All background tasks started (v25.69 - KOTH Robinhood eligibility logging)");
+    logger.info("All background tasks started (v25.70 - Claude KOTH includes Robinhood tokens)");
 }
 
 /**

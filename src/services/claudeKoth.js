@@ -3,6 +3,7 @@
  * v25.38 - Uses Claude to intelligently select the King of the Pill
  * v25.39 - Optimized for credit efficiency (Haiku model, reduced tokens)
  * v25.40 - Enhanced debugging with Redis log storage and admin controls
+ * v25.70 - Now includes Robinhood partner tokens in KOTH candidates
  *
  * This service calls Claude API to analyze token metrics and select
  * the best candidate for KOTH based on multiple factors.
@@ -168,6 +169,7 @@ function isEnabled() {
 
 /**
  * Format token data for Claude prompt (compact format to save tokens)
+ * v25.70: Now includes source type (platform vs robinhood partner)
  */
 function formatTokensForPrompt(tokens) {
     // Limit to MAX_CANDIDATES to reduce input tokens
@@ -175,8 +177,10 @@ function formatTokensForPrompt(tokens) {
 
     return limited.map((t, i) => {
         const ageHours = t.timestamp ? Math.round((Date.now() - t.timestamp) / (1000 * 60 * 60)) : 0;
+        // v25.70: Include source type in prompt
+        const sourceLabel = t.source === 'robinhood' ? '🤝Partner' : '🚀Platform';
         // Compact format: ~50 tokens per candidate vs ~80 in verbose format
-        return `${i + 1}. ${t.ticker}: MCap $${(t.marketCap || 0).toLocaleString()}, Vol $${(t.volume24h || 0).toLocaleString()}, ${t.actualHolders || t.holderCount || 0} holders, ${ageHours}h old [${t.mint.slice(0, 8)}]`;
+        return `${i + 1}. ${t.ticker} (${sourceLabel}): MCap $${(t.marketCap || 0).toLocaleString()}, Vol $${(t.volume24h || 0).toLocaleString()}, ${t.actualHolders || t.holderCount || 0} holders, ${ageHours}h old [${t.mint.slice(0, 8)}]`;
     }).join('\n');
 }
 
@@ -457,6 +461,7 @@ CRITICAL: Output ONLY raw JSON. No markdown, no code blocks, no backticks. Just 
  */
 async function getKothWithFallback(db, algorithmFallback) {
     // v25.41: Simplified - only consider top 10 leaderboard tokens (by 24hr volume)
+    // v25.70: Now includes both platform AND robinhood tokens, selecting top 10 by volume
     // This reduces API calls and ensures KOTH is always a visible, active token
 
     logger.debug('[ClaudeKOTH] Starting KOTH selection with fallback', {
@@ -464,35 +469,62 @@ async function getKothWithFallback(db, algorithmFallback) {
     });
 
     try {
-        // Get top 10 tokens by 24hr volume (matches leaderboard display)
+        // v25.70: Get top 10 tokens by 24hr volume from BOTH platform and robinhood tokens
         const queryStart = Date.now();
         let candidates = await db.all(`
-            SELECT
-                t.mint,
-                t.ticker,
-                t.name,
-                t."marketCap",
-                t.volume24h,
-                t."holderCount",
-                t.timestamp,
-                COALESCE((SELECT COUNT(*) FROM token_holders th WHERE th.mint = t.mint), 0) as actualHolders
-            FROM tokens t
-            WHERE t.volume24h > 0
-            ORDER BY t.volume24h DESC
+            SELECT mint, ticker, name, "marketCap", volume24h, "holderCount", timestamp, actualHolders, source
+            FROM (
+                SELECT
+                    t.mint,
+                    t.ticker,
+                    t.name,
+                    t."marketCap",
+                    t.volume24h,
+                    t."holderCount",
+                    t.timestamp,
+                    COALESCE((SELECT COUNT(*) FROM token_holders th WHERE th.mint = t.mint), 0) as actualHolders,
+                    'platform' as source
+                FROM tokens t
+                WHERE t.volume24h > 0
+
+                UNION ALL
+
+                SELECT
+                    rt.mint,
+                    rt.ticker,
+                    rt.name,
+                    rt."marketCap",
+                    rt.volume24h,
+                    0 as "holderCount",
+                    rt."discoveredAt" as timestamp,
+                    COALESCE((SELECT COUNT(*) FROM robinhood_token_holders rth WHERE rth.mint = rt.mint), 0) as actualHolders,
+                    'robinhood' as source
+                FROM robinhood_tokens rt
+                WHERE rt."isActive" = 1 AND rt.volume24h > 0
+            )
+            ORDER BY volume24h DESC
             LIMIT 10
         `);
         const queryDuration = Date.now() - queryStart;
 
+        // v25.70: Log source breakdown
+        const platformCount = candidates.filter(c => c.source === 'platform').length;
+        const robinhoodCount = candidates.filter(c => c.source === 'robinhood').length;
+
         logger.debug('[ClaudeKOTH] Candidate query completed', {
             candidateCount: candidates.length,
+            platformCount,
+            robinhoodCount,
             queryDurationMs: queryDuration
         });
 
         await logEvaluation({
             type: 'CANDIDATE_QUERY',
             candidateCount: candidates.length,
+            platformCount,
+            robinhoodCount,
             queryDurationMs: queryDuration,
-            message: 'Top 10 tokens by 24hr volume'
+            message: `Top 10 tokens by 24hr volume (${platformCount} platform, ${robinhoodCount} robinhood)`
         });
 
         if (candidates.length === 0) {
