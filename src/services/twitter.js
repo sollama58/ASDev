@@ -14,6 +14,11 @@ let authenticatedUsername = null; // v25.22: Cache the bot's Twitter username
 const KOTH_TWEET_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes minimum between KOTH tweets
 let lastKothTweetTime = 0;
 
+// v25.70: Registration tweet rate limiting (prevent spam on multiple registrations)
+const REGISTRATION_TWEET_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes minimum between registration tweets
+let lastPagsTweetTime = 0;
+let lastRobinhoodTweetTime = 0;
+
 /**
  * Initialize Twitter client and fetch authenticated user's username
  */
@@ -92,7 +97,7 @@ $${ticker} (${name})
 Trade now:
 https://pump.fun/coin/${mint}
 
-#Solana #KOTH #Ignition`;
+#Solana #KOTH #Robinhood`;
 
         const { data } = await rwClient.v2.tweet(tweetText);
 
@@ -146,7 +151,7 @@ CA: ${mint}
 Trade now on PumpFun:
 https://pump.fun/coin/${mint}
 
-#Solana #Memecoin #Ignition`;
+#Solana #Memecoin #Robinhood`;
 
         const { data } = await rwClient.v2.tweet(tweetText);
 
@@ -174,9 +179,155 @@ https://pump.fun/coin/${mint}
     }
 }
 
+/**
+ * v25.70: Post a tweet for a new PAGS token registration
+ * Announces when a token is registered for Pay-to-Twitter fee sharing
+ */
+async function postPagsRegistrationTweet(ticker, name, mint, twitterUsername, beneficiaries = null) {
+    if (!twitterClient) {
+        logger.warn("Skipping PAGS Tweet: Missing Credentials");
+        return null;
+    }
+
+    // Rate limiting check
+    const now = Date.now();
+    const timeSinceLastTweet = now - lastPagsTweetTime;
+    if (timeSinceLastTweet < REGISTRATION_TWEET_COOLDOWN_MS) {
+        const waitMinutes = Math.ceil((REGISTRATION_TWEET_COOLDOWN_MS - timeSinceLastTweet) / 60000);
+        logger.info(`[PAGS Tweet] Rate limited - wait ${waitMinutes} min before next tweet`);
+        return null;
+    }
+
+    try {
+        const rwClient = twitterClient.readWrite;
+
+        // Build beneficiary display (handle multi-beneficiary)
+        let beneficiaryText;
+        if (beneficiaries && beneficiaries.length > 1) {
+            // Multi-beneficiary: show all usernames with percentages
+            beneficiaryText = beneficiaries
+                .map(b => `@${b.twitterUsername} (${b.shareBps / 100}%)`)
+                .join(', ');
+        } else {
+            // Single beneficiary
+            beneficiaryText = `@${twitterUsername}`;
+        }
+
+        const tweetText = `🎯 NEW PAGS TOKEN
+
+$${ticker} (${name})
+
+💰 Fee rewards go to: ${beneficiaryText}
+
+Trade now:
+https://pump.fun/coin/${mint}
+
+#Solana #PAGS #Robinhood`;
+
+        const { data } = await rwClient.v2.tweet(tweetText);
+
+        const tweetUrl = authenticatedUsername
+            ? `https://x.com/${authenticatedUsername}/status/${data.id}`
+            : `https://x.com/i/status/${data.id}`;
+
+        // Update rate limit timestamp on success
+        lastPagsTweetTime = Date.now();
+
+        logger.info(`PAGS Registration Tweet Posted: ${tweetUrl}`);
+        return tweetUrl;
+    } catch (e) {
+        if (e.code === 403) {
+            logger.error("PAGS Tweet Permission Error (403)", {
+                error: "Check App Permissions (Read/Write) in Developer Portal."
+            });
+        } else if (e.code === 401) {
+            logger.error("PAGS Tweet Auth Error (401)", {
+                error: "Regenerate Keys & Tokens."
+            });
+        } else if (e.code === 429) {
+            lastPagsTweetTime = Date.now();
+            logger.warn("PAGS Tweet Rate Limited (429) - cooldown activated");
+        } else {
+            logger.error("PAGS Tweet Failed", { error: e.message, code: e.code });
+        }
+        return null;
+    }
+}
+
+/**
+ * v25.70: Post a tweet for a new Robinhood token registration
+ * Announces when a token is registered for fee sharing on the leaderboard
+ */
+async function postRobinhoodRegistrationTweet(ticker, name, mint, feeSharePercent) {
+    if (!twitterClient) {
+        logger.warn("Skipping Robinhood Tweet: Missing Credentials");
+        return null;
+    }
+
+    // Rate limiting check
+    const now = Date.now();
+    const timeSinceLastTweet = now - lastRobinhoodTweetTime;
+    if (timeSinceLastTweet < REGISTRATION_TWEET_COOLDOWN_MS) {
+        const waitMinutes = Math.ceil((REGISTRATION_TWEET_COOLDOWN_MS - timeSinceLastTweet) / 60000);
+        logger.info(`[Robinhood Tweet] Rate limited - wait ${waitMinutes} min before next tweet`);
+        return null;
+    }
+
+    try {
+        const rwClient = twitterClient.readWrite;
+
+        // Determine if direct creator or fee shareholder
+        const isDirectCreator = feeSharePercent >= 100;
+        const shareInfo = isDirectCreator
+            ? '💯 Direct creator (100% fees)'
+            : `📊 Fee share: ${feeSharePercent.toFixed(1)}%`;
+
+        const tweetText = `🦸 NEW ROBINHOOD TOKEN
+
+$${ticker} (${name})
+
+${shareInfo}
+
+Trade now:
+https://pump.fun/coin/${mint}
+
+#Solana #Robinhood`;
+
+        const { data } = await rwClient.v2.tweet(tweetText);
+
+        const tweetUrl = authenticatedUsername
+            ? `https://x.com/${authenticatedUsername}/status/${data.id}`
+            : `https://x.com/i/status/${data.id}`;
+
+        // Update rate limit timestamp on success
+        lastRobinhoodTweetTime = Date.now();
+
+        logger.info(`Robinhood Registration Tweet Posted: ${tweetUrl}`);
+        return tweetUrl;
+    } catch (e) {
+        if (e.code === 403) {
+            logger.error("Robinhood Tweet Permission Error (403)", {
+                error: "Check App Permissions (Read/Write) in Developer Portal."
+            });
+        } else if (e.code === 401) {
+            logger.error("Robinhood Tweet Auth Error (401)", {
+                error: "Regenerate Keys & Tokens."
+            });
+        } else if (e.code === 429) {
+            lastRobinhoodTweetTime = Date.now();
+            logger.warn("Robinhood Tweet Rate Limited (429) - cooldown activated");
+        } else {
+            logger.error("Robinhood Tweet Failed", { error: e.message, code: e.code });
+        }
+        return null;
+    }
+}
+
 module.exports = {
     init,
     postLaunchTweet,
     postKothTweet,
+    postPagsRegistrationTweet,
+    postRobinhoodRegistrationTweet,
     getClient: () => twitterClient,
 };

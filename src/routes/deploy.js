@@ -95,7 +95,7 @@ function init(deps) {
             // This converts imgur.com/xxx -> i.imgur.com/xxx.png
             const normalizedImageUrl = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
 
-            const DESCRIPTION_FOOTER = " Launched via Ignition.";
+            const DESCRIPTION_FOOTER = " Launched via Robinhood.";
             const finalDescription = description + DESCRIPTION_FOOTER;
 
             // v25.1: No server-side moderation - Imgur handles it

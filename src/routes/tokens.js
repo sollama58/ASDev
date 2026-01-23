@@ -16,7 +16,7 @@ const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 const { PublicKey } = require('@solana/web3.js');
 const { isValidPubkey } = require('./solana');
-const { redis, mintExtractor, logger, circuitBreaker, imageUtils, signatureVerifier } = require('../services');
+const { redis, mintExtractor, logger, circuitBreaker, imageUtils, signatureVerifier, twitter } = require('../services');
 const { safeBalance, safeTotalBalance } = require('../utils');
 const config = require('../config/env');
 
@@ -1107,6 +1107,27 @@ function init(deps) {
                 logger.info(`[TokenRegistration] Registered as FEE SHAREHOLDER: ${token.ticker} (${mint.slice(0, 8)}...) - ${verification.feeSharePercent}% fee share (${verification.feeShareBps} bps), originalCreator: ${creatorPubkey.slice(0, 8)}...`);
             }
 
+            // v25.70: Post Twitter announcement for new Robinhood registration
+            // Non-blocking - don't fail registration if tweet fails
+            let tweetUrl = null;
+            try {
+                tweetUrl = await twitter.postRobinhoodRegistrationTweet(
+                    token.ticker,
+                    token.name,
+                    token.mint,
+                    verification.feeSharePercent
+                );
+                if (tweetUrl) {
+                    logger.info('[TokenRegistration] Registration announced on Twitter', {
+                        mint: token.mint,
+                        ticker: token.ticker,
+                        tweetUrl
+                    });
+                }
+            } catch (tweetErr) {
+                logger.warn('[TokenRegistration] Twitter announcement failed', { error: tweetErr.message });
+            }
+
             res.json({
                 success: true,
                 message: 'Token registered successfully! Fee sharing verified.',
@@ -1121,7 +1142,9 @@ function init(deps) {
                     feeSharePercent: verification.feeSharePercent,
                     feeShareBps: verification.feeShareBps,
                     isDirectCreator
-                }
+                },
+                // v25.70: Include tweet URL if announcement was posted
+                tweetUrl
             });
 
         } catch (e) {

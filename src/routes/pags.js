@@ -22,6 +22,7 @@ const pags = require('../services/pags');
 const pagsTwitterAuth = require('../services/pagsTwitterAuth');
 const signatureVerifier = require('../services/signatureVerifier');
 const mintExtractor = require('../services/mintExtractor');
+const twitter = require('../services/twitter'); // v25.70: For PAGS registration announcements
 
 /**
  * Timing-safe comparison for admin keys
@@ -678,6 +679,30 @@ function init(deps) {
                 });
             }
 
+            // v25.70: Post Twitter announcement for new PAGS registration
+            // Non-blocking - don't fail registration if tweet fails
+            let tweetUrl = null;
+            try {
+                const ticker = tokenMetadata?.ticker || sanitizedMint.slice(0, 8);
+                const name = tokenMetadata?.name || 'New Token';
+                tweetUrl = await twitter.postPagsRegistrationTweet(
+                    ticker,
+                    name,
+                    sanitizedMint,
+                    sanitizedUsername,
+                    sanitizedBeneficiaries
+                );
+                if (tweetUrl) {
+                    logger.info('[PAGS API] Registration announced on Twitter', {
+                        mint: sanitizedMint,
+                        ticker,
+                        tweetUrl
+                    });
+                }
+            } catch (tweetErr) {
+                logger.warn('[PAGS API] Twitter announcement failed', { error: tweetErr.message });
+            }
+
             res.json({
                 success: true,
                 beneficiary: result,
@@ -701,7 +726,9 @@ function init(deps) {
                     isDirectCreator: detectedFeeShareBps === 10000,
                     originalCreator: originalCreator,
                     creatorVerified: true
-                }
+                },
+                // v25.70: Include tweet URL if announcement was posted
+                tweetUrl
             });
         } catch (e) {
             logger.error('[PAGS API] Register error', { error: e.message });
