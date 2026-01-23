@@ -188,7 +188,7 @@ function init(deps) {
                     // v25.71: If not found in platform tokens, check robinhood tokens
                     if (!koth) {
                         koth = await db.get(`
-                            SELECT mint, "creatorPubkey" as "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h,
+                            SELECT mint, "creatorPubkey" as "userPubkey", name, ticker, image, NULL as "metadataUri", "marketCap", volume24h,
                                    (SELECT COUNT(*) FROM robinhood_token_holders rth WHERE rth.mint = rt.mint) as "holderCount"
                             FROM robinhood_tokens rt WHERE mint = $1 AND "isActive" = 1
                         `, [kothMint]);
