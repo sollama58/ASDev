@@ -2095,7 +2095,7 @@
             <p>Points are calculated based on your <span class="text-yellow-400">% of total token supply</span> in eligible tokens:</p>
             <ul class="list-disc list-inside ml-4 space-y-2 text-purple-300">
                 <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400">250 holders</span> of tokens with <span class="text-green-400">>$100 24hr volume</span> earn points.</li>
-                <li><span class="text-white">Volume Weight:</span> Each token's base points are scaled by its 24hr volume relative to other eligible tokens (<span class="text-yellow-400">0.5x to 2.0x</span> multiplier).</li>
+                <li><span class="text-white">Volume Weight:</span> Each token's base points are scaled by its 24hr volume relative to other eligible tokens (<span class="text-yellow-400">0.1x to 5.0x</span> multiplier).</li>
                 <li><span class="text-white">Supply-Based Points:</span> Points = <span class="text-cyan-400">(Your Balance / 1B Total Supply)</span> × Token's Weighted Points. All pump.fun tokens have 1 billion total supply.</li>
                 <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+Points</span> for holding partner tokens (scaled by volume + fee share %).</li>
                 <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400">2x Total Points</span> if you're a Top 100 $ASDF holder.</li>
@@ -2107,8 +2107,8 @@
             </div>
             <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mt-4">
                 <p class="text-yellow-400 text-xs uppercase mb-1">Example</p>
-                <p class="text-xs text-gray-300">Token A ($50k volume, max) = 2.0x weight = 2000 base points. If you hold 1% of total supply (10M tokens) = 20 points. With ASDF multiplier = 40 points.</p>
-                <p class="text-xs text-gray-400 mt-1">Token B ($1k volume, min) = 0.5x weight = 500 base points. Same 1% holding = 5 points.</p>
+                <p class="text-xs text-gray-300">Token A ($50k volume, max) = 5.0x weight = 5000 base points. If you hold 1% of total supply (10M tokens) = 50 points. With ASDF multiplier = 100 points.</p>
+                <p class="text-xs text-gray-400 mt-1">Token B ($100 volume, min) = 0.1x weight = 100 base points. Same 1% holding = 1 point.</p>
             </div>
             <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
                 <p class="text-fuchsia-400 text-xs uppercase mb-1 flex items-center gap-2">King of the Pill (KOTH) - AI Selection <span class="text-[9px] bg-cyan-700/50 text-cyan-300 px-1.5 py-0.5 rounded">CLAUDE</span></p>
@@ -2147,7 +2147,7 @@
                 <p class="text-purple-200 mb-2">Points are based on your <span class="text-yellow-400">% of total token supply</span>. Higher-volume tokens reward more points since they contribute more fees.</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
                     <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400">250 holders</span> of tokens with <span class="text-green-400">>$100 24hr volume</span>.</li>
-                    <li><span class="text-white">Volume Weight:</span> Each token's points scaled by volume (<span class="text-cyan-400">0.5x to 2.0x</span>) relative to other tokens.</li>
+                    <li><span class="text-white">Volume Weight:</span> Each token's points scaled by volume (<span class="text-cyan-400">0.1x to 5.0x</span>) relative to other tokens.</li>
                     <li><span class="text-white">Supply-Based:</span> Points = <span class="text-cyan-400">(Your Balance / 1B Supply)</span> × Weighted Points. All pump.fun tokens have 1B supply.</li>
                     <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+Points</span> for holding partner tokens (scaled by volume + fee share %).</li>
                     <li><span class="text-white">Multiplier:</span> <span class="text-green-400">2x Total Points</span> if you are a Top 100 $ASDF holder.</li>
@@ -2221,7 +2221,7 @@
                 <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">Benefits for Holders</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
                     <li><span class="text-white">Top 250 Holders</span> earn points based on % of total supply (1B tokens)</li>
-                    <li><span class="text-cyan-400">Volume Multiplier:</span> Higher volume = more points (0.5x to 2.0x scale)</li>
+                    <li><span class="text-cyan-400">Volume Multiplier:</span> Higher volume = more points (0.1x to 5.0x scale)</li>
                     <li><span class="text-yellow-400">Fee Share %:</span> Points scaled by creator's fee share (e.g., 50% share = 50% points)</li>
                     <li>Points stack with platform token holdings for maximum earnings</li>
                     <li>SOL airdrops distributed based on total point share</li>
@@ -2241,7 +2241,7 @@
             <div class="bg-cyan-900/30 p-3 rounded border border-cyan-700/50 mt-4">
                 <p class="text-cyan-400 text-xs uppercase mb-1">Points Formula (v25.36)</p>
                 <p class="text-xs text-gray-300">Robinhood Points = <span class="text-cyan-400">(Your Balance / 1B Total Supply)</span> × <span class="text-cyan-400">Volume Weight</span> × <span class="text-yellow-400">Fee Share %</span> × 1000</p>
-                <p class="text-xs text-gray-400 mt-1">Volume Weight: 0.5x (min volume) to 2.0x (max volume) - logarithmic scale</p>
+                <p class="text-xs text-gray-400 mt-1">Volume Weight: 0.1x (min volume) to 5.0x (max volume) - logarithmic scale</p>
                 <p class="text-xs text-gray-400 mt-1">All pump.fun tokens have a fixed 1 billion total supply</p>
             </div>
 
@@ -3502,7 +3502,7 @@
         const logMax = Math.log10(maxVol);
         const logVol = Math.log10(Math.max(volume, minVol));
         const normalized = (logVol - logMin) / (logMax - logMin);
-        return 0.5 + (normalized * 1.5); // 0.5x to 2.0x range
+        return 0.1 + (normalized * 4.9); // 0.1x to 5.0x range
     };
 
     const updateLeaderboard = async () => {

@@ -26,8 +26,8 @@ const router = express.Router();
 const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
 
 // v25.25: Volume weight range for point calculation (must match holderScanner.js)
-const VOLUME_WEIGHT_MIN = 0.5;  // Lowest volume token gets 0.5x base points
-const VOLUME_WEIGHT_MAX = 2.0;  // Highest volume token gets 2.0x base points
+const VOLUME_WEIGHT_MIN = 0.1;  // Lowest volume token gets 0.1x base points
+const VOLUME_WEIGHT_MAX = 5.0;  // Highest volume token gets 5.0x base points
 
 // v25.36: Pump.fun standard total supply (1 billion tokens with 6 decimals)
 // All pump.fun tokens have fixed 1B supply - use this for accurate % of supply calculation

@@ -176,25 +176,49 @@ async function evaluateKothCandidates(db) {
     const KOTH_MIN_VOLUME = 100;
 
     try {
-        // Get all eligible tokens with their metrics (single query)
+        // Get all eligible tokens with their metrics (combined query for platform + robinhood tokens)
         // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
+        // v25.64: Now includes Robinhood partner tokens in KOTH evaluation
         const candidates = await db.all(`
-            SELECT
-                t.mint,
-                t.ticker,
-                t.name,
-                t."marketCap",
-                t.volume24h,
-                t."holderCount",
-                t.timestamp,
-                COUNT(th."holderPubkey") as actualHolders
-            FROM tokens t
-            LEFT JOIN token_holders th ON th.mint = t.mint
-            WHERE t."marketCap" >= $1
-            AND t.volume24h >= $2
-            GROUP BY t.mint, t.ticker, t.name, t."marketCap", t.volume24h, t."holderCount", t.timestamp
-            HAVING COUNT(th."holderPubkey") >= $3
-            ORDER BY t."marketCap" DESC
+            SELECT mint, ticker, name, "marketCap", volume24h, "holderCount", timestamp, actualHolders, source FROM (
+                SELECT
+                    t.mint,
+                    t.ticker,
+                    t.name,
+                    t."marketCap",
+                    t.volume24h,
+                    t."holderCount",
+                    t.timestamp,
+                    COUNT(th."holderPubkey") as actualHolders,
+                    'platform' as source
+                FROM tokens t
+                LEFT JOIN token_holders th ON th.mint = t.mint
+                WHERE t."marketCap" >= $1
+                AND t.volume24h >= $2
+                GROUP BY t.mint, t.ticker, t.name, t."marketCap", t.volume24h, t."holderCount", t.timestamp
+                HAVING COUNT(th."holderPubkey") >= $3
+
+                UNION ALL
+
+                SELECT
+                    rt.mint,
+                    rt.ticker,
+                    rt.name,
+                    rt."marketCap",
+                    rt.volume24h,
+                    0 as "holderCount",
+                    rt."discoveredAt" as timestamp,
+                    COUNT(rth."holderPubkey") as actualHolders,
+                    'robinhood' as source
+                FROM robinhood_tokens rt
+                LEFT JOIN robinhood_token_holders rth ON rth.mint = rt.mint
+                WHERE rt."isActive" = 1
+                AND rt."marketCap" >= $1
+                AND rt.volume24h >= $2
+                GROUP BY rt.mint, rt.ticker, rt.name, rt."marketCap", rt.volume24h, rt."discoveredAt"
+                HAVING COUNT(rth."holderPubkey") >= $3
+            )
+            ORDER BY "marketCap" DESC
             LIMIT 50
         `, [KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME, KOTH_MIN_HOLDERS]);
 
@@ -246,7 +270,8 @@ async function evaluateKothCandidates(db) {
         // Generate reasoning
         const reasoning = generateKothReasoning(winner, runnerUp, stats);
 
-        logger.info(`[KOTH] 👑 AI Selected: ${winner.ticker} (Score: ${winner.totalScore}/100)`);
+        const sourceLabel = winner.source === 'robinhood' ? '🤝 Robinhood Partner' : '🚀 Platform';
+        logger.info(`[KOTH] 👑 AI Selected: ${winner.ticker} (Score: ${winner.totalScore}/100) [${sourceLabel}]`);
         logger.info(`[KOTH] Breakdown: ${JSON.stringify(winner.breakdown)}`);
 
         return {
@@ -254,10 +279,12 @@ async function evaluateKothCandidates(db) {
             score: winner.totalScore,
             reasoning,
             breakdown: winner.breakdown,
+            source: winner.source || 'platform',
             candidates: scoredCandidates.slice(0, 5).map(c => ({
                 ticker: c.ticker,
                 score: c.totalScore,
-                marketCap: c.marketCap
+                marketCap: c.marketCap,
+                source: c.source || 'platform'
             }))
         };
 

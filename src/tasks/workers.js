@@ -269,8 +269,8 @@ function chunkArray(array, size) {
 }
 
 // v25.27: Volume weight range (matches holderScanner.js)
-const VOLUME_WEIGHT_MIN = 0.5;  // Lowest volume token gets 0.5x base points
-const VOLUME_WEIGHT_MAX = 2.0;  // Highest volume token gets 2.0x base points
+const VOLUME_WEIGHT_MIN = 0.1;  // Lowest volume token gets 0.1x base points
+const VOLUME_WEIGHT_MAX = 5.0;  // Highest volume token gets 5.0x base points
 const MIN_VOLUME_USD = 100;     // Minimum 24hr volume for eligibility
 const BASE_POINTS_PER_TOKEN = 1000; // Base points distributed per token
 const TOP_HOLDERS_LIMIT = 250;  // Track top 250 holders per token

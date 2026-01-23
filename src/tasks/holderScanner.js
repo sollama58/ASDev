@@ -54,8 +54,8 @@ const SAFETY_RESERVE_SOL = 0.5; // Reserve 0.5 SOL for operations
 const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // v18.0: Minimum 24hr volume for eligibility
 
 // v25.4: Volume weight range (min multiplier to max multiplier)
-const VOLUME_WEIGHT_MIN = 0.5;  // Lowest volume token gets 0.5x base points
-const VOLUME_WEIGHT_MAX = 2.0;  // Highest volume token gets 2.0x base points
+const VOLUME_WEIGHT_MIN = 0.1;  // Lowest volume token gets 0.1x base points
+const VOLUME_WEIGHT_MAX = 5.0;  // Highest volume token gets 5.0x base points
 
 // v25.36: Pump.fun standard total supply (1 billion tokens with 6 decimals)
 // All pump.fun tokens have fixed 1B supply - use this for accurate % of supply calculation
