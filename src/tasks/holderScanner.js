@@ -14,6 +14,7 @@
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const { BN } = require('@coral-xyz/anchor');
+const axios = require('axios');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
 const { logger, mutex, postgres } = require('../services');
@@ -46,6 +47,73 @@ async function withRetry(fn, context = 'RPC call') {
         }
     }
     throw lastError;
+}
+
+/**
+ * v25.66: Fetch token accounts using Helius DAS API with pagination
+ * This handles tokens with many holders that exceed getProgramAccounts limits
+ * @param {string} mint - Token mint address
+ * @param {number} limit - Max accounts to fetch
+ * @returns {Promise<Array<{owner: string, balance: string}>>}
+ */
+async function fetchTokenAccountsHeliusDAS(mint, limit = 250) {
+    if (!config.HELIUS_API_KEY) {
+        logger.warn('[HolderScanner] No HELIUS_API_KEY configured, cannot use DAS API fallback');
+        return null;
+    }
+
+    const accounts = [];
+    let page = 1;
+    const pageSize = 100;
+
+    try {
+        while (accounts.length < limit) {
+            const response = await axios.post(
+                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+                {
+                    jsonrpc: '2.0',
+                    id: 'token-accounts',
+                    method: 'getTokenAccounts',
+                    params: {
+                        mint: mint,
+                        page: page,
+                        limit: pageSize,
+                        options: {
+                            showZeroBalance: false
+                        }
+                    }
+                },
+                { timeout: 15000 }
+            );
+
+            const result = response.data?.result;
+            if (!result || !result.token_accounts || result.token_accounts.length === 0) {
+                break;
+            }
+
+            for (const acc of result.token_accounts) {
+                if (accounts.length >= limit) break;
+                if (acc.owner && acc.amount) {
+                    accounts.push({
+                        owner: acc.owner,
+                        balance: acc.amount.toString()
+                    });
+                }
+            }
+
+            if (result.token_accounts.length < pageSize) {
+                break;
+            }
+
+            page++;
+            await new Promise(r => setTimeout(r, 100));
+        }
+
+        return accounts;
+    } catch (e) {
+        logger.warn(`[HolderScanner] Helius DAS API failed for ${mint.slice(0, 8)}: ${e.message}`);
+        return null;
+    }
 }
 
 // Constants for point calculation
@@ -172,6 +240,7 @@ async function updateGlobalState(deps) {
 
         // v18.0: Update holders for all eligible tokens (>$100 volume) - tracking Top 250 with balances
         // v25.65: Critical bugfix - don't delete holders on RPC failure
+        // v25.66: Added fallback for tokens with many holders
         for (const token of eligibleTokens) {
             try {
                 if (!token.mint) continue;
@@ -183,7 +252,10 @@ async function updateGlobalState(deps) {
                 );
 
                 const holdersToInsert = [];
-                let scanSucceeded = false; // v25.65: Track if scan actually succeeded
+                const bondingCurvePDAStr = bondingCurvePDA.toString();
+                const threshold = new BN(1000000); // Minimum balance threshold (dust filter)
+                let scanSucceeded = false;
+                let usedFallback = false;
 
                 try {
                     // v25.20: Use retry logic for RPC calls
@@ -215,27 +287,58 @@ async function updateGlobalState(deps) {
                     .filter(a => a !== null)
                     .sort((a, b) => b.amount.cmp(a.amount));
 
-                    const bondingCurvePDAStr = bondingCurvePDA.toString();
-                    const threshold = new BN(1000000); // Minimum balance threshold (dust filter)
-
                     for (const acc of parsedAccounts) {
-                        // v14.0: Track Top 250 Holders of Leaderboard Tokens
                         if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
-
                         if (acc.amount.lte(threshold)) continue;
 
                         if (acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr) {
                             holdersToInsert.push({
                                 mint: token.mint,
                                 owner: acc.owner,
-                                balance: acc.amount.toString() // Store balance for proportional calculation
+                                balance: acc.amount.toString()
                             });
                         }
                     }
-                    scanSucceeded = true; // v25.65: Mark scan as successful
+                    scanSucceeded = true;
                 } catch (scanErr) {
-                    logger.error(`Failed to scan holders for ${token.mint}`, { error: scanErr.message });
-                    // v25.65: scanSucceeded stays false, we'll preserve existing holders
+                    // v25.66: Check if this is a "too many accounts" error - use Helius DAS API fallback
+                    if (scanErr.message?.includes('Too many accounts') || scanErr.message?.includes('too many')) {
+                        logger.debug(`[HolderScanner] ${token.ticker || token.mint.slice(0, 8)} has too many holders, using Helius DAS API`);
+                        usedFallback = true;
+                    } else {
+                        logger.error(`Failed to scan holders for ${token.mint}`, { error: scanErr.message });
+                    }
+                }
+
+                // v25.66: Use Helius DAS API fallback for tokens with many holders (gets all 250)
+                if (usedFallback) {
+                    const dasAccounts = await fetchTokenAccountsHeliusDAS(token.mint, TOP_HOLDERS_LIMIT);
+
+                    if (dasAccounts && dasAccounts.length > 0) {
+                        // Sort by balance descending and filter
+                        const sortedAccounts = dasAccounts
+                            .filter(acc => {
+                                const bal = new BN(acc.balance);
+                                return bal.gt(threshold) && acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr;
+                            })
+                            .sort((a, b) => {
+                                const balA = new BN(a.balance);
+                                const balB = new BN(b.balance);
+                                return balB.cmp(balA);
+                            })
+                            .slice(0, TOP_HOLDERS_LIMIT);
+
+                        for (const acc of sortedAccounts) {
+                            holdersToInsert.push({
+                                mint: token.mint,
+                                owner: acc.owner,
+                                balance: acc.balance
+                            });
+                        }
+                        scanSucceeded = true;
+                    } else {
+                        logger.warn(`[HolderScanner] Helius DAS returned no results for ${token.ticker || token.mint.slice(0, 8)} - preserving existing`);
+                    }
                 }
 
                 // v25.65: Only update database if scan succeeded

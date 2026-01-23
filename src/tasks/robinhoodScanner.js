@@ -430,9 +430,78 @@ async function updateRobinhoodTokenMetadata(deps) {
 }
 
 /**
+ * v25.66: Fetch token accounts using Helius DAS API with pagination
+ * This handles tokens with many holders that exceed getProgramAccounts limits
+ * @param {string} mint - Token mint address
+ * @param {number} limit - Max accounts to fetch
+ * @returns {Promise<Array<{owner: string, balance: string}>>}
+ */
+async function fetchTokenAccountsHeliusDAS(mint, limit = 250) {
+    if (!config.HELIUS_API_KEY) {
+        logger.warn('[Robinhood] No HELIUS_API_KEY configured, cannot use DAS API fallback');
+        return null;
+    }
+
+    const accounts = [];
+    let page = 1;
+    const pageSize = 100; // Helius DAS supports up to 1000 per page, but 100 is safer
+
+    try {
+        while (accounts.length < limit) {
+            const response = await axios.post(
+                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
+                {
+                    jsonrpc: '2.0',
+                    id: 'token-accounts',
+                    method: 'getTokenAccounts',
+                    params: {
+                        mint: mint,
+                        page: page,
+                        limit: pageSize,
+                        options: {
+                            showZeroBalance: false
+                        }
+                    }
+                },
+                { timeout: 15000 }
+            );
+
+            const result = response.data?.result;
+            if (!result || !result.token_accounts || result.token_accounts.length === 0) {
+                break; // No more accounts
+            }
+
+            for (const acc of result.token_accounts) {
+                if (accounts.length >= limit) break;
+                if (acc.owner && acc.amount) {
+                    accounts.push({
+                        owner: acc.owner,
+                        balance: acc.amount.toString()
+                    });
+                }
+            }
+
+            // Check if there are more pages
+            if (result.token_accounts.length < pageSize) {
+                break; // Last page
+            }
+
+            page++;
+            await new Promise(r => setTimeout(r, 100)); // Rate limit between pages
+        }
+
+        return accounts;
+    } catch (e) {
+        logger.warn(`[Robinhood] Helius DAS API failed for ${mint.slice(0, 8)}: ${e.message}`);
+        return null;
+    }
+}
+
+/**
  * Update holders for all active Robinhood tokens
  * v25.64: Fixed to track 250 holders (matching platform tokens) and use batch inserts
  * v25.65: Critical bugfix - don't delete holders on RPC failure, better error handling
+ * v25.66: Use Helius DAS API with pagination for tokens with many holders
  */
 async function updateRobinhoodHolders(deps) {
     const { connection, db } = deps;
@@ -450,6 +519,7 @@ async function updateRobinhoodHolders(deps) {
         let totalHoldersUpdated = 0;
         let tokensWithHolders = 0;
         let tokensSkippedRpcFail = 0;
+        let tokensUsedFallback = 0;
 
         for (const token of tokens) {
             try {
@@ -462,14 +532,16 @@ async function updateRobinhoodHolders(deps) {
                 );
 
                 const holdersToInsert = [];
+                const bondingCurvePDAStr = bondingCurvePDA.toString();
+                const threshold = new BN(1000000);
 
-                // v25.65: Track RPC failures separately from empty results
+                // v25.66: Try getProgramAccounts first, fallback to Helius DAS API for large tokens
                 let rpcFailed = false;
+                let usedFallback = false;
                 let tokenAccounts = [];
                 let token2022Accounts = [];
 
                 // Fetch token accounts from both Token Program and Token-2022
-                // Most Pump.fun tokens use regular Token Program, but some may use Token-2022
                 try {
                     [tokenAccounts, token2022Accounts] = await Promise.all([
                         connection.getProgramAccounts(PROGRAMS.TOKEN, {
@@ -482,50 +554,80 @@ async function updateRobinhoodHolders(deps) {
                         })
                     ]);
                 } catch (rpcError) {
-                    // v25.65: Log RPC failures and skip this token (preserve existing holders)
-                    logger.warn(`[Robinhood] RPC failed for ${token.ticker || token.mint.slice(0, 8)}: ${rpcError.message}`);
-                    rpcFailed = true;
-                    tokensSkippedRpcFail++;
+                    // v25.66: Check if this is a "too many accounts" error - use Helius DAS API fallback
+                    if (rpcError.message?.includes('Too many accounts') || rpcError.message?.includes('too many')) {
+                        logger.debug(`[Robinhood] ${token.ticker || token.mint.slice(0, 8)} has too many holders, using Helius DAS API`);
+                        usedFallback = true;
+                        tokensUsedFallback++;
+                    } else {
+                        logger.warn(`[Robinhood] RPC failed for ${token.ticker || token.mint.slice(0, 8)}: ${rpcError.message}`);
+                        rpcFailed = true;
+                        tokensSkippedRpcFail++;
+                    }
                 }
 
                 // v25.65: Skip this token if RPC failed - don't delete existing holders
                 if (rpcFailed) {
-                    await new Promise(r => setTimeout(r, 500)); // Shorter delay before retry
+                    await new Promise(r => setTimeout(r, 500));
                     continue;
                 }
 
-                const accounts = [...tokenAccounts, ...token2022Accounts];
+                // v25.66: Use Helius DAS API fallback for tokens with many holders
+                if (usedFallback) {
+                    const dasAccounts = await fetchTokenAccountsHeliusDAS(token.mint, TOP_HOLDERS_LIMIT);
 
-                // v25.65: Handle both Buffer and base64 array tuple formats from RPC
-                const parsedAccounts = accounts.map(acc => {
-                    try {
-                        // Handle both formats: direct Buffer or [base64String, 'base64'] tuple
-                        const data = Array.isArray(acc.account.data)
-                            ? Buffer.from(acc.account.data[0], 'base64')
-                            : Buffer.from(acc.account.data);
+                    if (dasAccounts && dasAccounts.length > 0) {
+                        // Sort by balance descending and filter
+                        const sortedAccounts = dasAccounts
+                            .filter(acc => {
+                                const bal = new BN(acc.balance);
+                                return bal.gt(threshold) && acc.owner !== bondingCurvePDAStr;
+                            })
+                            .sort((a, b) => {
+                                const balA = new BN(a.balance);
+                                const balB = new BN(b.balance);
+                                return balB.cmp(balA);
+                            })
+                            .slice(0, TOP_HOLDERS_LIMIT);
 
-                        if (data.length < 72) return null;
-
-                        const owner = new PublicKey(data.slice(32, 64)).toString();
-                        const amount = new BN(data.slice(64, 72), 'le');
-                        return { owner, amount, balance: amount.toString() };
-                    } catch (parseErr) {
-                        return null;
+                        for (const acc of sortedAccounts) {
+                            holdersToInsert.push({ mint: token.mint, owner: acc.owner, balance: acc.balance });
+                        }
+                    } else {
+                        // DAS API failed or returned no results - preserve existing holders
+                        logger.warn(`[Robinhood] Helius DAS returned no results for ${token.ticker || token.mint.slice(0, 8)} - preserving existing`);
+                        await new Promise(r => setTimeout(r, 500));
+                        continue;
                     }
-                })
-                    .filter(a => a !== null)
-                    .sort((a, b) => b.amount.cmp(a.amount));
+                } else {
+                    // Normal path - parse getProgramAccounts results
+                    const accounts = [...tokenAccounts, ...token2022Accounts];
 
-                const bondingCurvePDAStr = bondingCurvePDA.toString();
-                const threshold = new BN(1000000);
+                    const parsedAccounts = accounts.map(acc => {
+                        try {
+                            const data = Array.isArray(acc.account.data)
+                                ? Buffer.from(acc.account.data[0], 'base64')
+                                : Buffer.from(acc.account.data);
 
-                for (const acc of parsedAccounts) {
-                    // v25.64: Track up to 250 holders (was 100)
-                    if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
-                    if (acc.amount.lte(threshold)) continue;
+                            if (data.length < 72) return null;
 
-                    if (acc.owner !== bondingCurvePDAStr) {
-                        holdersToInsert.push({ mint: token.mint, owner: acc.owner, balance: acc.balance });
+                            const owner = new PublicKey(data.slice(32, 64)).toString();
+                            const amount = new BN(data.slice(64, 72), 'le');
+                            return { owner, amount, balance: amount.toString() };
+                        } catch (parseErr) {
+                            return null;
+                        }
+                    })
+                        .filter(a => a !== null)
+                        .sort((a, b) => b.amount.cmp(a.amount));
+
+                    for (const acc of parsedAccounts) {
+                        if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
+                        if (acc.amount.lte(threshold)) continue;
+
+                        if (acc.owner !== bondingCurvePDAStr) {
+                            holdersToInsert.push({ mint: token.mint, owner: acc.owner, balance: acc.balance });
+                        }
                     }
                 }
 
@@ -586,7 +688,7 @@ async function updateRobinhoodHolders(deps) {
             }
         }
 
-        logger.info(`[Robinhood] Holder scan complete: ${totalHoldersUpdated} holders across ${tokensWithHolders}/${tokens.length} tokens (${tokensSkippedRpcFail} skipped due to RPC failure)`);
+        logger.info(`[Robinhood] Holder scan complete: ${totalHoldersUpdated} holders across ${tokensWithHolders}/${tokens.length} tokens (${tokensUsedFallback} used fallback, ${tokensSkippedRpcFail} skipped)`);
     } catch (e) {
         logger.error('[Robinhood] Holder update error', { error: e.message });
     }
@@ -755,6 +857,7 @@ function stop(deps) {
  * v25.65: Scan holders for a single token immediately
  * Called after new Robinhood token registration to populate holder data right away
  * instead of waiting for the next scheduled scan (up to 10 minutes)
+ * v25.66: Added fallback for tokens with many holders
  *
  * @param {Object} deps - Dependencies (connection, db)
  * @param {string} mint - Token mint address
@@ -777,10 +880,14 @@ async function scanSingleTokenHolders(deps, mint, ticker = null) {
         );
 
         const holdersToInsert = [];
+        const bondingCurvePDAStr = bondingCurvePDA.toString();
+        const threshold = new BN(1000000);
+        let usedFallback = false;
+
+        // Fetch token accounts from both Token Program and Token-2022
         let tokenAccounts = [];
         let token2022Accounts = [];
 
-        // Fetch token accounts from both Token Program and Token-2022
         try {
             [tokenAccounts, token2022Accounts] = await Promise.all([
                 connection.getProgramAccounts(PROGRAMS.TOKEN, {
@@ -793,39 +900,70 @@ async function scanSingleTokenHolders(deps, mint, ticker = null) {
                 })
             ]);
         } catch (rpcError) {
-            logger.warn(`[Robinhood] Immediate scan RPC failed for ${ticker || mint.slice(0, 8)}: ${rpcError.message}`);
-            return { success: false, holdersCount: 0, error: rpcError.message };
+            // v25.66: Check if this is a "too many accounts" error - use fallback
+            if (rpcError.message?.includes('Too many accounts') || rpcError.message?.includes('too many')) {
+                logger.debug(`[Robinhood] ${ticker || mint.slice(0, 8)} has too many holders, using getTokenLargestAccounts fallback`);
+                usedFallback = true;
+            } else {
+                logger.warn(`[Robinhood] Immediate scan RPC failed for ${ticker || mint.slice(0, 8)}: ${rpcError.message}`);
+                return { success: false, holdersCount: 0, error: rpcError.message };
+            }
         }
 
-        const accounts = [...tokenAccounts, ...token2022Accounts];
+        // v25.66: Use Helius DAS API fallback for tokens with many holders
+        if (usedFallback) {
+            const dasAccounts = await fetchTokenAccountsHeliusDAS(mint, TOP_HOLDERS_LIMIT);
 
-        const parsedAccounts = accounts.map(acc => {
-            try {
-                const data = Array.isArray(acc.account.data)
-                    ? Buffer.from(acc.account.data[0], 'base64')
-                    : Buffer.from(acc.account.data);
+            if (dasAccounts && dasAccounts.length > 0) {
+                // Sort by balance descending and filter
+                const sortedAccounts = dasAccounts
+                    .filter(acc => {
+                        const bal = new BN(acc.balance);
+                        return bal.gt(threshold) && acc.owner !== bondingCurvePDAStr;
+                    })
+                    .sort((a, b) => {
+                        const balA = new BN(a.balance);
+                        const balB = new BN(b.balance);
+                        return balB.cmp(balA);
+                    })
+                    .slice(0, TOP_HOLDERS_LIMIT);
 
-                if (data.length < 72) return null;
-
-                const owner = new PublicKey(data.slice(32, 64)).toString();
-                const amount = new BN(data.slice(64, 72), 'le');
-                return { owner, amount, balance: amount.toString() };
-            } catch (parseErr) {
-                return null;
+                for (const acc of sortedAccounts) {
+                    holdersToInsert.push({ mint, owner: acc.owner, balance: acc.balance });
+                }
+            } else {
+                logger.warn(`[Robinhood] Helius DAS returned no results for ${ticker || mint.slice(0, 8)}`);
+                return { success: false, holdersCount: 0, error: 'Helius DAS returned no results' };
             }
-        })
-            .filter(a => a !== null)
-            .sort((a, b) => b.amount.cmp(a.amount));
+        } else {
+            // Normal path - parse getProgramAccounts results
+            const accounts = [...tokenAccounts, ...token2022Accounts];
 
-        const bondingCurvePDAStr = bondingCurvePDA.toString();
-        const threshold = new BN(1000000);
+            const parsedAccounts = accounts.map(acc => {
+                try {
+                    const data = Array.isArray(acc.account.data)
+                        ? Buffer.from(acc.account.data[0], 'base64')
+                        : Buffer.from(acc.account.data);
 
-        for (const acc of parsedAccounts) {
-            if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
-            if (acc.amount.lte(threshold)) continue;
+                    if (data.length < 72) return null;
 
-            if (acc.owner !== bondingCurvePDAStr) {
-                holdersToInsert.push({ mint, owner: acc.owner, balance: acc.balance });
+                    const owner = new PublicKey(data.slice(32, 64)).toString();
+                    const amount = new BN(data.slice(64, 72), 'le');
+                    return { owner, amount, balance: amount.toString() };
+                } catch (parseErr) {
+                    return null;
+                }
+            })
+                .filter(a => a !== null)
+                .sort((a, b) => b.amount.cmp(a.amount));
+
+            for (const acc of parsedAccounts) {
+                if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
+                if (acc.amount.lte(threshold)) continue;
+
+                if (acc.owner !== bondingCurvePDAStr) {
+                    holdersToInsert.push({ mint, owner: acc.owner, balance: acc.balance });
+                }
             }
         }
 
