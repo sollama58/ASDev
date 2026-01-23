@@ -4557,6 +4557,7 @@
                             <th style="color:#eab308">Token</th>
                             <th style="width:45px;color:#eab308" class="text-right">Rank</th>
                             <th style="width:85px;color:#eab308" class="text-right">Vol 24H</th>
+                            <th style="width:50px;color:#eab308" class="text-right" title="Volume weight multiplier (0.1x-5.0x based on relative volume)">Wt</th>
                             <th style="width:60px;color:#eab308" class="text-right">Pts</th>
                         </tr>
                     </thead>
@@ -4567,6 +4568,8 @@
                 const imgSrc = resolveTokenImage(h.image);
                 const pts = h.isEligible ? `<span class="text-yellow-400">${h.basePoints.toFixed(1)}</span>` : '<span class="text-gray-600">-</span>';
                 const rhBadge = h.source === 'robinhood' ? '<span class="text-[9px] text-green-400 ml-1 font-medium">RH</span>' : '';
+                // v25.72: Show volume weight multiplier
+                const volWeight = h.isEligible && h.volumeWeight ? `<span class="text-cyan-400">${h.volumeWeight.toFixed(1)}x</span>` : '<span class="text-gray-600">-</span>';
 
                 html += `
                     <tr>
@@ -4581,6 +4584,7 @@
                         </td>
                         <td class="text-right text-orange-400">#${h.rank}</td>
                         <td class="text-right">$${(h.volume24h || 0).toLocaleString()}</td>
+                        <td class="text-right">${volWeight}</td>
                         <td class="text-right">${pts}</td>
                     </tr>
                 `;
@@ -4591,7 +4595,8 @@
             html += `
                 <div class="mt-4 p-3 bg-purple-900/20 rounded border border-purple-700/30">
                     <p class="text-[10px] text-purple-300 uppercase mb-1">Note</p>
-                    <p class="text-xs text-gray-400">Points shown are before ASDF multiplier. If you're a Top 100 ASDF holder, your total points are doubled!</p>
+                    <p class="text-xs text-gray-400 mb-1">Points shown include volume weighting (Wt column) - higher volume tokens contribute more points.</p>
+                    <p class="text-xs text-gray-400">If you're a Top 100 ASDF holder, your total points are doubled!</p>
                 </div>
             `;
 
