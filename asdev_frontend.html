@@ -1462,58 +1462,51 @@
             </div>
         </div>
 
-        <!-- Platform Metrics & Robinhood -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-8">
-            <!-- Platform Metrics -->
-            <div class="panel bg-orange-900/10">
-                <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-orange-900/50 pb-2 mb-4 md:mb-6">PLATFORM METRICS</h3>
-                <div class="grid grid-cols-3 gap-2 md:gap-4">
-                    <div class="metric-card"><div class="metric-label">Launches</div><div id="metric-launches" class="metric-value">0</div></div>
-                    <div class="metric-card"><div class="metric-label">Airdropped</div><div id="metric-pump" class="metric-value">0.00</div></div>
-                    <div class="metric-card"><div class="metric-label">Daily Vol</div><div id="metric-fees" class="metric-value">$0.00</div></div>
+        <!-- Platform Metrics - Combined -->
+        <div class="panel bg-green-900/10" id="robinhood-section">
+            <h3 class="text-green-400 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-4 md:mb-6 flex items-center gap-2">
+                <svg class="w-3 h-3 md:w-4 md:h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                <span>PLATFORM METRICS</span>
+                <span class="ml-auto text-[10px] text-green-500/70 font-normal" id="robinhood-status-indicator">ACTIVE</span>
+            </h3>
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 md:gap-3">
+                <div class="metric-card" style="border-color: #f97316;">
+                    <div class="metric-label" style="color: #fdba74;">Airdropped</div>
+                    <div id="metric-pump" class="metric-value" style="color: #fb923c;">0.00</div>
                 </div>
-                <div class="text-center mt-4">
-                    <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-[10px] md:text-xs border border-orange-700 hover:bg-orange-800 px-3 md:px-4 py-2 rounded transition">FEE MECHANICS</button>
+                <div class="metric-card" style="border-color: #f97316;">
+                    <div class="metric-label" style="color: #fdba74;">Daily Vol</div>
+                    <div id="metric-fees" class="metric-value" style="color: #fb923c;">$0.00</div>
+                </div>
+                <div class="metric-card" style="border-color: #22c55e;">
+                    <div class="metric-label" style="color: #86efac;">Partners</div>
+                    <div id="robinhood-token-count" class="metric-value" style="color: #4ade80;">0</div>
+                </div>
+                <div class="metric-card" style="border-color: #22c55e;">
+                    <div class="metric-label" style="color: #86efac;">Pending Fees</div>
+                    <div id="robinhood-pending-fees" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00 SOL</div>
+                </div>
+                <div class="metric-card" style="border-color: #22c55e;">
+                    <div class="metric-label" style="color: #86efac;">Lifetime</div>
+                    <div id="robinhood-fees" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00 SOL</div>
+                </div>
+                <div class="metric-card" style="border-color: #22c55e;">
+                    <div class="metric-label" style="color: #86efac;">Your Holds</div>
+                    <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80; font-size: 16px;">-</div>
+                </div>
+                <div class="metric-card" style="border-color: #22c55e;">
+                    <div class="metric-label" style="color: #86efac;">Your Points</div>
+                    <div id="robinhood-user-points-display" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00</div>
+                </div>
+                <div class="metric-card" style="border-color: #22c55e;">
+                    <div class="metric-label" style="color: #86efac;">Top Earner</div>
+                    <div id="robinhood-top-earner" class="metric-value" style="color: #4ade80; font-size: 12px;">-</div>
                 </div>
             </div>
-
-            <!-- Robinhood Section - v25.11: Enhanced status monitor -->
-            <div class="panel bg-green-900/10" id="robinhood-section">
-                <h3 class="text-green-400 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-4 md:mb-6 flex items-center gap-2">
-                    <svg class="w-3 h-3 md:w-4 md:h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
-                    <span>ROBINHOOD PARTNERS</span>
-                    <span class="ml-auto text-[10px] text-green-500/70 font-normal" id="robinhood-status-indicator">ACTIVE</span>
-                </h3>
-                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 md:gap-3">
-                    <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Partners</div>
-                        <div id="robinhood-token-count" class="metric-value" style="color: #4ade80;">0</div>
-                    </div>
-                    <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Pending Fees</div>
-                        <div id="robinhood-pending-fees" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00 SOL</div>
-                    </div>
-                    <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Lifetime</div>
-                        <div id="robinhood-fees" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00 SOL</div>
-                    </div>
-                    <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Your Holds</div>
-                        <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80; font-size: 16px;">-</div>
-                    </div>
-                    <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Your Points</div>
-                        <div id="robinhood-user-points-display" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00</div>
-                    </div>
-                    <div class="metric-card" style="border-color: #22c55e;">
-                        <div class="metric-label" style="color: #86efac;">Top Earner</div>
-                        <div id="robinhood-top-earner" class="metric-value" style="color: #4ade80; font-size: 12px;">-</div>
-                    </div>
-                </div>
-                <div class="text-center mt-4 flex justify-center gap-2 flex-wrap">
-                    <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">VIEW PARTNERS</button>
-                    <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">HOW IT WORKS</button>
-                </div>
+            <div class="text-center mt-4 flex justify-center gap-2 flex-wrap">
+                <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-[10px] md:text-xs border border-orange-700 hover:bg-orange-800 px-2 md:px-3 py-2 rounded transition">FEE MECHANICS</button>
+                <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">VIEW PARTNERS</button>
+                <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs border border-green-700 hover:bg-green-800 px-2 md:px-3 py-2 rounded transition">HOW IT WORKS</button>
             </div>
         </div>
 
@@ -1583,6 +1576,27 @@
 
         <!-- TAB: REGISTER TOKEN -->
         <div id="tab-register" class="tab-content">
+
+        <!-- Check Token Status Section -->
+        <div class="panel bg-cyan-900/10 border border-cyan-800/50 mb-6">
+            <h3 class="text-cyan-400 font-mono text-sm mb-4 uppercase tracking-widest border-b-2 border-cyan-900/50 pb-3 flex items-center gap-2">
+                <i data-lucide="search-check" class="w-4 h-4"></i>
+                Check Token Status
+            </h3>
+            <p class="text-cyan-200/70 text-sm mb-4">Verify if a token is registered with Robinhood and view its fee share details.</p>
+
+            <div class="flex flex-col sm:flex-row gap-3">
+                <input type="text" id="check-token-mint" class="flex-1 bg-black/50 border border-cyan-700/50 rounded px-4 py-3 text-white font-mono text-sm placeholder-cyan-700 focus:border-cyan-500 focus:outline-none" placeholder="Enter token mint address...">
+                <button onclick="checkTokenRegistration()" id="check-token-btn" class="bg-cyan-700 hover:bg-cyan-600 text-white font-mono text-sm px-6 py-3 rounded transition flex items-center justify-center gap-2 whitespace-nowrap">
+                    <i data-lucide="search" class="w-4 h-4"></i>
+                    CHECK STATUS
+                </button>
+            </div>
+
+            <div id="check-token-result" class="mt-4 hidden">
+                <!-- Results will be populated by JS -->
+            </div>
+        </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
             <!-- Registration Form -->
@@ -3009,9 +3023,6 @@
             const data = msg.data;
 
             // Update stats
-            if (data.totalTokens !== undefined) {
-                ui.totalLaunches.innerText = data.totalTokens;
-            }
             if (data.airdropPoolSol !== undefined) {
                 ui.airdropPoolBalance.innerText = data.airdropPoolSol.toFixed(3);
                 updateCountdownPool(data.airdropPoolSol.toFixed(3));
@@ -3317,7 +3328,7 @@
         mayhemStatusLabel: document.getElementById('mayhem-status-label'), logModal: document.getElementById('log-modal'), modalLogContent: document.getElementById('modal-log-content'),
         aboutModal: document.getElementById('about-modal'), successModal: document.getElementById('success-modal'),
         tickerContent: document.getElementById('ticker-content'), leaderboardBody: document.getElementById('leaderboard-body'), versionDisplay: document.getElementById('version-display'),
-        metricLaunches: document.getElementById('metric-launches'), metricPump: document.getElementById('metric-pump'), metricFees: document.getElementById('metric-fees'),
+        metricPump: document.getElementById('metric-pump'), metricFees: document.getElementById('metric-fees'),
         trackBalance: document.getElementById('track-balance'), trackLastAmt: document.getElementById('track-last-amt'), trackLastTime: document.getElementById('track-last-time'), trackNextCheck: document.getElementById('track-next-check'),
         leaderboardLastUpdated: document.getElementById('leaderboard-last-updated'),
         airdropBalance: document.getElementById('airdrop-balance'),
@@ -3845,7 +3856,6 @@
                 } else if (data.lifetimeFees) {
                     ui.metricFees.innerText = data.lifetimeFees + "\u00A0SOL";
                 }
-                if (data.totalLaunches) ui.metricLaunches.innerText = data.totalLaunches;
                 // v11.0: Display SOL airdrop total (or legacy PUMP for backwards compat)
                 if (data.totalSolAirdropped !== undefined && parseFloat(data.totalSolAirdropped) > 0) {
                     ui.metricPump.innerText = parseFloat(data.totalSolAirdropped).toFixed(2) + '\u00A0SOL';
@@ -5233,6 +5243,126 @@
         }
     };
     window.verifyTokenForRegistration = verifyTokenForRegistration;
+
+    // Check if a token is registered with Robinhood and display its fee share details
+    const checkTokenRegistration = async () => {
+        const mintInput = document.getElementById('check-token-mint');
+        const resultDiv = document.getElementById('check-token-result');
+        const checkBtn = document.getElementById('check-token-btn');
+        const mint = mintInput.value.trim();
+
+        if (!mint) {
+            resultDiv.innerHTML = `<div class="bg-red-900/30 border border-red-700/50 rounded p-3 text-red-400 text-sm">Please enter a token mint address</div>`;
+            resultDiv.classList.remove('hidden');
+            return;
+        }
+
+        // Validate mint format
+        if (mint.length < 32 || mint.length > 50) {
+            resultDiv.innerHTML = `<div class="bg-red-900/30 border border-red-700/50 rounded p-3 text-red-400 text-sm">Invalid mint address format</div>`;
+            resultDiv.classList.remove('hidden');
+            return;
+        }
+
+        checkBtn.disabled = true;
+        checkBtn.innerHTML = '<i data-lucide="loader" class="w-4 h-4 animate-spin"></i> CHECKING...';
+        lucide.createIcons();
+
+        try {
+            // Use verify-token endpoint to check registration and fee sharing status
+            const res = await fetchWithRetry(`${BACKEND_URL}/api/verify-token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mint })
+            });
+            const data = await res.json();
+
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to check token');
+            }
+
+            let html = '';
+
+            if (data.alreadyRegistered) {
+                // Token is registered - show full details
+                const token = data.token || {};
+                const feeShare = data.feeSharePercent || token.feeSharePercent || 100;
+                const isDirectCreator = data.isDirectCreator || false;
+                const sourceLabel = data.source === 'bonding_curve' ? 'Bonding Curve' :
+                                   data.source === 'amm_pool' ? 'AMM Pool' : 'Fee Config';
+
+                html = `
+                    <div class="bg-green-900/30 border border-green-700/50 rounded p-4">
+                        <div class="flex items-center gap-2 mb-3">
+                            <i data-lucide="check-circle" class="w-5 h-5 text-green-400"></i>
+                            <span class="text-green-400 font-bold font-mono uppercase text-sm">Registered with Robinhood</span>
+                        </div>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                            <div class="bg-black/30 rounded p-2">
+                                <div class="text-cyan-400/70 text-xs uppercase">Token</div>
+                                <div class="text-white font-mono font-bold">${escapeHtml(token.ticker || data.tokenPreview?.ticker || 'N/A')}</div>
+                            </div>
+                            <div class="bg-black/30 rounded p-2">
+                                <div class="text-cyan-400/70 text-xs uppercase">Fee Share</div>
+                                <div class="text-green-400 font-mono font-bold">${feeShare}%</div>
+                            </div>
+                            <div class="bg-black/30 rounded p-2">
+                                <div class="text-cyan-400/70 text-xs uppercase">Type</div>
+                                <div class="text-white font-mono">${isDirectCreator ? 'Direct Creator' : 'Fee Shareholder'}</div>
+                            </div>
+                            <div class="bg-black/30 rounded p-2">
+                                <div class="text-cyan-400/70 text-xs uppercase">Source</div>
+                                <div class="text-white font-mono">${sourceLabel}</div>
+                            </div>
+                        </div>
+                        ${feeShare < 100 ? `<p class="text-xs text-yellow-400/80 mt-3"><i data-lucide="info" class="w-3 h-3 inline mr-1"></i>Points earned by holders are scaled to ${feeShare}% of full value.</p>` : ''}
+                    </div>
+                `;
+            } else if (data.isEligible) {
+                // Token shares fees but is not registered yet
+                const feeShare = data.feeSharePercent || 100;
+                const sourceLabel = data.source === 'bonding_curve' ? 'Bonding Curve' :
+                                   data.source === 'amm_pool' ? 'AMM Pool' : 'Fee Config';
+
+                html = `
+                    <div class="bg-yellow-900/30 border border-yellow-700/50 rounded p-4">
+                        <div class="flex items-center gap-2 mb-3">
+                            <i data-lucide="alert-circle" class="w-5 h-5 text-yellow-400"></i>
+                            <span class="text-yellow-400 font-bold font-mono uppercase text-sm">Eligible but Not Registered</span>
+                        </div>
+                        <p class="text-yellow-200/80 text-sm mb-3">This token shares ${feeShare}% fees with Robinhood (via ${sourceLabel}) but has not been registered yet.</p>
+                        <p class="text-xs text-gray-400">Use the registration form below to register this token and enable airdrop points for holders.</p>
+                    </div>
+                `;
+            } else {
+                // Token does not share fees
+                html = `
+                    <div class="bg-red-900/30 border border-red-700/50 rounded p-4">
+                        <div class="flex items-center gap-2 mb-3">
+                            <i data-lucide="x-circle" class="w-5 h-5 text-red-400"></i>
+                            <span class="text-red-400 font-bold font-mono uppercase text-sm">Not Registered</span>
+                        </div>
+                        <p class="text-red-200/80 text-sm">This token does not share fees with Robinhood. The token creator must add our wallet as a fee recipient on Pump.fun to be eligible.</p>
+                        <code class="block mt-2 text-xs text-amber-300 bg-black/30 p-2 rounded break-all select-all">FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB</code>
+                    </div>
+                `;
+            }
+
+            resultDiv.innerHTML = html;
+            resultDiv.classList.remove('hidden');
+            lucide.createIcons();
+
+        } catch (e) {
+            console.error('Check token error:', e);
+            resultDiv.innerHTML = `<div class="bg-red-900/30 border border-red-700/50 rounded p-3 text-red-400 text-sm">Error: ${escapeHtml(e.message || 'Failed to check token')}</div>`;
+            resultDiv.classList.remove('hidden');
+        } finally {
+            checkBtn.disabled = false;
+            checkBtn.innerHTML = '<i data-lucide="search" class="w-4 h-4"></i> CHECK STATUS';
+            lucide.createIcons();
+        }
+    };
+    window.checkTokenRegistration = checkTokenRegistration;
 
     const registerToken = async () => {
         if (!registrationVerified || !registrationTokenData) {

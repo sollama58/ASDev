@@ -1921,16 +1921,38 @@ function init(deps) {
             const platformWallet = devKeypair.publicKey.toString();
 
             // Check if already registered in either table
-            const existingToken = await db.get('SELECT mint, ticker, name FROM tokens WHERE mint = $1', [mint]);
-            const existingRobinhoodToken = await db.get('SELECT mint, ticker, name FROM robinhood_tokens WHERE mint = $1', [mint]);
+            const existingToken = await db.get('SELECT mint, ticker, name, image FROM tokens WHERE mint = $1', [mint]);
+            const existingRobinhoodToken = await db.get('SELECT mint, ticker, name, image, feeShareBps, creatorPubkey FROM robinhood_tokens WHERE mint = $1', [mint]);
 
             if (existingToken || existingRobinhoodToken) {
+                const token = existingRobinhoodToken || existingToken;
+                const isRobinhoodToken = !!existingRobinhoodToken;
+
+                // For robinhood tokens, get the fee share percent from stored feeShareBps
+                // For internal tokens, they have 100% fee share (we are the creator)
+                const feeShareBps = isRobinhoodToken ? (existingRobinhoodToken.feeShareBps || 10000) : 10000;
+                const feeSharePercent = feeShareBps / 100;
+
+                // Determine source - robinhood tokens could be from various sources
+                // Internal tokens are always from our launcher
+                const source = isRobinhoodToken ? 'fee_sharing_config' : 'internal_launch';
+                const isDirectCreator = !isRobinhoodToken;
+
                 return res.json({
                     success: true,
                     isEligible: false,
                     alreadyRegistered: true,
-                    token: existingToken || existingRobinhoodToken,
-                    mint
+                    token,
+                    mint,
+                    feeSharePercent,
+                    feeShareBps,
+                    source,
+                    isDirectCreator,
+                    tokenPreview: {
+                        ticker: token.ticker,
+                        name: token.name,
+                        image: token.image
+                    }
                 });
             }
 
