@@ -1922,7 +1922,7 @@ function init(deps) {
 
             // Check if already registered in either table
             const existingToken = await db.get('SELECT mint, ticker, name, image FROM tokens WHERE mint = $1', [mint]);
-            const existingRobinhoodToken = await db.get('SELECT mint, ticker, name, image, feeShareBps, creatorPubkey FROM robinhood_tokens WHERE mint = $1', [mint]);
+            const existingRobinhoodToken = await db.get('SELECT mint, ticker, name, image, "feeShareBps", "creatorPubkey" FROM robinhood_tokens WHERE mint = $1', [mint]);
 
             if (existingToken || existingRobinhoodToken) {
                 const token = existingRobinhoodToken || existingToken;
