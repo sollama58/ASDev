@@ -8,6 +8,7 @@
  * v25.68 - Admin trigger-robinhood-scan now includes holder updates
  * v25.69 - Enhanced KOTH logging for Robinhood token eligibility
  * v25.70 - Claude KOTH now includes Robinhood tokens in candidates
+ * v25.71 - Fixed /koth endpoint and Redis storage to handle Robinhood tokens
  */
 const holderScanner = require('./holderScanner');
 const metadataUpdater = require('./metadataUpdater');
@@ -93,7 +94,7 @@ function startAll(deps) {
         }
     }
 
-    logger.info("All background tasks started (v25.70 - Claude KOTH includes Robinhood tokens)");
+    logger.info("All background tasks started (v25.71 - KOTH endpoint/storage supports Robinhood tokens)");
 }
 
 /**

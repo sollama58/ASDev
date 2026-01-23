@@ -440,6 +440,7 @@ async function getAiSelectedKoth(db) {
                     mint: result.token.mint,
                     ticker: result.token.ticker,
                     name: result.token.name,
+                    source: result.token.source || 'platform', // v25.71: Include token source for frontend
                     score: result.score,
                     reasoning: result.reasoning,
                     breakdown: result.breakdown,

@@ -10,6 +10,7 @@
  * v25.36 - User holdings now uses supply-based point calculation (1B total supply)
  * v25.37 - Added token-lookup and token-lookup-batch endpoints for external integrations
  * v25.64 - Added token-metadata endpoint for fetching on-chain metadata (PAGS preview)
+ * v25.71 - Fixed /koth endpoint to handle both platform and Robinhood tokens
  */
 const express = require('express');
 const axios = require('axios');
@@ -157,6 +158,7 @@ function init(deps) {
 
     // King of the Pill (KOTH) Endpoint - Cached for 15 seconds
     // v25.38: Now uses AI-based selection from Redis cache (set by flywheel)
+    // v25.71: Now supports both platform AND Robinhood tokens as KOTH
     router.get('/koth', async (req, res) => {
         try {
             const result = await redis.smartCache('koth_data', 15, async () => {
@@ -171,18 +173,40 @@ function init(deps) {
                     // Fallback to market cap if AI selection unavailable
                 }
 
-                // Get the KOTH token (AI-selected mint or fallback to highest mcap)
+                // v25.71: Get the KOTH token - check both platform and robinhood tables
                 const kothMint = aiSelection?.mint;
-                const koth = kothMint
-                    ? await db.get(`
+                let koth = null;
+                let source = 'platform';
+
+                if (kothMint) {
+                    // First check platform tokens
+                    koth = await db.get(`
                         SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, "holderCount"
                         FROM tokens WHERE mint = $1
-                    `, [kothMint])
-                    : await db.get(`
+                    `, [kothMint]);
+
+                    // v25.71: If not found in platform tokens, check robinhood tokens
+                    if (!koth) {
+                        koth = await db.get(`
+                            SELECT mint, "creatorPubkey" as "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h,
+                                   (SELECT COUNT(*) FROM robinhood_token_holders rth WHERE rth.mint = rt.mint) as "holderCount"
+                            FROM robinhood_tokens rt WHERE mint = $1 AND "isActive" = 1
+                        `, [kothMint]);
+                        if (koth) {
+                            source = 'robinhood';
+                        }
+                    }
+                }
+
+                // Fallback: highest mcap platform token (don't include robinhood in fallback)
+                if (!koth) {
+                    koth = await db.get(`
                         SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, "holderCount"
                         FROM tokens WHERE "marketCap" > 0
                         ORDER BY "marketCap" DESC LIMIT 1
                     `);
+                    source = 'platform';
+                }
 
                 if (koth) {
                     // v25.4: Fetch image from metadataUri if missing
@@ -192,7 +216,9 @@ function init(deps) {
                             const fallbackImage = await imageUtils.fetchImageFromMetadataUri(koth.metadataUri, 2000);
                             if (fallbackImage) {
                                 image = fallbackImage;
-                                db.run('UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
+                                // v25.71: Update correct table based on source
+                                const updateTable = source === 'robinhood' ? 'robinhood_tokens' : 'tokens';
+                                db.run(`UPDATE ${updateTable} SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = '' OR image = 'null')`,
                                     [fallbackImage, koth.mint]).catch(() => {});
                             }
                         } catch (e) { /* silent fail */ }
@@ -208,7 +234,8 @@ function init(deps) {
                             image: image,
                             marketCap: koth.marketCap,
                             volume24h: koth.volume24h,  // v25.42: Fixed field name (was 'volume')
-                            holderCount: koth.holderCount || 0
+                            holderCount: koth.holderCount || 0,
+                            source: source  // v25.71: Include source type
                         },
                         // v25.38: Include AI selection details
                         ai: aiSelection ? {
@@ -220,7 +247,8 @@ function init(deps) {
                             isAI: aiSelection.isAI || false,
                             model: aiSelection.model || null,
                             runnerUp: aiSelection.runnerUp || null,
-                            runnerUpReason: aiSelection.runnerUpReason || null
+                            runnerUpReason: aiSelection.runnerUpReason || null,
+                            source: aiSelection.source || source  // v25.71: Include source in AI data
                         } : null
                     };
                 } else {
