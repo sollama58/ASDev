@@ -432,6 +432,7 @@ async function updateRobinhoodTokenMetadata(deps) {
 /**
  * Update holders for all active Robinhood tokens
  * v25.64: Fixed to track 250 holders (matching platform tokens) and use batch inserts
+ * v25.65: Critical bugfix - don't delete holders on RPC failure, better error handling
  */
 async function updateRobinhoodHolders(deps) {
     const { connection, db } = deps;
@@ -447,6 +448,8 @@ async function updateRobinhoodHolders(deps) {
 
         logger.info(`[Robinhood] Scanning holders for ${tokens.length} active tokens...`);
         let totalHoldersUpdated = 0;
+        let tokensWithHolders = 0;
+        let tokensSkippedRpcFail = 0;
 
         for (const token of tokens) {
             try {
@@ -460,28 +463,55 @@ async function updateRobinhoodHolders(deps) {
 
                 const holdersToInsert = [];
 
+                // v25.65: Track RPC failures separately from empty results
+                let rpcFailed = false;
+                let tokenAccounts = [];
+                let token2022Accounts = [];
+
                 // Fetch token accounts from both Token Program and Token-2022
                 // Most Pump.fun tokens use regular Token Program, but some may use Token-2022
-                const [tokenAccounts, token2022Accounts] = await Promise.all([
-                    connection.getProgramAccounts(PROGRAMS.TOKEN, {
-                        filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
-                        encoding: 'base64'
-                    }).catch(() => []),
-                    connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
-                        filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
-                        encoding: 'base64'
-                    }).catch(() => [])
-                ]);
+                try {
+                    [tokenAccounts, token2022Accounts] = await Promise.all([
+                        connection.getProgramAccounts(PROGRAMS.TOKEN, {
+                            filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                            encoding: 'base64'
+                        }),
+                        connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
+                            filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                            encoding: 'base64'
+                        })
+                    ]);
+                } catch (rpcError) {
+                    // v25.65: Log RPC failures and skip this token (preserve existing holders)
+                    logger.warn(`[Robinhood] RPC failed for ${token.ticker || token.mint.slice(0, 8)}: ${rpcError.message}`);
+                    rpcFailed = true;
+                    tokensSkippedRpcFail++;
+                }
+
+                // v25.65: Skip this token if RPC failed - don't delete existing holders
+                if (rpcFailed) {
+                    await new Promise(r => setTimeout(r, 500)); // Shorter delay before retry
+                    continue;
+                }
 
                 const accounts = [...tokenAccounts, ...token2022Accounts];
 
+                // v25.65: Handle both Buffer and base64 array tuple formats from RPC
                 const parsedAccounts = accounts.map(acc => {
-                    const data = Buffer.from(acc.account.data);
-                    if (data.length < 72) return null;
+                    try {
+                        // Handle both formats: direct Buffer or [base64String, 'base64'] tuple
+                        const data = Array.isArray(acc.account.data)
+                            ? Buffer.from(acc.account.data[0], 'base64')
+                            : Buffer.from(acc.account.data);
 
-                    const owner = new PublicKey(data.slice(32, 64)).toString();
-                    const amount = new BN(data.slice(64, 72), 'le');
-                    return { owner, amount, balance: amount.toString() };
+                        if (data.length < 72) return null;
+
+                        const owner = new PublicKey(data.slice(32, 64)).toString();
+                        const amount = new BN(data.slice(64, 72), 'le');
+                        return { owner, amount, balance: amount.toString() };
+                    } catch (parseErr) {
+                        return null;
+                    }
                 })
                     .filter(a => a !== null)
                     .sort((a, b) => b.amount.cmp(a.amount));
@@ -499,11 +529,19 @@ async function updateRobinhoodHolders(deps) {
                     }
                 }
 
-                // Update database - DELETE then batch INSERT
-                await db.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [token.mint]);
+                // v25.65: Only update database if we got holders OR this is a known empty token
+                // Don't delete existing holders if RPC returned 0 results (could be indexing delay)
+                const existingHolders = await db.get(
+                    'SELECT COUNT(*) as count FROM robinhood_token_holders WHERE mint = $1',
+                    [token.mint]
+                );
+                const hadExistingHolders = (existingHolders?.count || 0) > 0;
 
+                // If we got holders from RPC, update the database
                 if (holdersToInsert.length > 0) {
-                    // v25.64: Use batch inserts for better performance
+                    // DELETE then batch INSERT
+                    await db.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [token.mint]);
+
                     const BATCH_SIZE = 50;
                     const now = Date.now();
 
@@ -533,6 +571,13 @@ async function updateRobinhoodHolders(deps) {
                     }
 
                     totalHoldersUpdated += holdersToInsert.length;
+                    tokensWithHolders++;
+                } else if (!hadExistingHolders) {
+                    // v25.65: New token with no holders yet - this is normal, log for visibility
+                    logger.debug(`[Robinhood] ${token.ticker || token.mint.slice(0, 8)} has no holders yet (new token or not indexed)`);
+                } else {
+                    // v25.65: Token had holders but RPC returned 0 - preserve existing, log warning
+                    logger.warn(`[Robinhood] ${token.ticker || token.mint.slice(0, 8)} RPC returned 0 holders but had ${existingHolders.count} - preserving existing`);
                 }
 
                 await new Promise(r => setTimeout(r, 1000));
@@ -541,7 +586,7 @@ async function updateRobinhoodHolders(deps) {
             }
         }
 
-        logger.info(`[Robinhood] Holder scan complete: ${totalHoldersUpdated} holders across ${tokens.length} tokens`);
+        logger.info(`[Robinhood] Holder scan complete: ${totalHoldersUpdated} holders across ${tokensWithHolders}/${tokens.length} tokens (${tokensSkippedRpcFail} skipped due to RPC failure)`);
     } catch (e) {
         logger.error('[Robinhood] Holder update error', { error: e.message });
     }
@@ -706,6 +751,129 @@ function stop(deps) {
     logger.info('[Robinhood] Scanner stopped');
 }
 
+/**
+ * v25.65: Scan holders for a single token immediately
+ * Called after new Robinhood token registration to populate holder data right away
+ * instead of waiting for the next scheduled scan (up to 10 minutes)
+ *
+ * @param {Object} deps - Dependencies (connection, db)
+ * @param {string} mint - Token mint address
+ * @param {string} [ticker] - Optional ticker for logging
+ * @returns {Promise<{success: boolean, holdersCount: number}>}
+ */
+async function scanSingleTokenHolders(deps, mint, ticker = null) {
+    const { connection, db } = deps;
+    const TOP_HOLDERS_LIMIT = 250;
+
+    try {
+        if (!mint) {
+            return { success: false, holdersCount: 0, error: 'No mint provided' };
+        }
+
+        const tokenMintPublicKey = new PublicKey(mint);
+        const [bondingCurvePDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("bonding-curve"), tokenMintPublicKey.toBuffer()],
+            PROGRAMS.PUMP
+        );
+
+        const holdersToInsert = [];
+        let tokenAccounts = [];
+        let token2022Accounts = [];
+
+        // Fetch token accounts from both Token Program and Token-2022
+        try {
+            [tokenAccounts, token2022Accounts] = await Promise.all([
+                connection.getProgramAccounts(PROGRAMS.TOKEN, {
+                    filters: [{ memcmp: { offset: 0, bytes: mint } }],
+                    encoding: 'base64'
+                }),
+                connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
+                    filters: [{ memcmp: { offset: 0, bytes: mint } }],
+                    encoding: 'base64'
+                })
+            ]);
+        } catch (rpcError) {
+            logger.warn(`[Robinhood] Immediate scan RPC failed for ${ticker || mint.slice(0, 8)}: ${rpcError.message}`);
+            return { success: false, holdersCount: 0, error: rpcError.message };
+        }
+
+        const accounts = [...tokenAccounts, ...token2022Accounts];
+
+        const parsedAccounts = accounts.map(acc => {
+            try {
+                const data = Array.isArray(acc.account.data)
+                    ? Buffer.from(acc.account.data[0], 'base64')
+                    : Buffer.from(acc.account.data);
+
+                if (data.length < 72) return null;
+
+                const owner = new PublicKey(data.slice(32, 64)).toString();
+                const amount = new BN(data.slice(64, 72), 'le');
+                return { owner, amount, balance: amount.toString() };
+            } catch (parseErr) {
+                return null;
+            }
+        })
+            .filter(a => a !== null)
+            .sort((a, b) => b.amount.cmp(a.amount));
+
+        const bondingCurvePDAStr = bondingCurvePDA.toString();
+        const threshold = new BN(1000000);
+
+        for (const acc of parsedAccounts) {
+            if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
+            if (acc.amount.lte(threshold)) continue;
+
+            if (acc.owner !== bondingCurvePDAStr) {
+                holdersToInsert.push({ mint, owner: acc.owner, balance: acc.balance });
+            }
+        }
+
+        if (holdersToInsert.length > 0) {
+            // Clear any existing holders (shouldn't be any for new tokens, but just in case)
+            await db.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [mint]);
+
+            const BATCH_SIZE = 50;
+            const now = Date.now();
+
+            for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
+                const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
+                const placeholders = batch.map((_, idx) => {
+                    const baseIdx = idx * 5;
+                    return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5})`;
+                }).join(', ');
+
+                const params = batch.flatMap((h, idx) => [
+                    h.mint,
+                    h.owner,
+                    h.balance,
+                    i + idx + 1,
+                    now
+                ]);
+
+                await db.run(`
+                    INSERT INTO robinhood_token_holders (mint, "holderPubkey", balance, rank, "updatedAt")
+                    VALUES ${placeholders}
+                    ON CONFLICT (mint, "holderPubkey") DO UPDATE SET
+                        balance = EXCLUDED.balance,
+                        rank = EXCLUDED.rank,
+                        "updatedAt" = EXCLUDED."updatedAt"
+                `, params);
+            }
+
+            logger.info(`[Robinhood] Immediate scan for ${ticker || mint.slice(0, 8)}: found ${holdersToInsert.length} holders`);
+        } else {
+            logger.debug(`[Robinhood] Immediate scan for ${ticker || mint.slice(0, 8)}: no holders found yet (token may be very new)`);
+        }
+
+        return { success: true, holdersCount: holdersToInsert.length };
+
+    } catch (e) {
+        logger.error(`[Robinhood] Immediate scan error for ${mint}`, { error: e.message });
+        return { success: false, holdersCount: 0, error: e.message };
+    }
+}
+
 module.exports = {
     start,
     stop,
@@ -721,4 +889,5 @@ module.exports = {
     fetchGeckoTerminalMetadata,
     fetchGeckoTerminalTokenInfo,
     fetchPumpFunMetadata,
+    scanSingleTokenHolders, // v25.65: Immediate scan for new tokens
 };

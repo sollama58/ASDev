@@ -17,6 +17,7 @@ const rateLimit = require('express-rate-limit');
 const { PublicKey } = require('@solana/web3.js');
 const { isValidPubkey } = require('./solana');
 const { redis, mintExtractor, logger, circuitBreaker, imageUtils, signatureVerifier, twitter } = require('../services');
+const robinhoodScanner = require('../tasks/robinhoodScanner');
 const { safeBalance, safeTotalBalance } = require('../utils');
 const config = require('../config/env');
 
@@ -1105,6 +1106,11 @@ function init(deps) {
                 ]);
 
                 logger.info(`[TokenRegistration] Registered as FEE SHAREHOLDER: ${token.ticker} (${mint.slice(0, 8)}...) - ${verification.feeSharePercent}% fee share (${verification.feeShareBps} bps), originalCreator: ${creatorPubkey.slice(0, 8)}...`);
+
+                // v25.65: Immediately scan holders for new Robinhood token (non-blocking)
+                // This populates holder data right away instead of waiting up to 10 minutes
+                robinhoodScanner.scanSingleTokenHolders({ connection, db }, token.mint, token.ticker)
+                    .catch(err => logger.warn(`[TokenRegistration] Immediate holder scan failed for ${token.ticker}`, { error: err.message }));
             }
 
             // v25.70: Post Twitter announcement for new Robinhood registration
@@ -3225,6 +3231,12 @@ function init(deps) {
 
                 logger.info(`[TokenReregister] ${existingRobinhoodToken.ticker} (${mint.slice(0, 8)}...) - Re-registered with ${currentBps} bps (was ${previousBps} bps)`);
 
+                // v25.65: If token was reactivated, immediately scan holders (non-blocking)
+                if (wasInactive) {
+                    robinhoodScanner.scanSingleTokenHolders({ connection, db }, mint, existingRobinhoodToken.ticker)
+                        .catch(err => logger.warn(`[TokenReregister] Immediate holder scan failed for ${existingRobinhoodToken.ticker}`, { error: err.message }));
+                }
+
                 res.json({
                     success: true,
                     message: 'Token re-registered successfully',
@@ -3272,6 +3284,10 @@ function init(deps) {
                     await db.run('DELETE FROM tokens WHERE mint = $1', [mint]);
 
                     logger.info(`[TokenReregister] ${existingToken.ticker} (${mint.slice(0, 8)}...) - Migrated from direct creator to fee shareholder (${verification.feeShareBps} bps)`);
+
+                    // v25.65: Immediately scan holders for newly migrated token (non-blocking)
+                    robinhoodScanner.scanSingleTokenHolders({ connection, db }, mint, existingToken.ticker)
+                        .catch(err => logger.warn(`[TokenReregister] Immediate holder scan failed for ${existingToken.ticker}`, { error: err.message }));
 
                     res.json({
                         success: true,

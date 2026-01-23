@@ -171,6 +171,7 @@ async function updateGlobalState(deps) {
         // --- END CALCULATION PREP ---
 
         // v18.0: Update holders for all eligible tokens (>$100 volume) - tracking Top 250 with balances
+        // v25.65: Critical bugfix - don't delete holders on RPC failure
         for (const token of eligibleTokens) {
             try {
                 if (!token.mint) continue;
@@ -182,6 +183,7 @@ async function updateGlobalState(deps) {
                 );
 
                 const holdersToInsert = [];
+                let scanSucceeded = false; // v25.65: Track if scan actually succeeded
 
                 try {
                     // v25.20: Use retry logic for RPC calls
@@ -195,13 +197,20 @@ async function updateGlobalState(deps) {
                         `getProgramAccounts for ${token.mint.slice(0, 8)}`
                     );
 
+                    // v25.65: Handle both Buffer and base64 array tuple formats from RPC
                     const parsedAccounts = accounts.map(acc => {
-                        const data = Buffer.from(acc.account.data);
-                        if (data.length < 72) return null;
+                        try {
+                            const data = Array.isArray(acc.account.data)
+                                ? Buffer.from(acc.account.data[0], 'base64')
+                                : Buffer.from(acc.account.data);
+                            if (data.length < 72) return null;
 
-                        const owner = new PublicKey(data.slice(32, 64)).toString();
-                        const amount = new BN(data.slice(64, 72), 'le');
-                        return { owner, amount };
+                            const owner = new PublicKey(data.slice(32, 64)).toString();
+                            const amount = new BN(data.slice(64, 72), 'le');
+                            return { owner, amount };
+                        } catch (parseErr) {
+                            return null;
+                        }
                     })
                     .filter(a => a !== null)
                     .sort((a, b) => b.amount.cmp(a.amount));
@@ -223,15 +232,32 @@ async function updateGlobalState(deps) {
                             });
                         }
                     }
+                    scanSucceeded = true; // v25.65: Mark scan as successful
                 } catch (scanErr) {
                     logger.error(`Failed to scan holders for ${token.mint}`, { error: scanErr.message });
+                    // v25.65: scanSucceeded stays false, we'll preserve existing holders
                 }
+
+                // v25.65: Only update database if scan succeeded
+                // Don't delete existing holders if scan failed
+                if (!scanSucceeded) {
+                    await new Promise(r => setTimeout(r, 500)); // Shorter delay after failure
+                    continue;
+                }
+
+                // v25.65: Check if we have existing holders before potentially clearing them
+                const existingHolders = await db.get(
+                    'SELECT COUNT(*) as count FROM token_holders WHERE mint = $1',
+                    [token.mint]
+                );
+                const hadExistingHolders = (existingHolders?.count || 0) > 0;
 
                 // v25.20: PostgreSQL compatible - delete then insert (no explicit transaction needed for simple ops)
                 try {
-                    await db.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
-
+                    // v25.65: Only delete+insert if we got holders, or token is genuinely new with no holders
                     if (holdersToInsert.length > 0) {
+                        await db.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
+
                         let rank = 1;
                         for (const h of holdersToInsert) {
                             await db.run(
@@ -240,6 +266,9 @@ async function updateGlobalState(deps) {
                             );
                             rank++;
                         }
+                    } else if (hadExistingHolders) {
+                        // v25.65: RPC returned 0 but we had holders - preserve existing, log warning
+                        logger.warn(`[HolderScanner] ${token.ticker || token.mint.slice(0, 8)} RPC returned 0 holders but had ${existingHolders.count} - preserving existing`);
                     }
                 } catch (err) {
                     logger.error(`[HolderScanner] DB update failed for ${token.mint}`, { error: err.message });
