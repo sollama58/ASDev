@@ -50,13 +50,32 @@ const config = {
     AIRDROP_THRESHOLD_SOL: 1.0, // v17.0: Minimum 1 SOL to trigger airdrop distribution
     AIRDROP_MIN_VOLUME_USD: 100, // v18.0: Minimum 24hr volume for airdrop eligibility
 
-    // Update Intervals (ms)
+    // =====================================================
+    // UPDATE INTERVALS (ms) - v25.64: Timing Reference
+    // =====================================================
+    // Task                     | Interval   | Initial Delay | Notes
+    // -------------------------|------------|---------------|------------------------
+    // WebSocket Broadcast      | 30s        | 2s            | Frontend state updates
+    // Top Token Prices         | 60s        | 10s           | Top 10 by market cap
+    // Fee Collection           | 2.5min     | 30s           | Robinhood fee claims
+    // ASDF Top 100 Sync        | 2min       | 0s            | 2x multiplier holders
+    // Holder Scanner           | 5min       | 20s           | Points recalculation
+    // All Token Prices         | 5min       | 45s           | Full metadata update
+    // Robinhood Scanner        | 10min      | 60s           | Partner token sync
+    // Missing Images           | 10min      | 90s           | Fill missing images
+    // Redis Cleanup            | 10min      | immediate     | Memory management
+    // Airdrop Distribution     | 15min      | 2min          | SOL distribution
+    // KOTH Evaluation          | 30min      | varies        | King selection
+    // =====================================================
     FEE_COLLECTION_INTERVAL: 150000, // v25.13: Rewards claim every 2.5 minutes
     AIRDROP_INTERVAL: 900000, // v25.13: Airdrop processing every 15 minutes
-    HOLDER_UPDATE_INTERVAL: parseInt(process.env.HOLDER_UPDATE_INTERVAL) || 300000, // v25.13: 5 minutes
+    HOLDER_UPDATE_INTERVAL: parseInt(process.env.HOLDER_UPDATE_INTERVAL) || 300000, // v25.13: 5 minutes (points recalc)
     METADATA_PRICE_INTERVAL: 60000, // v25.13: Price updates for top tokens every 1 minute
     METADATA_FULL_INTERVAL: 300000, // v25.13: Full price updates for all tokens every 5 minutes
     ASDF_UPDATE_INTERVAL: 300000, // v25.13: 5 minutes
+    // v25.64: WebSocket broadcast interval (how often frontend receives updates)
+    // Lower = more responsive but more DB queries, Higher = less load but slower updates
+    WS_BROADCAST_INTERVAL: parseInt(process.env.WS_BROADCAST_INTERVAL) || 30000, // 30 seconds default (was 10s)
 
     // Pinata (IPFS)
     PINATA_JWT: process.env.PINATA_JWT?.trim() || null,

@@ -314,7 +314,15 @@ async function updateGlobalState(deps) {
         // v18.0: All robinhood tokens with >$100 volume are eligible (no limit)
         // v25.4: Also apply volume weighting to Robinhood tokens
         // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
+        // v25.64: Added detailed logging for debugging Robinhood token issues
+        let robinhoodPointsTotal = 0;
+        let robinhoodHoldersWithPoints = 0;
         try {
+            // v25.64: First check total active Robinhood tokens (before volume filter)
+            const totalRobinhoodTokens = await db.get(
+                'SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL'
+            );
+
             const robinhoodTokens = await db.all(
                 'SELECT mint, "feeShareBps", ticker, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
                 [MIN_VOLUME_USD]
@@ -330,7 +338,8 @@ async function updateGlobalState(deps) {
                 rhMaxVolume = Math.max(...rhVolumes);
             }
 
-            logger.info(`[HolderScanner] Found ${robinhoodMints.length} eligible Robinhood tokens with >${MIN_VOLUME_USD} USD volume (range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
+            // v25.64: Enhanced logging to debug Robinhood token eligibility issues
+            logger.info(`[HolderScanner] Robinhood: ${totalRobinhoodTokens?.count || 0} total active, ${robinhoodMints.length} with volume >= $${MIN_VOLUME_USD} (range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
 
             if (robinhoodMints.length > 0) {
                 // For each robinhood token, calculate volume-weighted proportional points scaled by fee share
@@ -346,16 +355,19 @@ async function updateGlobalState(deps) {
                     const feeShareBps = rhToken.feeShareBps || 10000; // Default to 100% if not set
                     const feeShareMultiplier = feeShareBps / 10000; // Convert BPS to decimal (1000 bps = 0.1 = 10%)
 
-                    logger.debug(`[Robinhood] ${rhToken.ticker || rhToken.mint.slice(0, 8)}: Vol $${tokenVolume.toFixed(0)} -> ${volumeWeight.toFixed(2)}x weight, Fee share ${(feeShareMultiplier * 100).toFixed(1)}%`);
-
                     const holders = await db.all(
                         'SELECT "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC',
                         [rhToken.mint]
                     );
 
-                    if (holders.length === 0) continue;
+                    // v25.64: Log when a token has no holders in the tracking table
+                    if (holders.length === 0) {
+                        logger.debug(`[HolderScanner] Robinhood token ${rhToken.ticker || rhToken.mint.slice(0, 8)} has 0 holders in tracking table`);
+                        continue;
+                    }
 
                     // v25.36: Distribute points based on % of TOTAL SUPPLY, scaled by fee share
+                    let tokenPointsDistributed = 0;
                     for (const holder of holders) {
                         const holderBalance = BigInt(holder.balance || '0');
                         if (holderBalance === BigInt(0)) continue;
@@ -371,13 +383,19 @@ async function updateGlobalState(deps) {
                         };
                         entry.robinhoodPoints += scaledPoints;
                         rawPointsMap.set(holder.holderPubkey, entry);
+
+                        tokenPointsDistributed += scaledPoints;
+                        robinhoodHoldersWithPoints++;
                     }
+                    robinhoodPointsTotal += tokenPointsDistributed;
+
+                    logger.debug(`[HolderScanner] Robinhood ${rhToken.ticker || rhToken.mint.slice(0, 8)}: ${holders.length} holders, ${tokenPointsDistributed.toFixed(2)} points distributed`);
                 }
 
-                logger.debug(`[Robinhood] Calculated proportional points for ${robinhoodMints.length} Robinhood tokens (scaled by fee share %)`);
+                logger.info(`[HolderScanner] Robinhood points: ${robinhoodPointsTotal.toFixed(2)} total across ${robinhoodHoldersWithPoints} holder positions`);
             }
         } catch (e) {
-            logger.debug('[Robinhood] Holder points calculation skipped', { error: e.message });
+            logger.error('[HolderScanner] Robinhood holder points calculation error', { error: e.message });
         }
 
         // Calculate final points including ASDF multiplier

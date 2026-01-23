@@ -464,9 +464,17 @@ function initHolderScannerWorker(deps) {
             }
 
             // 8. Include Robinhood token holders (with volume weighting and fee share scaling)
+            // v25.64: Added detailed logging to debug Robinhood token issues
+            let robinhoodPointsTotal = 0;
+            let robinhoodHoldersWithPoints = 0;
             try {
+                // v25.64: First check total active Robinhood tokens (before volume filter)
+                const totalRobinhoodTokens = await db.get(
+                    'SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL'
+                );
+
                 const robinhoodTokens = await db.all(
-                    'SELECT mint, "feeShareBps", volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
+                    'SELECT mint, "feeShareBps", ticker, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
                     [MIN_VOLUME_USD]
                 );
 
@@ -476,7 +484,9 @@ function initHolderScannerWorker(deps) {
                     rhMinVolume = Math.min(...rhVolumes);
                     rhMaxVolume = Math.max(...rhVolumes);
                 }
-                logger.info(`[Worker] Found ${robinhoodTokens.length} eligible Robinhood tokens (vol range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
+
+                // v25.64: Enhanced logging to debug Robinhood token eligibility issues
+                logger.info(`[Worker] Robinhood: ${totalRobinhoodTokens?.count || 0} total active, ${robinhoodTokens.length} with volume >= $${MIN_VOLUME_USD} (range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
 
                 // v25.36: Points now based on % of TOTAL SUPPLY for Robinhood tokens too
                 for (const rhToken of robinhoodTokens) {
@@ -491,8 +501,14 @@ function initHolderScannerWorker(deps) {
                         'SELECT "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC',
                         [rhToken.mint]
                     );
-                    if (holders.length === 0) continue;
 
+                    // v25.64: Log when a token has no holders in the tracking table
+                    if (holders.length === 0) {
+                        logger.debug(`[Worker] Robinhood token ${rhToken.ticker || rhToken.mint.slice(0, 8)} has 0 holders in tracking table`);
+                        continue;
+                    }
+
+                    let tokenPointsDistributed = 0;
                     for (const holder of holders) {
                         const holderBalance = BigInt(holder.balance || '0');
                         if (holderBalance === BigInt(0)) continue;
@@ -506,10 +522,18 @@ function initHolderScannerWorker(deps) {
                         entry.robinhoodPoints += scaledPoints;
                         entry.positionsCount++;
                         rawPointsMap.set(holder.holderPubkey, entry);
+
+                        tokenPointsDistributed += scaledPoints;
+                        robinhoodHoldersWithPoints++;
                     }
+                    robinhoodPointsTotal += tokenPointsDistributed;
+                }
+
+                if (robinhoodTokens.length > 0) {
+                    logger.info(`[Worker] Robinhood points: ${robinhoodPointsTotal.toFixed(2)} total across ${robinhoodHoldersWithPoints} holder positions`);
                 }
             } catch (e) {
-                logger.debug('[Worker] Robinhood holder points calculation skipped', { error: e.message });
+                logger.error('[Worker] Robinhood holder points calculation error', { error: e.message });
             }
 
             // 9. Calculate final points with ASDF multiplier
@@ -674,14 +698,14 @@ function initHolderScannerWorker(deps) {
         }
     }, config.HOLDER_UPDATE_INTERVAL);
 
-    // Initial job after 5 seconds
+    // v25.64: Staggered initial job after 20 seconds (was 5s) to avoid RPC spike at startup
     setTimeout(async () => {
         try {
             await redis.addHolderScannerJob({});
         } catch (e) {
             logger.error('[Worker] Failed to add initial holder scanner job', { error: e.message });
         }
-    }, 5000);
+    }, 20000);
 
     logger.info('[Worker] Holder scanner worker initialized');
     return worker;
@@ -849,14 +873,14 @@ function initMetadataUpdaterWorker(deps) {
         }
     }, config.METADATA_FULL_INTERVAL || 300000); // v25.25: Fixed config key name
 
-    // Initial job after 5 seconds
+    // v25.64: Staggered initial job after 45 seconds (was 5s) to avoid RPC spike at startup
     setTimeout(async () => {
         try {
             await redis.addMetadataUpdaterJob({});
         } catch (e) {
             logger.error('[Worker] Failed to add initial metadata updater job', { error: e.message });
         }
-    }, 5000);
+    }, 45000);
 
     logger.info('[Worker] Metadata updater worker initialized');
     return worker;
@@ -897,14 +921,14 @@ function initRobinhoodScannerWorker(deps) {
         }
     }, 10 * 60 * 1000);
 
-    // Initial job after 10 seconds
+    // v25.64: Staggered initial job after 60 seconds (was 10s) to avoid RPC spike at startup
     setTimeout(async () => {
         try {
             await redis.addRobinhoodScannerJob({});
         } catch (e) {
             logger.error('[Worker] Failed to add initial Robinhood scanner job', { error: e.message });
         }
-    }, 10000);
+    }, 60000);
 
     logger.info('[Worker] Robinhood scanner worker initialized');
     return worker;

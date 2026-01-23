@@ -1659,9 +1659,9 @@ async function start(deps) {
     setInterval(() => processAirdrop(deps), airdropInterval);
     logger.info(`Airdrop distribution started (${airdropInterval / 60000}min interval, >${config.AIRDROP_THRESHOLD_SOL || 1.0} SOL threshold)`);
 
-    // Initial runs after short delay
-    setTimeout(() => runFeeCollection(deps), 5000);
-    setTimeout(() => processAirdrop(deps), 10000);
+    // v25.64: Staggered initial runs to avoid RPC spike at startup
+    setTimeout(() => runFeeCollection(deps), 30000); // Fee collection at 30s (was 5s)
+    setTimeout(() => processAirdrop(deps), 120000); // Airdrop at 2min (was 10s)
 }
 
 module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, refreshAllFeeShares, start, getAiSelectedKoth, resetKothCache };

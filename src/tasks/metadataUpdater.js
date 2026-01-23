@@ -915,16 +915,19 @@ async function updateAllMissingImages(deps) {
  * - Top 10 + KOTH prices: every 1 minute
  * - All token prices: every 5 minutes
  * - v25.46: Missing images for all token types: every 10 minutes
+ * v25.64: Improved staggering to avoid RPC/API spikes at startup
  */
 function start(deps) {
     const priceInterval = config.METADATA_PRICE_INTERVAL || 60000; // 1 minute
     const fullInterval = config.METADATA_FULL_INTERVAL || 300000; // 5 minutes
     const imageInterval = config.METADATA_IMAGE_INTERVAL || 600000; // 10 minutes
 
-    // Initial runs with staggered delays
-    setTimeout(() => updateTopTokenPrices(deps), 5000);
-    setTimeout(() => updateAllTokenPrices(deps), 15000);
-    setTimeout(() => updateAllMissingImages(deps), 30000); // v25.46: Fill missing images on startup
+    // v25.64: Better staggered initial runs to avoid API rate limits and RPC spikes
+    // Top token prices: 10s (lightweight, only 10 tokens)
+    // All token prices: handled by worker at 45s
+    // Images: 90s (can be slow, runs after other tasks stabilize)
+    setTimeout(() => updateTopTokenPrices(deps), 10000);
+    setTimeout(() => updateAllMissingImages(deps), 90000);
 
     // Set up intervals
     setInterval(() => updateTopTokenPrices(deps), priceInterval);

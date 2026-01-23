@@ -3,10 +3,12 @@
  * Real-time data push to frontend clients
  * v25.4 - Initial implementation to reduce polling load
  * v25.6 - Added metadataUri fallback for images
+ * v25.64 - Made broadcast interval configurable via WS_BROADCAST_INTERVAL
  */
 const WebSocket = require('ws');
 const logger = require('./logger');
 const imageUtils = require('./imageUtils');
+const config = require('../config/env');
 
 let wss = null;
 let broadcastInterval = null;
@@ -127,9 +129,9 @@ function broadcast(type, data) {
 /**
  * Start periodic broadcasts of global state
  * @param {object} deps - Dependencies containing globalState, db, etc.
- * @param {number} intervalMs - Broadcast interval in milliseconds (default 10s)
+ * @param {number} intervalMs - Broadcast interval in milliseconds (default from config)
  */
-function startBroadcasting(deps, intervalMs = 10000) {
+function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30000) {
     const { db, globalState, connection, devKeypair } = deps;
 
     const doBroadcast = async () => {

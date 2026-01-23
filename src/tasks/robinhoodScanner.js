@@ -318,6 +318,7 @@ async function fetchPumpFunMetadata(mint) {
  * Update metadata for Robinhood tokens (ticker, name, market data)
  * Fetches from multiple sources with fallback chain:
  * DexScreener -> GeckoTerminal -> Helius -> Pump.fun API
+ * v25.64: Added better logging for debugging, always fetch market data
  */
 async function updateRobinhoodTokenMetadata(deps) {
     const { db } = deps;
@@ -325,10 +326,19 @@ async function updateRobinhoodTokenMetadata(deps) {
     try {
         const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 500');
 
+        if (tokens.length === 0) {
+            logger.debug('[Robinhood] No active tokens to update metadata for');
+            return;
+        }
+
+        logger.info(`[Robinhood] Updating metadata for ${tokens.length} tokens...`);
+        let tokensWithVolume = 0;
+        let tokensUpdated = 0;
+
         for (const token of tokens) {
             try {
-                // Fetch updated metadata from multiple sources
-                // Priority: DexScreener (market data) > GeckoTerminal > Helius (on-chain) > Pump.fun API
+                // v25.64: ALWAYS fetch DexScreener data for market stats (volume, marketcap)
+                // This is critical for points eligibility (requires volume24h >= $100)
                 const dexMeta = await fetchDexScreenerMetadata(token.mint);
 
                 // If token is missing metadata (image/name/ticker), try other sources
@@ -372,8 +382,16 @@ async function updateRobinhoodTokenMetadata(deps) {
                     image: dexMeta?.image || geckoMeta?.image || heliusMeta?.image || pumpMeta?.image || token.image || null
                 };
 
-                // Only update if we have meaningful changes
-                const hasChanges = updates.volume24h !== token.volume24h ||
+                // Track volume stats
+                if (updates.volume24h >= 100) {
+                    tokensWithVolume++;
+                }
+
+                // v25.64: Always update if we have new volume/marketcap data, even if same value
+                // This ensures the data is always fresh from the source
+                const hasNewMarketData = dexMeta?.volume24h !== undefined || dexMeta?.marketCap !== undefined;
+                const hasChanges = hasNewMarketData ||
+                                   updates.volume24h !== token.volume24h ||
                                    updates.marketCap !== token.marketCap ||
                                    updates.ticker !== token.ticker ||
                                    updates.name !== token.name ||
@@ -386,6 +404,7 @@ async function updateRobinhoodTokenMetadata(deps) {
                         'UPDATE robinhood_tokens SET volume24h = $1, "marketCap" = $2, ticker = $3, name = $4, image = COALESCE(NULLIF($5, \'\'), image) WHERE id = $6',
                         [updates.volume24h, updates.marketCap, updates.ticker, updates.name, updates.image, token.id]
                     );
+                    tokensUpdated++;
 
                     if (updates.image && !token.image) {
                         const source = dexMeta?.image ? 'DexScreener' :
@@ -403,6 +422,8 @@ async function updateRobinhoodTokenMetadata(deps) {
                 logger.debug(`[Robinhood] Failed to update metadata for ${token.mint}`, { error: e.message });
             }
         }
+
+        logger.info(`[Robinhood] Metadata update complete: ${tokensUpdated} updated, ${tokensWithVolume} have volume >= $100`);
     } catch (e) {
         logger.error('[Robinhood] Metadata update error', { error: e.message });
     }
@@ -410,12 +431,22 @@ async function updateRobinhoodTokenMetadata(deps) {
 
 /**
  * Update holders for all active Robinhood tokens
+ * v25.64: Fixed to track 250 holders (matching platform tokens) and use batch inserts
  */
 async function updateRobinhoodHolders(deps) {
     const { connection, db } = deps;
+    const TOP_HOLDERS_LIMIT = 250; // v25.64: Match platform token holder limit
 
     try {
         const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 500');
+
+        if (tokens.length === 0) {
+            logger.debug('[Robinhood] No active tokens to scan for holders');
+            return;
+        }
+
+        logger.info(`[Robinhood] Scanning holders for ${tokens.length} active tokens...`);
+        let totalHoldersUpdated = 0;
 
         for (const token of tokens) {
             try {
@@ -459,7 +490,8 @@ async function updateRobinhoodHolders(deps) {
                 const threshold = new BN(1000000);
 
                 for (const acc of parsedAccounts) {
-                    if (holdersToInsert.length >= 100) break;
+                    // v25.64: Track up to 250 holders (was 100)
+                    if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
                     if (acc.amount.lte(threshold)) continue;
 
                     if (acc.owner !== bondingCurvePDAStr) {
@@ -467,18 +499,40 @@ async function updateRobinhoodHolders(deps) {
                     }
                 }
 
-                // Update database
+                // Update database - DELETE then batch INSERT
                 await db.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [token.mint]);
 
                 if (holdersToInsert.length > 0) {
-                    let rank = 1;
-                    for (const h of holdersToInsert) {
-                        await db.run(
-                            'INSERT INTO robinhood_token_holders (mint, "holderPubkey", balance, rank, "updatedAt") VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING',
-                            [h.mint, h.owner, h.balance, rank, Date.now()]
-                        );
-                        rank++;
+                    // v25.64: Use batch inserts for better performance
+                    const BATCH_SIZE = 50;
+                    const now = Date.now();
+
+                    for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
+                        const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
+                        const placeholders = batch.map((_, idx) => {
+                            const baseIdx = idx * 5;
+                            return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5})`;
+                        }).join(', ');
+
+                        const params = batch.flatMap((h, idx) => [
+                            h.mint,
+                            h.owner,
+                            h.balance,
+                            i + idx + 1,  // rank
+                            now
+                        ]);
+
+                        await db.run(`
+                            INSERT INTO robinhood_token_holders (mint, "holderPubkey", balance, rank, "updatedAt")
+                            VALUES ${placeholders}
+                            ON CONFLICT (mint, "holderPubkey") DO UPDATE SET
+                                balance = EXCLUDED.balance,
+                                rank = EXCLUDED.rank,
+                                "updatedAt" = EXCLUDED."updatedAt"
+                        `, params);
                     }
+
+                    totalHoldersUpdated += holdersToInsert.length;
                 }
 
                 await new Promise(r => setTimeout(r, 1000));
@@ -486,6 +540,8 @@ async function updateRobinhoodHolders(deps) {
                 logger.error(`[Robinhood] Holder scan error for ${token.mint}`, { error: e.message });
             }
         }
+
+        logger.info(`[Robinhood] Holder scan complete: ${totalHoldersUpdated} holders across ${tokens.length} tokens`);
     } catch (e) {
         logger.error('[Robinhood] Holder update error', { error: e.message });
     }
