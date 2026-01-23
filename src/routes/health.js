@@ -787,23 +787,29 @@ function init(deps) {
     /**
      * POST /admin/trigger-robinhood-scan
      * Force an immediate Robinhood token scan and verification
+     * v25.68: Now also scans holders, not just verification
      */
     router.post('/admin/trigger-robinhood-scan', adminAuth, async (req, res) => {
         try {
             const robinhoodScanner = require('../tasks/robinhoodScanner');
 
-            logger.info('[Admin] Triggering manual Robinhood scan...');
+            logger.info('[Admin] Triggering manual Robinhood scan (verify + holders)...');
 
-            // Run the scan (async, don't wait for completion)
-            robinhoodScanner.reverifyRobinhoodTokens(deps).then(() => {
-                logger.info('[Admin] Manual Robinhood scan completed');
-            }).catch(e => {
-                logger.error('[Admin] Manual Robinhood scan failed', { error: e.message });
-            });
+            // v25.68: Run both verification AND holder scan
+            (async () => {
+                try {
+                    await robinhoodScanner.reverifyRobinhoodTokens(deps);
+                    logger.info('[Admin] Robinhood verification completed, starting holder scan...');
+                    await robinhoodScanner.updateRobinhoodHolders(deps);
+                    logger.info('[Admin] Manual Robinhood scan completed (verify + holders)');
+                } catch (e) {
+                    logger.error('[Admin] Manual Robinhood scan failed', { error: e.message });
+                }
+            })();
 
             res.json({
                 success: true,
-                message: 'Robinhood scan triggered. Check logs for progress.'
+                message: 'Robinhood scan triggered (verify + holders). Check logs for progress.'
             });
         } catch (e) {
             logger.error('[Admin] Trigger Robinhood scan error', { error: e.message });
@@ -1069,6 +1075,115 @@ function init(deps) {
         } catch (e) {
             logger.error('[Admin] Clear KOTH cache error', { error: e.message });
             res.status(500).json({ error: 'Failed to clear KOTH cache' });
+        }
+    });
+
+    /**
+     * GET /admin/koth-candidates
+     * v25.69: Debug endpoint to check KOTH candidate eligibility
+     * Shows all potential candidates and why tokens don't qualify
+     */
+    router.get('/admin/koth-candidates', adminAuth, async (req, res) => {
+        try {
+            const KOTH_MIN_HOLDERS = 10;
+            const KOTH_MIN_MARKET_CAP = 1000;
+            const KOTH_MIN_VOLUME = 100;
+
+            // Get eligible platform candidates
+            const platformCandidates = await db.all(`
+                SELECT
+                    t.mint, t.ticker, t.name, t."marketCap", t.volume24h,
+                    COUNT(th."holderPubkey") as holderCount,
+                    'platform' as source
+                FROM tokens t
+                LEFT JOIN token_holders th ON th.mint = t.mint
+                WHERE t."marketCap" >= $1 AND t.volume24h >= $2
+                GROUP BY t.mint, t.ticker, t.name, t."marketCap", t.volume24h
+                HAVING COUNT(th."holderPubkey") >= $3
+                ORDER BY t."marketCap" DESC
+                LIMIT 10
+            `, [KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME, KOTH_MIN_HOLDERS]);
+
+            // Get eligible robinhood candidates
+            const robinhoodCandidates = await db.all(`
+                SELECT
+                    rt.mint, rt.ticker, rt.name, rt."marketCap", rt.volume24h,
+                    COUNT(rth."holderPubkey") as holderCount,
+                    'robinhood' as source
+                FROM robinhood_tokens rt
+                LEFT JOIN robinhood_token_holders rth ON rth.mint = rt.mint
+                WHERE rt."isActive" = 1 AND rt."marketCap" >= $1 AND rt.volume24h >= $2
+                GROUP BY rt.mint, rt.ticker, rt.name, rt."marketCap", rt.volume24h
+                HAVING COUNT(rth."holderPubkey") >= $3
+                ORDER BY rt."marketCap" DESC
+                LIMIT 10
+            `, [KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME, KOTH_MIN_HOLDERS]);
+
+            // Get all robinhood tokens with their status (to show why they don't qualify)
+            const allRobinhoodTokens = await db.all(`
+                SELECT
+                    rt.mint, rt.ticker, rt.name, rt."marketCap", rt.volume24h, rt."isActive",
+                    COUNT(rth."holderPubkey") as holderCount
+                FROM robinhood_tokens rt
+                LEFT JOIN robinhood_token_holders rth ON rth.mint = rt.mint
+                GROUP BY rt.mint, rt.ticker, rt.name, rt."marketCap", rt.volume24h, rt."isActive"
+                ORDER BY rt.volume24h DESC
+                LIMIT 20
+            `);
+
+            // Analyze why robinhood tokens don't qualify
+            const robinhoodAnalysis = allRobinhoodTokens.map(token => {
+                const issues = [];
+                if (!token.isActive) issues.push('inactive');
+                if ((token.marketCap || 0) < KOTH_MIN_MARKET_CAP) issues.push(`mcap $${token.marketCap || 0} < $${KOTH_MIN_MARKET_CAP}`);
+                if ((token.volume24h || 0) < KOTH_MIN_VOLUME) issues.push(`vol $${token.volume24h || 0} < $${KOTH_MIN_VOLUME}`);
+                if ((token.holderCount || 0) < KOTH_MIN_HOLDERS) issues.push(`holders ${token.holderCount} < ${KOTH_MIN_HOLDERS}`);
+
+                return {
+                    ticker: token.ticker,
+                    mint: token.mint?.slice(0, 8) + '...',
+                    isActive: !!token.isActive,
+                    marketCap: token.marketCap || 0,
+                    volume24h: token.volume24h || 0,
+                    holderCount: token.holderCount || 0,
+                    isEligible: issues.length === 0,
+                    issues: issues.length > 0 ? issues : ['✓ Eligible']
+                };
+            });
+
+            res.json({
+                success: true,
+                requirements: {
+                    minMarketCap: KOTH_MIN_MARKET_CAP,
+                    minVolume: KOTH_MIN_VOLUME,
+                    minHolders: KOTH_MIN_HOLDERS
+                },
+                eligibleCandidates: {
+                    platform: platformCandidates.map(c => ({
+                        ticker: c.ticker,
+                        mint: c.mint?.slice(0, 8) + '...',
+                        marketCap: c.marketCap,
+                        volume24h: c.volume24h,
+                        holderCount: c.holderCount
+                    })),
+                    robinhood: robinhoodCandidates.map(c => ({
+                        ticker: c.ticker,
+                        mint: c.mint?.slice(0, 8) + '...',
+                        marketCap: c.marketCap,
+                        volume24h: c.volume24h,
+                        holderCount: c.holderCount
+                    }))
+                },
+                robinhoodTokenAnalysis: robinhoodAnalysis,
+                summary: {
+                    totalPlatformEligible: platformCandidates.length,
+                    totalRobinhoodEligible: robinhoodCandidates.length,
+                    totalRobinhoodTokens: allRobinhoodTokens.length
+                }
+            });
+        } catch (e) {
+            logger.error('[Admin] KOTH candidates error', { error: e.message });
+            res.status(500).json({ error: 'Failed to get KOTH candidates' });
         }
     });
 
@@ -1618,6 +1733,143 @@ function init(deps) {
         } catch (e) {
             logger.error('[Admin] Reactivate token error', { error: e.message });
             res.status(500).json({ error: 'Failed to reactivate token' });
+        }
+    });
+
+    /**
+     * GET /debug/robinhood-token/:mint
+     * v25.68: Debug endpoint to check Robinhood token status and holders
+     * Helps diagnose why holdings might not be showing up
+     */
+    router.get('/debug/robinhood-token/:mint', adminAuth, async (req, res) => {
+        try {
+            const { mint } = req.params;
+            const { PublicKey } = require('@solana/web3.js');
+
+            // Validate mint
+            try {
+                new PublicKey(mint);
+            } catch (e) {
+                return res.status(400).json({ error: 'Invalid mint address' });
+            }
+
+            // Get token info
+            const token = await db.get(
+                'SELECT * FROM robinhood_tokens WHERE mint = $1',
+                [mint]
+            );
+
+            if (!token) {
+                return res.json({
+                    found: false,
+                    error: 'Token not found in robinhood_tokens table',
+                    hint: 'Token may not be registered or may be in the regular tokens table'
+                });
+            }
+
+            // Get holder count and sample
+            const holderCount = await db.get(
+                'SELECT COUNT(*) as count FROM robinhood_token_holders WHERE mint = $1',
+                [mint]
+            );
+
+            const topHolders = await db.all(
+                'SELECT "holderPubkey", balance, rank FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 10',
+                [mint]
+            );
+
+            // Check if volume meets threshold
+            const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
+            const isEligible = (parseFloat(token.volume24h) || 0) >= MIN_VOLUME_USD;
+
+            res.json({
+                found: true,
+                token: {
+                    mint: token.mint,
+                    ticker: token.ticker,
+                    name: token.name,
+                    isActive: token.isActive === 1,
+                    volume24h: token.volume24h,
+                    marketCap: token.marketCap,
+                    feeShareBps: token.feeShareBps,
+                    createdAt: token.createdAt,
+                    updatedAt: token.updatedAt
+                },
+                eligibility: {
+                    isEligible,
+                    volumeThreshold: MIN_VOLUME_USD,
+                    currentVolume: parseFloat(token.volume24h) || 0,
+                    reason: !token.isActive ? 'Token is not active' :
+                            !isEligible ? `Volume ${token.volume24h || 0} below threshold ${MIN_VOLUME_USD}` :
+                            'Token is eligible'
+                },
+                holders: {
+                    totalCount: holderCount?.count || 0,
+                    sampleTop10: topHolders.map(h => ({
+                        wallet: h.holderPubkey.slice(0, 8) + '...',
+                        balance: h.balance,
+                        rank: h.rank
+                    }))
+                },
+                hints: (holderCount?.count || 0) === 0 ? [
+                    'No holders in database - the holder scan may not have run yet',
+                    'Try POST /admin/trigger-robinhood-scan to force a scan',
+                    'Check logs for Helius DAS API errors'
+                ] : []
+            });
+        } catch (e) {
+            logger.error('[Debug] Robinhood token lookup error', { error: e.message });
+            res.status(500).json({ error: 'Failed to lookup token' });
+        }
+    });
+
+    /**
+     * POST /admin/trigger-robinhood-holder-scan/:mint
+     * v25.68: Force an immediate holder scan for a specific Robinhood token
+     */
+    router.post('/admin/trigger-robinhood-holder-scan/:mint', adminAuth, async (req, res) => {
+        try {
+            const { mint } = req.params;
+            const { PublicKey } = require('@solana/web3.js');
+            const robinhoodScanner = require('../tasks/robinhoodScanner');
+
+            // Validate mint
+            try {
+                new PublicKey(mint);
+            } catch (e) {
+                return res.status(400).json({ error: 'Invalid mint address' });
+            }
+
+            // Check if token exists
+            const token = await db.get(
+                'SELECT ticker FROM robinhood_tokens WHERE mint = $1',
+                [mint]
+            );
+
+            if (!token) {
+                return res.status(404).json({
+                    error: 'Token not found in robinhood_tokens table'
+                });
+            }
+
+            logger.info(`[Admin] Triggering immediate holder scan for ${token.ticker || mint.slice(0, 8)}...`);
+
+            // Run the scan (async, don't wait for completion)
+            robinhoodScanner.scanSingleTokenHolders(deps, mint, token.ticker)
+                .then(() => {
+                    logger.info(`[Admin] Holder scan completed for ${token.ticker || mint.slice(0, 8)}`);
+                })
+                .catch(e => {
+                    logger.error(`[Admin] Holder scan failed for ${token.ticker || mint.slice(0, 8)}`, { error: e.message });
+                });
+
+            res.json({
+                success: true,
+                message: `Holder scan triggered for ${token.ticker || mint.slice(0, 8)}. Check logs for progress.`
+            });
+        } catch (e) {
+            logger.error('[Admin] Trigger holder scan error', { error: e.message });
+            res.status(500).json({ error: 'Failed to trigger holder scan' });
         }
     });
 

@@ -222,7 +222,65 @@ async function evaluateKothCandidates(db) {
             LIMIT 50
         `, [KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME, KOTH_MIN_HOLDERS]);
 
+        // v25.69: Enhanced logging for KOTH candidate sources
+        const platformCandidates = candidates.filter(c => c.source === 'platform');
+        const robinhoodCandidates = candidates.filter(c => c.source === 'robinhood');
+        logger.info(`[KOTH] Candidates found: ${candidates.length} total (${platformCandidates.length} platform, ${robinhoodCandidates.length} robinhood)`);
+
+        // v25.69: If no robinhood candidates, log why they're not qualifying
+        if (robinhoodCandidates.length === 0) {
+            const robinhoodStatus = await db.all(`
+                SELECT
+                    rt.mint, rt.ticker, rt."marketCap", rt.volume24h, rt."isActive",
+                    COUNT(rth."holderPubkey") as holderCount
+                FROM robinhood_tokens rt
+                LEFT JOIN robinhood_token_holders rth ON rth.mint = rt.mint
+                WHERE rt."isActive" = 1
+                GROUP BY rt.mint, rt.ticker, rt."marketCap", rt.volume24h, rt."isActive"
+                ORDER BY rt.volume24h DESC
+                LIMIT 5
+            `);
+
+            if (robinhoodStatus.length > 0) {
+                logger.info(`[KOTH] Robinhood tokens not qualifying for KOTH:`);
+                for (const token of robinhoodStatus) {
+                    const issues = [];
+                    if ((token.marketCap || 0) < KOTH_MIN_MARKET_CAP) issues.push(`mcap $${token.marketCap || 0} < $${KOTH_MIN_MARKET_CAP}`);
+                    if ((token.volume24h || 0) < KOTH_MIN_VOLUME) issues.push(`vol $${token.volume24h || 0} < $${KOTH_MIN_VOLUME}`);
+                    if ((token.holderCount || 0) < KOTH_MIN_HOLDERS) issues.push(`holders ${token.holderCount || 0} < ${KOTH_MIN_HOLDERS}`);
+                    if (issues.length > 0) {
+                        logger.info(`[KOTH]   - ${token.ticker || token.mint?.slice(0, 8)}: ${issues.join(', ')}`);
+                    }
+                }
+            } else {
+                logger.info(`[KOTH] No active Robinhood tokens in database`);
+            }
+        }
+
         if (candidates.length === 0) {
+            // v25.69: Debug why no candidates - check what robinhood tokens exist but don't qualify
+            const ineligibleRobinhood = await db.all(`
+                SELECT
+                    rt.mint, rt.ticker, rt."marketCap", rt.volume24h,
+                    COUNT(rth."holderPubkey") as holderCount
+                FROM robinhood_tokens rt
+                LEFT JOIN robinhood_token_holders rth ON rth.mint = rt.mint
+                WHERE rt."isActive" = 1
+                GROUP BY rt.mint, rt.ticker, rt."marketCap", rt.volume24h
+                ORDER BY rt.volume24h DESC
+                LIMIT 5
+            `);
+
+            if (ineligibleRobinhood.length > 0) {
+                for (const token of ineligibleRobinhood) {
+                    const issues = [];
+                    if ((token.marketCap || 0) < KOTH_MIN_MARKET_CAP) issues.push(`mcap ${token.marketCap || 0} < ${KOTH_MIN_MARKET_CAP}`);
+                    if ((token.volume24h || 0) < KOTH_MIN_VOLUME) issues.push(`vol ${token.volume24h || 0} < ${KOTH_MIN_VOLUME}`);
+                    if ((token.holderCount || 0) < KOTH_MIN_HOLDERS) issues.push(`holders ${token.holderCount || 0} < ${KOTH_MIN_HOLDERS}`);
+                    logger.info(`[KOTH] Robinhood ${token.ticker || token.mint?.slice(0, 8)} not eligible: ${issues.join(', ')}`);
+                }
+            }
+
             logger.info('[KOTH] No eligible candidates found');
             return { token: null, score: 0, reasoning: 'No tokens meet minimum requirements' };
         }

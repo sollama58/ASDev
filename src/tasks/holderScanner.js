@@ -51,6 +51,7 @@ async function withRetry(fn, context = 'RPC call') {
 
 /**
  * v25.66: Fetch token accounts using Helius DAS API with pagination
+ * v25.67: Fixed response parsing - handle both result wrapper and direct response
  * This handles tokens with many holders that exceed getProgramAccounts limits
  * @param {string} mint - Token mint address
  * @param {number} limit - Max accounts to fetch
@@ -86,27 +87,47 @@ async function fetchTokenAccountsHeliusDAS(mint, limit = 250) {
                 { timeout: 15000 }
             );
 
-            const result = response.data?.result;
-            if (!result || !result.token_accounts || result.token_accounts.length === 0) {
+            // v25.67: Handle both wrapped (jsonrpc result) and direct response formats
+            const result = response.data?.result || response.data;
+            const tokenAccounts = result?.token_accounts || [];
+
+            if (tokenAccounts.length === 0) {
+                // v25.67: Log first page failure for debugging
+                if (page === 1) {
+                    logger.debug(`[HolderScanner] Helius DAS returned 0 accounts for ${mint.slice(0, 8)} (page 1)`, {
+                        hasResult: !!response.data?.result,
+                        directData: !!response.data?.token_accounts,
+                        responseKeys: Object.keys(response.data || {}).slice(0, 5)
+                    });
+                }
                 break;
             }
 
-            for (const acc of result.token_accounts) {
+            for (const acc of tokenAccounts) {
                 if (accounts.length >= limit) break;
-                if (acc.owner && acc.amount) {
+                // v25.67: Handle amount as number or string, also check for tokenAmount nested structure
+                const owner = acc.owner;
+                const amount = acc.amount ?? acc.tokenAmount?.amount ?? acc.balance;
+
+                if (owner && amount !== undefined && amount !== null && amount !== 0 && amount !== '0') {
                     accounts.push({
-                        owner: acc.owner,
-                        balance: acc.amount.toString()
+                        owner: owner,
+                        balance: amount.toString()
                     });
                 }
             }
 
-            if (result.token_accounts.length < pageSize) {
+            if (tokenAccounts.length < pageSize) {
                 break;
             }
 
             page++;
             await new Promise(r => setTimeout(r, 100));
+        }
+
+        // v25.67: Log success for debugging
+        if (accounts.length > 0) {
+            logger.debug(`[HolderScanner] Helius DAS found ${accounts.length} accounts for ${mint.slice(0, 8)}`);
         }
 
         return accounts;
@@ -447,6 +468,7 @@ async function updateGlobalState(deps) {
         // v25.4: Also apply volume weighting to Robinhood tokens
         // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
         // v25.64: Added detailed logging for debugging Robinhood token issues
+        // v25.67: Enhanced debugging for volume-excluded tokens
         let robinhoodPointsTotal = 0;
         let robinhoodHoldersWithPoints = 0;
         try {
@@ -455,11 +477,23 @@ async function updateGlobalState(deps) {
                 'SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL'
             );
 
+            // v25.67: Get all active tokens to show which ones are below volume threshold
+            const allActiveRobinhoodTokens = await db.all(
+                'SELECT mint, ticker, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL'
+            );
+
             const robinhoodTokens = await db.all(
                 'SELECT mint, "feeShareBps", ticker, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
                 [MIN_VOLUME_USD]
             );
             const robinhoodMints = robinhoodTokens.map(t => t.mint).filter(m => m);
+
+            // v25.67: Log tokens that are active but below volume threshold
+            const belowVolumeTokens = allActiveRobinhoodTokens.filter(t => (parseFloat(t.volume24h) || 0) < MIN_VOLUME_USD);
+            if (belowVolumeTokens.length > 0) {
+                const belowVolumeList = belowVolumeTokens.map(t => `${t.ticker || t.mint.slice(0, 8)}($${(parseFloat(t.volume24h) || 0).toFixed(0)})`).join(', ');
+                logger.info(`[HolderScanner] Robinhood tokens below volume threshold ($${MIN_VOLUME_USD}): ${belowVolumeList}`);
+            }
 
             // v25.4: Calculate volume range for Robinhood tokens
             let rhMinVolume = MIN_VOLUME_USD;
@@ -472,6 +506,19 @@ async function updateGlobalState(deps) {
 
             // v25.64: Enhanced logging to debug Robinhood token eligibility issues
             logger.info(`[HolderScanner] Robinhood: ${totalRobinhoodTokens?.count || 0} total active, ${robinhoodMints.length} with volume >= $${MIN_VOLUME_USD} (range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
+
+            // v25.67: Also check holder counts for eligible tokens
+            if (robinhoodMints.length > 0) {
+                for (const rhToken of robinhoodTokens) {
+                    const holderCount = await db.get(
+                        'SELECT COUNT(*) as count FROM robinhood_token_holders WHERE mint = $1',
+                        [rhToken.mint]
+                    );
+                    if ((holderCount?.count || 0) === 0) {
+                        logger.warn(`[HolderScanner] Robinhood ${rhToken.ticker || rhToken.mint.slice(0, 8)} has volume $${(parseFloat(rhToken.volume24h) || 0).toFixed(0)} but 0 holders in DB`);
+                    }
+                }
+            }
 
             if (robinhoodMints.length > 0) {
                 // For each robinhood token, calculate volume-weighted proportional points scaled by fee share

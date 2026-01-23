@@ -4,6 +4,9 @@
  * v13.0 - Worker-based architecture with Redis queues
  * v25.14 - Added graceful shutdown with interval cleanup
  * v25.47 - Added PAGS claim processor
+ * v25.67 - Fixed Helius DAS API response parsing for holder scanning
+ * v25.68 - Admin trigger-robinhood-scan now includes holder updates
+ * v25.69 - Enhanced KOTH logging for Robinhood token eligibility
  */
 const holderScanner = require('./holderScanner');
 const metadataUpdater = require('./metadataUpdater');
@@ -89,7 +92,7 @@ function startAll(deps) {
         }
     }
 
-    logger.info("All background tasks started (v25.47 - PAGS claim processor enabled)");
+    logger.info("All background tasks started (v25.69 - KOTH Robinhood eligibility logging)");
 }
 
 /**
