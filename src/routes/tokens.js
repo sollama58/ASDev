@@ -1118,9 +1118,13 @@ function init(deps) {
                     || (verifiedSubmitter && isValidPubkey(verifiedSubmitter) ? verifiedSubmitter : null)
                     || 'unknown_creator';
 
+                // v25.73: For fee sharing tokens, feeVaultAddress is the actual vault (coinCreator FEE account)
+                // If null, vault is derived from creatorPubkey using standard PDA derivation
+                const feeVaultAddress = verification.feeVaultAddress || null;
+
                 await db.run(`
-                    INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive")
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
+                    INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive", "feeVaultAddress")
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10)
                 `, [
                     token.mint,
                     token.ticker,
@@ -1130,10 +1134,11 @@ function init(deps) {
                     verification.feeShareBps,
                     Date.now(),
                     token.marketCap || 0,
-                    token.volume24h || 0
+                    token.volume24h || 0,
+                    feeVaultAddress
                 ]);
 
-                logger.info(`[TokenRegistration] Registered as FEE SHAREHOLDER: ${token.ticker} (${mint.slice(0, 8)}...) - ${verification.feeSharePercent}% fee share (${verification.feeShareBps} bps), originalCreator: ${creatorPubkey.slice(0, 8)}...`);
+                logger.info(`[TokenRegistration] Registered as FEE SHAREHOLDER: ${token.ticker} (${mint.slice(0, 8)}...) - ${verification.feeSharePercent}% fee share (${verification.feeShareBps} bps), originalCreator: ${creatorPubkey.slice(0, 8)}...${feeVaultAddress ? `, feeVault: ${feeVaultAddress.slice(0, 8)}...` : ''}`);
 
                 // v25.65: Immediately scan holders for new Robinhood token (non-blocking)
                 // This populates holder data right away instead of waiting up to 10 minutes
@@ -3289,12 +3294,16 @@ function init(deps) {
                     const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
                     const token = validTokens.length > 0 ? validTokens[0] : null;
 
+                    // v25.73: For fee sharing tokens, feeVaultAddress is the actual vault (coinCreator FEE account)
+                    const feeVaultAddress = verification.feeVaultAddress || null;
+
                     // Insert into robinhood_tokens
                     await db.run(`
-                        INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive")
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
+                        INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive", "feeVaultAddress")
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10)
                         ON CONFLICT (mint) DO UPDATE SET
                             "feeShareBps" = EXCLUDED."feeShareBps",
+                            "feeVaultAddress" = EXCLUDED."feeVaultAddress",
                             "isActive" = 1
                     `, [
                         mint,
@@ -3305,13 +3314,14 @@ function init(deps) {
                         verification.feeShareBps,
                         Date.now(),
                         token?.marketCap || existingToken.marketCap || 0,
-                        token?.volume24h || existingToken.volume24h || 0
+                        token?.volume24h || existingToken.volume24h || 0,
+                        feeVaultAddress
                     ]);
 
                     // Remove from tokens table
                     await db.run('DELETE FROM tokens WHERE mint = $1', [mint]);
 
-                    logger.info(`[TokenReregister] ${existingToken.ticker} (${mint.slice(0, 8)}...) - Migrated from direct creator to fee shareholder (${verification.feeShareBps} bps)`);
+                    logger.info(`[TokenReregister] ${existingToken.ticker} (${mint.slice(0, 8)}...) - Migrated from direct creator to fee shareholder (${verification.feeShareBps} bps)${feeVaultAddress ? `, vault: ${feeVaultAddress.slice(0, 8)}...` : ''}`);
 
                     // v25.65: Immediately scan holders for newly migrated token (non-blocking)
                     robinhoodScanner.scanSingleTokenHolders({ connection, db }, mint, existingToken.ticker)

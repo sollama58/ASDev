@@ -607,6 +607,7 @@ async function claimCreatorFees(deps) {
 /**
  * Claim creator fees from Robinhood tokens (external tokens sharing fees with us)
  * v12.0 - New feature for fee sharing partnerships
+ * v25.73 - CRITICAL FIX: Use feeVaultAddress when available for fee sharing tokens
  *
  * Note: For fee sharing configs, we need to call distribute_creator_fees first
  * to have fees distributed to all shareholders, then claim our share
@@ -624,7 +625,22 @@ async function claimRobinhoodFees(deps) {
         for (const token of tokens) {
             try {
                 const creatorPubkey = new PublicKey(token.creatorPubkey);
-                const { bcVault, ammVaultAuth, ammVaultAta, sharingConfigPDA } = pump.getShareholderFeeVaults(creatorPubkey);
+
+                // v25.73: Use feeVaultAddress directly if available (for fee sharing tokens)
+                // For fee sharing tokens, the vault is the coinCreator FEE program account,
+                // NOT a PDA derived from originalCreator
+                let bcVault;
+                const { ammVaultAuth, ammVaultAta, sharingConfigPDA } = pump.getShareholderFeeVaults(creatorPubkey);
+
+                if (token.feeVaultAddress) {
+                    // Direct vault address for fee sharing tokens
+                    bcVault = new PublicKey(token.feeVaultAddress);
+                    logger.debug(`[Robinhood] ${token.ticker}: Using stored feeVaultAddress ${token.feeVaultAddress.slice(0, 8)}...`);
+                } else {
+                    // Derive vault from creatorPubkey (legacy path)
+                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                    bcVault = vaults.bcVault;
+                }
 
                 let tokenClaimed = 0;
 

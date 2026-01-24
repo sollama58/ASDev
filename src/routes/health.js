@@ -1783,20 +1783,47 @@ function init(deps) {
             const isEligible = (parseFloat(token.volume24h) || 0) >= MIN_VOLUME_USD;
 
             // v25.72: Add vault debugging info
+            // v25.73: CRITICAL FIX - Use feeVaultAddress if available (for fee sharing tokens)
+            // For fee sharing tokens, the vault is the coinCreator FEE program account,
+            // NOT a PDA derived from originalCreator
             let vaultInfo = null;
             let vaultBalances = null;
             const creatorPubkey = token.creatorPubkey;
+            const storedFeeVaultAddress = token.feeVaultAddress; // v25.73: Direct vault address from DB
 
-            if (creatorPubkey && creatorPubkey !== 'unknown' && creatorPubkey !== 'unknown_creator') {
+            if (storedFeeVaultAddress || (creatorPubkey && creatorPubkey !== 'unknown' && creatorPubkey !== 'unknown_creator')) {
                 try {
-                    const creatorPubkeyObj = new PublicKey(creatorPubkey);
-                    const { bcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
-                    const ammVaultAtaResolved = await ammVaultAta;
+                    let bcVault;
+                    let ammVaultAtaResolved;
+                    let vaultSource;
+
+                    if (storedFeeVaultAddress) {
+                        // v25.73: Use stored feeVaultAddress directly (for fee sharing tokens)
+                        bcVault = new PublicKey(storedFeeVaultAddress);
+                        vaultSource = 'feeVaultAddress (direct)';
+                        logger.info(`[Debug] Using stored feeVaultAddress for ${token.ticker}: ${storedFeeVaultAddress.slice(0, 8)}...`);
+
+                        // For AMM vault, we still need to derive from creatorPubkey (for graduated tokens)
+                        if (creatorPubkey && creatorPubkey !== 'unknown' && creatorPubkey !== 'unknown_creator') {
+                            const creatorPubkeyObj = new PublicKey(creatorPubkey);
+                            const { ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
+                            ammVaultAtaResolved = await ammVaultAta;
+                        }
+                    } else {
+                        // Derive vault from creatorPubkey (legacy path for tokens without feeVaultAddress)
+                        const creatorPubkeyObj = new PublicKey(creatorPubkey);
+                        const { bcVault: derivedBcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
+                        bcVault = derivedBcVault;
+                        ammVaultAtaResolved = await ammVaultAta;
+                        vaultSource = 'derived from creatorPubkey';
+                    }
 
                     vaultInfo = {
                         creatorPubkey: creatorPubkey,
+                        feeVaultAddress: storedFeeVaultAddress || null,
                         bcVault: bcVault.toString(),
-                        ammVaultAta: ammVaultAtaResolved.toString()
+                        ammVaultAta: ammVaultAtaResolved?.toString() || null,
+                        vaultSource: vaultSource
                     };
 
                     // Check on-chain balances
@@ -1808,10 +1835,12 @@ function init(deps) {
                         bcBalance = bcInfo?.lamports || 0;
                     } catch (e) { /* silent */ }
 
-                    try {
-                        const ammBal = await connection.getTokenAccountBalance(ammVaultAtaResolved).catch(() => ({ value: { amount: "0" } }));
-                        ammBalance = parseInt(ammBal.value.amount) || 0;
-                    } catch (e) { /* silent */ }
+                    if (ammVaultAtaResolved) {
+                        try {
+                            const ammBal = await connection.getTokenAccountBalance(ammVaultAtaResolved).catch(() => ({ value: { amount: "0" } }));
+                            ammBalance = parseInt(ammBal.value.amount) || 0;
+                        } catch (e) { /* silent */ }
+                    }
 
                     const feeShareBps = token.feeShareBps || 10000;
                     const bcClaimable = Math.max(0, bcBalance - 5000);
@@ -1838,13 +1867,14 @@ function init(deps) {
                         }
                     };
                 } catch (e) {
-                    vaultInfo = { error: e.message, creatorPubkey };
+                    vaultInfo = { error: e.message, creatorPubkey, feeVaultAddress: storedFeeVaultAddress };
                 }
             } else {
                 vaultInfo = {
-                    error: 'Invalid or missing creatorPubkey',
+                    error: 'Invalid or missing creatorPubkey/feeVaultAddress',
                     creatorPubkey,
-                    hint: 'The token was registered without a valid original creator. Try re-registering the token.'
+                    feeVaultAddress: storedFeeVaultAddress,
+                    hint: 'The token was registered without a valid original creator or vault address. Try re-registering or using the fix-robinhood-creator endpoint.'
                 };
             }
 
@@ -1953,7 +1983,8 @@ function init(deps) {
     /**
      * POST /admin/fix-robinhood-creator/:mint
      * v25.72: Re-verify and fix the creatorPubkey for a Robinhood token
-     * This is needed when tokens were registered with incorrect/missing creatorPubkey
+     * v25.73: Also updates feeVaultAddress for fee sharing tokens
+     * This is needed when tokens were registered with incorrect/missing creatorPubkey/feeVaultAddress
      */
     router.post('/admin/fix-robinhood-creator/:mint', adminAuth, async (req, res) => {
         try {
@@ -1981,6 +2012,7 @@ function init(deps) {
             }
 
             const oldCreator = token.creatorPubkey;
+            const oldFeeVaultAddress = token.feeVaultAddress;
             logger.info(`[Admin] Re-verifying creatorPubkey for ${token.ticker}. Current: ${oldCreator?.slice(0, 8) || 'NONE'}...`);
 
             // Re-verify fee recipient
@@ -2006,16 +2038,34 @@ function init(deps) {
                 });
             }
 
-            // Update the creatorPubkey
+            // v25.73: Get feeVaultAddress for fee sharing tokens
+            const newFeeVaultAddress = verification.feeVaultAddress || null;
+
+            // Update the creatorPubkey AND feeVaultAddress
             await db.run(
-                'UPDATE robinhood_tokens SET "creatorPubkey" = $1, "feeShareBps" = $2 WHERE mint = $3',
-                [newCreator, verification.feeShareBps, mint]
+                'UPDATE robinhood_tokens SET "creatorPubkey" = $1, "feeShareBps" = $2, "feeVaultAddress" = $3 WHERE mint = $4',
+                [newCreator, verification.feeShareBps, newFeeVaultAddress, mint]
             );
 
-            // Verify the vaults can now be derived
-            const creatorPubkeyObj = new PublicKey(newCreator);
-            const { bcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
-            const ammVaultAtaResolved = await ammVaultAta;
+            // v25.73: Use feeVaultAddress directly if available, otherwise derive from creatorPubkey
+            let bcVault;
+            let ammVaultAtaResolved;
+            let vaultSource;
+
+            if (newFeeVaultAddress) {
+                bcVault = new PublicKey(newFeeVaultAddress);
+                vaultSource = 'feeVaultAddress (direct)';
+
+                const creatorPubkeyObj = new PublicKey(newCreator);
+                const { ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
+                ammVaultAtaResolved = await ammVaultAta;
+            } else {
+                const creatorPubkeyObj = new PublicKey(newCreator);
+                const { bcVault: derivedBcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
+                bcVault = derivedBcVault;
+                ammVaultAtaResolved = await ammVaultAta;
+                vaultSource = 'derived from creatorPubkey';
+            }
 
             // Check vault balances
             let bcBalance = 0;
@@ -2031,7 +2081,7 @@ function init(deps) {
                 ammBalance = parseInt(ammBal.value.amount) || 0;
             } catch (e) { /* silent */ }
 
-            logger.info(`[Admin] Fixed creatorPubkey for ${token.ticker}: ${oldCreator?.slice(0, 8) || 'NONE'} -> ${newCreator.slice(0, 8)}`);
+            logger.info(`[Admin] Fixed creatorPubkey for ${token.ticker}: ${oldCreator?.slice(0, 8) || 'NONE'} -> ${newCreator.slice(0, 8)}${newFeeVaultAddress ? `, vault: ${newFeeVaultAddress.slice(0, 8)}...` : ''}`);
 
             res.json({
                 success: true,
@@ -2039,13 +2089,16 @@ function init(deps) {
                 mint: mint,
                 oldCreator: oldCreator,
                 newCreator: newCreator,
+                oldFeeVaultAddress: oldFeeVaultAddress,
+                newFeeVaultAddress: newFeeVaultAddress,
                 feeShareBps: verification.feeShareBps,
                 feeSharePercent: verification.feeSharePercent,
                 vaults: {
                     bcVault: bcVault.toString(),
                     ammVaultAta: ammVaultAtaResolved.toString(),
                     bcBalanceSol: (bcBalance / LAMPORTS_PER_SOL).toFixed(6),
-                    ammBalanceSol: (ammBalance / LAMPORTS_PER_SOL).toFixed(6)
+                    ammBalanceSol: (ammBalance / LAMPORTS_PER_SOL).toFixed(6),
+                    vaultSource: vaultSource
                 }
             });
         } catch (e) {
@@ -2057,20 +2110,24 @@ function init(deps) {
     /**
      * POST /admin/fix-all-robinhood-creators
      * v25.72: Re-verify and fix creatorPubkey for all Robinhood tokens with missing/invalid creators
+     * v25.73: Also fixes tokens with missing feeVaultAddress (needed for fee sharing tokens)
      */
     router.post('/admin/fix-all-robinhood-creators', adminAuth, async (req, res) => {
         try {
             const mintExtractor = require('../services/mintExtractor');
             const { PublicKey } = require('@solana/web3.js');
 
-            // Find tokens with missing/invalid creatorPubkey
+            // v25.73: Find tokens with missing/invalid creatorPubkey OR missing feeVaultAddress
             const tokensToFix = await db.all(`
                 SELECT * FROM robinhood_tokens
                 WHERE "isActive" = 1
-                AND ("creatorPubkey" IS NULL OR "creatorPubkey" = 'unknown' OR "creatorPubkey" = 'unknown_creator' OR "creatorPubkey" = '')
+                AND (
+                    "creatorPubkey" IS NULL OR "creatorPubkey" = 'unknown' OR "creatorPubkey" = 'unknown_creator' OR "creatorPubkey" = ''
+                    OR "feeVaultAddress" IS NULL
+                )
             `);
 
-            logger.info(`[Admin] Fixing ${tokensToFix.length} Robinhood tokens with invalid creatorPubkey`);
+            logger.info(`[Admin] Fixing ${tokensToFix.length} Robinhood tokens with invalid creatorPubkey or missing feeVaultAddress`);
 
             const results = {
                 total: tokensToFix.length,
@@ -2090,9 +2147,12 @@ function init(deps) {
                     if (verification.isRecipient && verification.originalCreator &&
                         verification.originalCreator !== 'unknown' && verification.originalCreator !== 'unknown_creator') {
 
+                        // v25.73: Update both creatorPubkey AND feeVaultAddress
+                        const newFeeVaultAddress = verification.feeVaultAddress || null;
+
                         await db.run(
-                            'UPDATE robinhood_tokens SET "creatorPubkey" = $1, "feeShareBps" = $2 WHERE mint = $3',
-                            [verification.originalCreator, verification.feeShareBps, token.mint]
+                            'UPDATE robinhood_tokens SET "creatorPubkey" = $1, "feeShareBps" = $2, "feeVaultAddress" = $3 WHERE mint = $4',
+                            [verification.originalCreator, verification.feeShareBps, newFeeVaultAddress, token.mint]
                         );
 
                         results.fixed++;
@@ -2100,7 +2160,8 @@ function init(deps) {
                             mint: token.mint,
                             ticker: token.ticker,
                             status: 'fixed',
-                            newCreator: verification.originalCreator.slice(0, 8) + '...'
+                            newCreator: verification.originalCreator.slice(0, 8) + '...',
+                            newFeeVaultAddress: newFeeVaultAddress ? newFeeVaultAddress.slice(0, 8) + '...' : null
                         });
                     } else {
                         results.failed++;
@@ -2125,7 +2186,7 @@ function init(deps) {
                 await new Promise(resolve => setTimeout(resolve, 500));
             }
 
-            logger.info(`[Admin] Robinhood creator fix complete: ${results.fixed} fixed, ${results.failed} failed`);
+            logger.info(`[Admin] Robinhood creator/vault fix complete: ${results.fixed} fixed, ${results.failed} failed`);
 
             res.json({
                 success: true,

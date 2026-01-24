@@ -360,6 +360,17 @@ async function createSchema() {
         END $$;
     `);
 
+    // v25.73: Migration - Add feeVaultAddress column for fee sharing tokens
+    // For fee sharing tokens, the vault is the coinCreator FEE program account, NOT derived from originalCreator
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'robinhood_tokens' AND column_name = 'feeVaultAddress') THEN
+                ALTER TABLE robinhood_tokens ADD COLUMN "feeVaultAddress" TEXT;
+            END IF;
+        END $$;
+    `);
+
     // v25.24: Migration - Fix null balance values that cause BigInt conversion errors
     // Set default for balance column and fix any existing null values
     await pool.query(`

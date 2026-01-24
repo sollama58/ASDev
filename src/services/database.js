@@ -253,6 +253,15 @@ async function initDB() {
             )
         `);
 
+        // v25.73: Migration - Add feeVaultAddress column for fee sharing tokens
+        // For fee sharing tokens, the vault is the coinCreator FEE program account, NOT derived from originalCreator
+        try {
+            await db.exec(`ALTER TABLE robinhood_tokens ADD COLUMN feeVaultAddress TEXT`);
+            logger.info('[DB MIGRATION] Added feeVaultAddress column to robinhood_tokens table');
+        } catch (e) {
+            // Column already exists - this is expected
+        }
+
         await db.exec(`
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

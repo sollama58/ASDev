@@ -10,6 +10,7 @@
  * v25.70 - Claude KOTH now includes Robinhood tokens in candidates
  * v25.71 - Fixed /koth endpoint and Redis storage to handle Robinhood tokens
  * v25.72 - Added Robinhood vault debugging and admin fix endpoints for creatorPubkey
+ * v25.73 - CRITICAL FIX: feeVaultAddress for fee sharing tokens - coinCreator IS the vault
  */
 const holderScanner = require('./holderScanner');
 const metadataUpdater = require('./metadataUpdater');
@@ -95,7 +96,7 @@ function startAll(deps) {
         }
     }
 
-    logger.info("All background tasks started (v25.72 - Robinhood vault debugging and creatorPubkey fix endpoints)");
+    logger.info("All background tasks started (v25.73 - feeVaultAddress fix for fee sharing tokens)");
 }
 
 /**

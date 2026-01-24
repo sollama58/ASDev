@@ -1060,10 +1060,14 @@ function parseFeeSharingConfigAny(data) {
  * 3. If coin_creator is a fee_sharing_config PDA (owned by PUMP) -> Parse shareholders, find our BPS
  * 4. Otherwise -> Not a fee recipient
  *
+ * v25.73: CRITICAL FIX - For fee sharing tokens, coinCreator (FEE program account) IS the vault
+ * where fees accumulate, NOT a PDA derived from originalCreator. We now return feeVaultAddress
+ * to store the actual vault address.
+ *
  * @param {string} mint - Token mint address
  * @param {string} walletToVerify - Wallet public key to verify as fee recipient
  * @param {Object} connection - Solana connection object
- * @returns {Promise<{isRecipient: boolean, source: string|null, feeShareBps: number, feeSharePercent: number, originalCreator?: string}>}
+ * @returns {Promise<{isRecipient: boolean, source: string|null, feeShareBps: number, feeSharePercent: number, originalCreator?: string, feeVaultAddress?: string}>}
  */
 async function verifyFeeRecipient(mint, walletToVerify, connection) {
     try {
@@ -1085,11 +1089,13 @@ async function verifyFeeRecipient(mint, walletToVerify, connection) {
             logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Direct creator via ${source} (100% fee share)`);
             // v25.54: Return originalCreator as the wallet address for direct creators
             // This is needed to derive the creator fee vault correctly
-            return { isRecipient: true, source, feeShareBps: 10000, feeSharePercent: 100, originalCreator: walletKey.toString() };
+            // v25.73: feeVaultAddress is null for direct creators - vault is derived from originalCreator
+            return { isRecipient: true, source, feeShareBps: 10000, feeSharePercent: 100, originalCreator: walletKey.toString(), feeVaultAddress: null };
         }
 
         // Step 3: coin_creator is not us - check if it's a fee_sharing_config PDA
         // When fee sharing is enabled, coin_creator IS the fee_sharing_config PDA
+        // v25.73: Pass coinCreator to checkFeeSharingConfig so we can return it as feeVaultAddress
         const feeSharingResult = await checkFeeSharingConfig(coinCreator, walletKey, mint, connection);
 
         if (feeSharingResult) {
@@ -1308,6 +1314,10 @@ async function getCoinCreator(mintPubkey, connection) {
  * - This FEE program account contains the SharingConfig with shareholders embedded in its data
  * - We need to parse the account data to find the shareholders array
  *
+ * v25.73: CRITICAL - For fee sharing tokens, the coinCreator FEE program account IS where
+ * fees accumulate (it's the vault). We return this as feeVaultAddress so we can read
+ * the balance directly instead of trying to derive a vault from originalCreator.
+ *
  * @param {PublicKey} coinCreator - The coin_creator from BC/AMM (could be original creator or FEE program account)
  * @param {PublicKey} walletKey - Wallet to check for in shareholders
  * @param {string} mint - Mint address (for logging)
@@ -1330,18 +1340,32 @@ async function checkFeeSharingConfig(coinCreator, walletKey, mint, connection) {
         logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator owner: ${owner}, dataLen: ${accountInfo.data.length}`);
 
         // Check if coin_creator is owned by FEE program - this means it's a creator_vault with SharingConfig
+        // v25.73: The FEE program account IS the vault where fees accumulate
         if (accountInfo.owner.equals(PROGRAMS.FEE)) {
-            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is a FEE program account, parsing SharingConfig...`);
+            logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is a FEE program account (THIS IS THE VAULT), parsing SharingConfig...`);
 
             // Parse the FEE program account to find shareholders
             // The SharingConfig is embedded in the account data
-            return parseFeeAccountSharingConfig(accountInfo.data, walletKey, mint);
+            // v25.73: Pass coinCreator so we can return it as feeVaultAddress
+            const result = parseFeeAccountSharingConfig(accountInfo.data, walletKey, mint);
+            if (result) {
+                // v25.73: CRITICAL FIX - The coinCreator IS the fee vault for FEE program accounts
+                result.feeVaultAddress = coinCreator.toString();
+                logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - Fee vault address is coinCreator: ${coinCreator.toString().slice(0, 8)}...`);
+            }
+            return result;
         }
 
         // If coin_creator is owned by PUMP program, it might be a fee_sharing_config PDA directly
         if (accountInfo.owner.equals(PROGRAMS.PUMP)) {
             logger.info(`[MintExtractor] ${mint.slice(0, 8)}... - coin_creator is owned by PUMP, parsing as fee_sharing_config...`);
-            return await parseAndCheckFeeSharingConfig(accountInfo.data, walletKey, mint, null);
+            const result = await parseAndCheckFeeSharingConfig(accountInfo.data, walletKey, mint, null);
+            if (result) {
+                // For PUMP-owned configs, we still need to derive the vault from originalCreator
+                // feeVaultAddress stays null so vault derivation works as before
+                result.feeVaultAddress = null;
+            }
+            return result;
         }
 
         // If coin_creator is owned by System Program, it's a regular wallet (no fee sharing)
