@@ -2016,9 +2016,10 @@ function init(deps) {
             logger.info(`[Admin] Re-verifying creatorPubkey for ${token.ticker}. Current: ${oldCreator?.slice(0, 8) || 'NONE'}...`);
 
             // Re-verify fee recipient
+            // v25.73: Use devKeypair.publicKey instead of undefined config.PLATFORM_WALLET
             const verification = await mintExtractor.verifyFeeRecipient(
                 mint,
-                config.PLATFORM_WALLET,
+                devKeypair.publicKey.toString(),
                 connection
             );
 
@@ -2138,9 +2139,10 @@ function init(deps) {
 
             for (const token of tokensToFix) {
                 try {
+                    // v25.73: Use devKeypair.publicKey instead of undefined config.PLATFORM_WALLET
                     const verification = await mintExtractor.verifyFeeRecipient(
                         token.mint,
-                        config.PLATFORM_WALLET,
+                        devKeypair.publicKey.toString(),
                         connection
                     );
 
