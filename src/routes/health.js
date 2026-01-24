@@ -1782,12 +1782,79 @@ function init(deps) {
             const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
             const isEligible = (parseFloat(token.volume24h) || 0) >= MIN_VOLUME_USD;
 
+            // v25.72: Add vault debugging info
+            let vaultInfo = null;
+            let vaultBalances = null;
+            const creatorPubkey = token.creatorPubkey;
+
+            if (creatorPubkey && creatorPubkey !== 'unknown' && creatorPubkey !== 'unknown_creator') {
+                try {
+                    const creatorPubkeyObj = new PublicKey(creatorPubkey);
+                    const { bcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
+                    const ammVaultAtaResolved = await ammVaultAta;
+
+                    vaultInfo = {
+                        creatorPubkey: creatorPubkey,
+                        bcVault: bcVault.toString(),
+                        ammVaultAta: ammVaultAtaResolved.toString()
+                    };
+
+                    // Check on-chain balances
+                    let bcBalance = 0;
+                    let ammBalance = 0;
+
+                    try {
+                        const bcInfo = await connection.getAccountInfo(bcVault);
+                        bcBalance = bcInfo?.lamports || 0;
+                    } catch (e) { /* silent */ }
+
+                    try {
+                        const ammBal = await connection.getTokenAccountBalance(ammVaultAtaResolved).catch(() => ({ value: { amount: "0" } }));
+                        ammBalance = parseInt(ammBal.value.amount) || 0;
+                    } catch (e) { /* silent */ }
+
+                    const feeShareBps = token.feeShareBps || 10000;
+                    const bcClaimable = Math.max(0, bcBalance - 5000);
+                    const ourBcShare = Math.floor(bcClaimable * (feeShareBps / 10000));
+                    const ourAmmShare = Math.floor(ammBalance * (feeShareBps / 10000));
+
+                    vaultBalances = {
+                        bcVault: {
+                            totalLamports: bcBalance,
+                            totalSol: (bcBalance / LAMPORTS_PER_SOL).toFixed(6),
+                            claimableLamports: bcClaimable,
+                            ourShareLamports: ourBcShare,
+                            ourShareSol: (ourBcShare / LAMPORTS_PER_SOL).toFixed(6)
+                        },
+                        ammVault: {
+                            totalLamports: ammBalance,
+                            totalSol: (ammBalance / LAMPORTS_PER_SOL).toFixed(6),
+                            ourShareLamports: ourAmmShare,
+                            ourShareSol: (ourAmmShare / LAMPORTS_PER_SOL).toFixed(6)
+                        },
+                        combined: {
+                            totalPendingLamports: ourBcShare + ourAmmShare,
+                            totalPendingSol: ((ourBcShare + ourAmmShare) / LAMPORTS_PER_SOL).toFixed(6)
+                        }
+                    };
+                } catch (e) {
+                    vaultInfo = { error: e.message, creatorPubkey };
+                }
+            } else {
+                vaultInfo = {
+                    error: 'Invalid or missing creatorPubkey',
+                    creatorPubkey,
+                    hint: 'The token was registered without a valid original creator. Try re-registering the token.'
+                };
+            }
+
             res.json({
                 found: true,
                 token: {
                     mint: token.mint,
                     ticker: token.ticker,
                     name: token.name,
+                    creatorPubkey: token.creatorPubkey,
                     isActive: token.isActive === 1,
                     volume24h: token.volume24h,
                     marketCap: token.marketCap,
@@ -1795,6 +1862,8 @@ function init(deps) {
                     createdAt: token.createdAt,
                     updatedAt: token.updatedAt
                 },
+                vaultInfo,
+                vaultBalances,
                 eligibility: {
                     isEligible,
                     volumeThreshold: MIN_VOLUME_USD,
@@ -1811,11 +1880,19 @@ function init(deps) {
                         rank: h.rank
                     }))
                 },
-                hints: (holderCount?.count || 0) === 0 ? [
-                    'No holders in database - the holder scan may not have run yet',
-                    'Try POST /admin/trigger-robinhood-scan to force a scan',
-                    'Check logs for Helius DAS API errors'
-                ] : []
+                hints: [
+                    ...(holderCount?.count || 0) === 0 ? [
+                        'No holders in database - the holder scan may not have run yet',
+                        'Try POST /admin/trigger-robinhood-scan to force a scan'
+                    ] : [],
+                    ...(!creatorPubkey || creatorPubkey === 'unknown' || creatorPubkey === 'unknown_creator') ? [
+                        'CRITICAL: creatorPubkey is invalid - vault addresses cannot be derived',
+                        'Re-verify and re-register the token to fix this'
+                    ] : [],
+                    ...(vaultBalances?.combined?.totalPendingLamports === 0) ? [
+                        'No pending fees in vaults - token may not have generated any fees yet'
+                    ] : []
+                ]
             });
         } catch (e) {
             logger.error('[Debug] Robinhood token lookup error', { error: e.message });
@@ -1870,6 +1947,193 @@ function init(deps) {
         } catch (e) {
             logger.error('[Admin] Trigger holder scan error', { error: e.message });
             res.status(500).json({ error: 'Failed to trigger holder scan' });
+        }
+    });
+
+    /**
+     * POST /admin/fix-robinhood-creator/:mint
+     * v25.72: Re-verify and fix the creatorPubkey for a Robinhood token
+     * This is needed when tokens were registered with incorrect/missing creatorPubkey
+     */
+    router.post('/admin/fix-robinhood-creator/:mint', adminAuth, async (req, res) => {
+        try {
+            const { mint } = req.params;
+            const { PublicKey } = require('@solana/web3.js');
+            const mintExtractor = require('../services/mintExtractor');
+
+            // Validate mint
+            try {
+                new PublicKey(mint);
+            } catch (e) {
+                return res.status(400).json({ error: 'Invalid mint address' });
+            }
+
+            // Check if token exists
+            const token = await db.get(
+                'SELECT * FROM robinhood_tokens WHERE mint = $1',
+                [mint]
+            );
+
+            if (!token) {
+                return res.status(404).json({
+                    error: 'Token not found in robinhood_tokens table'
+                });
+            }
+
+            const oldCreator = token.creatorPubkey;
+            logger.info(`[Admin] Re-verifying creatorPubkey for ${token.ticker}. Current: ${oldCreator?.slice(0, 8) || 'NONE'}...`);
+
+            // Re-verify fee recipient
+            const verification = await mintExtractor.verifyFeeRecipient(
+                mint,
+                config.PLATFORM_WALLET,
+                connection
+            );
+
+            if (!verification.isRecipient) {
+                return res.status(400).json({
+                    error: 'Platform wallet is not a fee recipient for this token',
+                    verification
+                });
+            }
+
+            const newCreator = verification.originalCreator;
+            if (!newCreator || newCreator === 'unknown' || newCreator === 'unknown_creator') {
+                return res.status(400).json({
+                    error: 'Could not determine original creator from on-chain data',
+                    verification,
+                    hint: 'The token may have a non-standard fee sharing setup'
+                });
+            }
+
+            // Update the creatorPubkey
+            await db.run(
+                'UPDATE robinhood_tokens SET "creatorPubkey" = $1, "feeShareBps" = $2 WHERE mint = $3',
+                [newCreator, verification.feeShareBps, mint]
+            );
+
+            // Verify the vaults can now be derived
+            const creatorPubkeyObj = new PublicKey(newCreator);
+            const { bcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
+            const ammVaultAtaResolved = await ammVaultAta;
+
+            // Check vault balances
+            let bcBalance = 0;
+            let ammBalance = 0;
+
+            try {
+                const bcInfo = await connection.getAccountInfo(bcVault);
+                bcBalance = bcInfo?.lamports || 0;
+            } catch (e) { /* silent */ }
+
+            try {
+                const ammBal = await connection.getTokenAccountBalance(ammVaultAtaResolved).catch(() => ({ value: { amount: "0" } }));
+                ammBalance = parseInt(ammBal.value.amount) || 0;
+            } catch (e) { /* silent */ }
+
+            logger.info(`[Admin] Fixed creatorPubkey for ${token.ticker}: ${oldCreator?.slice(0, 8) || 'NONE'} -> ${newCreator.slice(0, 8)}`);
+
+            res.json({
+                success: true,
+                token: token.ticker,
+                mint: mint,
+                oldCreator: oldCreator,
+                newCreator: newCreator,
+                feeShareBps: verification.feeShareBps,
+                feeSharePercent: verification.feeSharePercent,
+                vaults: {
+                    bcVault: bcVault.toString(),
+                    ammVaultAta: ammVaultAtaResolved.toString(),
+                    bcBalanceSol: (bcBalance / LAMPORTS_PER_SOL).toFixed(6),
+                    ammBalanceSol: (ammBalance / LAMPORTS_PER_SOL).toFixed(6)
+                }
+            });
+        } catch (e) {
+            logger.error('[Admin] Fix Robinhood creator error', { error: e.message });
+            res.status(500).json({ error: 'Failed to fix creator', details: e.message });
+        }
+    });
+
+    /**
+     * POST /admin/fix-all-robinhood-creators
+     * v25.72: Re-verify and fix creatorPubkey for all Robinhood tokens with missing/invalid creators
+     */
+    router.post('/admin/fix-all-robinhood-creators', adminAuth, async (req, res) => {
+        try {
+            const mintExtractor = require('../services/mintExtractor');
+            const { PublicKey } = require('@solana/web3.js');
+
+            // Find tokens with missing/invalid creatorPubkey
+            const tokensToFix = await db.all(`
+                SELECT * FROM robinhood_tokens
+                WHERE "isActive" = 1
+                AND ("creatorPubkey" IS NULL OR "creatorPubkey" = 'unknown' OR "creatorPubkey" = 'unknown_creator' OR "creatorPubkey" = '')
+            `);
+
+            logger.info(`[Admin] Fixing ${tokensToFix.length} Robinhood tokens with invalid creatorPubkey`);
+
+            const results = {
+                total: tokensToFix.length,
+                fixed: 0,
+                failed: 0,
+                details: []
+            };
+
+            for (const token of tokensToFix) {
+                try {
+                    const verification = await mintExtractor.verifyFeeRecipient(
+                        token.mint,
+                        config.PLATFORM_WALLET,
+                        connection
+                    );
+
+                    if (verification.isRecipient && verification.originalCreator &&
+                        verification.originalCreator !== 'unknown' && verification.originalCreator !== 'unknown_creator') {
+
+                        await db.run(
+                            'UPDATE robinhood_tokens SET "creatorPubkey" = $1, "feeShareBps" = $2 WHERE mint = $3',
+                            [verification.originalCreator, verification.feeShareBps, token.mint]
+                        );
+
+                        results.fixed++;
+                        results.details.push({
+                            mint: token.mint,
+                            ticker: token.ticker,
+                            status: 'fixed',
+                            newCreator: verification.originalCreator.slice(0, 8) + '...'
+                        });
+                    } else {
+                        results.failed++;
+                        results.details.push({
+                            mint: token.mint,
+                            ticker: token.ticker,
+                            status: 'failed',
+                            reason: !verification.isRecipient ? 'Not a fee recipient' : 'Could not determine original creator'
+                        });
+                    }
+                } catch (e) {
+                    results.failed++;
+                    results.details.push({
+                        mint: token.mint,
+                        ticker: token.ticker,
+                        status: 'error',
+                        reason: e.message
+                    });
+                }
+
+                // Add delay between tokens to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+
+            logger.info(`[Admin] Robinhood creator fix complete: ${results.fixed} fixed, ${results.failed} failed`);
+
+            res.json({
+                success: true,
+                ...results
+            });
+        } catch (e) {
+            logger.error('[Admin] Fix all Robinhood creators error', { error: e.message });
+            res.status(500).json({ error: 'Failed to fix creators', details: e.message });
         }
     });
 

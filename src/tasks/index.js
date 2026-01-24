@@ -9,6 +9,7 @@
  * v25.69 - Enhanced KOTH logging for Robinhood token eligibility
  * v25.70 - Claude KOTH now includes Robinhood tokens in candidates
  * v25.71 - Fixed /koth endpoint and Redis storage to handle Robinhood tokens
+ * v25.72 - Added Robinhood vault debugging and admin fix endpoints for creatorPubkey
  */
 const holderScanner = require('./holderScanner');
 const metadataUpdater = require('./metadataUpdater');
@@ -94,7 +95,7 @@ function startAll(deps) {
         }
     }
 
-    logger.info("All background tasks started (v25.71 - KOTH endpoint/storage supports Robinhood tokens)");
+    logger.info("All background tasks started (v25.72 - Robinhood vault debugging and creatorPubkey fix endpoints)");
 }
 
 /**

@@ -973,6 +973,54 @@
                             // API response will appear here
                         </div>
                     </div>
+
+                    <!-- Robinhood Vault Debug (v25.72) -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header">
+                            <h3 class="text-pink-500 font-bold">Robinhood Vault Debug</h3>
+                        </div>
+                        <p class="text-xs text-gray-400 mb-3">Debug reward vault detection for Robinhood tokens. Check if creatorPubkey is correctly stored and vaults have pending fees.</p>
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <!-- Debug Single Token -->
+                            <div class="bg-black/30 rounded p-3">
+                                <h4 class="text-sm text-pink-400 font-bold mb-2">Debug Token Vaults</h4>
+                                <div class="flex gap-2 mb-2">
+                                    <input type="text" id="rh-debug-mint" class="input-field flex-1" placeholder="Token mint address">
+                                    <button onclick="debugRobinhoodToken()" class="btn btn-secondary">Debug</button>
+                                </div>
+                                <div id="rh-debug-result" class="result-box text-xs max-h-64 overflow-y-auto">
+                                    // Debug info will appear here
+                                </div>
+                            </div>
+
+                            <!-- Fix CreatorPubkey -->
+                            <div class="bg-black/30 rounded p-3">
+                                <h4 class="text-sm text-pink-400 font-bold mb-2">Fix Token CreatorPubkey</h4>
+                                <div class="flex gap-2 mb-2">
+                                    <input type="text" id="rh-fix-mint" class="input-field flex-1" placeholder="Token mint address">
+                                    <button onclick="fixRobinhoodCreator()" class="btn btn-success">Fix</button>
+                                </div>
+                                <p class="text-xs text-gray-500 mb-2">Re-verifies and updates the creatorPubkey from on-chain data.</p>
+                                <div id="rh-fix-result" class="result-box text-xs">
+                                    // Fix result will appear here
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Fix All Button -->
+                        <div class="mt-4 p-3 bg-red-900/20 rounded border border-red-700/30">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <h4 class="text-sm text-red-400 font-bold">Fix All Invalid CreatorPubkeys</h4>
+                                    <p class="text-xs text-gray-500">Scans all Robinhood tokens and fixes any with missing/invalid creatorPubkey</p>
+                                </div>
+                                <button onclick="fixAllRobinhoodCreators()" class="btn btn-danger">Fix All</button>
+                            </div>
+                            <div id="rh-fix-all-result" class="result-box text-xs mt-2 hidden">
+                                // Fix all result will appear here
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -2693,6 +2741,183 @@
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Robinhood scan error: ${e.message}`, 'error');
+            }
+        }
+
+        // ===== ROBINHOOD VAULT DEBUG (v25.72) =====
+        async function debugRobinhoodToken() {
+            const mint = document.getElementById('rh-debug-mint').value.trim();
+            const resultEl = document.getElementById('rh-debug-result');
+
+            if (!mint) {
+                resultEl.innerHTML = '<span class="text-red-400">Please enter a token mint address</span>';
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Debugging token...</span>';
+            log(`Debugging Robinhood token: ${mint.slice(0, 8)}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/debug/robinhood-token/${mint}`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+                const data = await response.json();
+
+                if (!data.found) {
+                    resultEl.innerHTML = `<span class="text-red-400">Token not found: ${data.error || 'Not in robinhood_tokens table'}</span>`;
+                    log(`Token not found: ${mint.slice(0, 8)}...`, 'error');
+                    return;
+                }
+
+                let html = '<div class="space-y-2">';
+
+                // Token info
+                html += `<div class="text-pink-400 font-bold">${data.token.ticker} (${data.token.name})</div>`;
+                html += `<div class="text-gray-400">Mint: <span class="text-white">${data.token.mint}</span></div>`;
+                html += `<div class="text-gray-400">Creator: <span class="${data.token.creatorPubkey && data.token.creatorPubkey !== 'unknown' ? 'text-green-400' : 'text-red-400'}">${data.token.creatorPubkey || 'MISSING'}</span></div>`;
+                html += `<div class="text-gray-400">Fee Share: <span class="text-cyan-400">${(data.token.feeShareBps / 100).toFixed(1)}%</span></div>`;
+                html += `<div class="text-gray-400">Active: <span class="${data.token.isActive ? 'text-green-400' : 'text-red-400'}">${data.token.isActive ? 'Yes' : 'No'}</span></div>`;
+
+                // Vault info
+                if (data.vaultInfo) {
+                    if (data.vaultInfo.error) {
+                        html += `<div class="mt-2 p-2 bg-red-900/30 rounded"><span class="text-red-400">Vault Error: ${data.vaultInfo.error}</span></div>`;
+                        if (data.vaultInfo.hint) {
+                            html += `<div class="text-yellow-400 text-xs">${data.vaultInfo.hint}</div>`;
+                        }
+                    } else {
+                        html += `<div class="mt-2 text-cyan-400 font-bold">Vault Addresses:</div>`;
+                        html += `<div class="text-xs text-gray-400">BC Vault: <span class="text-white">${data.vaultInfo.bcVault}</span></div>`;
+                        html += `<div class="text-xs text-gray-400">AMM Vault: <span class="text-white">${data.vaultInfo.ammVaultAta}</span></div>`;
+                    }
+                }
+
+                // Vault balances
+                if (data.vaultBalances) {
+                    html += `<div class="mt-2 text-green-400 font-bold">Vault Balances:</div>`;
+                    html += `<div class="text-xs">BC Vault: ${data.vaultBalances.bcVault.totalSol} SOL (our share: ${data.vaultBalances.bcVault.ourShareSol} SOL)</div>`;
+                    html += `<div class="text-xs">AMM Vault: ${data.vaultBalances.ammVault.totalSol} SOL (our share: ${data.vaultBalances.ammVault.ourShareSol} SOL)</div>`;
+                    html += `<div class="text-sm text-green-400 font-bold mt-1">Total Pending: ${data.vaultBalances.combined.totalPendingSol} SOL</div>`;
+                }
+
+                // Hints
+                if (data.hints && data.hints.length > 0) {
+                    html += `<div class="mt-2 p-2 bg-yellow-900/30 rounded">`;
+                    html += `<div class="text-yellow-400 font-bold text-xs">Hints:</div>`;
+                    for (const hint of data.hints) {
+                        html += `<div class="text-yellow-300 text-xs">• ${hint}</div>`;
+                    }
+                    html += `</div>`;
+                }
+
+                html += '</div>';
+                resultEl.innerHTML = html;
+                log(`Debug complete for ${data.token.ticker}`, 'success');
+
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Debug error: ${e.message}`, 'error');
+            }
+        }
+
+        async function fixRobinhoodCreator() {
+            const mint = document.getElementById('rh-fix-mint').value.trim();
+            const resultEl = document.getElementById('rh-fix-result');
+
+            if (!mint) {
+                resultEl.innerHTML = '<span class="text-red-400">Please enter a token mint address</span>';
+                return;
+            }
+
+            if (!confirm(`This will re-verify and update the creatorPubkey for this token. Continue?`)) {
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">Fixing creatorPubkey...</span>';
+            log(`Fixing creatorPubkey for: ${mint.slice(0, 8)}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/fix-robinhood-creator/${mint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    let html = '<div class="space-y-1">';
+                    html += `<div class="text-green-400 font-bold">✓ Fixed ${data.token}</div>`;
+                    html += `<div class="text-xs">Old: <span class="text-red-400">${data.oldCreator || 'NONE'}</span></div>`;
+                    html += `<div class="text-xs">New: <span class="text-green-400">${data.newCreator}</span></div>`;
+                    html += `<div class="text-xs">Fee Share: <span class="text-cyan-400">${data.feeSharePercent}%</span></div>`;
+                    html += `<div class="text-xs mt-1">BC Vault Balance: ${data.vaults.bcBalanceSol} SOL</div>`;
+                    html += `<div class="text-xs">AMM Vault Balance: ${data.vaults.ammBalanceSol} SOL</div>`;
+                    html += '</div>';
+                    resultEl.innerHTML = html;
+                    log(`Fixed creatorPubkey for ${data.token}`, 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Fix failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Fix error: ${e.message}`, 'error');
+            }
+        }
+
+        async function fixAllRobinhoodCreators() {
+            const resultEl = document.getElementById('rh-fix-all-result');
+
+            if (!confirm(`This will scan ALL Robinhood tokens and fix any with missing/invalid creatorPubkey.\n\nThis may take a while. Continue?`)) {
+                return;
+            }
+
+            resultEl.classList.remove('hidden');
+            resultEl.innerHTML = '<span class="text-blue-400">Scanning and fixing all tokens... This may take a while.</span>';
+            log('Starting fix for all Robinhood creators...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/fix-all-robinhood-creators`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    let html = '<div class="space-y-1">';
+                    html += `<div class="text-green-400 font-bold">✓ Scan Complete</div>`;
+                    html += `<div class="text-xs">Total scanned: ${data.total}</div>`;
+                    html += `<div class="text-xs text-green-400">Fixed: ${data.fixed}</div>`;
+                    html += `<div class="text-xs text-red-400">Failed: ${data.failed}</div>`;
+
+                    if (data.details && data.details.length > 0) {
+                        html += `<div class="mt-2 text-xs max-h-32 overflow-y-auto">`;
+                        for (const d of data.details) {
+                            const color = d.status === 'fixed' ? 'text-green-400' : 'text-red-400';
+                            html += `<div class="${color}">${d.ticker}: ${d.status}${d.reason ? ` (${d.reason})` : ''}</div>`;
+                        }
+                        html += `</div>`;
+                    }
+
+                    html += '</div>';
+                    resultEl.innerHTML = html;
+                    log(`Fix all complete: ${data.fixed} fixed, ${data.failed} failed`, 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Fix all failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Fix all error: ${e.message}`, 'error');
             }
         }
 
