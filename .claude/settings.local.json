@@ -18,7 +18,8 @@
       "Bash(node:*)",
       "Bash(ls:*)",
       "Bash(find:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "WebFetch(domain:api.solscan.io)"
     ]
   }
 }
