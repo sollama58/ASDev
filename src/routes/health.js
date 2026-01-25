@@ -220,7 +220,8 @@ function init(deps) {
                 let robinhoodPendingDetails = [];
                 try {
                     // v25.14 SCALABILITY: Limit to 200 tokens for health check to avoid timeout
-                    const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 200');
+                    // v25.74: Include feeVaultAddress for fee sharing tokens
+                    const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 200');
 
                     // v24.0: Process tokens in parallel batches for better responsiveness
                     const BATCH_SIZE = 10;
@@ -232,8 +233,19 @@ function init(deps) {
                     for (const batch of batches) {
                         const batchResults = await Promise.all(batch.map(async (token) => {
                             try {
-                                const creatorPubkey = new PublicKey(token.creatorPubkey);
-                                const { bcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkey);
+                                // v25.74: Use feeVaultAddress for fee sharing tokens
+                                let bcVault, ammVaultAta;
+                                if (token.feeVaultAddress) {
+                                    bcVault = new PublicKey(token.feeVaultAddress);
+                                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                                    const vaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                                    ammVaultAta = vaults.ammVaultAta;
+                                } else {
+                                    const creatorPubkey = new PublicKey(token.creatorPubkey);
+                                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                                    bcVault = vaults.bcVault;
+                                    ammVaultAta = vaults.ammVaultAta;
+                                }
 
                                 // v24.0: Use circuit breaker for RPC calls
                                 const [bcLamports, ammBalance] = await Promise.all([

@@ -730,8 +730,19 @@ async function getRobinhoodPendingFees(deps) {
 
         for (const token of tokens) {
             try {
-                const creatorPubkey = new PublicKey(token.creatorPubkey);
-                const { bcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkey);
+                // v25.74: Use feeVaultAddress for fee sharing tokens
+                let bcVault, ammVaultAta;
+                if (token.feeVaultAddress) {
+                    bcVault = new PublicKey(token.feeVaultAddress);
+                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                    const vaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                    ammVaultAta = vaults.ammVaultAta;
+                } else {
+                    const creatorPubkey = new PublicKey(token.creatorPubkey);
+                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                    bcVault = vaults.bcVault;
+                    ammVaultAta = vaults.ammVaultAta;
+                }
 
                 let tokenFeeAmount = new BN(0);
 
