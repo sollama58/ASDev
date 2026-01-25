@@ -233,19 +233,20 @@ function init(deps) {
                     for (const batch of batches) {
                         const batchResults = await Promise.all(batch.map(async (token) => {
                             try {
-                                // v25.74: Use feeVaultAddress for fee sharing tokens
-                                let bcVault, ammVaultAta;
+                                // v25.77: Use feeVaultAddress for BC vault (fee sharing tokens)
+                                // AMM vaults are ALWAYS derived from creatorPubkey
+                                const creatorPubkey = new PublicKey(token.creatorPubkey);
+                                const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                                let bcVault;
                                 if (token.feeVaultAddress) {
+                                    // FEE program token - BC fees go to feeVaultAddress
                                     bcVault = new PublicKey(token.feeVaultAddress);
-                                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                                    const vaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                                    ammVaultAta = vaults.ammVaultAta;
                                 } else {
-                                    const creatorPubkey = new PublicKey(token.creatorPubkey);
-                                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                                    // PUMP program token - BC fees go to derived vault
                                     bcVault = vaults.bcVault;
-                                    ammVaultAta = vaults.ammVaultAta;
                                 }
+                                // AMM vault is always derived from original creator
+                                const ammVaultAta = vaults.ammVaultAta;
 
                                 // v24.0: Use circuit breaker for RPC calls
                                 const [bcLamports, ammBalance] = await Promise.all([

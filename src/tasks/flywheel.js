@@ -666,18 +666,19 @@ async function claimRobinhoodFees(deps) {
                 let isFeeProgram = false;
 
                 if (token.feeVaultAddress) {
-                    // v25.76: Fee sharing token - feeVaultAddress is the FEE program account
-                    // The FEE program account IS both the vault AND contains shareholders config
+                    // v25.77: Fee sharing token - feeVaultAddress is the FEE program account
+                    // The FEE program account IS both the BC vault AND contains shareholders config
                     bcVault = new PublicKey(token.feeVaultAddress);
                     sharingConfigPDA = bcVault; // Same account for FEE program
                     isFeeProgram = true;
 
-                    // v25.76: AMM vaults for FEE program tokens use the FEE account address as seed
-                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                    const vaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                    // v25.77: CRITICAL FIX - AMM vaults are ALWAYS derived from creatorPubkey (original creator)
+                    // NOT from feeVaultAddress. The FEE account only handles BC fees.
+                    // For graduated tokens, AMM fees still go to the original creator's derived vault.
+                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                     ammVaultAuth = vaults.ammVaultAuth;
                     ammVaultAta = vaults.ammVaultAta;
-                    logger.debug(`[Robinhood] ${token.ticker}: FEE program account ${token.feeVaultAddress.slice(0, 8)}...`);
+                    logger.debug(`[Robinhood] ${token.ticker}: FEE program BC vault ${token.feeVaultAddress.slice(0, 8)}..., AMM from creator ${token.creatorPubkey.slice(0, 8)}...`);
                 } else {
                     // Legacy path: PUMP program fee sharing - derive from original creator
                     const vaults = pump.getShareholderFeeVaults(creatorPubkey);
@@ -1727,47 +1728,59 @@ async function runFeeCollection(deps) {
             logger.debug('[FeeCollection] AMM vault check failed', { error: e.message });
         }
 
-        // v25.76: Also check Robinhood token pending fees for threshold calculation
+        // v25.77: Check Robinhood token pending fees for threshold calculation (BC + AMM)
         let robinhoodPendingFees = new BN(0);
         try {
             const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 100');
-            // v25.77: Log how many robinhood tokens we found
             logger.info(`[FeeCollection] Found ${robinhoodTokens.length} active Robinhood tokens to check`);
             for (const token of robinhoodTokens) {
                 try {
-                    // v25.76: Use feeVaultAddress for FEE program tokens, derive for PUMP tokens
+                    // v25.77: Get vaults - AMM always from creatorPubkey, BC depends on feeVaultAddress
+                    const creatorPubkey = new PublicKey(token.creatorPubkey);
+                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+
                     let bcVaultAddr;
                     if (token.feeVaultAddress) {
+                        // FEE program token - BC vault is the FEE account
                         bcVaultAddr = new PublicKey(token.feeVaultAddress);
-                        logger.debug(`[FeeCollection] ${token.ticker}: Using feeVaultAddress ${token.feeVaultAddress.slice(0, 8)}...`);
                     } else {
-                        const creatorPubkey = new PublicKey(token.creatorPubkey);
-                        const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                        // PUMP program token - BC vault is derived from creator
                         bcVaultAddr = vaults.bcVault;
-                        logger.debug(`[FeeCollection] ${token.ticker}: Deriving vault from creatorPubkey ${token.creatorPubkey.slice(0, 8)}...`);
                     }
+
+                    // v25.77: Check BOTH BC and AMM vaults (like health.js does)
+                    const rentMin = 5000; // Small buffer for pending fee calculation
+                    let tokenBcFees = 0;
+                    let tokenAmmFees = 0;
+
+                    // Check BC vault
                     const bcInfo = await connection.getAccountInfo(bcVaultAddr);
-                    // v25.77: Use small buffer for THRESHOLD calculation (same as health.js)
-                    // The larger safety buffer is only applied when actually CLAIMING fees
-                    const rentMin = 5000; // Small buffer for pending fee calculation (matches health.js)
                     if (bcInfo && bcInfo.lamports > rentMin) {
                         const pendingLamports = bcInfo.lamports - rentMin;
-                        // Calculate our share based on feeShareBps
-                        const ourShare = Math.floor(pendingLamports * (token.feeShareBps / 10000));
-                        robinhoodPendingFees = robinhoodPendingFees.add(new BN(ourShare));
-                        // v25.77: Log per-token pending fees
-                        logger.info(`[FeeCollection] ${token.ticker}: ${(ourShare / LAMPORTS_PER_SOL).toFixed(4)} SOL pending (${token.feeShareBps / 100}% of ${(pendingLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL in vault)`);
-                    } else if (bcInfo) {
-                        logger.debug(`[FeeCollection] ${token.ticker}: Vault balance ${(bcInfo.lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL below rent minimum`);
-                    } else {
-                        logger.debug(`[FeeCollection] ${token.ticker}: Vault account not found`);
+                        tokenBcFees = Math.floor(pendingLamports * (token.feeShareBps / 10000));
+                    }
+
+                    // Check AMM vault (for graduated tokens)
+                    try {
+                        const ammVaultAtaKey = await vaults.ammVaultAta;
+                        const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
+                        const ammBalance = parseInt(bal.value.amount) || 0;
+                        if (ammBalance > 0) {
+                            tokenAmmFees = Math.floor(ammBalance * (token.feeShareBps / 10000));
+                        }
+                    } catch (e) {
+                        // AMM vault may not exist for non-graduated tokens
+                    }
+
+                    const tokenTotalFees = tokenBcFees + tokenAmmFees;
+                    if (tokenTotalFees > 0) {
+                        robinhoodPendingFees = robinhoodPendingFees.add(new BN(tokenTotalFees));
+                        logger.info(`[FeeCollection] ${token.ticker}: ${(tokenTotalFees / LAMPORTS_PER_SOL).toFixed(4)} SOL pending (BC: ${(tokenBcFees / LAMPORTS_PER_SOL).toFixed(4)}, AMM: ${(tokenAmmFees / LAMPORTS_PER_SOL).toFixed(4)}) @ ${token.feeShareBps / 100}%`);
                     }
                 } catch (e) {
-                    // v25.77: Log individual token errors for debugging
                     logger.debug(`[FeeCollection] ${token.ticker}: Error checking pending fees - ${e.message}`);
                 }
             }
-            // v25.77: Always log Robinhood pending fees at info level for visibility
             logger.info(`[FeeCollection] Robinhood pending fees total: ${(robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL from ${robinhoodTokens.length} tokens`);
         } catch (e) {
             logger.debug('[FeeCollection] Robinhood pending fees check failed', { error: e.message });
