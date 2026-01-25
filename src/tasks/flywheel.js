@@ -1747,8 +1747,9 @@ async function runFeeCollection(deps) {
                         logger.debug(`[FeeCollection] ${token.ticker}: Deriving vault from creatorPubkey ${token.creatorPubkey.slice(0, 8)}...`);
                     }
                     const bcInfo = await connection.getAccountInfo(bcVaultAddr);
-                    // v25.76: Use 0.1 SOL safety buffer to avoid claiming rent-exempt balance
-                    const rentMin = 100000000; // 0.1 SOL safety buffer
+                    // v25.77: Use small buffer for THRESHOLD calculation (same as health.js)
+                    // The larger safety buffer is only applied when actually CLAIMING fees
+                    const rentMin = 5000; // Small buffer for pending fee calculation (matches health.js)
                     if (bcInfo && bcInfo.lamports > rentMin) {
                         const pendingLamports = bcInfo.lamports - rentMin;
                         // Calculate our share based on feeShareBps
@@ -1757,7 +1758,7 @@ async function runFeeCollection(deps) {
                         // v25.77: Log per-token pending fees
                         logger.info(`[FeeCollection] ${token.ticker}: ${(ourShare / LAMPORTS_PER_SOL).toFixed(4)} SOL pending (${token.feeShareBps / 100}% of ${(pendingLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL in vault)`);
                     } else if (bcInfo) {
-                        logger.debug(`[FeeCollection] ${token.ticker}: Vault balance ${(bcInfo.lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL below 0.1 SOL safety buffer`);
+                        logger.debug(`[FeeCollection] ${token.ticker}: Vault balance ${(bcInfo.lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL below rent minimum`);
                     } else {
                         logger.debug(`[FeeCollection] ${token.ticker}: Vault account not found`);
                     }
