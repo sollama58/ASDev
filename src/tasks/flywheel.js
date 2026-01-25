@@ -626,20 +626,28 @@ async function claimRobinhoodFees(deps) {
             try {
                 const creatorPubkey = new PublicKey(token.creatorPubkey);
 
-                // v25.73: Use feeVaultAddress directly if available (for fee sharing tokens)
-                // For fee sharing tokens, the vault is the coinCreator FEE program account,
-                // NOT a PDA derived from originalCreator
+                // v25.74: For fee sharing tokens, ALL vaults (BC and AMM) are derived from feeVaultAddress (coinCreator)
+                // The coinCreator in both BC and AMM pool is the FEE program account, not originalCreator
                 let bcVault;
-                const { ammVaultAuth, ammVaultAta, sharingConfigPDA } = pump.getShareholderFeeVaults(creatorPubkey);
+                let ammVaultAuth, ammVaultAta, sharingConfigPDA;
 
                 if (token.feeVaultAddress) {
-                    // Direct vault address for fee sharing tokens
+                    // Fee sharing token: use feeVaultAddress for BC vault directly,
+                    // and derive AMM vault from feeVaultAddress (coinCreator)
                     bcVault = new PublicKey(token.feeVaultAddress);
+                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                    const vaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                    ammVaultAuth = vaults.ammVaultAuth;
+                    ammVaultAta = vaults.ammVaultAta;
+                    sharingConfigPDA = vaults.sharingConfigPDA;
                     logger.debug(`[Robinhood] ${token.ticker}: Using stored feeVaultAddress ${token.feeVaultAddress.slice(0, 8)}...`);
                 } else {
-                    // Derive vault from creatorPubkey (legacy path)
+                    // Legacy path: derive all vaults from creatorPubkey
                     const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                     bcVault = vaults.bcVault;
+                    ammVaultAuth = vaults.ammVaultAuth;
+                    ammVaultAta = vaults.ammVaultAta;
+                    sharingConfigPDA = vaults.sharingConfigPDA;
                 }
 
                 let tokenClaimed = 0;

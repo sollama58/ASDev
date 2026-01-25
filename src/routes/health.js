@@ -1803,12 +1803,11 @@ function init(deps) {
                         vaultSource = 'feeVaultAddress (direct)';
                         logger.info(`[Debug] Using stored feeVaultAddress for ${token.ticker}: ${storedFeeVaultAddress.slice(0, 8)}...`);
 
-                        // For AMM vault, we still need to derive from creatorPubkey (for graduated tokens)
-                        if (creatorPubkey && creatorPubkey !== 'unknown' && creatorPubkey !== 'unknown_creator') {
-                            const creatorPubkeyObj = new PublicKey(creatorPubkey);
-                            const { ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
-                            ammVaultAtaResolved = await ammVaultAta;
-                        }
+                        // v25.74: For fee sharing tokens, AMM vault is ALSO derived from feeVaultAddress (coinCreator)
+                        // The AMM pool stores coinCreator (FEE program account) as the creator, not originalCreator
+                        const feeVaultPubkey = new PublicKey(storedFeeVaultAddress);
+                        const { ammVaultAta } = pump.getShareholderFeeVaults(feeVaultPubkey);
+                        ammVaultAtaResolved = await ammVaultAta;
                     } else {
                         // Derive vault from creatorPubkey (legacy path for tokens without feeVaultAddress)
                         const creatorPubkeyObj = new PublicKey(creatorPubkey);
@@ -2057,8 +2056,9 @@ function init(deps) {
                 bcVault = new PublicKey(newFeeVaultAddress);
                 vaultSource = 'feeVaultAddress (direct)';
 
-                const creatorPubkeyObj = new PublicKey(newCreator);
-                const { ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
+                // v25.74: For fee sharing tokens, AMM vault is also derived from feeVaultAddress (coinCreator)
+                const feeVaultPubkey = new PublicKey(newFeeVaultAddress);
+                const { ammVaultAta } = pump.getShareholderFeeVaults(feeVaultPubkey);
                 ammVaultAtaResolved = await ammVaultAta;
             } else {
                 const creatorPubkeyObj = new PublicKey(newCreator);
