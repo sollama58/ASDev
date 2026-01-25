@@ -240,12 +240,13 @@ function init(deps) {
                                 let ammVaultAta;
 
                                 if (token.feeVaultAddress) {
-                                    // v25.85: FEE program token - bcVault must be derived as a PUMP PDA
-                                    // from feeVaultAddress (the coinCreator), NOT used directly
-                                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                                    const creatorVaults = pump.getCreatorFeeVaults(feeVaultPubkey);
-                                    bcVault = creatorVaults.bcVault;
-                                    ammVaultAta = creatorVaults.ammVaultAta;
+                                    // v25.87: FEE program token - derive vaults from ORIGINAL CREATOR
+                                    // (creatorPubkey), not from feeVaultAddress. PUMP's distribute_creator_fees
+                                    // expects PUMP-owned accounts derived from the original creator.
+                                    const creatorPubkey = new PublicKey(token.creatorPubkey);
+                                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                                    bcVault = vaults.bcVault;
+                                    ammVaultAta = vaults.ammVaultAta;
                                 } else {
                                     // PUMP program token - derive from creatorPubkey
                                     const creatorPubkey = new PublicKey(token.creatorPubkey);

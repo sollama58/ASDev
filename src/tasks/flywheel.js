@@ -666,23 +666,24 @@ async function claimRobinhoodFees(deps) {
                 let isFeeProgram = false;
 
                 if (token.feeVaultAddress) {
-                    // v25.86: CRITICAL FIX - For FEE program tokens:
-                    // 1. feeVaultAddress IS the sharingConfigPDA (the FEE program account with shareholders)
-                    // 2. bcVault is derived from feeVaultAddress using PUMP's creator-vault seed
-                    // 3. We must use distribute_creator_fees (NOT claim_fees) since there are shareholders
+                    // v25.87: CRITICAL FIX - For FEE program tokens:
+                    // PUMP's distribute_creator_fees expects PUMP-owned accounts, NOT FEE program accounts!
+                    // We must derive sharing config and vaults from the ORIGINAL CREATOR (creatorPubkey),
+                    // not from feeVaultAddress (which is FEE-owned and causes error 101).
+                    //
+                    // The creatorPubkey IS the original token creator who set up fee sharing.
+                    // PUMP's fee_sharing_config PDA is derived from this original creator.
                     const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
 
-                    // sharingConfigPDA = feeVaultAddress (the FEE program account containing shareholder config)
-                    sharingConfigPDA = feeVaultPubkey;
-
-                    // bcVault is a PUMP PDA derived from feeVaultAddress (the coinCreator)
-                    const creatorVaults = pump.getCreatorFeeVaults(feeVaultPubkey);
-                    bcVault = creatorVaults.bcVault;
-                    ammVaultAuth = creatorVaults.ammVaultAuth;
-                    ammVaultAta = creatorVaults.ammVaultAta;
+                    // Derive PUMP-owned sharing config from ORIGINAL creator (not feeVaultAddress)
+                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                    sharingConfigPDA = vaults.sharingConfigPDA;
+                    bcVault = vaults.bcVault;
+                    ammVaultAuth = vaults.ammVaultAuth;
+                    ammVaultAta = vaults.ammVaultAta;
                     isFeeProgram = true;
 
-                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - sharingConfig=${token.feeVaultAddress.slice(0, 8)}..., bcVault=${bcVault.toString().slice(0, 8)}...`);
+                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - using PUMP sharing config from original creator ${token.creatorPubkey.slice(0, 8)}...`);
                 } else {
                     // Legacy path: PUMP program fee sharing - derive from original creator
                     const vaults = pump.getShareholderFeeVaults(creatorPubkey);
@@ -713,13 +714,13 @@ async function claimRobinhoodFees(deps) {
                 if (bcPendingLamports > 0) {
                     try {
                         if (isFeeProgram) {
-                            // v25.86: FEE program tokens use distribute_creator_fees (NOT claim_fees)
-                            // The feeVaultAddress is the sharingConfigPDA containing shareholder config
-                            // We parse shareholders from it and distribute to all of them
+                            // v25.87: FEE program tokens - use PUMP's distribute_creator_fees
+                            // We use PUMP-owned sharing config derived from original creator (creatorPubkey)
+                            // NOT the feeVaultAddress (which is FEE-owned and causes error 101)
                             logger.info(`[Robinhood/FEE] ${token.ticker}: BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - distributing...`);
 
-                            // Get shareholders from the FEE program account
-                            const configData = await getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey, true);
+                            // Get shareholders from PUMP-owned sharing config (derived from original creator)
+                            const configData = await getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey, false);
 
                             if (configData && configData.shareholders && configData.shareholders.length > 0) {
                                 const tx = new Transaction();
@@ -772,7 +773,7 @@ async function claimRobinhoodFees(deps) {
 
                                 logger.info(`[Robinhood/FEE] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
                             } else {
-                                logger.warn(`[Robinhood/FEE] ${token.ticker}: Could not parse shareholders from FEE account`);
+                                logger.warn(`[Robinhood/FEE] ${token.ticker}: Could not find PUMP sharing config at ${sharingConfigPDA.toString().slice(0, 8)}...`);
                             }
                         } else {
                             // v25.79: PUMP program fee sharing - use standard distribute_creator_fees
