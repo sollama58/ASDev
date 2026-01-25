@@ -710,8 +710,9 @@ async function claimRobinhoodFees(deps) {
                     logger.debug(`[Robinhood] ${token.ticker}: BC vault check failed - ${e.message}`);
                 }
 
-                // v25.85: Claim BC fees using the same approach as platform tokens
-                if (bcPendingLamports > 0) {
+                // v25.88: Only claim BC fees if over 0.05 SOL threshold (50M lamports)
+                const BC_CLAIM_THRESHOLD = 50000000; // 0.05 SOL
+                if (bcPendingLamports > BC_CLAIM_THRESHOLD) {
                     try {
                         if (isFeeProgram) {
                             // v25.87: FEE program tokens - use PUMP's distribute_creator_fees
@@ -861,7 +862,9 @@ async function claimRobinhoodFees(deps) {
                     const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
                     const ammFeeLamports = parseInt(bal.value.amount) || 0;
 
-                    if (ammFeeLamports > 0) {
+                    // v25.88: Only claim AMM fees if over 0.05 SOL threshold
+                    const AMM_CLAIM_THRESHOLD = 50000000; // 0.05 SOL
+                    if (ammFeeLamports > AMM_CLAIM_THRESHOLD) {
                         const ammFeeSol = ammFeeLamports / LAMPORTS_PER_SOL;
                         const ourShare = ammFeeSol * (token.feeShareBps / 10000);
 
