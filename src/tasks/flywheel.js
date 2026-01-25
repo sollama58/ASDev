@@ -666,19 +666,20 @@ async function claimRobinhoodFees(deps) {
                 let isFeeProgram = false;
 
                 if (token.feeVaultAddress) {
-                    // v25.79: CRITICAL FIX - For fee sharing tokens, BOTH BC and AMM vaults
-                    // are derived from feeVaultAddress (coinCreator). The AMM pool stores
-                    // coinCreator (FEE program account) as the creator, not originalCreator.
+                    // v25.85: CRITICAL FIX - bcVault must be derived as a PUMP PDA from feeVaultAddress
+                    // The feeVaultAddress is the coinCreator, so PUMP's creator-vault is derived from it.
+                    // Previous bug: bcVault was set to feeVaultAddress directly (a FEE program account)
+                    // which is NOT where fees accumulate for claiming.
                     const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                    bcVault = feeVaultPubkey;
-                    sharingConfigPDA = feeVaultPubkey; // Same account for FEE program
+
+                    // Use getCreatorFeeVaults to derive the proper PUMP PDAs from feeVaultAddress
+                    const creatorVaults = pump.getCreatorFeeVaults(feeVaultPubkey);
+                    bcVault = creatorVaults.bcVault;
+                    ammVaultAuth = creatorVaults.ammVaultAuth;
+                    ammVaultAta = creatorVaults.ammVaultAta;
                     isFeeProgram = true;
 
-                    // AMM vaults derived from feeVaultAddress (the coinCreator stored in AMM pool)
-                    const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                    ammVaultAuth = feeVaults.ammVaultAuth;
-                    ammVaultAta = feeVaults.ammVaultAta;
-                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - BC and AMM vaults from feeVaultAddress ${token.feeVaultAddress.slice(0, 8)}...`);
+                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - BC vault ${bcVault.toString().slice(0, 8)}... derived from feeVaultAddress ${token.feeVaultAddress.slice(0, 8)}...`);
                 } else {
                     // Legacy path: PUMP program fee sharing - derive from original creator
                     const vaults = pump.getShareholderFeeVaults(creatorPubkey);
@@ -705,102 +706,50 @@ async function claimRobinhoodFees(deps) {
                     logger.debug(`[Robinhood] ${token.ticker}: BC vault check failed - ${e.message}`);
                 }
 
-                // v25.83: Try to claim BC fees if any pending
+                // v25.85: Claim BC fees using the same approach as platform tokens
                 if (bcPendingLamports > 0) {
                     try {
                         if (isFeeProgram) {
-                            // v25.83: FEE program tokens - use PUMP's distribute_creator_fees with CPI to FEE
-                            // Similar to how buy/sell includes feeConfig and FEE program for CPI
-                            logger.info(`[Robinhood] ${token.ticker}: FEE program BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending`);
+                            // v25.85: CRITICAL FIX - Use standard claim_fees instruction exactly like platform tokens
+                            // Now that bcVault is correctly derived as a PUMP PDA from feeVaultAddress,
+                            // we can call PUMP's claim_fees instruction just like claimCreatorFees() does.
+                            logger.info(`[Robinhood/FEE] ${token.ticker}: BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - claiming...`);
 
-                            const configData = await getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey, true);
+                            const tx = new Transaction();
+                            solana.addPriorityFee(tx);
 
-                            if (configData && configData.shareholders && configData.shareholders.length > 0) {
-                                const tx = new Transaction();
-                                solana.addPriorityFee(tx);
+                            const discriminator = pump.buildClaimFeesData();
+                            const [eventAuthority] = PublicKey.findProgramAddressSync(
+                                [Buffer.from("__event_authority")], PROGRAMS.PUMP
+                            );
 
-                                // v25.83: Use PUMP's distribute_creator_fees with FEE program accounts for CPI
-                                const distributeDiscriminator = pump.buildDistributeFeesData();
-                                const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP
-                                );
+                            // Same account structure as platform claiming in claimCreatorFees()
+                            const keys = [
+                                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
+                                { pubkey: bcVault, isSigner: false, isWritable: true },
+                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+                            ];
 
-                                // Global fee config (same as used in buy/sell)
-                                const feeConfig = new PublicKey("8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt");
+                            tx.add(new TransactionInstruction({
+                                keys,
+                                programId: PROGRAMS.PUMP,
+                                data: discriminator
+                            }));
 
-                                // Account format for FEE program tokens (includes CPI accounts):
-                                // 1. sharing_config (FEE account)
-                                // 2. creator_vault (FEE account - same)
-                                // 3. [shareholders...]
-                                // 4. system_program
-                                // 5. event_authority (PUMP)
-                                // 6. PUMP program
-                                // 7. feeConfig (global config for CPI)
-                                // 8. FEE program (for CPI)
-                                const distributeKeys = [
-                                    { pubkey: bcVault, isSigner: false, isWritable: true }, // FEE account as config
-                                    { pubkey: bcVault, isSigner: false, isWritable: true }, // FEE account as vault
-                                ];
+                            tx.feePayer = devKeypair.publicKey;
+                            await solana.sendTxWithRetry(tx, [devKeypair]);
 
-                                for (const shareholder of configData.shareholders) {
-                                    distributeKeys.push({
-                                        pubkey: shareholder.pubkey,
-                                        isSigner: false,
-                                        isWritable: true
-                                    });
-                                }
+                            tokenClaimed += bcPendingLamports;
+                            totalClaimed += bcPendingLamports;
+                            claimedTokens.push({
+                                ticker: token.ticker || token.creatorPubkey.slice(0, 8),
+                                amount: bcPendingLamports,
+                                source: 'BC'
+                            });
 
-                                distributeKeys.push(
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-                                    { pubkey: feeConfig, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
-                                );
-
-                                tx.add(new TransactionInstruction({
-                                    keys: distributeKeys,
-                                    programId: PROGRAMS.PUMP,
-                                    data: distributeDiscriminator
-                                }));
-
-                                const ourShare = Math.floor(bcPendingLamports * (token.feeShareBps / 10000));
-
-                                try {
-                                    tx.feePayer = devKeypair.publicKey;
-                                    await solana.sendTxWithRetry(tx, [devKeypair]);
-
-                                    tokenClaimed += ourShare;
-                                    totalClaimed += ourShare;
-                                    claimedTokens.push({
-                                        ticker: token.ticker || token.creatorPubkey.slice(0, 8),
-                                        amount: ourShare,
-                                        source: 'BC'
-                                    });
-
-                                    await db.run(
-                                        'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2 WHERE id = $3',
-                                        [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
-                                    );
-
-                                    logger.info(`[Robinhood/FEE] Claimed BC fees from ${token.ticker}: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share)`);
-                                } catch (txErr) {
-                                    // Log the error and track as pending
-                                    logger.warn(`[Robinhood/FEE] BC distribute failed for ${token.ticker}`, {
-                                        error: txErr.message.slice(0, 200),
-                                        bcPendingLamports,
-                                        shareholders: configData.shareholders.length
-                                    });
-
-                                    // Track as pending for monitoring
-                                    await db.run(
-                                        'UPDATE robinhood_tokens SET "pendingBcFees" = $1 WHERE mint = $2',
-                                        [bcPendingLamports / LAMPORTS_PER_SOL, token.mint]
-                                    ).catch(() => {});
-                                }
-                            } else {
-                                logger.debug(`[Robinhood/FEE] No config data for ${token.ticker}`);
-                            }
+                            logger.info(`[Robinhood/FEE] ${token.ticker}: Claimed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL from BC vault`);
                         } else {
                             // v25.79: PUMP program fee sharing - use standard distribute_creator_fees
                             logger.info(`[Robinhood] ${token.ticker}: PUMP program BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending`);
