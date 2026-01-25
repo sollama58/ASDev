@@ -233,20 +233,25 @@ function init(deps) {
                     for (const batch of batches) {
                         const batchResults = await Promise.all(batch.map(async (token) => {
                             try {
-                                // v25.77: Use feeVaultAddress for BC vault (fee sharing tokens)
-                                // AMM vaults are ALWAYS derived from creatorPubkey
-                                const creatorPubkey = new PublicKey(token.creatorPubkey);
-                                const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                                // v25.79: CRITICAL FIX - For fee sharing tokens, BOTH BC and AMM vaults
+                                // are derived from feeVaultAddress (coinCreator), NOT creatorPubkey.
+                                // The AMM pool stores coinCreator as the creator, not originalCreator.
                                 let bcVault;
+                                let ammVaultAta;
+
                                 if (token.feeVaultAddress) {
-                                    // FEE program token - BC fees go to feeVaultAddress
-                                    bcVault = new PublicKey(token.feeVaultAddress);
+                                    // FEE program token - both vaults derived from feeVaultAddress
+                                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                                    bcVault = feeVaultPubkey;
+                                    const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                                    ammVaultAta = feeVaults.ammVaultAta;
                                 } else {
-                                    // PUMP program token - BC fees go to derived vault
+                                    // PUMP program token - derive from creatorPubkey
+                                    const creatorPubkey = new PublicKey(token.creatorPubkey);
+                                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                                     bcVault = vaults.bcVault;
+                                    ammVaultAta = vaults.ammVaultAta;
                                 }
-                                // AMM vault is always derived from original creator
-                                const ammVaultAta = vaults.ammVaultAta;
 
                                 // v24.0: Use circuit breaker for RPC calls
                                 const [bcLamports, ammBalance] = await Promise.all([
@@ -356,8 +361,8 @@ function init(deps) {
                 // v14.0: Raw SOL balance (actual wallet balance)
                 solBalance: (cachedHealth.currentBalance / LAMPORTS_PER_SOL).toFixed(4),
                 solBalanceLamports: cachedHealth.currentBalance,
-                // v11.0: Current airdrop pool available (SOL balance minus 0.5 SOL reserve)
-                airdropPoolSol: Math.max(0, (cachedHealth.currentBalance / LAMPORTS_PER_SOL) - 0.5).toFixed(4),
+                // v25.78: Current airdrop pool available (SOL balance minus 0.1 SOL reserve)
+                airdropPoolSol: Math.max(0, (cachedHealth.currentBalance / LAMPORTS_PER_SOL) - 0.1).toFixed(4),
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
                 // Pass dynamic conservation status to frontend
                 conservationStatus: globalState.conservationStatus || null,
@@ -766,7 +771,8 @@ function init(deps) {
 
             // Check current balance first
             const currentBalance = await connection.getBalance(devKeypair.publicKey);
-            const SAFETY_RESERVE = 0.5 * LAMPORTS_PER_SOL;
+            // v25.78: Safety reserve is 0.1 SOL for operations
+            const SAFETY_RESERVE = 0.1 * LAMPORTS_PER_SOL;
             const MIN_AIRDROP_POOL = (config.AIRDROP_THRESHOLD_SOL || 1.0) * LAMPORTS_PER_SOL;
             const availableForAirdrop = currentBalance - SAFETY_RESERVE;
 

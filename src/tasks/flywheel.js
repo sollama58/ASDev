@@ -666,19 +666,19 @@ async function claimRobinhoodFees(deps) {
                 let isFeeProgram = false;
 
                 if (token.feeVaultAddress) {
-                    // v25.77: Fee sharing token - feeVaultAddress is the FEE program account
-                    // The FEE program account IS both the BC vault AND contains shareholders config
-                    bcVault = new PublicKey(token.feeVaultAddress);
-                    sharingConfigPDA = bcVault; // Same account for FEE program
+                    // v25.79: CRITICAL FIX - For fee sharing tokens, BOTH BC and AMM vaults
+                    // are derived from feeVaultAddress (coinCreator). The AMM pool stores
+                    // coinCreator (FEE program account) as the creator, not originalCreator.
+                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                    bcVault = feeVaultPubkey;
+                    sharingConfigPDA = feeVaultPubkey; // Same account for FEE program
                     isFeeProgram = true;
 
-                    // v25.77: CRITICAL FIX - AMM vaults are ALWAYS derived from creatorPubkey (original creator)
-                    // NOT from feeVaultAddress. The FEE account only handles BC fees.
-                    // For graduated tokens, AMM fees still go to the original creator's derived vault.
-                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
-                    ammVaultAuth = vaults.ammVaultAuth;
-                    ammVaultAta = vaults.ammVaultAta;
-                    logger.debug(`[Robinhood] ${token.ticker}: FEE program BC vault ${token.feeVaultAddress.slice(0, 8)}..., AMM from creator ${token.creatorPubkey.slice(0, 8)}...`);
+                    // AMM vaults derived from feeVaultAddress (the coinCreator stored in AMM pool)
+                    const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                    ammVaultAuth = feeVaults.ammVaultAuth;
+                    ammVaultAta = feeVaults.ammVaultAta;
+                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - BC and AMM vaults from feeVaultAddress ${token.feeVaultAddress.slice(0, 8)}...`);
                 } else {
                     // Legacy path: PUMP program fee sharing - derive from original creator
                     const vaults = pump.getShareholderFeeVaults(creatorPubkey);
@@ -1104,8 +1104,8 @@ async function processAirdrop(deps) {
         // Get current SOL balance available for airdrop
         const solBalance = await connection.getBalance(devKeypair.publicKey);
 
-        // Calculate airdrop pool: SOL balance minus safety reserve (0.5 SOL for operations)
-        const SAFETY_RESERVE = 0.5 * LAMPORTS_PER_SOL;
+        // v25.78: Calculate airdrop pool: SOL balance minus safety reserve (0.1 SOL for operations)
+        const SAFETY_RESERVE = 0.1 * LAMPORTS_PER_SOL;
         // v17.0: Minimum 1 SOL to trigger airdrop (configurable)
         const MIN_AIRDROP_POOL = (config.AIRDROP_THRESHOLD_SOL || 1.0) * LAMPORTS_PER_SOL;
 
@@ -1695,7 +1695,8 @@ async function runPurchaseAndFees(deps) {
 
         // v11.0: Simplified airdrop status for SOL airdrops (no ATA costs)
         // v13.0: Fetch from Redis for cross-process consistency
-        const SAFETY_RESERVE = 0.5 * LAMPORTS_PER_SOL;
+        // v25.78: Safety reserve is 0.1 SOL for operations
+        const SAFETY_RESERVE = 0.1 * LAMPORTS_PER_SOL;
         const MIN_AIRDROP_POOL = 0.1 * LAMPORTS_PER_SOL;
         const currentUserPointsMap = await redis.getAllUserPoints();
         const eligibleUsers = Array.from(currentUserPointsMap.keys());
@@ -1795,27 +1796,34 @@ async function runFeeCollection(deps) {
             logger.debug('[FeeCollection] AMM vault check failed', { error: e.message });
         }
 
-        // v25.77: Check Robinhood token pending fees for threshold calculation (BC + AMM)
+        // v25.79: Check Robinhood token pending fees for threshold calculation (BC + AMM)
+        // CRITICAL: For fee sharing tokens, BOTH vaults are derived from feeVaultAddress
         let robinhoodPendingFees = new BN(0);
         try {
             const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 100');
             logger.info(`[FeeCollection] Found ${robinhoodTokens.length} active Robinhood tokens to check`);
             for (const token of robinhoodTokens) {
                 try {
-                    // v25.77: Get vaults - AMM always from creatorPubkey, BC depends on feeVaultAddress
-                    const creatorPubkey = new PublicKey(token.creatorPubkey);
-                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
-
+                    // v25.79: CRITICAL FIX - For fee sharing tokens, BOTH BC and AMM vaults
+                    // are derived from feeVaultAddress. AMM pool stores coinCreator as creator.
                     let bcVaultAddr;
+                    let ammVaultAta;
+
                     if (token.feeVaultAddress) {
-                        // FEE program token - BC vault is the FEE account
-                        bcVaultAddr = new PublicKey(token.feeVaultAddress);
+                        // FEE program token - both vaults derived from feeVaultAddress
+                        const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                        bcVaultAddr = feeVaultPubkey;
+                        const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                        ammVaultAta = feeVaults.ammVaultAta;
                     } else {
-                        // PUMP program token - BC vault is derived from creator
+                        // PUMP program token - derive from creatorPubkey
+                        const creatorPubkey = new PublicKey(token.creatorPubkey);
+                        const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                         bcVaultAddr = vaults.bcVault;
+                        ammVaultAta = vaults.ammVaultAta;
                     }
 
-                    // v25.77: Check BOTH BC and AMM vaults (like health.js does)
+                    // Check BOTH BC and AMM vaults
                     const rentMin = 5000; // Small buffer for pending fee calculation
                     let tokenBcFees = 0;
                     let tokenAmmFees = 0;
@@ -1829,7 +1837,7 @@ async function runFeeCollection(deps) {
 
                     // Check AMM vault (for graduated tokens)
                     try {
-                        const ammVaultAtaKey = await vaults.ammVaultAta;
+                        const ammVaultAtaKey = await ammVaultAta;
                         const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
                         const ammBalance = parseInt(bal.value.amount) || 0;
                         if (ammBalance > 0) {

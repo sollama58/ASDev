@@ -139,7 +139,7 @@ async function fetchTokenAccountsHeliusDAS(mint, limit = 250) {
 
 // Constants for point calculation
 const TOP_HOLDERS_LIMIT = 250; // Track top 250 holders per eligible token
-const SAFETY_RESERVE_SOL = 0.5; // Reserve 0.5 SOL for operations
+const SAFETY_RESERVE_SOL = 0.1; // v25.78: Reserve 0.1 SOL for operations
 const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // v18.0: Minimum 24hr volume for eligibility
 
 // v25.4: Volume weight range (min multiplier to max multiplier)

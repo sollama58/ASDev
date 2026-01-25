@@ -208,7 +208,7 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
             try {
                 const balance = await connection.getBalance(devKeypair.publicKey);
                 solBalance = balance / 1e9;
-                airdropPoolSol = Math.max(0, solBalance - 0.5); // Reserve 0.5 SOL
+                airdropPoolSol = Math.max(0, solBalance - 0.1); // v25.78: Reserve 0.1 SOL
             } catch (e) {
                 // Use cached value if RPC fails
             }

@@ -337,7 +337,8 @@ function initHolderScannerWorker(deps) {
             await redis.setDevPumpHoldings(devPumpHoldings);
 
             // 3. Calculate distribution pots based on SOL balance
-            const SAFETY_RESERVE = 0.5;
+            // v25.78: Safety reserve is 0.1 SOL for operations
+            const SAFETY_RESERVE = 0.1;
             let solBalance = 0;
             try {
                 const balanceLamports = await connection.getBalance(devKeypair.publicKey);
