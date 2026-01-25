@@ -13,6 +13,7 @@
  * v25.38 - AI-based KOTH selection (volume, holders, age, consistency) evaluated hourly
  * v25.39 - Fresh data guarantee: Holder scanner runs before each airdrop distribution
  * v25.46 - Twitter announcements when KOTH changes (with AI reasoning)
+ * v25.75 - Fixed fee claiming for FEE program tokens: use feeVaultAddress as both vault+config
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -487,10 +488,16 @@ async function getAiSelectedKoth(db) {
 
 /**
  * v25.21: Get fee sharing config with caching
+ * v25.75: Now handles both PUMP program PDAs and FEE program accounts
  * Reduces RPC calls by caching parsed configs
+ *
+ * @param {Object} connection - Solana connection
+ * @param {PublicKey} configAccount - The config account (PDA for PUMP, or FEE account)
+ * @param {PublicKey} creatorPubkey - Creator pubkey (for cache key)
+ * @param {boolean} isFeeProgram - If true, account is FEE program (not PUMP PDA)
  */
-async function getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey) {
-    const cacheKey = creatorPubkey.toString();
+async function getCachedFeeSharingConfig(connection, configAccount, creatorPubkey, isFeeProgram = false) {
+    const cacheKey = configAccount.toString(); // v25.75: Use account address as cache key
     const cached = feeSharingConfigCache.get(cacheKey);
 
     // Return cached if fresh
@@ -500,9 +507,34 @@ async function getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPu
 
     // Fetch fresh config
     try {
-        const configInfo = await connection.getAccountInfo(sharingConfigPDA);
+        const configInfo = await connection.getAccountInfo(configAccount);
         if (configInfo && configInfo.data) {
-            const configData = robinhoodScanner.parseFeeSharingConfig(configInfo.data, sharingConfigPDA);
+            let configData = null;
+
+            // v25.75: Detect account type by owner and use appropriate parser
+            if (isFeeProgram || configInfo.owner.equals(PROGRAMS.FEE)) {
+                // FEE program account - use mintExtractor's FEE account parser
+                // We need a dummy wallet key just for parsing structure (we want all shareholders)
+                const dummyWallet = creatorPubkey; // Use creator as dummy (we just need allShareholders)
+                const result = mintExtractor.parseFeeAccountSharingConfig
+                    ? await Promise.resolve(require('../services/mintExtractor').parseFeeAccountSharingConfig(configInfo.data, dummyWallet, 'cache'))
+                    : null;
+
+                if (result && result.allShareholders) {
+                    // Convert to expected format with PublicKey objects
+                    configData = {
+                        creator: result.originalCreator ? new PublicKey(result.originalCreator) : creatorPubkey,
+                        shareholders: result.allShareholders.map(s => ({
+                            pubkey: new PublicKey(s.pubkey),
+                            shareBps: s.bps
+                        }))
+                    };
+                }
+            } else {
+                // PUMP program PDA - use robinhoodScanner's parser
+                configData = robinhoodScanner.parseFeeSharingConfig(configInfo.data, configAccount);
+            }
+
             if (configData) {
                 feeSharingConfigCache.set(cacheKey, {
                     config: configData,
@@ -632,17 +664,20 @@ async function claimRobinhoodFees(deps) {
                 let ammVaultAuth, ammVaultAta, sharingConfigPDA;
 
                 if (token.feeVaultAddress) {
-                    // Fee sharing token: use feeVaultAddress for BC vault directly,
-                    // and derive AMM vault from feeVaultAddress (coinCreator)
+                    // v25.75: Fee sharing token - feeVaultAddress is the FEE program account
+                    // which is BOTH the vault AND contains the shareholders config
                     bcVault = new PublicKey(token.feeVaultAddress);
+                    // v25.75: For FEE program accounts, the account itself IS the sharing config
+                    // Don't derive a PDA - use the feeVaultAddress directly
+                    sharingConfigPDA = bcVault; // Same account!
+                    // AMM vault derivation still uses the FEE account for post-graduation
                     const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
                     const vaults = pump.getShareholderFeeVaults(feeVaultPubkey);
                     ammVaultAuth = vaults.ammVaultAuth;
                     ammVaultAta = vaults.ammVaultAta;
-                    sharingConfigPDA = vaults.sharingConfigPDA;
-                    logger.debug(`[Robinhood] ${token.ticker}: Using stored feeVaultAddress ${token.feeVaultAddress.slice(0, 8)}...`);
+                    logger.debug(`[Robinhood] ${token.ticker}: Using FEE program account ${token.feeVaultAddress.slice(0, 8)}... as vault+config`);
                 } else {
-                    // Legacy path: derive all vaults from creatorPubkey
+                    // Legacy path: derive all vaults from creatorPubkey (PUMP program tokens)
                     const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                     bcVault = vaults.bcVault;
                     ammVaultAuth = vaults.ammVaultAuth;
@@ -662,7 +697,9 @@ async function claimRobinhoodFees(deps) {
 
                     if (pendingLamports > 0) {
                         // v25.21: Use cached fee_sharing_config to reduce RPC calls
-                        const configData = await getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey);
+                        // v25.75: Pass isFeeProgram flag for FEE program accounts
+                        const isFeeProgram = !!token.feeVaultAddress;
+                        const configData = await getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey, isFeeProgram);
 
                         if (configData && configData.shareholders && configData.shareholders.length > 0) {
                                 const tx = new Transaction();

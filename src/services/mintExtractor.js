@@ -1823,6 +1823,7 @@ module.exports = {
 
     // Fee sharing config parsing
     parseFeeSharingConfig,
+    parseFeeAccountSharingConfig, // v25.75: Export for flywheel to use with FEE program accounts
 
     // Constants (for external use if needed)
     DISCRIMINATORS,
