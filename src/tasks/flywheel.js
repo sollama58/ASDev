@@ -1731,16 +1731,20 @@ async function runFeeCollection(deps) {
         let robinhoodPendingFees = new BN(0);
         try {
             const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 100');
+            // v25.77: Log how many robinhood tokens we found
+            logger.info(`[FeeCollection] Found ${robinhoodTokens.length} active Robinhood tokens to check`);
             for (const token of robinhoodTokens) {
                 try {
                     // v25.76: Use feeVaultAddress for FEE program tokens, derive for PUMP tokens
                     let bcVaultAddr;
                     if (token.feeVaultAddress) {
                         bcVaultAddr = new PublicKey(token.feeVaultAddress);
+                        logger.debug(`[FeeCollection] ${token.ticker}: Using feeVaultAddress ${token.feeVaultAddress.slice(0, 8)}...`);
                     } else {
                         const creatorPubkey = new PublicKey(token.creatorPubkey);
                         const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                         bcVaultAddr = vaults.bcVault;
+                        logger.debug(`[FeeCollection] ${token.ticker}: Deriving vault from creatorPubkey ${token.creatorPubkey.slice(0, 8)}...`);
                     }
                     const bcInfo = await connection.getAccountInfo(bcVaultAddr);
                     // v25.76: Use 0.1 SOL safety buffer to avoid claiming rent-exempt balance
@@ -1750,20 +1754,29 @@ async function runFeeCollection(deps) {
                         // Calculate our share based on feeShareBps
                         const ourShare = Math.floor(pendingLamports * (token.feeShareBps / 10000));
                         robinhoodPendingFees = robinhoodPendingFees.add(new BN(ourShare));
+                        // v25.77: Log per-token pending fees
+                        logger.info(`[FeeCollection] ${token.ticker}: ${(ourShare / LAMPORTS_PER_SOL).toFixed(4)} SOL pending (${token.feeShareBps / 100}% of ${(pendingLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL in vault)`);
+                    } else if (bcInfo) {
+                        logger.debug(`[FeeCollection] ${token.ticker}: Vault balance ${(bcInfo.lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL below 0.1 SOL safety buffer`);
+                    } else {
+                        logger.debug(`[FeeCollection] ${token.ticker}: Vault account not found`);
                     }
                 } catch (e) {
-                    // Skip individual token errors
+                    // v25.77: Log individual token errors for debugging
+                    logger.debug(`[FeeCollection] ${token.ticker}: Error checking pending fees - ${e.message}`);
                 }
             }
-            if (robinhoodPendingFees.gt(new BN(0))) {
-                logger.debug(`[FeeCollection] Robinhood pending fees: ${(robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
-            }
+            // v25.77: Always log Robinhood pending fees at info level for visibility
+            logger.info(`[FeeCollection] Robinhood pending fees total: ${(robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL from ${robinhoodTokens.length} tokens`);
         } catch (e) {
             logger.debug('[FeeCollection] Robinhood pending fees check failed', { error: e.message });
         }
 
         // v25.76: Total pending = platform + robinhood (for threshold check)
+        // v25.77: Also log platform pending for visibility
+        logger.info(`[FeeCollection] Platform pending fees: ${(platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
         const totalPendingFees = platformPendingFees.add(robinhoodPendingFees);
+        logger.info(`[FeeCollection] Total pending fees: ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL (platform: ${(platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} + robinhood: ${(robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)})`);
 
         // v17.0: Fee threshold is 0.05 SOL
         const threshold = new BN((config.FEE_THRESHOLD_SOL || 0.05) * LAMPORTS_PER_SOL);
@@ -1827,12 +1840,15 @@ async function runFeeCollection(deps) {
                 }
             }
         } else {
-            logger.debug(`[FeeCollection] Below threshold: ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL pending, need ${config.FEE_THRESHOLD_SOL || 0.05} SOL`);
+            // v25.77: Log with breakdown of platform vs robinhood
+            logger.info(`[FeeCollection] Below threshold: ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL pending (platform: ${(platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} + robinhood: ${(robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)}), need ${config.FEE_THRESHOLD_SOL || 0.05} SOL`);
             // v25.12: Log skip events to frontend so users know system is working
             if (logPurchase && totalPendingFees.toNumber() > 0) {
                 await logPurchase('FEE_CHECK', {
                     status: 'PENDING',
                     pendingSol: (totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
+                    platformPendingSol: (platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
+                    robinhoodPendingSol: (robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
                     thresholdSol: (config.FEE_THRESHOLD_SOL || 0.05).toFixed(2),
                     reason: 'Below threshold'
                 });
