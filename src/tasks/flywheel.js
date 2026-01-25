@@ -709,7 +709,8 @@ async function claimRobinhoodFees(deps) {
                 if (bcPendingLamports > 0) {
                     try {
                         if (isFeeProgram) {
-                            // v25.79: FEE program account - use distribute_creator_fees with FEE account
+                            // v25.80: FEE program tokens - use FEE program's distribute_creator_fees
+                            // CRITICAL: Must call FEE program (not PUMP) with simpler account format
                             logger.info(`[Robinhood] ${token.ticker}: FEE program BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending`);
 
                             const configData = await getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey, true);
@@ -718,15 +719,16 @@ async function claimRobinhoodFees(deps) {
                                 const tx = new Transaction();
                                 solana.addPriorityFee(tx);
 
+                                // v25.80: FEE program uses same discriminator as PUMP's distribute_creator_fees
+                                // but with different account format (no event_authority, no program account at end)
                                 const distributeDiscriminator = pump.buildDistributeFeesData();
-                                const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP
-                                );
 
-                                // Account order: sharing_config, creator_vault, [shareholders...], system, event_auth, program
+                                // FEE program account format:
+                                // 1. creator_vault (FEE account - contains both config and funds)
+                                // 2. [shareholders...] - writable
+                                // 3. system_program
                                 const distributeKeys = [
-                                    { pubkey: bcVault, isSigner: false, isWritable: true }, // FEE account as config
-                                    { pubkey: bcVault, isSigner: false, isWritable: true }, // FEE account as vault (same)
+                                    { pubkey: bcVault, isSigner: false, isWritable: true }, // FEE account (config + vault)
                                 ];
 
                                 for (const shareholder of configData.shareholders) {
@@ -738,14 +740,12 @@ async function claimRobinhoodFees(deps) {
                                 }
 
                                 distributeKeys.push(
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
                                 );
 
                                 tx.add(new TransactionInstruction({
                                     keys: distributeKeys,
-                                    programId: PROGRAMS.PUMP,
+                                    programId: PROGRAMS.FEE, // v25.80: Use FEE program, not PUMP
                                     data: distributeDiscriminator
                                 }));
 
@@ -770,11 +770,20 @@ async function claimRobinhoodFees(deps) {
 
                                     logger.info(`[Robinhood/FEE] Claimed BC fees from ${token.ticker}: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share)`);
                                 } catch (txErr) {
+                                    // v25.80: If FEE program distribute fails, log and track as pending
+                                    // Distribution may happen automatically during next trade
                                     logger.warn(`[Robinhood/FEE] BC distribute failed for ${token.ticker}`, {
-                                        error: txErr.message,
+                                        error: txErr.message.slice(0, 200),
                                         bcPendingLamports,
-                                        shareholders: configData.shareholders.length
+                                        shareholders: configData.shareholders.length,
+                                        note: 'Fees may distribute automatically during next trade'
                                     });
+
+                                    // Track as pending for monitoring
+                                    await db.run(
+                                        'UPDATE robinhood_tokens SET "pendingBcFees" = $1 WHERE mint = $2',
+                                        [bcPendingLamports / LAMPORTS_PER_SOL, token.mint]
+                                    ).catch(() => {});
                                 }
                             } else {
                                 logger.debug(`[Robinhood/FEE] No config data for ${token.ticker}`);
