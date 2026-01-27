@@ -965,12 +965,13 @@ function init(deps) {
             if (isFeeProgram) {
                 const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
                 bcVault = feeVaultPubkey;
-                // v25.99: All vaults (except bcVault) derived from ORIGINAL CREATOR
-                // AMM program doesn't know about FEE program - it only knows original creator
+                // Sharing config from original creator (for PUMP program distribution)
                 const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
                 sharingConfigPDA = creatorVaults.sharingConfigPDA;
-                ammVaultAuth = creatorVaults.ammVaultAuth;
-                ammVaultAta = creatorVaults.ammVaultAta;
+                // v25.100: AMM vaults from feeVaultPubkey (matches AMM pool.coin_creator)
+                const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                ammVaultAuth = feeVaults.ammVaultAuth;
+                ammVaultAta = feeVaults.ammVaultAta;
             } else {
                 const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                 bcVault = vaults.bcVault;
@@ -1228,12 +1229,13 @@ function init(deps) {
             if (isFeeProgram) {
                 const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
                 bcVault = feeVaultPubkey;
-                // v25.99: All vaults (except bcVault) derived from ORIGINAL CREATOR
-                // AMM program doesn't know about FEE program - it only knows original creator
+                // Sharing config from original creator (for PUMP program distribution)
                 const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
                 sharingConfigPDA = creatorVaults.sharingConfigPDA;
-                ammVaultAuth = creatorVaults.ammVaultAuth;
-                ammVaultAta = creatorVaults.ammVaultAta;
+                // v25.100: AMM vaults from feeVaultPubkey (matches AMM pool.coin_creator)
+                const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                ammVaultAuth = feeVaults.ammVaultAuth;
+                ammVaultAta = feeVaults.ammVaultAta;
             } else {
                 const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                 bcVault = vaults.bcVault;

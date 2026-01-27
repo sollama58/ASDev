@@ -17,7 +17,7 @@
  * v25.76 - Threshold now considers SUM of platform + robinhood fees; improved FEE program handling
  * v25.97 - Robinhood fee claiming: always use distribute_creator_fees on PUMP program
  * v25.98 - Fix fee sharing config lookup: FEE tokens use bcVault, PUMP tokens use sharingConfigPDA
- * v25.99 - Fix AMM claim: derive ammVaultAuth from ORIGINAL CREATOR (not feeVaultAddress)
+ * v25.100 - Fix AMM claim: ammVaultAuth from feeVaultPubkey (matches AMM pool.coin_creator)
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -681,15 +681,18 @@ async function claimRobinhoodFees(deps) {
                     // BC vault IS the feeVaultAddress directly (this is where fees accumulate!)
                     bcVault = feeVaultPubkey;
 
-                    // Sharing config and AMM vaults derived from original creator
-                    // v25.99: AMM vaults must be from ORIGINAL CREATOR (AMM program doesn't know about FEE program)
+                    // Sharing config derived from original creator (for PUMP program distribution)
                     const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
                     sharingConfigPDA = creatorVaults.sharingConfigPDA;
-                    ammVaultAuth = creatorVaults.ammVaultAuth;
-                    ammVaultAta = creatorVaults.ammVaultAta;
+
+                    // v25.100: AMM vaults derived from feeVaultPubkey (matches AMM pool.coin_creator)
+                    // The AMM pool's coin_creator field IS the feeVaultAddress, so vault_authority must match
+                    const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                    ammVaultAuth = feeVaults.ammVaultAuth;
+                    ammVaultAta = feeVaults.ammVaultAta;
                     isFeeProgram = true;
 
-                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - BC vault from feeVaultAddress ${token.feeVaultAddress.slice(0, 8)}..., AMM+config from creator ${token.creatorPubkey.slice(0, 8)}...`);
+                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - BC vault=${token.feeVaultAddress.slice(0, 8)}..., AMM from feeVault, config from creator ${token.creatorPubkey.slice(0, 8)}...`);
                 } else {
                     // Legacy path: PUMP program fee sharing - derive from original creator
                     const vaults = pump.getShareholderFeeVaults(creatorPubkey);
