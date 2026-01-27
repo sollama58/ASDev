@@ -19,7 +19,8 @@
       "Bash(ls:*)",
       "Bash(find:*)",
       "Bash(dir:*)",
-      "WebFetch(domain:api.solscan.io)"
+      "WebFetch(domain:api.solscan.io)",
+      "Bash(python3:*)"
     ]
   }
 }

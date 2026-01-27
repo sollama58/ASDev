@@ -18,6 +18,7 @@
  * v25.97 - Robinhood fee claiming: always use distribute_creator_fees on PUMP program
  * v25.98 - Fix fee sharing config lookup: FEE tokens use bcVault, PUMP tokens use sharingConfigPDA
  * v25.100 - Fix AMM claim: ammVaultAuth from feeVaultPubkey (matches AMM pool.coin_creator)
+ * v25.101 - Fix DistributeCreatorFees: correct discriminator and account structure from tx analysis
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -662,41 +663,47 @@ async function claimRobinhoodFees(deps) {
             try {
                 const creatorPubkey = new PublicKey(token.creatorPubkey);
 
-                // v25.76: Determine vault type and addresses based on token configuration
+                // v25.101: Determine vault type and addresses based on token configuration
                 // Two types: FEE program accounts (feeVaultAddress set) or PUMP program PDAs
-                let bcVault;
+                let bcVault;           // Where to check BC fee balance
+                let pumpBcVault;       // PUMP program's creator-vault (for distribute instruction)
+                let coinCreator;       // coin_creator account (feeVaultAddress or original creator)
                 let ammVaultAuth, ammVaultAta, sharingConfigPDA;
                 let isFeeProgram = false;
 
                 if (token.feeVaultAddress) {
-                    // v25.91: CRITICAL FIX - For FEE program tokens:
-                    // Fees accumulate in feeVaultAddress (the FEE program account / coinCreator), NOT in PUMP-derived vaults!
-                    // This is consistent with robinhoodScanner.js and threshold check logic.
+                    // v25.101: FEE program tokens have two separate concepts:
+                    // 1. coin_creator (feeVaultAddress) - stores shareholder config, passed to distribute instruction
+                    // 2. PUMP bc_vault - derived from original creator, where fees are distributed FROM
                     //
-                    // We use feeVaultAddress directly for BC vault (where fees are).
-                    // AMM vault is derived from feeVaultAddress as well.
-                    // Sharing config is still from original creator for the distribute instruction.
+                    // For balance checking, we check feeVaultAddress (where fees may accumulate)
+                    // For distribution, we pass both coin_creator AND the PUMP bc_vault
                     const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
 
-                    // BC vault IS the feeVaultAddress directly (this is where fees accumulate!)
-                    bcVault = feeVaultPubkey;
+                    // coin_creator = feeVaultAddress (shareholder config, passed to instruction)
+                    coinCreator = feeVaultPubkey;
 
-                    // Sharing config derived from original creator (for PUMP program distribution)
+                    // PUMP bc_vault derived from original creator (for distribute instruction)
                     const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
+                    pumpBcVault = creatorVaults.bcVault;
                     sharingConfigPDA = creatorVaults.sharingConfigPDA;
 
+                    // For balance checking, check feeVaultAddress (where BC fees accumulate for FEE tokens)
+                    bcVault = feeVaultPubkey;
+
                     // v25.100: AMM vaults derived from feeVaultPubkey (matches AMM pool.coin_creator)
-                    // The AMM pool's coin_creator field IS the feeVaultAddress, so vault_authority must match
                     const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
                     ammVaultAuth = feeVaults.ammVaultAuth;
                     ammVaultAta = feeVaults.ammVaultAta;
                     isFeeProgram = true;
 
-                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - BC vault=${token.feeVaultAddress.slice(0, 8)}..., AMM from feeVault, config from creator ${token.creatorPubkey.slice(0, 8)}...`);
+                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - coinCreator=${token.feeVaultAddress.slice(0, 8)}..., pumpBcVault from creator ${token.creatorPubkey.slice(0, 8)}...`);
                 } else {
                     // Legacy path: PUMP program fee sharing - derive from original creator
                     const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                     bcVault = vaults.bcVault;
+                    pumpBcVault = vaults.bcVault;  // Same for PUMP program tokens
+                    coinCreator = vaults.sharingConfigPDA;  // For PUMP tokens, coin_creator = sharingConfigPDA
                     ammVaultAuth = vaults.ammVaultAuth;
                     ammVaultAta = vaults.ammVaultAta;
                     sharingConfigPDA = vaults.sharingConfigPDA;
@@ -742,19 +749,21 @@ async function claimRobinhoodFees(deps) {
                                 [Buffer.from("__event_authority")], PROGRAMS.PUMP
                             );
 
-                            // PUMP distribute_creator_fees: sharing_config, creator_vault, [shareholders...], system, event_auth, program
+                            // v25.101: Correct account structure from successful tx analysis
+                            // DistributeCreatorFees: mint, coin_creator, claimer, bc_vault, system, event_auth, program, ...shareholders
+                            const mintPubkey = new PublicKey(token.mint);
                             const distributeKeys = [
-                                { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
-                                { pubkey: bcVault, isSigner: false, isWritable: true },
+                                { pubkey: mintPubkey, isSigner: false, isWritable: false },
+                                { pubkey: coinCreator, isSigner: false, isWritable: true },
+                                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
+                                { pubkey: pumpBcVault, isSigner: false, isWritable: true },
+                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
                             ];
                             for (const sh of configData.shareholders) {
                                 distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
                             }
-                            distributeKeys.push(
-                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-                            );
 
                             tx.add(new TransactionInstruction({
                                 keys: distributeKeys,

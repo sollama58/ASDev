@@ -960,13 +960,15 @@ function init(deps) {
             const creatorPubkey = new PublicKey(token.creatorPubkey);
             const isFeeProgram = !!token.feeVaultAddress;
 
-            let bcVault, ammVaultAuth, ammVaultAta, sharingConfigPDA;
+            // v25.101: Variables for vault addresses
+            let bcVault, pumpBcVault, coinCreator, ammVaultAuth, ammVaultAta, sharingConfigPDA;
 
             if (isFeeProgram) {
                 const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
                 bcVault = feeVaultPubkey;
-                // Sharing config from original creator (for PUMP program distribution)
+                coinCreator = feeVaultPubkey;
                 const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
+                pumpBcVault = creatorVaults.bcVault;
                 sharingConfigPDA = creatorVaults.sharingConfigPDA;
                 // v25.100: AMM vaults from feeVaultPubkey (matches AMM pool.coin_creator)
                 const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
@@ -975,6 +977,8 @@ function init(deps) {
             } else {
                 const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                 bcVault = vaults.bcVault;
+                pumpBcVault = vaults.bcVault;
+                coinCreator = vaults.sharingConfigPDA;
                 ammVaultAuth = vaults.ammVaultAuth;
                 ammVaultAta = vaults.ammVaultAta;
                 sharingConfigPDA = vaults.sharingConfigPDA;
@@ -1222,15 +1226,19 @@ function init(deps) {
                 amm: null
             };
 
-            // Determine vault addresses
-            let bcVault, ammVaultAuth, ammVaultAta, sharingConfigPDA;
+            // v25.101: Determine vault addresses
+            let bcVault, pumpBcVault, coinCreator, ammVaultAuth, ammVaultAta, sharingConfigPDA;
             const isFeeProgram = !!token.feeVaultAddress;
 
             if (isFeeProgram) {
                 const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                // For balance checking
                 bcVault = feeVaultPubkey;
-                // Sharing config from original creator (for PUMP program distribution)
+                // For distribute instruction: coin_creator = feeVaultAddress
+                coinCreator = feeVaultPubkey;
+                // PUMP bc_vault derived from original creator
                 const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
+                pumpBcVault = creatorVaults.bcVault;
                 sharingConfigPDA = creatorVaults.sharingConfigPDA;
                 // v25.100: AMM vaults from feeVaultPubkey (matches AMM pool.coin_creator)
                 const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
@@ -1239,6 +1247,8 @@ function init(deps) {
             } else {
                 const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                 bcVault = vaults.bcVault;
+                pumpBcVault = vaults.bcVault;
+                coinCreator = vaults.sharingConfigPDA;
                 ammVaultAuth = vaults.ammVaultAuth;
                 ammVaultAta = vaults.ammVaultAta;
                 sharingConfigPDA = vaults.sharingConfigPDA;
@@ -1339,19 +1349,21 @@ function init(deps) {
                                     [Buffer.from("__event_authority")], PROGRAMS.PUMP
                                 );
 
-                                // PUMP distribute: sharing_config, creator_vault, [shareholders...], system, event_auth, program
+                                // v25.101: Correct account structure from successful tx analysis
+                                // DistributeCreatorFees: mint, coin_creator, claimer, bc_vault, system, event_auth, program, ...shareholders
+                                const mintPubkey = new PublicKey(token.mint);
                                 const distributeKeys = [
-                                    { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
-                                    { pubkey: bcVault, isSigner: false, isWritable: true },
+                                    { pubkey: mintPubkey, isSigner: false, isWritable: false },
+                                    { pubkey: coinCreator, isSigner: false, isWritable: true },
+                                    { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
+                                    { pubkey: pumpBcVault, isSigner: false, isWritable: true },
+                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
                                 ];
                                 for (const sh of shareholders) {
                                     distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
                                 }
-                                distributeKeys.push(
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-                                );
 
                                 tx.add(new TransactionInstruction({
                                     keys: distributeKeys,

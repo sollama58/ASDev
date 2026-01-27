@@ -600,10 +600,17 @@ async function claimFeesForBeneficiary(pendingInfo) {
 
             const distributeDiscriminator = pump.buildDistributeFeesData();
 
-            // Build account keys: sharing_config, creator_vault, [all shareholders...], system_program, event_authority, program
+            // v25.101: Correct account structure from successful tx analysis
+            // DistributeCreatorFees: mint, coin_creator, claimer, bc_vault, system, event_auth, program, ...shareholders
+            const mintPubkey = new PublicKey(pendingInfo.mint);
             const distributeKeys = [
-                { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
+                { pubkey: mintPubkey, isSigner: false, isWritable: false },
+                { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },  // coin_creator
+                { pubkey: pagsKeypair.publicKey, isSigner: false, isWritable: true },  // claimer
                 { pubkey: bcVault, isSigner: false, isWritable: true },
+                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
             ];
 
             // Add ALL shareholders as writable accounts
@@ -614,13 +621,6 @@ async function claimFeesForBeneficiary(pendingInfo) {
                     isWritable: true
                 });
             }
-
-            // Add system accounts
-            distributeKeys.push(
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-            );
 
             tx.add(new TransactionInstruction({
                 keys: distributeKeys,

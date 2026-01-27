@@ -190,21 +190,35 @@ function getFeeSharingConfigPDA(creator) {
 /**
  * Get distribute creator fees instruction data (BC - bonding curve)
  * Used to distribute fees from a sharing config to all shareholders
+ * v25.101: Fixed discriminator from successful tx analysis
  */
 function buildDistributeFeesData() {
     // distribute_creator_fees discriminator for PUMP program (BC)
-    return Buffer.from([202, 87, 148, 171, 74, 66, 138, 57]);
+    // Correct discriminator: [165, 114, 103, 0, 121, 206, 247, 81] (hex: a572670079cef751)
+    return Buffer.from([165, 114, 103, 0, 121, 206, 247, 81]);
+}
+
+/**
+ * Get transfer creator fees to pump instruction data (AMM -> BC)
+ * v25.101: Transfers AMM fees to PUMP BC vault before distribution
+ */
+function buildTransferFeesToPumpData() {
+    // TransferCreatorFeesToPump discriminator for PUMP_AMM program
+    // Discriminator: [139, 52, 134, 85, 228, 229, 108, 241] (hex: 8b348655e4e56cf1)
+    return Buffer.from([139, 52, 134, 85, 228, 229, 108, 241]);
 }
 
 /**
  * Get distribute creator fees instruction data for AMM (PumpSwap)
- * v25.91: Used to distribute AMM fees from creator vault to all shareholders
- * Similar to BC distribute but for graduated tokens on PumpSwap
+ * v25.101: AMM fees must first be transferred to PUMP via TransferCreatorFeesToPump,
+ * then distributed via DistributeCreatorFees on PUMP program
+ * @deprecated Use buildTransferFeesToPumpData() + buildDistributeFeesData() instead
  */
 function buildDistributeAmmFeesData() {
-    // distribute_creator_fees discriminator for PUMP_AMM program
-    // This is the same instruction pattern as BC but for PumpSwap
-    return Buffer.from([202, 87, 148, 171, 74, 66, 138, 57]);
+    // This is now deprecated - AMM distribution uses a two-step process:
+    // 1. TransferCreatorFeesToPump on PUMP_AMM
+    // 2. DistributeCreatorFees on PUMP
+    return Buffer.from([165, 114, 103, 0, 121, 206, 247, 81]);
 }
 
 /**
@@ -268,4 +282,5 @@ module.exports = {
     buildClaimFeesData,
     buildDistributeFeesData,
     buildDistributeAmmFeesData,
+    buildTransferFeesToPumpData,
 };
