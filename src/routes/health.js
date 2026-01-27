@@ -1263,55 +1263,109 @@ function init(deps) {
                     };
 
                     if (bcPending > 0) {
-                        // v25.95: Use correct program based on vault type
-                        // - FEE program tokens: bcVault is feeVaultAddress (FEE program account)
-                        // - PUMP program tokens: bcVault is PUMP-derived PDA from creatorPubkey
-                        const programToUse = isFeeProgram ? PROGRAMS.FEE : PROGRAMS.PUMP;
+                        // v25.96: Use different instructions based on program type
+                        // - FEE program: distribute_creator_fees (collect not supported)
+                        // - PUMP program: collect_creator_fee
                         results.bc.program = isFeeProgram ? 'FEE' : 'PUMP';
+                        results.bc.instruction = isFeeProgram ? 'distribute' : 'collect';
 
                         try {
                             const tx = new Transaction();
                             solana.addPriorityFee(tx);
 
-                            const claimDiscriminator = pump.buildClaimFeesData();
-                            const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("__event_authority")], programToUse
-                            );
+                            if (isFeeProgram) {
+                                // FEE program: use distribute_creator_fees
+                                // Parse shareholders from FEE account
+                                let shareholders = [];
+                                if (bcInfo && bcInfo.data && bcInfo.data.length >= 80) {
+                                    const data = bcInfo.data;
+                                    const numShareholders = data.readUInt32LE(76);
+                                    let offset = 80;
+                                    if (numShareholders >= 1 && numShareholders <= 10) {
+                                        for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
+                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                                            offset += 32;
+                                            const bps = data.readUInt16LE(offset);
+                                            offset += 2;
+                                            shareholders.push({ pubkey, bps });
+                                        }
+                                    }
+                                    results.bc.numShareholders = numShareholders;
+                                }
 
-                            // Same account structure: [recipient, vault, system, event_auth, program]
-                            const claimKeys = [
-                                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
-                                { pubkey: bcVault, isSigner: false, isWritable: true },
-                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                { pubkey: programToUse, isSigner: false, isWritable: false }
-                            ];
+                                results.bc.shareholders = shareholders.map(s => ({
+                                    pubkey: s.pubkey.toString(),
+                                    bps: s.bps
+                                }));
 
-                            tx.add(new TransactionInstruction({
-                                keys: claimKeys,
-                                programId: programToUse,
-                                data: claimDiscriminator
-                            }));
+                                if (shareholders.length > 0) {
+                                    const distributeDiscriminator = pump.buildDistributeFeesData();
+                                    const [eventAuthority] = PublicKey.findProgramAddressSync(
+                                        [Buffer.from("__event_authority")], PROGRAMS.FEE
+                                    );
 
-                            tx.feePayer = devKeypair.publicKey;
-                            const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
+                                    const distributeKeys = [
+                                        { pubkey: bcVault, isSigner: false, isWritable: true },
+                                    ];
+                                    for (const sh of shareholders) {
+                                        distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
+                                    }
+                                    distributeKeys.push(
+                                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                        { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                                        { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
+                                    );
 
-                            results.bc.claimed = true;
-                            results.bc.signature = sig;
-                            results.bc.claimedSol = bcPending / LAMPORTS_PER_SOL;
+                                    tx.add(new TransactionInstruction({
+                                        keys: distributeKeys,
+                                        programId: PROGRAMS.FEE,
+                                        data: distributeDiscriminator
+                                    }));
+                                } else {
+                                    results.bc.error = 'No shareholders found in FEE account';
+                                }
+                            } else {
+                                // PUMP program: use collect_creator_fee
+                                const claimDiscriminator = pump.buildClaimFeesData();
+                                const [eventAuthority] = PublicKey.findProgramAddressSync(
+                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP
+                                );
 
-                            // Update database
-                            const ourShare = Math.floor(bcPending * (token.feeShareBps / 10000));
-                            await db.run(
-                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
-                                [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
-                            );
+                                const claimKeys = [
+                                    { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
+                                    { pubkey: bcVault, isSigner: false, isWritable: true },
+                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+                                ];
 
-                            logger.info(`[Admin] BC fees collected for ${token.ticker}: ${bcPending / LAMPORTS_PER_SOL} SOL`);
+                                tx.add(new TransactionInstruction({
+                                    keys: claimKeys,
+                                    programId: PROGRAMS.PUMP,
+                                    data: claimDiscriminator
+                                }));
+                            }
+
+                            if (tx.instructions.length > 0) {
+                                tx.feePayer = devKeypair.publicKey;
+                                const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
+
+                                results.bc.claimed = true;
+                                results.bc.signature = sig;
+                                results.bc.claimedSol = bcPending / LAMPORTS_PER_SOL;
+
+                                const ourShare = Math.floor(bcPending * (token.feeShareBps / 10000));
+                                await db.run(
+                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
+                                    [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
+                                );
+
+                                logger.info(`[Admin] BC fees claimed for ${token.ticker}: ${bcPending / LAMPORTS_PER_SOL} SOL`);
+                            }
                         } catch (txErr) {
                             results.bc.claimed = false;
                             results.bc.error = txErr.message;
-                            logger.error(`[Admin] BC collect failed for ${token.ticker}`, { error: txErr.message });
+                            logger.error(`[Admin] BC claim failed for ${token.ticker}`, { error: txErr.message });
                         }
                     }
                 } catch (e) {
