@@ -898,8 +898,12 @@ async function claimRobinhoodFees(deps) {
                             // Fee sharing is unified - set up once by creator, applies to both BC and AMM
                             const ammSharingConfigPDA = sharingConfigPDA; // Already derived from creatorPubkey
 
+                            logger.info(`[Robinhood/AMM] ${token.ticker}: Attempting AMM distribute - config: ${ammSharingConfigPDA.toString().slice(0, 8)}..., vault: ${ammVaultAtaKey.toString().slice(0, 8)}...`);
+
                             // Get shareholders from sharing config (same config used for both BC and AMM)
                             const ammConfigData = await getCachedFeeSharingConfig(connection, ammSharingConfigPDA, creatorPubkey, false);
+
+                            logger.info(`[Robinhood/AMM] ${token.ticker}: Config data: ${ammConfigData ? `${ammConfigData.shareholders?.length || 0} shareholders` : 'null'}`);
 
                             if (ammConfigData && ammConfigData.shareholders && ammConfigData.shareholders.length > 0) {
                                 const ammTx = new Transaction();
@@ -974,7 +978,8 @@ async function claimRobinhoodFees(deps) {
                                 [ammFeeSol, token.mint]
                             ).catch(() => {});
 
-                            logger.debug(`[Robinhood/AMM] ${token.ticker}: Cannot distribute AMM fees - ${claimErr.message.slice(0, 100)}`);
+                            // Log at info level to help debug the instruction format
+                            logger.info(`[Robinhood/AMM] ${token.ticker}: AMM distribute failed - ${claimErr.message}`);
                         }
                     }
                 } catch (e) {
