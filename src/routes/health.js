@@ -1268,25 +1268,55 @@ function init(deps) {
                         results.bc.instruction = 'distribute_creator_fees';
 
                         try {
-                            // Get sharing config to find shareholders
-                            const configInfo = await connection.getAccountInfo(sharingConfigPDA);
+                            // v25.98: Parse shareholders based on token type
+                            // FEE program tokens: shareholders embedded in bcVault (feeVaultAddress)
+                            // PUMP program tokens: shareholders in separate sharingConfigPDA
                             let shareholders = [];
 
-                            if (configInfo && configInfo.data.length > 44) {
-                                const data = configInfo.data;
-                                let offset = 8;
-                                offset += 32; // skip originalCreator
-                                const numShareholders = data.readUInt32LE(offset);
-                                offset += 4;
+                            if (isFeeProgram && bcInfo && bcInfo.owner.equals(PROGRAMS.FEE)) {
+                                // FEE program: parse from bcVault (feeVaultAddress)
+                                // Structure: 8 disc + 32 mint + 3 bump + 32 creator + 1 unknown + 4 array_len + shareholders
+                                const data = bcInfo.data;
+                                results.bc.configSource = 'FEE program account (bcVault)';
 
-                                results.bc.numShareholders = numShareholders;
+                                if (data.length >= 80) {
+                                    const numShareholders = data.readUInt32LE(76);
+                                    let offset = 80;
 
-                                for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                    const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                    offset += 32;
-                                    const bps = data.readUInt16LE(offset);
-                                    offset += 2;
-                                    shareholders.push({ pubkey, bps });
+                                    results.bc.numShareholders = numShareholders;
+
+                                    if (numShareholders >= 1 && numShareholders <= 10) {
+                                        for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
+                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                                            offset += 32;
+                                            const bps = data.readUInt16LE(offset);
+                                            offset += 2;
+                                            shareholders.push({ pubkey, bps });
+                                        }
+                                    }
+                                }
+                            } else {
+                                // PUMP program: parse from sharingConfigPDA
+                                // Structure: 8 disc + 32 originalCreator + 4 numShareholders + shareholders
+                                const configInfo = await connection.getAccountInfo(sharingConfigPDA);
+                                results.bc.configSource = 'PUMP sharingConfigPDA';
+
+                                if (configInfo && configInfo.data.length > 44) {
+                                    const data = configInfo.data;
+                                    let offset = 8;
+                                    offset += 32; // skip originalCreator
+                                    const numShareholders = data.readUInt32LE(offset);
+                                    offset += 4;
+
+                                    results.bc.numShareholders = numShareholders;
+
+                                    for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
+                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                                        offset += 32;
+                                        const bps = data.readUInt16LE(offset);
+                                        offset += 2;
+                                        shareholders.push({ pubkey, bps });
+                                    }
                                 }
                             }
 

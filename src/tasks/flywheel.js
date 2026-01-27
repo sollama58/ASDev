@@ -16,6 +16,7 @@
  * v25.75 - Fixed fee claiming for FEE program tokens: use feeVaultAddress as both vault+config
  * v25.76 - Threshold now considers SUM of platform + robinhood fees; improved FEE program handling
  * v25.97 - Robinhood fee claiming: always use distribute_creator_fees on PUMP program
+ * v25.98 - Fix fee sharing config lookup: FEE tokens use bcVault, PUMP tokens use sharingConfigPDA
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -724,8 +725,11 @@ async function claimRobinhoodFees(deps) {
                         // This distributes fees to all shareholders in the sharing config
                         logger.info(`[Robinhood] ${token.ticker}: BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - calling distribute_creator_fees...`);
 
-                        // Get sharing config and parse shareholders
-                        const configData = await getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey, isFeeProgram);
+                        // v25.98: Get sharing config from correct source
+                        // FEE program tokens: shareholders embedded in bcVault (feeVaultAddress)
+                        // PUMP program tokens: shareholders in separate sharingConfigPDA
+                        const configAccount = isFeeProgram ? bcVault : sharingConfigPDA;
+                        const configData = await getCachedFeeSharingConfig(connection, configAccount, creatorPubkey, isFeeProgram);
 
                         if (configData && configData.shareholders && configData.shareholders.length > 0) {
                             const tx = new Transaction();
