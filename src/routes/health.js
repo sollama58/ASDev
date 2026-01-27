@@ -1263,9 +1263,8 @@ function init(deps) {
                     };
 
                     if (bcPending > 0) {
-                        // v25.93: Use same collect_creator_fee pattern as platform tokens
-                        const programToUse = isFeeProgram ? PROGRAMS.FEE : PROGRAMS.PUMP;
-                        results.bc.program = isFeeProgram ? 'FEE' : 'PUMP';
+                        // v25.94: Always use PUMP program (6EF8...) for collect_creator_fee
+                        results.bc.program = 'PUMP';
 
                         try {
                             const tx = new Transaction();
@@ -1274,7 +1273,7 @@ function init(deps) {
                             // Same collect_creator_fee instruction as platform tokens
                             const claimDiscriminator = pump.buildClaimFeesData();
                             const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("__event_authority")], programToUse
+                                [Buffer.from("__event_authority")], PROGRAMS.PUMP
                             );
 
                             // Same account structure: [recipient, vault, system, event_auth, program]
@@ -1283,12 +1282,12 @@ function init(deps) {
                                 { pubkey: bcVault, isSigner: false, isWritable: true },
                                 { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                                 { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                { pubkey: programToUse, isSigner: false, isWritable: false }
+                                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
                             ];
 
                             tx.add(new TransactionInstruction({
                                 keys: claimKeys,
-                                programId: programToUse,
+                                programId: PROGRAMS.PUMP,
                                 data: claimDiscriminator
                             }));
 
