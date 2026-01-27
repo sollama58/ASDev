@@ -965,11 +965,12 @@ function init(deps) {
             if (isFeeProgram) {
                 const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
                 bcVault = feeVaultPubkey;
+                // v25.99: All vaults (except bcVault) derived from ORIGINAL CREATOR
+                // AMM program doesn't know about FEE program - it only knows original creator
                 const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
                 sharingConfigPDA = creatorVaults.sharingConfigPDA;
-                const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                ammVaultAuth = feeVaults.ammVaultAuth;
-                ammVaultAta = feeVaults.ammVaultAta;
+                ammVaultAuth = creatorVaults.ammVaultAuth;
+                ammVaultAta = creatorVaults.ammVaultAta;
             } else {
                 const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                 bcVault = vaults.bcVault;
@@ -1227,11 +1228,12 @@ function init(deps) {
             if (isFeeProgram) {
                 const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
                 bcVault = feeVaultPubkey;
+                // v25.99: All vaults (except bcVault) derived from ORIGINAL CREATOR
+                // AMM program doesn't know about FEE program - it only knows original creator
                 const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
                 sharingConfigPDA = creatorVaults.sharingConfigPDA;
-                const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                ammVaultAuth = feeVaults.ammVaultAuth;
-                ammVaultAta = feeVaults.ammVaultAta;
+                ammVaultAuth = creatorVaults.ammVaultAuth;
+                ammVaultAta = creatorVaults.ammVaultAta;
             } else {
                 const vaults = pump.getShareholderFeeVaults(creatorPubkey);
                 bcVault = vaults.bcVault;
