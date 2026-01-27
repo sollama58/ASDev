@@ -262,6 +262,14 @@ async function initDB() {
             // Column already exists - this is expected
         }
 
+        // v25.90: Migration - Add pendingFees column for tracking on-chain pending fees
+        try {
+            await db.exec('ALTER TABLE robinhood_tokens ADD COLUMN pendingFees REAL DEFAULT 0');
+            logger.info('[DB MIGRATION] Added pendingFees column to robinhood_tokens table');
+        } catch (e) {
+            // Column already exists - this is expected
+        }
+
         await db.exec(`
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

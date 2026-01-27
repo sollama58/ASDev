@@ -840,6 +840,104 @@ function init(deps) {
     });
 
     /**
+     * POST /admin/refresh-robinhood-pending-fees
+     * v25.90: Immediately refresh pending fees from on-chain and return per-token breakdown
+     */
+    router.post('/admin/refresh-robinhood-pending-fees', adminAuth, async (req, res) => {
+        try {
+            const { PublicKey } = require('@solana/web3.js');
+            const pump = require('../services/pump');
+            const LAMPORTS_PER_SOL = 1000000000;
+
+            logger.info('[Admin] Refreshing Robinhood pending fees...');
+
+            // Get all active Robinhood tokens
+            const tokens = await db.all('SELECT id, mint, ticker, name, "creatorPubkey", "feeShareBps", "feeVaultAddress", "totalFeesCollected" FROM robinhood_tokens WHERE "isActive" = 1 ORDER BY "totalFeesCollected" DESC LIMIT 500');
+
+            const tokenFees = [];
+            let totalPendingLamports = 0;
+
+            for (const token of tokens) {
+                try {
+                    let bcVault, ammVaultAta;
+                    if (token.feeVaultAddress) {
+                        bcVault = new PublicKey(token.feeVaultAddress);
+                        const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                        const vaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                        ammVaultAta = vaults.ammVaultAta;
+                    } else {
+                        const creatorPubkey = new PublicKey(token.creatorPubkey);
+                        const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                        bcVault = vaults.bcVault;
+                        ammVaultAta = vaults.ammVaultAta;
+                    }
+
+                    let bcPending = 0, ammPending = 0;
+
+                    // Check BC vault
+                    try {
+                        const bcInfo = await connection.getAccountInfo(bcVault);
+                        if (bcInfo && bcInfo.lamports > 5000) {
+                            bcPending = Math.floor((bcInfo.lamports - 5000) * (token.feeShareBps / 10000));
+                        }
+                    } catch (e) { /* Silent */ }
+
+                    // Check AMM vault
+                    try {
+                        const ammVaultAtaKey = await ammVaultAta;
+                        const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
+                        if (bal.value.amount && parseInt(bal.value.amount) > 0) {
+                            ammPending = Math.floor(parseInt(bal.value.amount) * (token.feeShareBps / 10000));
+                        }
+                    } catch (e) { /* Silent */ }
+
+                    const totalPending = bcPending + ammPending;
+                    const pendingFeesSol = totalPending / LAMPORTS_PER_SOL;
+
+                    // Update database
+                    await db.run('UPDATE robinhood_tokens SET "pendingFees" = $1 WHERE id = $2', [pendingFeesSol, token.id]);
+
+                    totalPendingLamports += totalPending;
+
+                    // Only include tokens with pending fees in the response
+                    if (totalPending > 0) {
+                        tokenFees.push({
+                            mint: token.mint,
+                            ticker: token.ticker || token.name || token.mint.slice(0, 8),
+                            feeShareBps: token.feeShareBps,
+                            feeSharePct: (token.feeShareBps / 100).toFixed(1) + '%',
+                            bcPendingSol: (bcPending / LAMPORTS_PER_SOL).toFixed(6),
+                            ammPendingSol: (ammPending / LAMPORTS_PER_SOL).toFixed(6),
+                            totalPendingSol: pendingFeesSol.toFixed(6),
+                            totalCollectedSol: (token.totalFeesCollected || 0).toFixed(4)
+                        });
+                    }
+                } catch (e) {
+                    logger.debug(`[Admin] Pending fee check error for ${token.ticker}`, { error: e.message });
+                }
+            }
+
+            // Sort by pending fees descending
+            tokenFees.sort((a, b) => parseFloat(b.totalPendingSol) - parseFloat(a.totalPendingSol));
+
+            const totalPendingSol = totalPendingLamports / LAMPORTS_PER_SOL;
+
+            logger.info(`[Admin] Refreshed pending fees: ${totalPendingSol.toFixed(4)} SOL across ${tokenFees.length} tokens with pending`);
+
+            res.json({
+                success: true,
+                totalPendingSol: totalPendingSol.toFixed(6),
+                totalTokensChecked: tokens.length,
+                tokensWithPending: tokenFees.length,
+                tokenFees
+            });
+        } catch (e) {
+            logger.error('[Admin] Refresh Robinhood pending fees error', { error: e.message });
+            res.status(500).json({ error: 'Failed to refresh pending fees' });
+        }
+    });
+
+    /**
      * POST /admin/reset-points
      * v25.25: Reset all point calculations and recalculate from scratch
      *

@@ -785,6 +785,74 @@ async function getRobinhoodPendingFees(deps) {
 }
 
 /**
+ * v25.90: Update pending fees in database from on-chain data
+ * This allows WebSocket broadcasts to display accurate pending fees on the frontend
+ */
+async function updatePendingFeesInDb(deps) {
+    const { connection, db } = deps;
+    const LAMPORTS_PER_SOL = 1000000000;
+
+    try {
+        // Get all active Robinhood tokens
+        const tokens = await db.all('SELECT id, mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 500');
+
+        let totalUpdated = 0;
+        for (const token of tokens) {
+            try {
+                // v25.90: Use same vault derivation logic as getRobinhoodPendingFees
+                let bcVault, ammVaultAta;
+                if (token.feeVaultAddress) {
+                    bcVault = new PublicKey(token.feeVaultAddress);
+                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                    const vaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                    ammVaultAta = vaults.ammVaultAta;
+                } else {
+                    const creatorPubkey = new PublicKey(token.creatorPubkey);
+                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                    bcVault = vaults.bcVault;
+                    ammVaultAta = vaults.ammVaultAta;
+                }
+
+                let tokenFeeAmount = 0;
+
+                // Check BC vault
+                try {
+                    const bcInfo = await connection.getAccountInfo(bcVault);
+                    if (bcInfo && bcInfo.lamports > 5000) {
+                        const ourShare = Math.floor((bcInfo.lamports - 5000) * (token.feeShareBps / 10000));
+                        tokenFeeAmount += ourShare;
+                    }
+                } catch (e) { /* Silent */ }
+
+                // Check AMM vault
+                try {
+                    const ammVaultAtaKey = await ammVaultAta;
+                    const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
+                    if (bal.value.amount && parseInt(bal.value.amount) > 0) {
+                        const ourShare = Math.floor(parseInt(bal.value.amount) * (token.feeShareBps / 10000));
+                        tokenFeeAmount += ourShare;
+                    }
+                } catch (e) { /* Silent */ }
+
+                // Update database with pending fees in SOL (not lamports)
+                const pendingFeesSol = tokenFeeAmount / LAMPORTS_PER_SOL;
+                await db.run('UPDATE robinhood_tokens SET "pendingFees" = $1 WHERE id = $2', [pendingFeesSol, token.id]);
+                totalUpdated++;
+
+            } catch (e) {
+                logger.debug(`[Robinhood] Pending fee update error for ${token.ticker}`, { error: e.message });
+            }
+        }
+
+        if (totalUpdated > 0) {
+            logger.debug(`[Robinhood] Updated pending fees for ${totalUpdated} tokens`);
+        }
+    } catch (e) {
+        logger.error('[Robinhood] Update pending fees in DB error', { error: e.message });
+    }
+}
+
+/**
  * Update market data for all registered tokens
  * v15.0 - Fetches fresh market data from DexScreener for existing tokens
  */
@@ -840,6 +908,7 @@ async function updateRegisteredTokensMarketData(deps) {
  * Main update function - runs periodically
  * v16.0: Tokens are registered via API with on-chain verification
  *        Scanner only handles: re-verification, metadata updates, holder tracking
+ * v25.90: Also updates pending fees in database for WebSocket/frontend display
  */
 async function updateRobinhoodState(deps) {
     try {
@@ -852,6 +921,9 @@ async function updateRobinhoodState(deps) {
 
         // Update holders for existing Robinhood tokens
         await updateRobinhoodHolders(deps);
+
+        // v25.90: Update pending fees from on-chain data for frontend display
+        await updatePendingFeesInDb(deps);
 
     } catch (e) {
         logger.error('[Robinhood] Update state error', { error: e.message });

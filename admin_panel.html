@@ -1020,6 +1020,25 @@
                                 // Fix all result will appear here
                             </div>
                         </div>
+
+                        <!-- v25.90: Pending Fees Refresh -->
+                        <div class="mt-4 p-3 bg-pink-900/20 rounded border border-pink-700/30">
+                            <div class="flex items-center justify-between mb-3">
+                                <div>
+                                    <h4 class="text-sm text-pink-400 font-bold">Pending Fees (On-Chain)</h4>
+                                    <p class="text-xs text-gray-500">Refresh pending fees from on-chain vaults and view per-token breakdown</p>
+                                </div>
+                                <button onclick="refreshRobinhoodPendingFees()" class="btn btn-primary" id="rh-pending-refresh-btn">Refresh Fees</button>
+                            </div>
+                            <div id="rh-pending-summary" class="text-sm mb-2 hidden">
+                                <span class="text-gray-400">Total Pending:</span>
+                                <span id="rh-pending-total" class="text-pink-400 font-bold ml-2">0 SOL</span>
+                                <span class="text-gray-500 ml-4">(<span id="rh-pending-token-count">0</span> tokens with pending)</span>
+                            </div>
+                            <div id="rh-pending-fees-list" class="result-box text-xs max-h-80 overflow-y-auto">
+                                Click "Refresh Fees" to load pending fees from on-chain vaults...
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2918,6 +2937,72 @@
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Fix all error: ${e.message}`, 'error');
+            }
+        }
+
+        // v25.90: Refresh Robinhood pending fees from on-chain
+        async function refreshRobinhoodPendingFees() {
+            const btnEl = document.getElementById('rh-pending-refresh-btn');
+            const summaryEl = document.getElementById('rh-pending-summary');
+            const listEl = document.getElementById('rh-pending-fees-list');
+
+            btnEl.disabled = true;
+            btnEl.textContent = 'Refreshing...';
+            listEl.innerHTML = '<span class="text-blue-400">Fetching on-chain vault balances... This may take a moment.</span>';
+            log('Refreshing Robinhood pending fees from on-chain...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/refresh-robinhood-pending-fees`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    // Update summary
+                    summaryEl.classList.remove('hidden');
+                    document.getElementById('rh-pending-total').textContent = data.totalPendingSol + ' SOL';
+                    document.getElementById('rh-pending-token-count').textContent = data.tokensWithPending;
+
+                    // Render token list
+                    if (data.tokenFees && data.tokenFees.length > 0) {
+                        let html = '<table class="w-full text-xs"><thead class="text-gray-400 border-b border-gray-700">';
+                        html += '<tr><th class="text-left py-1">Token</th><th class="text-right">Share</th><th class="text-right">BC</th><th class="text-right">AMM</th><th class="text-right">Total</th><th class="text-right">Collected</th></tr>';
+                        html += '</thead><tbody>';
+
+                        for (const t of data.tokenFees) {
+                            const totalFloat = parseFloat(t.totalPendingSol);
+                            const rowClass = totalFloat >= 0.1 ? 'text-green-400' : totalFloat >= 0.01 ? 'text-yellow-400' : 'text-gray-300';
+                            html += `<tr class="${rowClass} border-b border-gray-800 hover:bg-white/5">`;
+                            html += `<td class="py-1 font-mono">${t.ticker}</td>`;
+                            html += `<td class="text-right text-cyan-400">${t.feeSharePct}</td>`;
+                            html += `<td class="text-right">${parseFloat(t.bcPendingSol).toFixed(4)}</td>`;
+                            html += `<td class="text-right">${parseFloat(t.ammPendingSol).toFixed(4)}</td>`;
+                            html += `<td class="text-right font-bold">${parseFloat(t.totalPendingSol).toFixed(4)}</td>`;
+                            html += `<td class="text-right text-pink-400">${t.totalCollectedSol}</td>`;
+                            html += '</tr>';
+                        }
+
+                        html += '</tbody></table>';
+                        listEl.innerHTML = html;
+                    } else {
+                        listEl.innerHTML = '<span class="text-gray-400">No tokens with pending fees found.</span>';
+                    }
+
+                    log(`Pending fees refreshed: ${data.totalPendingSol} SOL across ${data.tokensWithPending} tokens`, 'success');
+                } else {
+                    listEl.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`Refresh failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                listEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Refresh error: ${e.message}`, 'error');
+            } finally {
+                btnEl.disabled = false;
+                btnEl.textContent = 'Refresh Fees';
             }
         }
 

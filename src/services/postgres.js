@@ -371,6 +371,17 @@ async function createSchema() {
         END $$;
     `);
 
+    // v25.90: Migration - Add pendingFees column for tracking on-chain pending fees
+    // This column is updated periodically by robinhoodScanner and used by WebSocket for frontend display
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'robinhood_tokens' AND column_name = 'pendingFees') THEN
+                ALTER TABLE robinhood_tokens ADD COLUMN "pendingFees" REAL DEFAULT 0;
+            END IF;
+        END $$;
+    `);
+
     // v25.24: Migration - Fix null balance values that cause BigInt conversion errors
     // Set default for balance column and fix any existing null values
     await pool.query(`

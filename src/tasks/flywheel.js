@@ -831,8 +831,9 @@ async function claimRobinhoodFees(deps) {
                                         source: 'BC'
                                     });
 
+                                    // v25.90: Also reset pendingFees to 0 after claiming
                                     await db.run(
-                                        'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2 WHERE id = $3',
+                                        'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
                                         [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
                                     );
 

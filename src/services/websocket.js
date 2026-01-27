@@ -163,7 +163,7 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
                     SELECT
                         COUNT(*) as count,
                         COALESCE(SUM("pendingFees"), 0) as pendingFees,
-                        COALESCE(SUM("collectedFees"), 0) as collectedFees
+                        COALESCE(SUM("totalFeesCollected"), 0) as collectedFees
                     FROM robinhood_tokens
                     WHERE "isActive" = 1
                 `)
