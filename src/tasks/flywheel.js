@@ -15,7 +15,7 @@
  * v25.46 - Twitter announcements when KOTH changes (with AI reasoning)
  * v25.75 - Fixed fee claiming for FEE program tokens: use feeVaultAddress as both vault+config
  * v25.76 - Threshold now considers SUM of platform + robinhood fees; improved FEE program handling
- * v25.92 - AMM fee claiming now properly handles FEE program tokens (parses shareholders from FEE account)
+ * v25.93 - Robinhood fee claiming now uses same collect_creator_fee pattern as platform tokens
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -721,170 +721,115 @@ async function claimRobinhoodFees(deps) {
                 if (bcPendingLamports > BC_CLAIM_THRESHOLD) {
                     try {
                         if (isFeeProgram) {
-                            // v25.91: FEE program tokens - shareholders are EMBEDDED in the feeVaultAddress account
-                            // The feeVaultAddress IS the vault AND contains the sharing config
-                            logger.info(`[Robinhood/FEE] ${token.ticker}: BC vault (feeVaultAddress) has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - attempting distribution...`);
+                            // v25.93: FEE program tokens - use collect_creator_fee like platform tokens
+                            // Same instruction pattern as claimCreatorFees() but with FEE program
+                            logger.info(`[Robinhood/FEE] ${token.ticker}: BC vault (feeVaultAddress) has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - attempting collect...`);
 
-                            // Parse shareholders directly from the FEE program account (bcVault = feeVaultAddress)
-                            // FEE account structure: 8 disc + 32 mint + 3 bump + 32 creator + 1 unk + 4 array_len + shareholders
-                            let feeConfigShareholders = [];
-                            if (bcInfo && bcInfo.data && bcInfo.data.length >= 80) {
-                                const data = bcInfo.data;
-                                const numShareholders = data.readUInt32LE(76);
-                                let offset = 80;
+                            const tx = new Transaction();
+                            solana.addPriorityFee(tx);
 
-                                if (numShareholders >= 1 && numShareholders <= 10) {
-                                    for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                        offset += 32;
-                                        const bps = data.readUInt16LE(offset);
-                                        offset += 2;
-                                        feeConfigShareholders.push({ pubkey, bps });
-                                    }
-                                }
-                            }
+                            // v25.93: Use same collect_creator_fee instruction as platform tokens
+                            const claimDiscriminator = pump.buildClaimFeesData();
+                            const [eventAuthority] = PublicKey.findProgramAddressSync(
+                                [Buffer.from("__event_authority")], PROGRAMS.FEE
+                            );
 
-                            logger.info(`[Robinhood/FEE] ${token.ticker}: Found ${feeConfigShareholders.length} shareholders in FEE account`);
+                            // Same account structure as platform tokens: [recipient, vault, system, event_auth, program]
+                            const claimKeys = [
+                                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
+                                { pubkey: bcVault, isSigner: false, isWritable: true },
+                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                                { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
+                            ];
 
-                            if (feeConfigShareholders.length > 0) {
-                                const tx = new Transaction();
-                                solana.addPriorityFee(tx);
+                            tx.add(new TransactionInstruction({
+                                keys: claimKeys,
+                                programId: PROGRAMS.FEE,
+                                data: claimDiscriminator
+                            }));
 
-                                // v25.91: For FEE program accounts, use FEE program's distribute instruction
-                                // The vault IS the sharing config - pass bcVault (feeVaultAddress) as both
-                                const distributeDiscriminator = pump.buildDistributeFeesData();
-                                const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], PROGRAMS.FEE
+                            // Calculate our share based on BPS
+                            const ourShare = Math.floor(bcPendingLamports * (token.feeShareBps / 10000));
+
+                            try {
+                                tx.feePayer = devKeypair.publicKey;
+                                await solana.sendTxWithRetry(tx, [devKeypair]);
+
+                                tokenClaimed += ourShare;
+                                totalClaimed += ourShare;
+                                claimedTokens.push({
+                                    ticker: token.ticker || token.creatorPubkey.slice(0, 8),
+                                    amount: ourShare,
+                                    source: 'BC'
+                                });
+
+                                // Update database after successful claim
+                                await db.run(
+                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
+                                    [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
                                 );
 
-                                // FEE program distribute: vault (contains config), [shareholders...], system, event_auth, program
-                                const distributeKeys = [
-                                    { pubkey: bcVault, isSigner: false, isWritable: true }, // FEE vault IS the config
-                                ];
-
-                                for (const shareholder of feeConfigShareholders) {
-                                    distributeKeys.push({
-                                        pubkey: shareholder.pubkey,
-                                        isSigner: false,
-                                        isWritable: true
-                                    });
-                                }
-
-                                distributeKeys.push(
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
-                                );
-
-                                tx.add(new TransactionInstruction({
-                                    keys: distributeKeys,
-                                    programId: PROGRAMS.FEE,
-                                    data: distributeDiscriminator
-                                }));
-
-                                // Calculate our share based on BPS
-                                const ourShare = Math.floor(bcPendingLamports * (token.feeShareBps / 10000));
-
-                                try {
-                                    tx.feePayer = devKeypair.publicKey;
-                                    await solana.sendTxWithRetry(tx, [devKeypair]);
-
-                                    tokenClaimed += ourShare;
-                                    totalClaimed += ourShare;
-                                    claimedTokens.push({
-                                        ticker: token.ticker || token.creatorPubkey.slice(0, 8),
-                                        amount: ourShare,
-                                        source: 'BC'
-                                    });
-
-                                    // v25.91: Add database update after successful FEE program claim
-                                    await db.run(
-                                        'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
-                                        [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
-                                    );
-
-                                    logger.info(`[Robinhood/FEE] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
-                                } catch (txErr) {
-                                    // Log full error for debugging FEE program distribute
-                                    logger.info(`[Robinhood/FEE] BC distribute failed for ${token.ticker}: ${txErr.message}`, {
-                                        shareholders: feeConfigShareholders.length,
-                                        bcVault: bcVault.toString(),
-                                        program: 'FEE'
-                                    });
-                                }
-                            } else {
-                                logger.warn(`[Robinhood/FEE] ${token.ticker}: No shareholders found in FEE account at ${bcVault.toString().slice(0, 8)}...`);
+                                logger.info(`[Robinhood/FEE] ${token.ticker}: Collected ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+                            } catch (txErr) {
+                                logger.info(`[Robinhood/FEE] BC collect failed for ${token.ticker}: ${txErr.message}`, {
+                                    bcVault: bcVault.toString(),
+                                    program: 'FEE'
+                                });
                             }
                         } else {
-                            // v25.79: PUMP program fee sharing - use standard distribute_creator_fees
-                            logger.info(`[Robinhood] ${token.ticker}: PUMP program BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending`);
+                            // v25.93: PUMP program fee sharing - use collect_creator_fee like platform tokens
+                            logger.info(`[Robinhood/PUMP] ${token.ticker}: BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - attempting collect...`);
 
-                            const configData = await getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey, false);
+                            const tx = new Transaction();
+                            solana.addPriorityFee(tx);
 
-                            if (configData && configData.shareholders && configData.shareholders.length > 0) {
-                                const tx = new Transaction();
-                                solana.addPriorityFee(tx);
+                            // v25.93: Use same collect_creator_fee instruction as platform tokens
+                            const claimDiscriminator = pump.buildClaimFeesData();
+                            const [eventAuthority] = PublicKey.findProgramAddressSync(
+                                [Buffer.from("__event_authority")], PROGRAMS.PUMP
+                            );
 
-                                const distributeDiscriminator = pump.buildDistributeFeesData();
-                                const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP
+                            // Same account structure as platform tokens: [recipient, vault, system, event_auth, program]
+                            const claimKeys = [
+                                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
+                                { pubkey: bcVault, isSigner: false, isWritable: true },
+                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+                            ];
+
+                            tx.add(new TransactionInstruction({
+                                keys: claimKeys,
+                                programId: PROGRAMS.PUMP,
+                                data: claimDiscriminator
+                            }));
+
+                            const ourShare = Math.floor(bcPendingLamports * (token.feeShareBps / 10000));
+
+                            try {
+                                tx.feePayer = devKeypair.publicKey;
+                                await solana.sendTxWithRetry(tx, [devKeypair]);
+
+                                tokenClaimed += ourShare;
+                                totalClaimed += ourShare;
+                                claimedTokens.push({
+                                    ticker: token.ticker || token.creatorPubkey.slice(0, 8),
+                                    amount: ourShare,
+                                    source: 'BC'
+                                });
+
+                                await db.run(
+                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
+                                    [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
                                 );
 
-                                // Account order: sharing_config, creator_vault, [shareholders...], system, event_auth, program
-                                const distributeKeys = [
-                                    { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
-                                    { pubkey: bcVault, isSigner: false, isWritable: true },
-                                ];
-
-                                for (const shareholder of configData.shareholders) {
-                                    distributeKeys.push({
-                                        pubkey: shareholder.pubkey,
-                                        isSigner: false,
-                                        isWritable: true
-                                    });
-                                }
-
-                                distributeKeys.push(
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-                                );
-
-                                tx.add(new TransactionInstruction({
-                                    keys: distributeKeys,
-                                    programId: PROGRAMS.PUMP,
-                                    data: distributeDiscriminator
-                                }));
-
-                                const ourShare = Math.floor(bcPendingLamports * (token.feeShareBps / 10000));
-
-                                try {
-                                    tx.feePayer = devKeypair.publicKey;
-                                    await solana.sendTxWithRetry(tx, [devKeypair]);
-
-                                    tokenClaimed += ourShare;
-                                    totalClaimed += ourShare;
-                                    claimedTokens.push({
-                                        ticker: token.ticker || token.creatorPubkey.slice(0, 8),
-                                        amount: ourShare,
-                                        source: 'BC'
-                                    });
-
-                                    // v25.90: Also reset pendingFees to 0 after claiming
-                                    await db.run(
-                                        'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
-                                        [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
-                                    );
-
-                                    logger.info(`[Robinhood/PUMP] Claimed BC fees from ${token.ticker}: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share)`);
-                                } catch (txErr) {
-                                    logger.debug(`[Robinhood/PUMP] BC distribute failed for ${token.ticker}`, {
-                                        error: txErr.message,
-                                        shareholders: configData.shareholders.length
-                                    });
-                                }
-                            } else {
-                                logger.debug(`[Robinhood/PUMP] No config data for ${token.ticker}`);
+                                logger.info(`[Robinhood/PUMP] ${token.ticker}: Collected ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+                            } catch (txErr) {
+                                logger.info(`[Robinhood/PUMP] BC collect failed for ${token.ticker}: ${txErr.message}`, {
+                                    bcVault: bcVault.toString(),
+                                    program: 'PUMP'
+                                });
                             }
                         }
                     } catch (e) {
@@ -894,9 +839,8 @@ async function claimRobinhoodFees(deps) {
                     logger.debug(`[Robinhood] ${token.ticker}: No pending BC fees (balance: ${bcInfo?.lamports || 0})`);
                 }
 
-                // v25.91: Check and attempt to distribute AMM vault fees for graduated tokens
-                // For fee sharing tokens, use distribute_creator_fees (similar to BC)
-                // AMM vaults derived from feeVaultAddress for FEE program tokens, creatorPubkey otherwise
+                // v25.93: Check and attempt to collect AMM vault fees for graduated tokens
+                // Use same collect_creator_fee pattern as platform tokens
                 try {
                     const ammVaultAtaKey = await ammVaultAta;
                     const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
@@ -910,127 +854,70 @@ async function claimRobinhoodFees(deps) {
 
                         logger.info(`[Robinhood/AMM] ${token.ticker}: Found ${ammFeeSol.toFixed(6)} SOL in AMM vault (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
 
-                        // v25.91: Use distribute_creator_fees for AMM (PumpSwap) similar to BC
-                        // This distributes fees to all shareholders without requiring creator signature
+                        // v25.93: Use same collect_creator_fee pattern as platform tokens
                         try {
-                            // v25.92: Different parsing for FEE program vs PUMP program tokens
-                            let ammShareholders = [];
-                            let ammConfigFound = false;
+                            const ammTx = new Transaction();
+                            solana.addPriorityFee(ammTx);
 
-                            if (isFeeProgram) {
-                                // FEE program: shareholders embedded in bcVault (feeVaultAddress) account
-                                // Same structure as BC: 8 disc + 32 mint + 3 bump + 32 creator + 1 unk + 4 array_len + shareholders
-                                logger.info(`[Robinhood/AMM] ${token.ticker}: FEE program - parsing shareholders from FEE account`);
-
-                                // Fetch the FEE account (bcVault = feeVaultAddress)
-                                const feeAccountInfo = await connection.getAccountInfo(bcVault);
-
-                                if (feeAccountInfo && feeAccountInfo.owner.equals(PROGRAMS.FEE) && feeAccountInfo.data.length >= 80) {
-                                    const data = feeAccountInfo.data;
-                                    const numShareholders = data.readUInt32LE(76);
-                                    let offset = 80;
-
-                                    if (numShareholders >= 1 && numShareholders <= 10) {
-                                        ammConfigFound = true;
-                                        for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                            offset += 32;
-                                            const bps = data.readUInt16LE(offset);
-                                            offset += 2;
-                                            ammShareholders.push({ pubkey, bps });
-                                        }
-                                    }
-                                    logger.info(`[Robinhood/AMM] ${token.ticker}: Found ${ammShareholders.length} shareholders in FEE account`);
-                                }
-                            } else {
-                                // PUMP program: separate fee_sharing_config PDA
-                                const ammSharingConfigPDA = sharingConfigPDA;
-                                logger.info(`[Robinhood/AMM] ${token.ticker}: PUMP program - using sharing config ${ammSharingConfigPDA.toString().slice(0, 8)}...`);
-
-                                const ammConfigData = await getCachedFeeSharingConfig(connection, ammSharingConfigPDA, creatorPubkey, false);
-
-                                if (ammConfigData && ammConfigData.shareholders && ammConfigData.shareholders.length > 0) {
-                                    ammConfigFound = true;
-                                    ammShareholders = ammConfigData.shareholders;
-                                }
-                                logger.info(`[Robinhood/AMM] ${token.ticker}: Config data: ${ammConfigData ? `${ammConfigData.shareholders?.length || 0} shareholders` : 'null'}`);
+                            // Create our wSOL ATA if needed
+                            const myWsolAta = await getAssociatedTokenAddress(TOKENS.WSOL, devKeypair.publicKey);
+                            try {
+                                await getAccount(connection, myWsolAta);
+                            } catch {
+                                ammTx.add(createAssociatedTokenAccountInstruction(
+                                    devKeypair.publicKey, myWsolAta, devKeypair.publicKey, TOKENS.WSOL
+                                ));
                             }
 
-                            if (ammConfigFound && ammShareholders.length > 0) {
-                                const ammTx = new Transaction();
-                                solana.addPriorityFee(ammTx);
+                            // Same discriminator as platform AMM collect
+                            const ammClaimDiscriminator = Buffer.from([160, 57, 89, 42, 181, 139, 43, 66]);
+                            const [ammEventAuthority] = PublicKey.findProgramAddressSync(
+                                [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
+                            );
 
-                                const ammDistributeDiscriminator = pump.buildDistributeAmmFeesData();
-                                const [ammEventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
-                                );
+                            // Same account structure as platform tokens: [wsol, token_program, creator (signer), vault_auth, vault_ata, my_wsol_ata, event_auth, program]
+                            const ammClaimKeys = [
+                                { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },
+                                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+                                { pubkey: devKeypair.publicKey, isSigner: true, isWritable: false },
+                                { pubkey: ammVaultAuth, isSigner: false, isWritable: false },
+                                { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true },
+                                { pubkey: myWsolAta, isSigner: false, isWritable: true },
+                                { pubkey: ammEventAuthority, isSigner: false, isWritable: false },
+                                { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false }
+                            ];
 
-                                // v25.92: Build keys based on program type
-                                const ammDistributeKeys = [];
+                            ammTx.add(new TransactionInstruction({
+                                keys: ammClaimKeys,
+                                programId: PROGRAMS.PUMP_AMM,
+                                data: ammClaimDiscriminator
+                            }));
 
-                                if (isFeeProgram) {
-                                    // FEE program: vault is the config
-                                    ammDistributeKeys.push(
-                                        { pubkey: bcVault, isSigner: false, isWritable: true },
-                                        { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true }
-                                    );
-                                } else {
-                                    // PUMP program: separate config + vault
-                                    ammDistributeKeys.push(
-                                        { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
-                                        { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true }
-                                    );
-                                }
+                            // Close wSOL ATA to get native SOL
+                            ammTx.add(createCloseAccountInstruction(myWsolAta, devKeypair.publicKey, devKeypair.publicKey));
 
-                                for (const shareholder of ammShareholders) {
-                                    ammDistributeKeys.push({
-                                        pubkey: shareholder.pubkey,
-                                        isSigner: false,
-                                        isWritable: true
-                                    });
-                                }
+                            ammTx.feePayer = devKeypair.publicKey;
+                            await solana.sendTxWithRetry(ammTx, [devKeypair]);
 
-                                ammDistributeKeys.push(
-                                    { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },
-                                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: ammEventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false }
-                                );
+                            // Collection succeeded!
+                            const ourShareLamports = Math.floor(ammFeeLamports * (token.feeShareBps / 10000));
+                            totalClaimed += ourShareLamports;
+                            claimedTokens.push({
+                                ticker: token.ticker || token.creatorPubkey.slice(0, 8),
+                                amount: ourShareLamports,
+                                source: 'AMM'
+                            });
 
-                                ammTx.add(new TransactionInstruction({
-                                    keys: ammDistributeKeys,
-                                    programId: PROGRAMS.PUMP_AMM,
-                                    data: ammDistributeDiscriminator
-                                }));
+                            // Update database
+                            await db.run(
+                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2 WHERE id = $3',
+                                [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, token.id]
+                            );
 
-                                ammTx.feePayer = devKeypair.publicKey;
-                                await solana.sendTxWithRetry(ammTx, [devKeypair]);
-
-                                // Distribution succeeded!
-                                const ourShareLamports = Math.floor(ammFeeLamports * (token.feeShareBps / 10000));
-                                totalClaimed += ourShareLamports;
-                                claimedTokens.push({
-                                    ticker: token.ticker || token.creatorPubkey.slice(0, 8),
-                                    amount: ourShareLamports,
-                                    source: 'AMM'
-                                });
-
-                                // Update database
-                                await db.run(
-                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2 WHERE id = $3',
-                                    [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, token.id]
-                                );
-
-                                logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
-                            } else {
-                                // No AMM sharing config found - track as pending
-                                totalPendingAmmFees += ammFeeLamports;
-                                logger.debug(`[Robinhood/AMM] ${token.ticker}: No AMM sharing config found or no shareholders`);
-                            }
+                            logger.info(`[Robinhood/AMM] ${token.ticker}: Collected ${ammFeeSol.toFixed(6)} SOL (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
 
                         } catch (claimErr) {
-                            // AMM distribute failed - track as pending for monitoring
+                            // AMM collect failed - track as pending for monitoring
                             totalPendingAmmFees += ammFeeLamports;
 
                             // Update database with pending AMM fees
@@ -1039,8 +926,7 @@ async function claimRobinhoodFees(deps) {
                                 [ammFeeSol, token.mint]
                             ).catch(() => {});
 
-                            // Log at info level to help debug the instruction format
-                            logger.info(`[Robinhood/AMM] ${token.ticker}: AMM distribute failed - ${claimErr.message}`);
+                            logger.info(`[Robinhood/AMM] ${token.ticker}: AMM collect failed - ${claimErr.message}`);
                         }
                     }
                 } catch (e) {

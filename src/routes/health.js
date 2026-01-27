@@ -1203,7 +1203,7 @@ function init(deps) {
             const pump = require('../services/pump');
             const solana = require('../services/solana');
             const { PublicKey, Transaction, TransactionInstruction, SystemProgram } = require('@solana/web3.js');
-            const { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } = require('@solana/spl-token');
+            const { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getAccount, createAssociatedTokenAccountInstruction, createCloseAccountInstruction } = require('@solana/spl-token');
             const { PROGRAMS, TOKENS } = require('../config/constants');
             const LAMPORTS_PER_SOL = 1000000000;
 
@@ -1263,143 +1263,54 @@ function init(deps) {
                     };
 
                     if (bcPending > 0) {
-                        // v25.91: Different parsing for FEE program vs PUMP program tokens
-                        let shareholders = [];
-                        let originalCreator = null;
-                        let configFound = false;
-                        let programToUse = PROGRAMS.PUMP;
+                        // v25.93: Use same collect_creator_fee pattern as platform tokens
+                        const programToUse = isFeeProgram ? PROGRAMS.FEE : PROGRAMS.PUMP;
+                        results.bc.program = isFeeProgram ? 'FEE' : 'PUMP';
 
-                        if (isFeeProgram && bcInfo && bcInfo.owner.equals(PROGRAMS.FEE)) {
-                            // FEE program: shareholders embedded in bcVault (feeVaultAddress) account
-                            // Structure: 8 disc + 32 mint + 3 bump + 32 creator + 1 unk + 4 array_len + shareholders
-                            results.bc.configSource = 'FEE program account';
-                            programToUse = PROGRAMS.FEE;
+                        try {
+                            const tx = new Transaction();
+                            solana.addPriorityFee(tx);
 
-                            const data = bcInfo.data;
-                            if (data.length >= 80) {
-                                try {
-                                    originalCreator = new PublicKey(data.slice(43, 75)).toString();
-                                } catch (e) {}
+                            // Same collect_creator_fee instruction as platform tokens
+                            const claimDiscriminator = pump.buildClaimFeesData();
+                            const [eventAuthority] = PublicKey.findProgramAddressSync(
+                                [Buffer.from("__event_authority")], programToUse
+                            );
 
-                                const numShareholders = data.readUInt32LE(76);
-                                let offset = 80;
+                            // Same account structure: [recipient, vault, system, event_auth, program]
+                            const claimKeys = [
+                                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
+                                { pubkey: bcVault, isSigner: false, isWritable: true },
+                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                                { pubkey: programToUse, isSigner: false, isWritable: false }
+                            ];
 
-                                if (numShareholders >= 1 && numShareholders <= 10) {
-                                    configFound = true;
-                                    for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                        offset += 32;
-                                        const bps = data.readUInt16LE(offset);
-                                        offset += 2;
-                                        shareholders.push({ pubkey, bps });
-                                    }
-                                }
-                                results.bc.numShareholders = numShareholders;
-                            }
-                        } else {
-                            // PUMP program: separate fee_sharing_config PDA
-                            results.bc.configSource = 'PUMP sharing config PDA';
-                            const configInfo = await connection.getAccountInfo(sharingConfigPDA);
+                            tx.add(new TransactionInstruction({
+                                keys: claimKeys,
+                                programId: programToUse,
+                                data: claimDiscriminator
+                            }));
 
-                            if (configInfo && configInfo.data.length > 44) {
-                                configFound = true;
-                                const data = configInfo.data;
-                                let offset = 8;
-                                originalCreator = new PublicKey(data.slice(offset, offset + 32)).toString();
-                                offset += 32;
-                                const numShareholders = data.readUInt32LE(offset);
-                                offset += 4;
+                            tx.feePayer = devKeypair.publicKey;
+                            const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
 
-                                results.bc.numShareholders = numShareholders;
+                            results.bc.claimed = true;
+                            results.bc.signature = sig;
+                            results.bc.claimedSol = bcPending / LAMPORTS_PER_SOL;
 
-                                for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                    const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                    offset += 32;
-                                    const bps = data.readUInt16LE(offset);
-                                    offset += 2;
-                                    shareholders.push({ pubkey, bps });
-                                }
-                            }
-                        }
+                            // Update database
+                            const ourShare = Math.floor(bcPending * (token.feeShareBps / 10000));
+                            await db.run(
+                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
+                                [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
+                            );
 
-                        results.bc.configFound = configFound;
-                        results.bc.originalCreator = originalCreator;
-                        results.bc.shareholders = shareholders.map(s => ({
-                            pubkey: s.pubkey.toString(),
-                            bps: s.bps,
-                            percent: s.bps / 100
-                        }));
-
-                        if (configFound && shareholders.length > 0) {
-                            // Try to build and send distribute transaction
-                            try {
-                                const tx = new Transaction();
-                                solana.addPriorityFee(tx);
-
-                                const distributeDiscriminator = pump.buildDistributeFeesData();
-                                const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], programToUse
-                                );
-
-                                // Build keys based on program type
-                                const distributeKeys = [];
-
-                                if (isFeeProgram) {
-                                    // FEE program: vault IS the config
-                                    distributeKeys.push(
-                                        { pubkey: bcVault, isSigner: false, isWritable: true }
-                                    );
-                                } else {
-                                    // PUMP program: separate config + vault
-                                    distributeKeys.push(
-                                        { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
-                                        { pubkey: bcVault, isSigner: false, isWritable: true }
-                                    );
-                                }
-
-                                for (const sh of shareholders) {
-                                    distributeKeys.push({
-                                        pubkey: sh.pubkey,
-                                        isSigner: false,
-                                        isWritable: true
-                                    });
-                                }
-
-                                distributeKeys.push(
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: programToUse, isSigner: false, isWritable: false }
-                                );
-
-                                tx.add(new TransactionInstruction({
-                                    keys: distributeKeys,
-                                    programId: programToUse,
-                                    data: distributeDiscriminator
-                                }));
-
-                                tx.feePayer = devKeypair.publicKey;
-                                const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
-
-                                results.bc.claimed = true;
-                                results.bc.signature = sig;
-                                results.bc.claimedSol = bcPending / LAMPORTS_PER_SOL;
-
-                                // Update database
-                                const ourShare = Math.floor(bcPending * (token.feeShareBps / 10000));
-                                await db.run(
-                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
-                                    [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
-                                );
-
-                                logger.info(`[Admin] BC fees claimed for ${token.ticker}: ${bcPending / LAMPORTS_PER_SOL} SOL`);
-                            } catch (txErr) {
-                                results.bc.claimed = false;
-                                results.bc.error = txErr.message;
-                                logger.error(`[Admin] BC claim failed for ${token.ticker}`, { error: txErr.message });
-                            }
-                        } else {
-                            results.bc.configFound = false;
-                            results.bc.error = 'Sharing config not found';
+                            logger.info(`[Admin] BC fees collected for ${token.ticker}: ${bcPending / LAMPORTS_PER_SOL} SOL`);
+                        } catch (txErr) {
+                            results.bc.claimed = false;
+                            results.bc.error = txErr.message;
+                            logger.error(`[Admin] BC collect failed for ${token.ticker}`, { error: txErr.message });
                         }
                     }
                 } catch (e) {
@@ -1422,127 +1333,60 @@ function init(deps) {
                     };
 
                     if (ammBalance > 0) {
-                        // Try AMM distribution
+                        // v25.93: Use same collect_creator_fee pattern as platform tokens
                         try {
-                            // v25.91: Different parsing for FEE program vs PUMP program tokens
-                            let ammShareholders = [];
-                            let ammConfigFound = false;
+                            const ammTx = new Transaction();
+                            solana.addPriorityFee(ammTx);
 
-                            if (isFeeProgram) {
-                                // FEE program: shareholders embedded in bcVault (feeVaultAddress) account
-                                // Same structure as BC: 8 disc + 32 mint + 3 bump + 32 creator + 1 unk + 4 array_len + shareholders
-                                results.amm.configSource = 'FEE program account';
-                                const feeAccountInfo = await connection.getAccountInfo(bcVault);
-
-                                if (feeAccountInfo && feeAccountInfo.owner.equals(PROGRAMS.FEE) && feeAccountInfo.data.length >= 80) {
-                                    const data = feeAccountInfo.data;
-                                    const numShareholders = data.readUInt32LE(76);
-                                    let offset = 80;
-
-                                    if (numShareholders >= 1 && numShareholders <= 10) {
-                                        ammConfigFound = true;
-                                        for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                            offset += 32;
-                                            const bps = data.readUInt16LE(offset);
-                                            offset += 2;
-                                            ammShareholders.push({ pubkey, bps });
-                                        }
-                                    }
-                                    results.amm.numShareholders = numShareholders;
-                                }
-                            } else {
-                                // PUMP program: separate fee_sharing_config PDA
-                                results.amm.configSource = 'PUMP sharing config PDA';
-                                const configInfo = await connection.getAccountInfo(sharingConfigPDA);
-
-                                if (configInfo && configInfo.data.length > 44) {
-                                    ammConfigFound = true;
-                                    const data = configInfo.data;
-                                    let offset = 8;
-                                    offset += 32; // skip originalCreator
-                                    const numShareholders = data.readUInt32LE(offset);
-                                    offset += 4;
-
-                                    results.amm.numShareholders = numShareholders;
-
-                                    for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                        offset += 32;
-                                        const bps = data.readUInt16LE(offset);
-                                        offset += 2;
-                                        ammShareholders.push({ pubkey, bps });
-                                    }
-                                }
+                            // Create our wSOL ATA if needed
+                            const myWsolAta = await getAssociatedTokenAddress(TOKENS.WSOL, devKeypair.publicKey);
+                            try {
+                                await getAccount(connection, myWsolAta);
+                            } catch {
+                                ammTx.add(createAssociatedTokenAccountInstruction(
+                                    devKeypair.publicKey, myWsolAta, devKeypair.publicKey, TOKENS.WSOL
+                                ));
                             }
 
-                            results.amm.configFound = ammConfigFound;
+                            // Same discriminator as platform AMM collect
+                            const ammClaimDiscriminator = Buffer.from([160, 57, 89, 42, 181, 139, 43, 66]);
+                            const [ammEventAuthority] = PublicKey.findProgramAddressSync(
+                                [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
+                            );
 
-                            if (ammConfigFound && ammShareholders.length > 0) {
-                                // Try AMM distribute
-                                const ammTx = new Transaction();
-                                solana.addPriorityFee(ammTx);
+                            // Same account structure as platform tokens
+                            const ammClaimKeys = [
+                                { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },
+                                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+                                { pubkey: devKeypair.publicKey, isSigner: true, isWritable: false },
+                                { pubkey: ammVaultAuth, isSigner: false, isWritable: false },
+                                { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true },
+                                { pubkey: myWsolAta, isSigner: false, isWritable: true },
+                                { pubkey: ammEventAuthority, isSigner: false, isWritable: false },
+                                { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false }
+                            ];
 
-                                const ammDistributeDiscriminator = pump.buildDistributeAmmFeesData();
-                                const [ammEventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
-                                );
+                            ammTx.add(new TransactionInstruction({
+                                keys: ammClaimKeys,
+                                programId: PROGRAMS.PUMP_AMM,
+                                data: ammClaimDiscriminator
+                            }));
 
-                                // Build keys based on program type
-                                const ammDistributeKeys = [];
+                            // Close wSOL ATA to get native SOL
+                            ammTx.add(createCloseAccountInstruction(myWsolAta, devKeypair.publicKey, devKeypair.publicKey));
 
-                                if (isFeeProgram) {
-                                    // FEE program: vault is the config
-                                    ammDistributeKeys.push(
-                                        { pubkey: bcVault, isSigner: false, isWritable: true },
-                                        { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true }
-                                    );
-                                } else {
-                                    // PUMP program: separate config + vault
-                                    ammDistributeKeys.push(
-                                        { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
-                                        { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true }
-                                    );
-                                }
+                            ammTx.feePayer = devKeypair.publicKey;
+                            const sig = await solana.sendTxWithRetry(ammTx, [devKeypair]);
 
-                                for (const sh of ammShareholders) {
-                                    ammDistributeKeys.push({
-                                        pubkey: sh.pubkey,
-                                        isSigner: false,
-                                        isWritable: true
-                                    });
-                                }
+                            results.amm.claimed = true;
+                            results.amm.signature = sig;
+                            results.amm.claimedSol = ammBalance / LAMPORTS_PER_SOL;
 
-                                ammDistributeKeys.push(
-                                    { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },
-                                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: ammEventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false }
-                                );
-
-                                ammTx.add(new TransactionInstruction({
-                                    keys: ammDistributeKeys,
-                                    programId: PROGRAMS.PUMP_AMM,
-                                    data: ammDistributeDiscriminator
-                                }));
-
-                                ammTx.feePayer = devKeypair.publicKey;
-                                const sig = await solana.sendTxWithRetry(ammTx, [devKeypair]);
-
-                                results.amm.claimed = true;
-                                results.amm.signature = sig;
-                                results.amm.claimedSol = ammBalance / LAMPORTS_PER_SOL;
-
-                                logger.info(`[Admin] AMM fees claimed for ${token.ticker}: ${ammBalance / LAMPORTS_PER_SOL} SOL`);
-                            } else {
-                                results.amm.configFound = false;
-                                results.amm.error = 'Sharing config not found or no shareholders';
-                            }
+                            logger.info(`[Admin] AMM fees collected for ${token.ticker}: ${ammBalance / LAMPORTS_PER_SOL} SOL`);
                         } catch (txErr) {
                             results.amm.claimed = false;
                             results.amm.error = txErr.message;
-                            logger.error(`[Admin] AMM claim failed for ${token.ticker}`, { error: txErr.message });
+                            logger.error(`[Admin] AMM collect failed for ${token.ticker}`, { error: txErr.message });
                         }
                     }
                 } catch (e) {
