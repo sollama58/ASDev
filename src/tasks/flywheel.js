@@ -15,6 +15,7 @@
  * v25.46 - Twitter announcements when KOTH changes (with AI reasoning)
  * v25.75 - Fixed fee claiming for FEE program tokens: use feeVaultAddress as both vault+config
  * v25.76 - Threshold now considers SUM of platform + robinhood fees; improved FEE program handling
+ * v25.92 - AMM fee claiming now properly handles FEE program tokens (parses shareholders from FEE account)
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -912,18 +913,50 @@ async function claimRobinhoodFees(deps) {
                         // v25.91: Use distribute_creator_fees for AMM (PumpSwap) similar to BC
                         // This distributes fees to all shareholders without requiring creator signature
                         try {
-                            // Use the same sharing config as BC (derived from original creatorPubkey)
-                            // Fee sharing is unified - set up once by creator, applies to both BC and AMM
-                            const ammSharingConfigPDA = sharingConfigPDA; // Already derived from creatorPubkey
+                            // v25.92: Different parsing for FEE program vs PUMP program tokens
+                            let ammShareholders = [];
+                            let ammConfigFound = false;
 
-                            logger.info(`[Robinhood/AMM] ${token.ticker}: Attempting AMM distribute - config: ${ammSharingConfigPDA.toString().slice(0, 8)}..., vault: ${ammVaultAtaKey.toString().slice(0, 8)}...`);
+                            if (isFeeProgram) {
+                                // FEE program: shareholders embedded in bcVault (feeVaultAddress) account
+                                // Same structure as BC: 8 disc + 32 mint + 3 bump + 32 creator + 1 unk + 4 array_len + shareholders
+                                logger.info(`[Robinhood/AMM] ${token.ticker}: FEE program - parsing shareholders from FEE account`);
 
-                            // Get shareholders from sharing config (same config used for both BC and AMM)
-                            const ammConfigData = await getCachedFeeSharingConfig(connection, ammSharingConfigPDA, creatorPubkey, false);
+                                // Fetch the FEE account (bcVault = feeVaultAddress)
+                                const feeAccountInfo = await connection.getAccountInfo(bcVault);
 
-                            logger.info(`[Robinhood/AMM] ${token.ticker}: Config data: ${ammConfigData ? `${ammConfigData.shareholders?.length || 0} shareholders` : 'null'}`);
+                                if (feeAccountInfo && feeAccountInfo.owner.equals(PROGRAMS.FEE) && feeAccountInfo.data.length >= 80) {
+                                    const data = feeAccountInfo.data;
+                                    const numShareholders = data.readUInt32LE(76);
+                                    let offset = 80;
 
-                            if (ammConfigData && ammConfigData.shareholders && ammConfigData.shareholders.length > 0) {
+                                    if (numShareholders >= 1 && numShareholders <= 10) {
+                                        ammConfigFound = true;
+                                        for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
+                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                                            offset += 32;
+                                            const bps = data.readUInt16LE(offset);
+                                            offset += 2;
+                                            ammShareholders.push({ pubkey, bps });
+                                        }
+                                    }
+                                    logger.info(`[Robinhood/AMM] ${token.ticker}: Found ${ammShareholders.length} shareholders in FEE account`);
+                                }
+                            } else {
+                                // PUMP program: separate fee_sharing_config PDA
+                                const ammSharingConfigPDA = sharingConfigPDA;
+                                logger.info(`[Robinhood/AMM] ${token.ticker}: PUMP program - using sharing config ${ammSharingConfigPDA.toString().slice(0, 8)}...`);
+
+                                const ammConfigData = await getCachedFeeSharingConfig(connection, ammSharingConfigPDA, creatorPubkey, false);
+
+                                if (ammConfigData && ammConfigData.shareholders && ammConfigData.shareholders.length > 0) {
+                                    ammConfigFound = true;
+                                    ammShareholders = ammConfigData.shareholders;
+                                }
+                                logger.info(`[Robinhood/AMM] ${token.ticker}: Config data: ${ammConfigData ? `${ammConfigData.shareholders?.length || 0} shareholders` : 'null'}`);
+                            }
+
+                            if (ammConfigFound && ammShareholders.length > 0) {
                                 const ammTx = new Transaction();
                                 solana.addPriorityFee(ammTx);
 
@@ -932,14 +965,24 @@ async function claimRobinhoodFees(deps) {
                                     [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
                                 );
 
-                                // v25.91: AMM distribute accounts similar to BC distribute
-                                // sharing_config, creator_vault_ata, [shareholders...], wsol_mint, token_program, system, event_auth, program
-                                const ammDistributeKeys = [
-                                    { pubkey: ammSharingConfigPDA, isSigner: false, isWritable: true },
-                                    { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true },
-                                ];
+                                // v25.92: Build keys based on program type
+                                const ammDistributeKeys = [];
 
-                                for (const shareholder of ammConfigData.shareholders) {
+                                if (isFeeProgram) {
+                                    // FEE program: vault is the config
+                                    ammDistributeKeys.push(
+                                        { pubkey: bcVault, isSigner: false, isWritable: true },
+                                        { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true }
+                                    );
+                                } else {
+                                    // PUMP program: separate config + vault
+                                    ammDistributeKeys.push(
+                                        { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
+                                        { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true }
+                                    );
+                                }
+
+                                for (const shareholder of ammShareholders) {
                                     ammDistributeKeys.push({
                                         pubkey: shareholder.pubkey,
                                         isSigner: false,
@@ -983,7 +1026,7 @@ async function claimRobinhoodFees(deps) {
                             } else {
                                 // No AMM sharing config found - track as pending
                                 totalPendingAmmFees += ammFeeLamports;
-                                logger.debug(`[Robinhood/AMM] ${token.ticker}: No AMM sharing config found at ${ammSharingConfigPDA.toString().slice(0, 8)}...`);
+                                logger.debug(`[Robinhood/AMM] ${token.ticker}: No AMM sharing config found or no shareholders`);
                             }
 
                         } catch (claimErr) {
