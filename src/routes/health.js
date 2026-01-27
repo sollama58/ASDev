@@ -240,13 +240,12 @@ function init(deps) {
                                 let ammVaultAta;
 
                                 if (token.feeVaultAddress) {
-                                    // v25.87: FEE program token - derive vaults from ORIGINAL CREATOR
-                                    // (creatorPubkey), not from feeVaultAddress. PUMP's distribute_creator_fees
-                                    // expects PUMP-owned accounts derived from the original creator.
-                                    const creatorPubkey = new PublicKey(token.creatorPubkey);
-                                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
-                                    bcVault = vaults.bcVault;
-                                    ammVaultAta = vaults.ammVaultAta;
+                                    // v25.91: FEE program token - use feeVaultAddress directly for BC vault
+                                    // This is where fees actually accumulate (consistent with scanner and admin refresh)
+                                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                                    bcVault = feeVaultPubkey;
+                                    const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                                    ammVaultAta = feeVaults.ammVaultAta;
                                 } else {
                                     // PUMP program token - derive from creatorPubkey
                                     const creatorPubkey = new PublicKey(token.creatorPubkey);
