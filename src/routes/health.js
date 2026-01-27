@@ -1042,41 +1042,82 @@ function init(deps) {
             // Also check the BC vault and AMM vault owners
             const bcVaultOwner = bcInfo?.owner?.toString() || null;
 
-            // Parse sharing config if found
+            // Parse sharing config - different approach for FEE program vs PUMP program tokens
             let shareholders = [];
             let originalCreator = null;
             let configFound = false;
-            let foundConfigInfo = configInfo;
+            let configSource = null;
+            const mintExtractor = require('../services/mintExtractor');
 
-            // If primary config not found, try to use any found config
-            if (!configInfo) {
-                const foundResult = configSearchResults.find(r => r.found && r.dataSize > 44);
-                if (foundResult) {
-                    foundConfigInfo = await connection.getAccountInfo(new PublicKey(foundResult.pda)).catch(() => null);
-                    configFound = !!foundConfigInfo;
+            if (isFeeProgram && bcInfo && bcInfo.owner.equals(PROGRAMS.FEE)) {
+                // v25.91: For FEE program tokens, the sharing config is EMBEDDED in the feeVaultAddress account
+                // The feeVaultAddress IS the vault AND contains the sharing config
+                configSource = 'FEE program account (feeVaultAddress)';
+
+                // Parse FEE account structure to find shareholders
+                // Structure: 8 discriminator + 32 mint + 3 bump/padding + 32 creator + 1 unknown + 4 array_len + shareholders
+                const data = bcInfo.data;
+                if (data.length >= 80) {
+                    // Original creator is at offset 43 (after 8 disc + 32 mint + 3 bump)
+                    try {
+                        originalCreator = new PublicKey(data.slice(43, 75)).toString();
+                    } catch (e) {}
+
+                    // Shareholders array length at offset 76
+                    const numShareholders = data.readUInt32LE(76);
+                    let offset = 80; // Start of shareholders array
+
+                    if (numShareholders >= 1 && numShareholders <= 10) {
+                        configFound = true;
+                        for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
+                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                            offset += 32;
+                            const bps = data.readUInt16LE(offset);
+                            offset += 2;
+                            shareholders.push({
+                                pubkey: pubkey.toString(),
+                                bps,
+                                percent: bps / 100
+                            });
+                        }
+                    }
                 }
             } else {
-                configFound = true;
-            }
+                // For PUMP program tokens, try separate fee_sharing_config PDA
+                let foundConfigInfo = configInfo;
 
-            if (foundConfigInfo && foundConfigInfo.data && foundConfigInfo.data.length > 44) {
-                const data = foundConfigInfo.data;
-                let offset = 8;
-                originalCreator = new PublicKey(data.slice(offset, offset + 32)).toString();
-                offset += 32;
-                const numShareholders = data.readUInt32LE(offset);
-                offset += 4;
+                // If primary config not found, try to use any found config from search
+                if (!configInfo) {
+                    const foundResult = configSearchResults.find(r => r.found && r.dataSize > 44);
+                    if (foundResult) {
+                        foundConfigInfo = await connection.getAccountInfo(new PublicKey(foundResult.pda)).catch(() => null);
+                        configSource = foundResult.label;
+                    }
+                } else {
+                    configSource = 'Primary PDA (PUMP from creatorPubkey)';
+                }
 
-                for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                    const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                configFound = !!foundConfigInfo;
+
+                if (foundConfigInfo && foundConfigInfo.data && foundConfigInfo.data.length > 44) {
+                    const data = foundConfigInfo.data;
+                    let offset = 8;
+                    originalCreator = new PublicKey(data.slice(offset, offset + 32)).toString();
                     offset += 32;
-                    const bps = data.readUInt16LE(offset);
-                    offset += 2;
-                    shareholders.push({
-                        pubkey: pubkey.toString(),
-                        bps,
-                        percent: bps / 100
-                    });
+                    const numShareholders = data.readUInt32LE(offset);
+                    offset += 4;
+
+                    for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
+                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                        offset += 32;
+                        const bps = data.readUInt16LE(offset);
+                        offset += 2;
+                        shareholders.push({
+                            pubkey: pubkey.toString(),
+                            bps,
+                            percent: bps / 100
+                        });
+                    }
                 }
             }
 
@@ -1117,11 +1158,14 @@ function init(deps) {
                 },
                 sharingConfig: {
                     found: configFound,
-                    dataSize: foundConfigInfo?.data?.length || 0,
+                    source: configSource,
+                    dataSize: isFeeProgram ? bcInfo?.data?.length : (configInfo?.data?.length || 0),
                     originalCreator,
                     shareholders,
                     primaryPDA: sharingConfigPDA.toString(),
-                    primaryFound: !!configInfo
+                    primaryFound: !!configInfo,
+                    isFeeProgram,
+                    feeVaultOwner: bcVaultOwner
                 },
                 configSearch: {
                     bcVaultOwner,
