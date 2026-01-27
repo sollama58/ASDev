@@ -1263,17 +1263,19 @@ function init(deps) {
                     };
 
                     if (bcPending > 0) {
-                        // v25.94: Always use PUMP program (6EF8...) for collect_creator_fee
-                        results.bc.program = 'PUMP';
+                        // v25.95: Use correct program based on vault type
+                        // - FEE program tokens: bcVault is feeVaultAddress (FEE program account)
+                        // - PUMP program tokens: bcVault is PUMP-derived PDA from creatorPubkey
+                        const programToUse = isFeeProgram ? PROGRAMS.FEE : PROGRAMS.PUMP;
+                        results.bc.program = isFeeProgram ? 'FEE' : 'PUMP';
 
                         try {
                             const tx = new Transaction();
                             solana.addPriorityFee(tx);
 
-                            // Same collect_creator_fee instruction as platform tokens
                             const claimDiscriminator = pump.buildClaimFeesData();
                             const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("__event_authority")], PROGRAMS.PUMP
+                                [Buffer.from("__event_authority")], programToUse
                             );
 
                             // Same account structure: [recipient, vault, system, event_auth, program]
@@ -1282,12 +1284,12 @@ function init(deps) {
                                 { pubkey: bcVault, isSigner: false, isWritable: true },
                                 { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                                 { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+                                { pubkey: programToUse, isSigner: false, isWritable: false }
                             ];
 
                             tx.add(new TransactionInstruction({
                                 keys: claimKeys,
-                                programId: PROGRAMS.PUMP,
+                                programId: programToUse,
                                 data: claimDiscriminator
                             }));
 

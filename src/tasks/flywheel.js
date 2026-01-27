@@ -15,7 +15,7 @@
  * v25.46 - Twitter announcements when KOTH changes (with AI reasoning)
  * v25.75 - Fixed fee claiming for FEE program tokens: use feeVaultAddress as both vault+config
  * v25.76 - Threshold now considers SUM of platform + robinhood fees; improved FEE program handling
- * v25.94 - Robinhood fee claiming: always use PUMP program (6EF8...) for collect_creator_fee
+ * v25.95 - Robinhood fee claiming: use correct program based on vault type (FEE vs PUMP)
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -720,33 +720,34 @@ async function claimRobinhoodFees(deps) {
                 const BC_CLAIM_THRESHOLD = 50000000; // 0.05 SOL
                 if (bcPendingLamports > BC_CLAIM_THRESHOLD) {
                     try {
-                        // v25.94: Always use PUMP program (6EF8...) for collect_creator_fee
-                        logger.info(`[Robinhood] ${token.ticker}: BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - attempting collect...`);
-
                         const tx = new Transaction();
                         solana.addPriorityFee(tx);
+                        const ourShare = Math.floor(bcPendingLamports * (token.feeShareBps / 10000));
+
+                        // v25.95: Use correct program based on vault type
+                        // - FEE program tokens: bcVault is feeVaultAddress (FEE program account)
+                        // - PUMP program tokens: bcVault is PUMP-derived PDA from creatorPubkey
+                        const programToUse = isFeeProgram ? PROGRAMS.FEE : PROGRAMS.PUMP;
+                        logger.info(`[Robinhood] ${token.ticker}: BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - using ${isFeeProgram ? 'FEE' : 'PUMP'} program...`);
 
                         const claimDiscriminator = pump.buildClaimFeesData();
                         const [eventAuthority] = PublicKey.findProgramAddressSync(
-                            [Buffer.from("__event_authority")], PROGRAMS.PUMP
+                            [Buffer.from("__event_authority")], programToUse
                         );
 
-                        // Same account structure as platform tokens: [recipient, vault, system, event_auth, program]
                         const claimKeys = [
                             { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
                             { pubkey: bcVault, isSigner: false, isWritable: true },
                             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                             { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                            { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+                            { pubkey: programToUse, isSigner: false, isWritable: false }
                         ];
 
                         tx.add(new TransactionInstruction({
                             keys: claimKeys,
-                            programId: PROGRAMS.PUMP,
+                            programId: programToUse,
                             data: claimDiscriminator
                         }));
-
-                        const ourShare = Math.floor(bcPendingLamports * (token.feeShareBps / 10000));
 
                         tx.feePayer = devKeypair.publicKey;
                         await solana.sendTxWithRetry(tx, [devKeypair]);
@@ -767,7 +768,8 @@ async function claimRobinhoodFees(deps) {
                         logger.info(`[Robinhood] ${token.ticker}: Collected ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
                     } catch (e) {
                         logger.info(`[Robinhood] BC collect failed for ${token.ticker}: ${e.message}`, {
-                            bcVault: bcVault.toString()
+                            bcVault: bcVault.toString(),
+                            isFeeProgram
                         });
                     }
                 } else {
