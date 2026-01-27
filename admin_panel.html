@@ -1039,6 +1039,31 @@
                                 Click "Refresh Fees" to load pending fees from on-chain vaults...
                             </div>
                         </div>
+
+                        <!-- v25.91: Token Fee Debugger -->
+                        <div class="mt-4 p-3 bg-yellow-900/20 rounded border border-yellow-700/30">
+                            <div class="flex items-center justify-between mb-3">
+                                <div>
+                                    <h4 class="text-sm text-yellow-400 font-bold">🔍 Token Fee Debugger</h4>
+                                    <p class="text-xs text-gray-500">Debug and manually claim fees for a specific token</p>
+                                </div>
+                            </div>
+                            <div class="flex gap-2 mb-3">
+                                <input type="text" id="fee-debug-mint" class="input-field flex-1" placeholder="Enter token mint address...">
+                                <button onclick="getTokenFeeStatus()" class="btn btn-secondary" id="fee-debug-status-btn">Get Status</button>
+                            </div>
+                            <div class="flex gap-2 mb-3">
+                                <select id="fee-debug-claim-type" class="input-field">
+                                    <option value="both">Both BC + AMM</option>
+                                    <option value="bc">BC Only</option>
+                                    <option value="amm">AMM Only</option>
+                                </select>
+                                <button onclick="claimTokenFees()" class="btn btn-success" id="fee-debug-claim-btn">Claim Fees</button>
+                            </div>
+                            <div id="fee-debug-result" class="result-box text-xs" style="max-height: 500px; overflow-y: auto;">
+                                Enter a token mint address and click "Get Status" to view fee details...
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -3003,6 +3028,250 @@
             } finally {
                 btnEl.disabled = false;
                 btnEl.textContent = 'Refresh Fees';
+            }
+        }
+
+        // v25.91: Get token fee status for debugging
+        async function getTokenFeeStatus() {
+            const mintInput = document.getElementById('fee-debug-mint');
+            const resultEl = document.getElementById('fee-debug-result');
+            const btnEl = document.getElementById('fee-debug-status-btn');
+            const mint = mintInput.value.trim();
+
+            if (!mint) {
+                resultEl.innerHTML = '<span class="text-red-400">Please enter a mint address</span>';
+                return;
+            }
+
+            btnEl.disabled = true;
+            btnEl.textContent = 'Loading...';
+            resultEl.innerHTML = '<span class="text-blue-400">Fetching token fee status...</span>';
+            log(`Getting fee status for ${mint.slice(0, 8)}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/token-fee-status/${mint}`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+                const data = await response.json();
+
+                if (data.error) {
+                    resultEl.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`Fee status error: ${data.error}`, 'error');
+                    return;
+                }
+
+                // Format the response for display
+                let html = '<div class="space-y-3">';
+
+                // Token Info
+                html += '<div class="bg-blue-900/20 p-2 rounded">';
+                html += '<div class="text-blue-400 font-bold mb-1">📋 Token Info</div>';
+                html += `<div class="grid grid-cols-2 gap-1 text-gray-300">`;
+                html += `<div>Ticker: <span class="text-white font-bold">${data.token.ticker}</span></div>`;
+                html += `<div>Fee Share: <span class="text-cyan-400">${data.token.feeSharePercent}%</span></div>`;
+                html += `<div class="col-span-2">Mint: <span class="text-gray-400 font-mono text-xs">${data.token.mint}</span></div>`;
+                html += `<div class="col-span-2">Creator: <span class="text-gray-400 font-mono text-xs">${data.token.creatorPubkey}</span></div>`;
+                if (data.token.feeVaultAddress) {
+                    html += `<div class="col-span-2">Fee Vault: <span class="text-purple-400 font-mono text-xs">${data.token.feeVaultAddress}</span></div>`;
+                }
+                html += `<div>Total Collected: <span class="text-green-400">${data.token.totalFeesCollected || 0} SOL</span></div>`;
+                html += `<div>Is Active: <span class="${data.token.isActive ? 'text-green-400' : 'text-red-400'}">${data.token.isActive ? 'Yes' : 'No'}</span></div>`;
+                html += '</div></div>';
+
+                // Vaults
+                html += '<div class="bg-purple-900/20 p-2 rounded">';
+                html += '<div class="text-purple-400 font-bold mb-1">🔐 Vault Addresses</div>';
+                html += `<div class="text-xs space-y-1">`;
+                html += `<div>BC Vault: <span class="font-mono text-gray-300">${data.vaults.bcVault}</span></div>`;
+                html += `<div>AMM Vault: <span class="font-mono text-gray-300">${data.vaults.ammVaultAta}</span></div>`;
+                html += `<div>Config PDA: <span class="font-mono text-gray-300">${data.vaults.sharingConfigPDA}</span></div>`;
+                html += `<div>Is FEE Program: <span class="${data.vaults.isFeeProgram ? 'text-yellow-400' : 'text-gray-400'}">${data.vaults.isFeeProgram ? 'Yes' : 'No'}</span></div>`;
+                html += '</div></div>';
+
+                // Balances
+                html += '<div class="bg-green-900/20 p-2 rounded">';
+                html += '<div class="text-green-400 font-bold mb-1">💰 Pending Balances</div>';
+                html += '<div class="grid grid-cols-2 gap-2">';
+                html += '<div class="bg-black/30 p-2 rounded">';
+                html += '<div class="text-xs text-gray-400">BC Vault</div>';
+                html += `<div class="text-lg font-bold text-yellow-400">${data.balances.bc.pendingSol.toFixed(6)} SOL</div>`;
+                html += `<div class="text-xs text-gray-500">Your share: ${data.balances.bc.ourShareSol.toFixed(6)} SOL</div>`;
+                html += '</div>';
+                html += '<div class="bg-black/30 p-2 rounded">';
+                html += '<div class="text-xs text-gray-400">AMM Vault</div>';
+                html += `<div class="text-lg font-bold text-pink-400">${data.balances.amm.pendingSol.toFixed(6)} SOL</div>`;
+                html += `<div class="text-xs text-gray-500">Your share: ${data.balances.amm.ourShareSol.toFixed(6)} SOL</div>`;
+                html += '</div>';
+                html += '</div>';
+                html += `<div class="mt-2 text-center text-sm">Total Pending: <span class="text-white font-bold">${data.balances.totalPendingSol.toFixed(6)} SOL</span> (Your share: <span class="text-green-400">${data.balances.totalOurShareSol.toFixed(6)} SOL</span>)</div>`;
+                html += '</div>';
+
+                // Sharing Config
+                html += '<div class="bg-orange-900/20 p-2 rounded">';
+                html += '<div class="text-orange-400 font-bold mb-1">⚙️ Sharing Config</div>';
+                if (data.sharingConfig.found) {
+                    html += `<div class="text-xs text-green-400 mb-1">✓ Config Found (${data.sharingConfig.dataSize} bytes)</div>`;
+                    if (data.sharingConfig.originalCreator) {
+                        html += `<div class="text-xs">Original Creator: <span class="font-mono text-gray-300">${data.sharingConfig.originalCreator}</span></div>`;
+                    }
+                    if (data.sharingConfig.shareholders && data.sharingConfig.shareholders.length > 0) {
+                        html += '<div class="mt-2 text-xs">';
+                        html += '<div class="text-gray-400 mb-1">Shareholders:</div>';
+                        html += '<table class="w-full"><thead><tr><th class="text-left">Wallet</th><th class="text-right">Share</th></tr></thead><tbody>';
+                        for (const sh of data.sharingConfig.shareholders) {
+                            html += `<tr class="border-b border-gray-800"><td class="font-mono">${sh.pubkey.slice(0, 8)}...${sh.pubkey.slice(-4)}</td><td class="text-right text-cyan-400">${sh.percent}%</td></tr>`;
+                        }
+                        html += '</tbody></table></div>';
+                    }
+                } else {
+                    html += '<div class="text-xs text-red-400">✗ Sharing config NOT found</div>';
+                    html += '<div class="text-xs text-gray-500 mt-1">This token may not have fee sharing enabled, or the config PDA derivation is incorrect.</div>';
+                }
+                html += '</div>';
+
+                // Raw JSON
+                html += '<details class="bg-gray-900/50 p-2 rounded">';
+                html += '<summary class="text-gray-400 cursor-pointer text-xs">📄 Raw JSON Response</summary>';
+                html += `<pre class="text-xs mt-2 overflow-x-auto">${JSON.stringify(data, null, 2)}</pre>`;
+                html += '</details>';
+
+                html += '</div>';
+                resultEl.innerHTML = html;
+                log(`Fee status loaded for ${data.token.ticker}`, 'success');
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Fee status error: ${e.message}`, 'error');
+            } finally {
+                btnEl.disabled = false;
+                btnEl.textContent = 'Get Status';
+            }
+        }
+
+        // v25.91: Claim fees for a specific token
+        async function claimTokenFees() {
+            const mintInput = document.getElementById('fee-debug-mint');
+            const claimTypeSelect = document.getElementById('fee-debug-claim-type');
+            const resultEl = document.getElementById('fee-debug-result');
+            const btnEl = document.getElementById('fee-debug-claim-btn');
+            const mint = mintInput.value.trim();
+            const claimType = claimTypeSelect.value;
+
+            if (!mint) {
+                resultEl.innerHTML = '<span class="text-red-400">Please enter a mint address</span>';
+                return;
+            }
+
+            if (!confirm(`Are you sure you want to claim ${claimType.toUpperCase()} fees for this token?`)) {
+                return;
+            }
+
+            btnEl.disabled = true;
+            btnEl.textContent = 'Claiming...';
+            resultEl.innerHTML = '<span class="text-blue-400">Attempting to claim fees... This may take a moment.</span>';
+            log(`Claiming ${claimType} fees for ${mint.slice(0, 8)}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/claim-token-fees/${mint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    },
+                    body: JSON.stringify({ claimType })
+                });
+                const data = await response.json();
+
+                if (data.error) {
+                    resultEl.innerHTML = `<span class="text-red-400">Error: ${data.error}</span>`;
+                    log(`Claim error: ${data.error}`, 'error');
+                    return;
+                }
+
+                // Format claim results
+                let html = '<div class="space-y-3">';
+
+                // Token Info
+                html += '<div class="bg-blue-900/20 p-2 rounded">';
+                html += '<div class="text-blue-400 font-bold mb-1">📋 Token</div>';
+                html += `<div>${data.results.token.ticker} - ${data.results.token.mint.slice(0, 8)}...${data.results.token.mint.slice(-4)}</div>`;
+                html += '</div>';
+
+                // BC Result
+                if (data.results.bc) {
+                    html += '<div class="bg-yellow-900/20 p-2 rounded">';
+                    html += '<div class="text-yellow-400 font-bold mb-1">🔶 BC (Bonding Curve) Result</div>';
+                    if (data.results.bc.error) {
+                        html += `<div class="text-red-400">❌ Error: ${data.results.bc.error}</div>`;
+                    } else if (data.results.bc.claimed) {
+                        html += `<div class="text-green-400">✅ Successfully claimed!</div>`;
+                        html += `<div class="text-xs">Amount: ${data.results.bc.claimedSol.toFixed(6)} SOL</div>`;
+                        html += `<div class="text-xs">Signature: <a href="https://solscan.io/tx/${data.results.bc.signature}" target="_blank" class="text-blue-400 underline">${data.results.bc.signature?.slice(0, 20)}...</a></div>`;
+                    } else {
+                        html += `<div class="text-gray-400">Pending: ${data.results.bc.pendingSol?.toFixed(6) || 0} SOL</div>`;
+                        if (data.results.bc.configFound === false) {
+                            html += `<div class="text-red-400 text-xs">Config not found</div>`;
+                        }
+                    }
+                    if (data.results.bc.shareholders) {
+                        html += '<div class="text-xs mt-1">Shareholders: ' + data.results.bc.shareholders.map(s => `${s.pubkey.slice(0,4)}...(${s.percent}%)`).join(', ') + '</div>';
+                    }
+                    html += '</div>';
+                }
+
+                // AMM Result
+                if (data.results.amm) {
+                    html += '<div class="bg-pink-900/20 p-2 rounded">';
+                    html += '<div class="text-pink-400 font-bold mb-1">🔷 AMM (PumpSwap) Result</div>';
+                    if (data.results.amm.error) {
+                        html += `<div class="text-red-400">❌ Error: ${data.results.amm.error}</div>`;
+                    } else if (data.results.amm.claimed) {
+                        html += `<div class="text-green-400">✅ Successfully claimed!</div>`;
+                        html += `<div class="text-xs">Amount: ${data.results.amm.claimedSol.toFixed(6)} SOL</div>`;
+                        html += `<div class="text-xs">Signature: <a href="https://solscan.io/tx/${data.results.amm.signature}" target="_blank" class="text-blue-400 underline">${data.results.amm.signature?.slice(0, 20)}...</a></div>`;
+                    } else {
+                        html += `<div class="text-gray-400">Pending: ${data.results.amm.pendingSol?.toFixed(6) || 0} SOL</div>`;
+                        if (data.results.amm.configFound === false) {
+                            html += `<div class="text-red-400 text-xs">Config not found</div>`;
+                        }
+                    }
+                    html += '</div>';
+                }
+
+                // Vaults info
+                if (data.results.vaults) {
+                    html += '<div class="bg-purple-900/20 p-2 rounded">';
+                    html += '<div class="text-purple-400 font-bold mb-1">🔐 Vaults Used</div>';
+                    html += `<div class="text-xs">BC: ${data.results.vaults.bcVault}</div>`;
+                    html += `<div class="text-xs">AMM: ${data.results.vaults.ammVaultAta}</div>`;
+                    html += `<div class="text-xs">Config: ${data.results.vaults.sharingConfigPDA}</div>`;
+                    html += '</div>';
+                }
+
+                // Raw JSON
+                html += '<details class="bg-gray-900/50 p-2 rounded">';
+                html += '<summary class="text-gray-400 cursor-pointer text-xs">📄 Raw JSON Response</summary>';
+                html += `<pre class="text-xs mt-2 overflow-x-auto">${JSON.stringify(data, null, 2)}</pre>`;
+                html += '</details>';
+
+                html += '</div>';
+                resultEl.innerHTML = html;
+
+                const claimed = (data.results.bc?.claimed ? 'BC ' : '') + (data.results.amm?.claimed ? 'AMM' : '');
+                if (claimed) {
+                    log(`Fees claimed: ${claimed}`, 'success');
+                } else {
+                    log('No fees claimed (check results for details)', 'warning');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Claim error: ${e.message}`, 'error');
+            } finally {
+                btnEl.disabled = false;
+                btnEl.textContent = 'Claim Fees';
             }
         }
 
