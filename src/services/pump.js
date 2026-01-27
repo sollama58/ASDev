@@ -188,12 +188,35 @@ function getFeeSharingConfigPDA(creator) {
 }
 
 /**
- * Get distribute creator fees instruction data
+ * Get distribute creator fees instruction data (BC - bonding curve)
  * Used to distribute fees from a sharing config to all shareholders
  */
 function buildDistributeFeesData() {
-    // distribute_creator_fees discriminator
+    // distribute_creator_fees discriminator for PUMP program (BC)
     return Buffer.from([202, 87, 148, 171, 74, 66, 138, 57]);
+}
+
+/**
+ * Get distribute creator fees instruction data for AMM (PumpSwap)
+ * v25.91: Used to distribute AMM fees from creator vault to all shareholders
+ * Similar to BC distribute but for graduated tokens on PumpSwap
+ */
+function buildDistributeAmmFeesData() {
+    // distribute_creator_fees discriminator for PUMP_AMM program
+    // This is the same instruction pattern as BC but for PumpSwap
+    return Buffer.from([202, 87, 148, 171, 74, 66, 138, 57]);
+}
+
+/**
+ * Get AMM fee sharing config PDA
+ * v25.91: PumpSwap may have its own sharing config for AMM fees
+ */
+function getAmmFeeSharingConfigPDA(creator) {
+    const [sharingConfig] = PublicKey.findProgramAddressSync(
+        [Buffer.from("fee_sharing_config"), creator.toBuffer()],
+        PROGRAMS.PUMP_AMM
+    );
+    return sharingConfig;
 }
 
 /**
@@ -235,6 +258,7 @@ module.exports = {
     getPumpAmmPDAs,
     getCreatorFeeVaults,
     getFeeSharingConfigPDA,
+    getAmmFeeSharingConfigPDA,
     getShareholderFeeVaults,
     calculateTokensForSol,
     serializeString,
@@ -243,4 +267,5 @@ module.exports = {
     buildSellInstructionData,
     buildClaimFeesData,
     buildDistributeFeesData,
+    buildDistributeAmmFeesData,
 };

@@ -875,9 +875,9 @@ async function claimRobinhoodFees(deps) {
                     logger.debug(`[Robinhood] ${token.ticker}: No pending BC fees (balance: ${bcInfo?.lamports || 0})`);
                 }
 
-                // v25.79: Check and attempt to claim AMM vault fees for graduated tokens
-                // For fee sharing tokens, AMM vaults are derived from feeVaultAddress (coinCreator)
-                // For direct creator tokens, AMM vaults are derived from creatorPubkey
+                // v25.91: Check and attempt to distribute AMM vault fees for graduated tokens
+                // For fee sharing tokens, use distribute_creator_fees (similar to BC)
+                // AMM vaults derived from feeVaultAddress for FEE program tokens, creatorPubkey otherwise
                 try {
                     const ammVaultAtaKey = await ammVaultAta;
                     const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
@@ -891,72 +891,81 @@ async function claimRobinhoodFees(deps) {
 
                         logger.info(`[Robinhood/AMM] ${token.ticker}: Found ${ammFeeSol.toFixed(6)} SOL in AMM vault (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
 
-                        // v25.77: Try to claim AMM fees using PUMP_AMM claim instruction
-                        // This requires a wSOL ATA for our wallet to receive the fees
+                        // v25.91: Use distribute_creator_fees for AMM (PumpSwap) similar to BC
+                        // This distributes fees to all shareholders without requiring creator signature
                         try {
-                            const myWsolAta = await getAssociatedTokenAddress(TOKENS.WSOL, devKeypair.publicKey);
+                            // Use the same sharing config as BC (derived from original creatorPubkey)
+                            // Fee sharing is unified - set up once by creator, applies to both BC and AMM
+                            const ammSharingConfigPDA = sharingConfigPDA; // Already derived from creatorPubkey
 
-                            // Create wSOL ATA if needed
-                            let needsAta = false;
-                            try {
-                                await getAccount(connection, myWsolAta);
-                            } catch {
-                                needsAta = true;
+                            // Get shareholders from sharing config (same config used for both BC and AMM)
+                            const ammConfigData = await getCachedFeeSharingConfig(connection, ammSharingConfigPDA, creatorPubkey, false);
+
+                            if (ammConfigData && ammConfigData.shareholders && ammConfigData.shareholders.length > 0) {
+                                const ammTx = new Transaction();
+                                solana.addPriorityFee(ammTx);
+
+                                const ammDistributeDiscriminator = pump.buildDistributeAmmFeesData();
+                                const [ammEventAuthority] = PublicKey.findProgramAddressSync(
+                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
+                                );
+
+                                // v25.91: AMM distribute accounts similar to BC distribute
+                                // sharing_config, creator_vault_ata, [shareholders...], wsol_mint, token_program, system, event_auth, program
+                                const ammDistributeKeys = [
+                                    { pubkey: ammSharingConfigPDA, isSigner: false, isWritable: true },
+                                    { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true },
+                                ];
+
+                                for (const shareholder of ammConfigData.shareholders) {
+                                    ammDistributeKeys.push({
+                                        pubkey: shareholder.pubkey,
+                                        isSigner: false,
+                                        isWritable: true
+                                    });
+                                }
+
+                                ammDistributeKeys.push(
+                                    { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },
+                                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                    { pubkey: ammEventAuthority, isSigner: false, isWritable: false },
+                                    { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false }
+                                );
+
+                                ammTx.add(new TransactionInstruction({
+                                    keys: ammDistributeKeys,
+                                    programId: PROGRAMS.PUMP_AMM,
+                                    data: ammDistributeDiscriminator
+                                }));
+
+                                ammTx.feePayer = devKeypair.publicKey;
+                                await solana.sendTxWithRetry(ammTx, [devKeypair]);
+
+                                // Distribution succeeded!
+                                const ourShareLamports = Math.floor(ammFeeLamports * (token.feeShareBps / 10000));
+                                totalClaimed += ourShareLamports;
+                                claimedTokens.push({
+                                    ticker: token.ticker || token.creatorPubkey.slice(0, 8),
+                                    amount: ourShareLamports,
+                                    source: 'AMM'
+                                });
+
+                                // Update database
+                                await db.run(
+                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2 WHERE id = $3',
+                                    [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, token.id]
+                                );
+
+                                logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+                            } else {
+                                // No AMM sharing config found - track as pending
+                                totalPendingAmmFees += ammFeeLamports;
+                                logger.debug(`[Robinhood/AMM] ${token.ticker}: No AMM sharing config found at ${ammSharingConfigPDA.toString().slice(0, 8)}...`);
                             }
-
-                            const ammTx = new Transaction();
-                            solana.addPriorityFee(ammTx);
-
-                            if (needsAta) {
-                                ammTx.add(createAssociatedTokenAccountInstruction(
-                                    devKeypair.publicKey, myWsolAta, devKeypair.publicKey, TOKENS.WSOL
-                                ));
-                            }
-
-                            // v25.77: Try PUMP_AMM claim instruction
-                            // This may fail if we're not the creator, but worth trying
-                            const ammDiscriminator = Buffer.from([160, 57, 89, 42, 181, 139, 43, 66]);
-                            const [ammEventAuthority] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
-                            );
-
-                            const ammClaimKeys = [
-                                { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },
-                                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                                { pubkey: devKeypair.publicKey, isSigner: true, isWritable: false },
-                                { pubkey: ammVaultAuth, isSigner: false, isWritable: false },
-                                { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true },
-                                { pubkey: myWsolAta, isSigner: false, isWritable: true },
-                                { pubkey: ammEventAuthority, isSigner: false, isWritable: false },
-                                { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false }
-                            ];
-
-                            ammTx.add(new TransactionInstruction({
-                                keys: ammClaimKeys,
-                                programId: PROGRAMS.PUMP_AMM,
-                                data: ammDiscriminator
-                            }));
-
-                            // Close wSOL ATA to get SOL back
-                            ammTx.add(createCloseAccountInstruction(myWsolAta, devKeypair.publicKey, devKeypair.publicKey));
-
-                            ammTx.feePayer = devKeypair.publicKey;
-                            await solana.sendTxWithRetry(ammTx, [devKeypair]);
-
-                            // If we get here, claim succeeded!
-                            const ourShareLamports = Math.floor(ammFeeLamports * (token.feeShareBps / 10000));
-                            totalClaimed += ourShareLamports;
-                            claimedTokens.push({
-                                ticker: token.ticker || token.creatorPubkey.slice(0, 8),
-                                amount: ourShareLamports,
-                                type: 'AMM'
-                            });
-
-                            logger.info(`[Robinhood/AMM] Successfully claimed ${ourShare.toFixed(6)} SOL from ${token.ticker}`);
 
                         } catch (claimErr) {
-                            // AMM claim failed - expected for shareholder tokens (creator signature required)
-                            // Track as pending for monitoring
+                            // AMM distribute failed - track as pending for monitoring
                             totalPendingAmmFees += ammFeeLamports;
 
                             // Update database with pending AMM fees
@@ -965,8 +974,7 @@ async function claimRobinhoodFees(deps) {
                                 [ammFeeSol, token.mint]
                             ).catch(() => {});
 
-                            // Only log at debug level since this is expected for most tokens
-                            logger.debug(`[Robinhood/AMM] ${token.ticker}: Cannot claim AMM fees - ${claimErr.message.slice(0, 100)}`);
+                            logger.debug(`[Robinhood/AMM] ${token.ticker}: Cannot distribute AMM fees - ${claimErr.message.slice(0, 100)}`);
                         }
                     }
                 } catch (e) {
