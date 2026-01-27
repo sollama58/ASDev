@@ -3128,10 +3128,33 @@
                         html += '</tbody></table></div>';
                     }
                 } else {
-                    html += '<div class="text-xs text-red-400">✗ Sharing config NOT found</div>';
-                    html += '<div class="text-xs text-gray-500 mt-1">This token may not have fee sharing enabled, or the config PDA derivation is incorrect.</div>';
+                    html += '<div class="text-xs text-red-400">✗ Sharing config NOT found at primary PDA</div>';
+                    html += `<div class="text-xs text-gray-500 mt-1">Primary PDA: ${data.sharingConfig.primaryPDA || 'N/A'}</div>`;
                 }
                 html += '</div>';
+
+                // Config Search Results (PDA Derivation Debug)
+                if (data.configSearch && data.configSearch.derivations) {
+                    html += '<div class="bg-red-900/20 p-2 rounded">';
+                    html += '<div class="text-red-400 font-bold mb-1">🔎 Config PDA Search Results</div>';
+                    if (data.configSearch.bcVaultOwner) {
+                        html += `<div class="text-xs mb-2">BC Vault Owner: <span class="font-mono text-yellow-400">${data.configSearch.bcVaultOwner}</span></div>`;
+                    }
+                    html += '<table class="w-full text-xs">';
+                    html += '<thead><tr><th class="text-left">Derivation</th><th class="text-center">Found</th><th class="text-right">Size</th></tr></thead><tbody>';
+                    for (const d of data.configSearch.derivations) {
+                        const rowClass = d.found ? 'text-green-400' : 'text-gray-500';
+                        const icon = d.found ? '✓' : '✗';
+                        html += `<tr class="${rowClass} border-b border-gray-800">`;
+                        html += `<td title="${d.pda}">${d.label}</td>`;
+                        html += `<td class="text-center">${icon}</td>`;
+                        html += `<td class="text-right">${d.found ? d.dataSize + 'b' : '-'}</td>`;
+                        html += '</tr>';
+                    }
+                    html += '</tbody></table>';
+                    html += '<div class="text-xs text-gray-500 mt-2">If a config is found under a different derivation, the claiming code may need to be updated.</div>';
+                    html += '</div>';
+                }
 
                 // Raw JSON
                 html += '<details class="bg-gray-900/50 p-2 rounded">';

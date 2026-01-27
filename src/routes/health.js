@@ -991,11 +991,76 @@ function init(deps) {
             const bcPending = Math.max(0, bcBalance - 5000);
             const ammBalance = parseInt(ammBal.value.amount) || 0;
 
+            // v25.91: Try multiple PDA derivations to find the actual sharing config
+            const { PROGRAMS } = require('../config/constants');
+            const configSearchResults = [];
+
+            // Helper to derive and check a config PDA
+            const checkConfigPDA = async (seed, creator, program, label) => {
+                try {
+                    const [pda] = PublicKey.findProgramAddressSync(
+                        [Buffer.from(seed), creator.toBuffer()],
+                        program
+                    );
+                    const info = await connection.getAccountInfo(pda).catch(() => null);
+                    return {
+                        label,
+                        seed,
+                        creator: creator.toString(),
+                        program: program.toString(),
+                        pda: pda.toString(),
+                        found: !!info,
+                        dataSize: info?.data?.length || 0,
+                        owner: info?.owner?.toString() || null
+                    };
+                } catch (e) {
+                    return { label, error: e.message };
+                }
+            };
+
+            // Try all possible derivations
+            const derivationsToTry = [
+                ['fee_sharing_config', creatorPubkey, PROGRAMS.PUMP, 'PUMP from creatorPubkey'],
+                ['fee_sharing_config', creatorPubkey, PROGRAMS.PUMP_AMM, 'PUMP_AMM from creatorPubkey'],
+            ];
+
+            if (isFeeProgram) {
+                const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                derivationsToTry.push(
+                    ['fee_sharing_config', feeVaultPubkey, PROGRAMS.PUMP, 'PUMP from feeVaultAddress'],
+                    ['fee_sharing_config', feeVaultPubkey, PROGRAMS.PUMP_AMM, 'PUMP_AMM from feeVaultAddress'],
+                    ['fee_sharing_config', feeVaultPubkey, PROGRAMS.FEE, 'FEE from feeVaultAddress'],
+                    ['fee_sharing_config', creatorPubkey, PROGRAMS.FEE, 'FEE from creatorPubkey']
+                );
+            }
+
+            for (const [seed, creator, program, label] of derivationsToTry) {
+                const result = await checkConfigPDA(seed, creator, program, label);
+                configSearchResults.push(result);
+            }
+
+            // Also check the BC vault and AMM vault owners
+            const bcVaultOwner = bcInfo?.owner?.toString() || null;
+
             // Parse sharing config if found
             let shareholders = [];
             let originalCreator = null;
-            if (configInfo && configInfo.data.length > 44) {
-                const data = configInfo.data;
+            let configFound = false;
+            let foundConfigInfo = configInfo;
+
+            // If primary config not found, try to use any found config
+            if (!configInfo) {
+                const foundResult = configSearchResults.find(r => r.found && r.dataSize > 44);
+                if (foundResult) {
+                    foundConfigInfo = await connection.getAccountInfo(new PublicKey(foundResult.pda)).catch(() => null);
+                    configFound = !!foundConfigInfo;
+                }
+            } else {
+                configFound = true;
+            }
+
+            if (foundConfigInfo && foundConfigInfo.data && foundConfigInfo.data.length > 44) {
+                const data = foundConfigInfo.data;
                 let offset = 8;
                 originalCreator = new PublicKey(data.slice(offset, offset + 32)).toString();
                 offset += 32;
@@ -1051,10 +1116,16 @@ function init(deps) {
                     totalOurShareSol: ((bcPending + ammBalance) / LAMPORTS_PER_SOL) * (token.feeShareBps / 10000)
                 },
                 sharingConfig: {
-                    found: !!configInfo,
-                    dataSize: configInfo?.data.length || 0,
+                    found: configFound,
+                    dataSize: foundConfigInfo?.data?.length || 0,
                     originalCreator,
-                    shareholders
+                    shareholders,
+                    primaryPDA: sharingConfigPDA.toString(),
+                    primaryFound: !!configInfo
+                },
+                configSearch: {
+                    bcVaultOwner,
+                    derivations: configSearchResults
                 }
             });
         } catch (e) {
