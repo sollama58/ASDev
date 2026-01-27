@@ -1263,90 +1263,68 @@ function init(deps) {
                     };
 
                     if (bcPending > 0) {
-                        // v25.96: Use different instructions based on program type
-                        // - FEE program: distribute_creator_fees (collect not supported)
-                        // - PUMP program: collect_creator_fee
-                        results.bc.program = isFeeProgram ? 'FEE' : 'PUMP';
-                        results.bc.instruction = isFeeProgram ? 'distribute' : 'collect';
+                        // v25.97: All Robinhood tokens use distribute_creator_fees on PUMP program
+                        results.bc.program = 'PUMP';
+                        results.bc.instruction = 'distribute_creator_fees';
 
                         try {
-                            const tx = new Transaction();
-                            solana.addPriorityFee(tx);
+                            // Get sharing config to find shareholders
+                            const configInfo = await connection.getAccountInfo(sharingConfigPDA);
+                            let shareholders = [];
 
-                            if (isFeeProgram) {
-                                // FEE program: use distribute_creator_fees
-                                // Parse shareholders from FEE account
-                                let shareholders = [];
-                                if (bcInfo && bcInfo.data && bcInfo.data.length >= 80) {
-                                    const data = bcInfo.data;
-                                    const numShareholders = data.readUInt32LE(76);
-                                    let offset = 80;
-                                    if (numShareholders >= 1 && numShareholders <= 10) {
-                                        for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                            offset += 32;
-                                            const bps = data.readUInt16LE(offset);
-                                            offset += 2;
-                                            shareholders.push({ pubkey, bps });
-                                        }
-                                    }
-                                    results.bc.numShareholders = numShareholders;
+                            if (configInfo && configInfo.data.length > 44) {
+                                const data = configInfo.data;
+                                let offset = 8;
+                                offset += 32; // skip originalCreator
+                                const numShareholders = data.readUInt32LE(offset);
+                                offset += 4;
+
+                                results.bc.numShareholders = numShareholders;
+
+                                for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
+                                    const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                                    offset += 32;
+                                    const bps = data.readUInt16LE(offset);
+                                    offset += 2;
+                                    shareholders.push({ pubkey, bps });
                                 }
+                            }
 
-                                results.bc.shareholders = shareholders.map(s => ({
-                                    pubkey: s.pubkey.toString(),
-                                    bps: s.bps
-                                }));
+                            results.bc.configFound = shareholders.length > 0;
+                            results.bc.shareholders = shareholders.map(s => ({
+                                pubkey: s.pubkey.toString(),
+                                bps: s.bps
+                            }));
 
-                                if (shareholders.length > 0) {
-                                    const distributeDiscriminator = pump.buildDistributeFeesData();
-                                    const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                        [Buffer.from("__event_authority")], PROGRAMS.FEE
-                                    );
+                            if (shareholders.length > 0) {
+                                const tx = new Transaction();
+                                solana.addPriorityFee(tx);
 
-                                    const distributeKeys = [
-                                        { pubkey: bcVault, isSigner: false, isWritable: true },
-                                    ];
-                                    for (const sh of shareholders) {
-                                        distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
-                                    }
-                                    distributeKeys.push(
-                                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                        { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                        { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
-                                    );
-
-                                    tx.add(new TransactionInstruction({
-                                        keys: distributeKeys,
-                                        programId: PROGRAMS.FEE,
-                                        data: distributeDiscriminator
-                                    }));
-                                } else {
-                                    results.bc.error = 'No shareholders found in FEE account';
-                                }
-                            } else {
-                                // PUMP program: use collect_creator_fee
-                                const claimDiscriminator = pump.buildClaimFeesData();
+                                const distributeDiscriminator = pump.buildDistributeFeesData();
                                 const [eventAuthority] = PublicKey.findProgramAddressSync(
                                     [Buffer.from("__event_authority")], PROGRAMS.PUMP
                                 );
 
-                                const claimKeys = [
-                                    { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
+                                // PUMP distribute: sharing_config, creator_vault, [shareholders...], system, event_auth, program
+                                const distributeKeys = [
+                                    { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
                                     { pubkey: bcVault, isSigner: false, isWritable: true },
+                                ];
+                                for (const sh of shareholders) {
+                                    distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
+                                }
+                                distributeKeys.push(
                                     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                                     { pubkey: eventAuthority, isSigner: false, isWritable: false },
                                     { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-                                ];
+                                );
 
                                 tx.add(new TransactionInstruction({
-                                    keys: claimKeys,
+                                    keys: distributeKeys,
                                     programId: PROGRAMS.PUMP,
-                                    data: claimDiscriminator
+                                    data: distributeDiscriminator
                                 }));
-                            }
 
-                            if (tx.instructions.length > 0) {
                                 tx.feePayer = devKeypair.publicKey;
                                 const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
 
@@ -1360,12 +1338,14 @@ function init(deps) {
                                     [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
                                 );
 
-                                logger.info(`[Admin] BC fees claimed for ${token.ticker}: ${bcPending / LAMPORTS_PER_SOL} SOL`);
+                                logger.info(`[Admin] BC fees distributed for ${token.ticker}: ${bcPending / LAMPORTS_PER_SOL} SOL`);
+                            } else {
+                                results.bc.error = 'No sharing config found';
                             }
                         } catch (txErr) {
                             results.bc.claimed = false;
                             results.bc.error = txErr.message;
-                            logger.error(`[Admin] BC claim failed for ${token.ticker}`, { error: txErr.message });
+                            logger.error(`[Admin] BC distribute failed for ${token.ticker}`, { error: txErr.message });
                         }
                     }
                 } catch (e) {

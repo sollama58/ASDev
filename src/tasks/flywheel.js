@@ -15,7 +15,7 @@
  * v25.46 - Twitter announcements when KOTH changes (with AI reasoning)
  * v25.75 - Fixed fee claiming for FEE program tokens: use feeVaultAddress as both vault+config
  * v25.76 - Threshold now considers SUM of platform + robinhood fees; improved FEE program handling
- * v25.96 - Robinhood fee claiming: FEE tokens use distribute, PUMP tokens use collect
+ * v25.97 - Robinhood fee claiming: always use distribute_creator_fees on PUMP program
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -720,87 +720,46 @@ async function claimRobinhoodFees(deps) {
                 const BC_CLAIM_THRESHOLD = 50000000; // 0.05 SOL
                 if (bcPendingLamports > BC_CLAIM_THRESHOLD) {
                     try {
-                        const tx = new Transaction();
-                        solana.addPriorityFee(tx);
-                        const ourShare = Math.floor(bcPendingLamports * (token.feeShareBps / 10000));
+                        // v25.97: All Robinhood tokens use distribute_creator_fees on PUMP program
+                        // This distributes fees to all shareholders in the sharing config
+                        logger.info(`[Robinhood] ${token.ticker}: BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - calling distribute_creator_fees...`);
 
-                        if (isFeeProgram) {
-                            // v25.96: FEE program tokens - use distribute_creator_fees
-                            // FEE program doesn't support collect_creator_fee, must use distribute
-                            logger.info(`[Robinhood/FEE] ${token.ticker}: BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - using distribute...`);
+                        // Get sharing config and parse shareholders
+                        const configData = await getCachedFeeSharingConfig(connection, sharingConfigPDA, creatorPubkey, isFeeProgram);
 
-                            // Parse shareholders from FEE account
-                            let shareholders = [];
-                            if (bcInfo && bcInfo.data && bcInfo.data.length >= 80) {
-                                const data = bcInfo.data;
-                                const numShareholders = data.readUInt32LE(76);
-                                let offset = 80;
-                                if (numShareholders >= 1 && numShareholders <= 10) {
-                                    for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                        offset += 32;
-                                        const bps = data.readUInt16LE(offset);
-                                        offset += 2;
-                                        shareholders.push({ pubkey, bps });
-                                    }
-                                }
-                            }
+                        if (configData && configData.shareholders && configData.shareholders.length > 0) {
+                            const tx = new Transaction();
+                            solana.addPriorityFee(tx);
 
-                            if (shareholders.length > 0) {
-                                const distributeDiscriminator = pump.buildDistributeFeesData();
-                                const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], PROGRAMS.FEE
-                                );
-
-                                // FEE distribute: vault (contains config), [shareholders...], system, event_auth, program
-                                const distributeKeys = [
-                                    { pubkey: bcVault, isSigner: false, isWritable: true },
-                                ];
-                                for (const sh of shareholders) {
-                                    distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
-                                }
-                                distributeKeys.push(
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
-                                );
-
-                                tx.add(new TransactionInstruction({
-                                    keys: distributeKeys,
-                                    programId: PROGRAMS.FEE,
-                                    data: distributeDiscriminator
-                                }));
-                            } else {
-                                logger.warn(`[Robinhood/FEE] ${token.ticker}: No shareholders found in FEE account`);
-                            }
-                        } else {
-                            // v25.96: PUMP program tokens - use collect_creator_fee
-                            logger.info(`[Robinhood/PUMP] ${token.ticker}: BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - using collect...`);
-
-                            const claimDiscriminator = pump.buildClaimFeesData();
+                            const distributeDiscriminator = pump.buildDistributeFeesData();
                             const [eventAuthority] = PublicKey.findProgramAddressSync(
                                 [Buffer.from("__event_authority")], PROGRAMS.PUMP
                             );
 
-                            const claimKeys = [
-                                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
+                            // PUMP distribute_creator_fees: sharing_config, creator_vault, [shareholders...], system, event_auth, program
+                            const distributeKeys = [
+                                { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },
                                 { pubkey: bcVault, isSigner: false, isWritable: true },
+                            ];
+                            for (const sh of configData.shareholders) {
+                                distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
+                            }
+                            distributeKeys.push(
                                 { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                                 { pubkey: eventAuthority, isSigner: false, isWritable: false },
                                 { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-                            ];
+                            );
 
                             tx.add(new TransactionInstruction({
-                                keys: claimKeys,
+                                keys: distributeKeys,
                                 programId: PROGRAMS.PUMP,
-                                data: claimDiscriminator
+                                data: distributeDiscriminator
                             }));
-                        }
 
-                        if (tx.instructions.length > 0) {
                             tx.feePayer = devKeypair.publicKey;
                             await solana.sendTxWithRetry(tx, [devKeypair]);
 
+                            const ourShare = Math.floor(bcPendingLamports * (token.feeShareBps / 10000));
                             tokenClaimed += ourShare;
                             totalClaimed += ourShare;
                             claimedTokens.push({
@@ -814,12 +773,14 @@ async function claimRobinhoodFees(deps) {
                                 [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
                             );
 
-                            logger.info(`[Robinhood] ${token.ticker}: Claimed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+                            logger.info(`[Robinhood] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+                        } else {
+                            logger.warn(`[Robinhood] ${token.ticker}: No sharing config found at ${sharingConfigPDA.toString().slice(0, 8)}...`);
                         }
                     } catch (e) {
-                        logger.info(`[Robinhood] BC claim failed for ${token.ticker}: ${e.message}`, {
+                        logger.info(`[Robinhood] BC distribute failed for ${token.ticker}: ${e.message}`, {
                             bcVault: bcVault.toString(),
-                            isFeeProgram
+                            sharingConfigPDA: sharingConfigPDA.toString()
                         });
                     }
                 } else {
