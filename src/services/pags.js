@@ -784,6 +784,33 @@ async function executeClaimTransfer(claimId, recipientWallet, amount) {
                             WHERE id = $2
                         `, [pendingForToken, b.id]);
 
+                        // BUGFIX: Also update pags_beneficiary_shares.totalFeesClaimed
+                        // This ensures getPendingRewardsByUsername returns correct amounts after claim
+                        // Critical for Robinhood tokens and multi-beneficiary scenarios
+                        const shares = await db.all(`
+                            SELECT id, "totalFeesAccumulated", "totalFeesClaimed"
+                            FROM pags_beneficiary_shares
+                            WHERE "beneficiaryId" = $1 AND LOWER("twitterUsername") = LOWER($2)
+                        `, [b.id, claim.twitterUsername]);
+
+                        for (const share of shares) {
+                            const sharePending = (share.totalFeesAccumulated || 0) - (share.totalFeesClaimed || 0);
+                            if (sharePending > 0) {
+                                await db.run(`
+                                    UPDATE pags_beneficiary_shares
+                                    SET "totalFeesClaimed" = "totalFeesClaimed" + $1
+                                    WHERE id = $2
+                                `, [sharePending, share.id]);
+
+                                logger.debug('[PAGS] Updated claimed amount for share', {
+                                    shareId: share.id,
+                                    beneficiaryId: b.id,
+                                    mint: b.mint,
+                                    claimedAmount: sharePending
+                                });
+                            }
+                        }
+
                         logger.debug('[PAGS] Updated claimed amount for beneficiary', {
                             beneficiaryId: b.id,
                             mint: b.mint,
