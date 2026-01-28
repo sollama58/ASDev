@@ -662,6 +662,12 @@ async function claimFeesForBeneficiary(pendingInfo) {
                 );
                 const ammVaultAta = await getAssociatedTokenAddress(TOKENS.WSOL, ammVaultAuth, true);
 
+                // v25.113: BUGFIX - Account 8 must be event_authority, NOT pool
+                // Reference: successful tx 2cGnFzu4w12n995MxTHo8BKFbb2V5FHJ4aeCQh69mxhkmhuyrnBH9zMSMwQ2tt9GhoZMardqgSXDPjm4SAA3i8AV
+                const [ammEventAuthority] = PublicKey.findProgramAddressSync(
+                    [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
+                );
+
                 // TransferCreatorFeesToPump accounts from reference tx
                 const transferKeys = [
                     { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },           // 0: wsol_mint
@@ -672,7 +678,7 @@ async function claimFeesForBeneficiary(pendingInfo) {
                     { pubkey: ammVaultAuth, isSigner: false, isWritable: true },           // 5: amm_vault_auth
                     { pubkey: ammVaultAta, isSigner: false, isWritable: true },            // 6: amm_vault_ata (wSOL)
                     { pubkey: bcVault, isSigner: false, isWritable: true },                // 7: bc_vault (destination)
-                    { pubkey: pool, isSigner: false, isWritable: false },                  // 8: pool
+                    { pubkey: ammEventAuthority, isSigner: false, isWritable: false },     // 8: event_authority (NOT pool!)
                     { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false },     // 9: pump_amm_program
                 ];
 

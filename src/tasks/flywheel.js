@@ -849,6 +849,12 @@ async function claimRobinhoodFees(deps) {
                             // Step 1: TransferCreatorFeesToPump - moves wSOL from AMM vault to BC vault
                             const transferDiscriminator = pump.buildTransferFeesToPumpData();
 
+                            // v25.113: BUGFIX - Account 8 must be event_authority, NOT pool
+                            // Reference: successful tx 2cGnFzu4w12n995MxTHo8BKFbb2V5FHJ4aeCQh69mxhkmhuyrnBH9zMSMwQ2tt9GhoZMardqgSXDPjm4SAA3i8AV
+                            const [ammEventAuthority] = PublicKey.findProgramAddressSync(
+                                [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
+                            );
+
                             const transferKeys = [
                                 { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },           // 0: wsol_mint
                                 { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },     // 1: token_program
@@ -858,7 +864,7 @@ async function claimRobinhoodFees(deps) {
                                 { pubkey: ammVaultAuthKey, isSigner: false, isWritable: true },        // 5: amm_vault_auth
                                 { pubkey: ammVaultAtaResolved, isSigner: false, isWritable: true },    // 6: amm_vault_ata (wSOL)
                                 { pubkey: bcVaultKey, isSigner: false, isWritable: true },             // 7: bc_vault (destination)
-                                { pubkey: pool, isSigner: false, isWritable: false },                  // 8: pool
+                                { pubkey: ammEventAuthority, isSigner: false, isWritable: false },     // 8: event_authority (NOT pool!)
                                 { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false },     // 9: pump_amm_program
                             ];
 
