@@ -1349,13 +1349,14 @@ function init(deps) {
                                     [Buffer.from("__event_authority")], PROGRAMS.PUMP
                                 );
 
-                                // v25.102: Correct account structure - account #2 is bonding_curve PDA
-                                // DistributeCreatorFees: mint, bonding_curve, claimer, creator_vault, system, event_auth, program, ...shareholders
+                                // v25.103: Need BOTH bonding_curve AND sharing_config accounts
+                                // DistributeCreatorFees: mint, bonding_curve, sharing_config, claimer, creator_vault, system, event_auth, program, ...shareholders
                                 const mintPubkey = new PublicKey(token.mint);
                                 const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
                                 const distributeKeys = [
                                     { pubkey: mintPubkey, isSigner: false, isWritable: false },
                                     { pubkey: bondingCurve, isSigner: false, isWritable: true },
+                                    { pubkey: coinCreator, isSigner: false, isWritable: true },  // sharing_config (feeVaultAddress)
                                     { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
                                     { pubkey: pumpBcVault, isSigner: false, isWritable: true },
                                     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
