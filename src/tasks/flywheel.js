@@ -29,7 +29,7 @@ const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_
 const { BN } = require('@coral-xyz/anchor');
 const {
     getAssociatedTokenAddress, getAccount, createAssociatedTokenAccountInstruction,
-    createCloseAccountInstruction, TOKEN_PROGRAM_ID
+    createCloseAccountInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
 } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
@@ -805,8 +805,9 @@ async function claimRobinhoodFees(deps) {
                     logger.debug(`[Robinhood] ${token.ticker}: No pending BC fees (balance: ${bcInfo?.lamports || 0})`);
                 }
 
-                // v25.93: Check and attempt to collect AMM vault fees for graduated tokens
-                // Use same collect_creator_fee pattern as platform tokens
+                // v25.112: BUGFIX - AMM fees use TransferCreatorFeesToPump + distribute_creator_fees
+                // collect_creator_fee requires signer to be creator, which fails for fee-sharing tokens (error 2006)
+                // The correct approach: transfer AMM fees to BC vault, then distribute to shareholders
                 try {
                     const ammVaultAtaKey = await ammVaultAta;
                     const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
@@ -820,52 +821,92 @@ async function claimRobinhoodFees(deps) {
 
                         logger.info(`[Robinhood/AMM] ${token.ticker}: Found ${ammFeeSol.toFixed(6)} SOL in AMM vault (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
 
-                        // v25.93: Use same collect_creator_fee pattern as platform tokens
                         try {
                             const ammTx = new Transaction();
                             solana.addPriorityFee(ammTx);
 
-                            // Create our wSOL ATA if needed
-                            const myWsolAta = await getAssociatedTokenAddress(TOKENS.WSOL, devKeypair.publicKey);
+                            const mintPubkey = new PublicKey(token.mint);
+                            const { pool } = pump.getPumpAmmPDAs(mintPubkey);
+
+                            // v25.112: Read coin_creator from AMM pool (authoritative for graduated tokens)
+                            let ammCoinCreator = coinCreator;
                             try {
-                                await getAccount(connection, myWsolAta);
-                            } catch {
-                                ammTx.add(createAssociatedTokenAccountInstruction(
-                                    devKeypair.publicKey, myWsolAta, devKeypair.publicKey, TOKENS.WSOL
-                                ));
+                                const poolAccountInfo = await connection.getAccountInfo(pool);
+                                if (poolAccountInfo && poolAccountInfo.data.length >= 43) {
+                                    ammCoinCreator = new PublicKey(poolAccountInfo.data.slice(11, 43));
+                                    logger.debug(`[Robinhood/AMM] ${token.ticker}: Using AMM pool coin_creator: ${ammCoinCreator.toString().slice(0, 8)}...`);
+                                }
+                            } catch (e) {
+                                logger.debug(`[Robinhood/AMM] ${token.ticker}: Could not read AMM pool, using fallback coin_creator`);
                             }
 
-                            // Same discriminator as platform AMM collect
-                            const ammClaimDiscriminator = Buffer.from([160, 57, 89, 42, 181, 139, 43, 66]);
-                            const [ammEventAuthority] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
-                            );
+                            // Derive vaults from coin_creator for consistency
+                            const ammVaults = pump.getShareholderFeeVaults(ammCoinCreator);
+                            const ammVaultAuthKey = ammVaults.ammVaultAuth;
+                            const ammVaultAtaResolved = await ammVaults.ammVaultAta;
+                            const bcVaultKey = ammVaults.bcVault;
 
-                            // Same account structure as platform tokens: [wsol, token_program, creator (signer), vault_auth, vault_ata, my_wsol_ata, event_auth, program]
-                            const ammClaimKeys = [
-                                { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },
-                                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                                { pubkey: devKeypair.publicKey, isSigner: true, isWritable: false },
-                                { pubkey: ammVaultAuth, isSigner: false, isWritable: false },
-                                { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true },
-                                { pubkey: myWsolAta, isSigner: false, isWritable: true },
-                                { pubkey: ammEventAuthority, isSigner: false, isWritable: false },
-                                { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false }
+                            // Step 1: TransferCreatorFeesToPump - moves wSOL from AMM vault to BC vault
+                            const transferDiscriminator = pump.buildTransferFeesToPumpData();
+
+                            const transferKeys = [
+                                { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },           // 0: wsol_mint
+                                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },     // 1: token_program
+                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 2: system_program
+                                { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // 3: ata_program
+                                { pubkey: ammCoinCreator, isSigner: false, isWritable: false },        // 4: coin_creator
+                                { pubkey: ammVaultAuthKey, isSigner: false, isWritable: true },        // 5: amm_vault_auth
+                                { pubkey: ammVaultAtaResolved, isSigner: false, isWritable: true },    // 6: amm_vault_ata (wSOL)
+                                { pubkey: bcVaultKey, isSigner: false, isWritable: true },             // 7: bc_vault (destination)
+                                { pubkey: pool, isSigner: false, isWritable: false },                  // 8: pool
+                                { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false },     // 9: pump_amm_program
                             ];
 
                             ammTx.add(new TransactionInstruction({
-                                keys: ammClaimKeys,
+                                keys: transferKeys,
                                 programId: PROGRAMS.PUMP_AMM,
-                                data: ammClaimDiscriminator
+                                data: transferDiscriminator
                             }));
 
-                            // Close wSOL ATA to get native SOL
-                            ammTx.add(createCloseAccountInstruction(myWsolAta, devKeypair.publicKey, devKeypair.publicKey));
+                            // Step 2: distribute_creator_fees - distributes from BC vault to shareholders
+                            // Get shareholders from config (re-use from BC claim if we have it)
+                            const configAccount = isFeeProgram ? new PublicKey(token.feeVaultAddress) : ammVaults.sharingConfigPDA;
+                            const ammConfigData = await getCachedFeeSharingConfig(connection, configAccount, creatorPubkey, isFeeProgram);
+
+                            if (ammConfigData && ammConfigData.shareholders && ammConfigData.shareholders.length > 0) {
+                                const distributeDiscriminator = pump.buildDistributeFeesData();
+                                const [eventAuthority] = PublicKey.findProgramAddressSync(
+                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP
+                                );
+
+                                const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
+                                const distributeKeys = [
+                                    { pubkey: mintPubkey, isSigner: false, isWritable: false },
+                                    { pubkey: bondingCurve, isSigner: false, isWritable: true },
+                                    { pubkey: ammCoinCreator, isSigner: false, isWritable: true },  // sharing_config / coin_creator
+                                    { pubkey: bcVaultKey, isSigner: false, isWritable: true },       // creator_vault
+                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
+                                ];
+                                for (const sh of ammConfigData.shareholders) {
+                                    distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
+                                }
+
+                                ammTx.add(new TransactionInstruction({
+                                    keys: distributeKeys,
+                                    programId: PROGRAMS.PUMP,
+                                    data: distributeDiscriminator
+                                }));
+                            } else {
+                                // No shareholders found - can still try transfer only
+                                logger.warn(`[Robinhood/AMM] ${token.ticker}: No shareholders found, attempting transfer only`);
+                            }
 
                             ammTx.feePayer = devKeypair.publicKey;
                             await solana.sendTxWithRetry(ammTx, [devKeypair]);
 
-                            // Collection succeeded!
+                            // Distribution succeeded!
                             const ourShareLamports = Math.floor(ammFeeLamports * (token.feeShareBps / 10000));
                             totalClaimed += ourShareLamports;
                             claimedTokens.push({
@@ -880,10 +921,10 @@ async function claimRobinhoodFees(deps) {
                                 [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, token.id]
                             );
 
-                            logger.info(`[Robinhood/AMM] ${token.ticker}: Collected ${ammFeeSol.toFixed(6)} SOL (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+                            logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL via TransferCreatorFeesToPump (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
 
                         } catch (claimErr) {
-                            // AMM collect failed - track as pending for monitoring
+                            // AMM distribution failed - track as pending for monitoring
                             totalPendingAmmFees += ammFeeLamports;
 
                             // Update database with pending AMM fees
@@ -892,7 +933,7 @@ async function claimRobinhoodFees(deps) {
                                 [ammFeeSol, token.mint]
                             ).catch(() => {});
 
-                            logger.info(`[Robinhood/AMM] ${token.ticker}: AMM collect failed - ${claimErr.message}`);
+                            logger.info(`[Robinhood/AMM] ${token.ticker}: AMM distribution failed - ${claimErr.message}`);
                         }
                     }
                 } catch (e) {
@@ -909,14 +950,15 @@ async function claimRobinhoodFees(deps) {
         logger.error('[Robinhood] Claim fees error', { error: e.message });
     }
 
-    // v25.23: AMM fee monitoring - alert if pending fees exceed threshold
+    // v25.112: AMM fee monitoring - alert if pending fees exceed threshold
+    // Now using TransferCreatorFeesToPump + distribute_creator_fees pattern
     const pendingAmmSol = totalPendingAmmFees / LAMPORTS_PER_SOL;
     if (pendingAmmSol > AMM_FEE_ALERT_THRESHOLD_SOL) {
         const now = Date.now();
         // Only alert every 5 minutes to prevent spam
         if (now - lastAmmFeeAlert > AMM_FEE_MONITOR_INTERVAL_MS) {
             lastAmmFeeAlert = now;
-            logger.warn(`[Robinhood/AMM] ALERT: ${pendingAmmSol.toFixed(4)} SOL in pending AMM fees cannot be claimed (awaiting Pump.fun AMM distribution instruction documentation)`);
+            logger.warn(`[Robinhood/AMM] ALERT: ${pendingAmmSol.toFixed(4)} SOL in pending AMM fees failed to distribute (check transaction errors)`);
 
             // Store total pending AMM fees in stats for dashboard visibility
             await db.run(

@@ -1413,51 +1413,118 @@ function init(deps) {
                         vaultBalance: ammBalance,
                         pendingLamports: ammBalance,
                         pendingSol: ammBalance / LAMPORTS_PER_SOL,
-                        ourShare: (ammBalance / LAMPORTS_PER_SOL) * (token.feeShareBps / 10000)
+                        ourShare: (ammBalance / LAMPORTS_PER_SOL) * (token.feeShareBps / 10000),
+                        isFeeProgram
                     };
 
                     if (ammBalance > 0) {
-                        // v25.93: Use same collect_creator_fee pattern as platform tokens
+                        // v25.112: BUGFIX - Use TransferCreatorFeesToPump + distribute_creator_fees pattern
+                        // collect_creator_fee requires signer to be creator, which fails for fee-sharing tokens
+                        // The correct approach: transfer AMM fees to BC vault, then distribute to shareholders
                         try {
                             const ammTx = new Transaction();
                             solana.addPriorityFee(ammTx);
 
-                            // Create our wSOL ATA if needed
-                            const myWsolAta = await getAssociatedTokenAddress(TOKENS.WSOL, devKeypair.publicKey);
+                            // Get the AMM pool for this token
+                            const mintPubkey = new PublicKey(token.mint);
+                            const { pool } = pump.getPumpAmmPDAs(mintPubkey);
+
+                            // v25.112: Read coin_creator from AMM pool (authoritative for graduated tokens)
+                            let ammCoinCreator = coinCreator;
                             try {
-                                await getAccount(connection, myWsolAta);
-                            } catch {
-                                ammTx.add(createAssociatedTokenAccountInstruction(
-                                    devKeypair.publicKey, myWsolAta, devKeypair.publicKey, TOKENS.WSOL
-                                ));
+                                const poolAccountInfo = await connection.getAccountInfo(pool);
+                                if (poolAccountInfo && poolAccountInfo.data.length >= 43) {
+                                    ammCoinCreator = new PublicKey(poolAccountInfo.data.slice(11, 43));
+                                    logger.info(`[Admin] Using AMM pool coin_creator: ${ammCoinCreator.toString().slice(0, 8)}...`);
+                                }
+                            } catch (e) {
+                                logger.debug(`[Admin] Could not read AMM pool coin_creator, using fallback`);
                             }
 
-                            // Same discriminator as platform AMM collect
-                            const ammClaimDiscriminator = Buffer.from([160, 57, 89, 42, 181, 139, 43, 66]);
-                            const [ammEventAuthority] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
-                            );
+                            // Derive vaults from coin_creator for consistency
+                            const ammVaults = pump.getShareholderFeeVaults(ammCoinCreator);
+                            const ammVaultAuthKey = ammVaults.ammVaultAuth;
+                            const ammVaultAtaResolved = await ammVaults.ammVaultAta;
+                            const bcVaultKey = ammVaults.bcVault;
 
-                            // Same account structure as platform tokens
-                            const ammClaimKeys = [
-                                { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },
-                                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                                { pubkey: devKeypair.publicKey, isSigner: true, isWritable: false },
-                                { pubkey: ammVaultAuth, isSigner: false, isWritable: false },
-                                { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true },
-                                { pubkey: myWsolAta, isSigner: false, isWritable: true },
-                                { pubkey: ammEventAuthority, isSigner: false, isWritable: false },
-                                { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false }
+                            // Step 1: TransferCreatorFeesToPump - moves wSOL from AMM vault to BC vault
+                            const transferDiscriminator = pump.buildTransferFeesToPumpData();
+                            const { ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+
+                            const transferKeys = [
+                                { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },           // 0: wsol_mint
+                                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },     // 1: token_program
+                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 2: system_program
+                                { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // 3: ata_program
+                                { pubkey: ammCoinCreator, isSigner: false, isWritable: false },        // 4: coin_creator
+                                { pubkey: ammVaultAuthKey, isSigner: false, isWritable: true },        // 5: amm_vault_auth
+                                { pubkey: ammVaultAtaResolved, isSigner: false, isWritable: true },    // 6: amm_vault_ata (wSOL)
+                                { pubkey: bcVaultKey, isSigner: false, isWritable: true },             // 7: bc_vault (destination)
+                                { pubkey: pool, isSigner: false, isWritable: false },                  // 8: pool
+                                { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false },     // 9: pump_amm_program
                             ];
 
                             ammTx.add(new TransactionInstruction({
-                                keys: ammClaimKeys,
+                                keys: transferKeys,
                                 programId: PROGRAMS.PUMP_AMM,
-                                data: ammClaimDiscriminator
+                                data: transferDiscriminator
                             }));
 
-                            // Close wSOL ATA to get native SOL
-                            ammTx.add(createCloseAccountInstruction(myWsolAta, devKeypair.publicKey, devKeypair.publicKey));
+                            results.amm.method = 'TransferCreatorFeesToPump';
+                            results.amm.coinCreator = ammCoinCreator.toString();
+
+                            // Step 2: distribute_creator_fees - distributes from BC vault to shareholders
+                            // Re-use the shareholders from BC claim if available, otherwise fetch them
+                            let ammShareholders = results.bc?.shareholders || [];
+                            if (ammShareholders.length === 0) {
+                                // Fetch shareholders from sharing config
+                                const configAccount = isFeeProgram ? new PublicKey(token.feeVaultAddress) : ammVaults.sharingConfigPDA;
+                                const configInfo = await connection.getAccountInfo(configAccount);
+                                if (configInfo && configInfo.data.length > 44) {
+                                    const data = configInfo.data;
+                                    let offset = isFeeProgram ? 76 : 40;
+                                    const numShareholders = data.readUInt32LE(offset);
+                                    offset += 4;
+                                    for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
+                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
+                                        offset += 32;
+                                        const bps = data.readUInt16LE(offset);
+                                        offset += 2;
+                                        ammShareholders.push({ pubkey: pubkey.toString(), bps });
+                                    }
+                                }
+                            }
+
+                            if (ammShareholders.length > 0) {
+                                const distributeDiscriminator = pump.buildDistributeFeesData();
+                                const [eventAuthority] = PublicKey.findProgramAddressSync(
+                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP
+                                );
+
+                                // DistributeCreatorFees accounts
+                                const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
+                                const distributeKeys = [
+                                    { pubkey: mintPubkey, isSigner: false, isWritable: false },
+                                    { pubkey: bondingCurve, isSigner: false, isWritable: true },
+                                    { pubkey: ammCoinCreator, isSigner: false, isWritable: true },  // sharing_config / coin_creator
+                                    { pubkey: bcVaultKey, isSigner: false, isWritable: true },       // creator_vault
+                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
+                                ];
+                                for (const sh of ammShareholders) {
+                                    distributeKeys.push({ pubkey: new PublicKey(sh.pubkey), isSigner: false, isWritable: true });
+                                }
+
+                                ammTx.add(new TransactionInstruction({
+                                    keys: distributeKeys,
+                                    programId: PROGRAMS.PUMP,
+                                    data: distributeDiscriminator
+                                }));
+
+                                results.amm.method = 'TransferCreatorFeesToPump + distribute_creator_fees';
+                                results.amm.shareholderCount = ammShareholders.length;
+                            }
 
                             ammTx.feePayer = devKeypair.publicKey;
                             const sig = await solana.sendTxWithRetry(ammTx, [devKeypair]);
@@ -1466,11 +1533,18 @@ function init(deps) {
                             results.amm.signature = sig;
                             results.amm.claimedSol = ammBalance / LAMPORTS_PER_SOL;
 
-                            logger.info(`[Admin] AMM fees collected for ${token.ticker}: ${ammBalance / LAMPORTS_PER_SOL} SOL`);
+                            // Update database
+                            const ourShare = Math.floor(ammBalance * (token.feeShareBps / 10000));
+                            await db.run(
+                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2 WHERE id = $3',
+                                [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
+                            );
+
+                            logger.info(`[Admin] AMM fees distributed for ${token.ticker}: ${ammBalance / LAMPORTS_PER_SOL} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL)`);
                         } catch (txErr) {
                             results.amm.claimed = false;
                             results.amm.error = txErr.message;
-                            logger.error(`[Admin] AMM collect failed for ${token.ticker}`, { error: txErr.message });
+                            logger.error(`[Admin] AMM distribute failed for ${token.ticker}`, { error: txErr.message });
                         }
                     }
                 } catch (e) {
