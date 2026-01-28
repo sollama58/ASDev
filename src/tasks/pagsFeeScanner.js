@@ -31,6 +31,7 @@ const { BN } = require('@coral-xyz/anchor');
 const logger = require('../services/logger');
 const config = require('../config/env');
 const pump = require('../services/pump');
+const mintExtractor = require('../services/mintExtractor');
 const { PROGRAMS, TOKENS } = require('../config/constants');
 
 // Dependencies injected at init
@@ -598,14 +599,68 @@ async function claimFeesForBeneficiary(pendingInfo) {
                 return null;
             }
 
-            const { bcVault, sharingConfigPDA, ammVaultAuth, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkey);
             const mintPubkey = new PublicKey(pendingInfo.mint);
 
-            // v25.105: If there are AMM fees, transfer them to BC vault first
+            // v25.109: For graduated tokens with AMM fees, AMM pool's coin_creator is authoritative
+            // Both TransferCreatorFeesToPump and DistributeCreatorFees must use the SAME coin_creator
             // Reference tx: 2cGnFzu4w12n995MxTHo8BKFbb2V5FHJ4aeCQh69mxhkmhuyrnBH9zMSMwQ2tt9GhoZMardqgSXDPjm4SAA3i8AV
+            const { pool } = pump.getPumpAmmPDAs(mintPubkey);
+            let coinCreator = null;
+            let bcVault = null;
+            let sharingConfigPDA = null;
+
+            // v25.109: For tokens with AMM fees, read coin_creator from AMM pool (authoritative for graduated tokens)
+            if (pendingInfo.ammFeesLamports > 0) {
+                const poolAccountInfo = await connection.getAccountInfo(pool);
+                if (poolAccountInfo && poolAccountInfo.data.length >= 43) {
+                    // AMM Pool layout: coin_creator at offset 11 (32 bytes)
+                    coinCreator = new PublicKey(poolAccountInfo.data.slice(11, 43));
+                    logger.info('[PAGS Fee Scanner] Using AMM pool coin_creator (graduated token)', {
+                        mint: pendingInfo.mint,
+                        coinCreator: coinCreator.toString()
+                    });
+                }
+            }
+
+            // Fallback to getCoinCreator if AMM pool not available
+            if (!coinCreator) {
+                const coinCreatorResult = await mintExtractor.getCoinCreator(mintPubkey, connection);
+                if (!coinCreatorResult) {
+                    logger.warn('[PAGS Fee Scanner] Could not get coin_creator from on-chain - cannot claim', {
+                        mint: pendingInfo.mint
+                    });
+                    return null;
+                }
+                coinCreator = coinCreatorResult.coinCreator;
+                logger.info('[PAGS Fee Scanner] Using coin_creator from getCoinCreator', {
+                    mint: pendingInfo.mint,
+                    coinCreator: coinCreator.toString(),
+                    source: coinCreatorResult.source
+                });
+            }
+
+            // v25.109: Derive ALL vaults from the same coin_creator for consistency
+            const vaults = pump.getShareholderFeeVaults(coinCreator);
+            bcVault = vaults.bcVault;
+            sharingConfigPDA = vaults.sharingConfigPDA;
+
+            logger.info('[PAGS Fee Scanner] Derived vaults from coin_creator', {
+                mint: pendingInfo.mint,
+                coinCreator: coinCreator.toString(),
+                bcVault: bcVault.toString(),
+                sharingConfigPDA: sharingConfigPDA.toString()
+            });
+
+            // v25.105: If there are AMM fees, transfer them to BC vault first
             if (pendingInfo.ammFeesLamports > 0) {
                 const transferDiscriminator = pump.buildTransferFeesToPumpData();
-                const { pool } = pump.getPumpAmmPDAs(mintPubkey);
+
+                // Derive AMM vault accounts from the same coin_creator
+                const [ammVaultAuth] = PublicKey.findProgramAddressSync(
+                    [Buffer.from("creator_vault"), coinCreator.toBuffer()],
+                    PROGRAMS.PUMP_AMM
+                );
+                const ammVaultAta = await getAssociatedTokenAddress(TOKENS.WSOL, ammVaultAuth, true);
 
                 // TransferCreatorFeesToPump accounts from reference tx
                 const transferKeys = [
@@ -613,12 +668,12 @@ async function claimFeesForBeneficiary(pendingInfo) {
                     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },     // 1: token_program
                     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 2: system_program
                     { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // 3: ata_program
-                    { pubkey: creatorPubkey, isSigner: false, isWritable: false },        // 4: coin_creator
-                    { pubkey: ammVaultAuth, isSigner: false, isWritable: true },          // 5: amm_vault_auth
-                    { pubkey: ammVaultAta, isSigner: false, isWritable: true },           // 6: amm_vault_ata (wSOL)
-                    { pubkey: bcVault, isSigner: false, isWritable: true },               // 7: bc_vault (destination)
-                    { pubkey: pool, isSigner: false, isWritable: false },                 // 8: pool
-                    { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false },    // 9: pump_amm_program
+                    { pubkey: coinCreator, isSigner: false, isWritable: false },           // 4: coin_creator
+                    { pubkey: ammVaultAuth, isSigner: false, isWritable: true },           // 5: amm_vault_auth
+                    { pubkey: ammVaultAta, isSigner: false, isWritable: true },            // 6: amm_vault_ata (wSOL)
+                    { pubkey: bcVault, isSigner: false, isWritable: true },                // 7: bc_vault (destination)
+                    { pubkey: pool, isSigner: false, isWritable: false },                  // 8: pool
+                    { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false },     // 9: pump_amm_program
                 ];
 
                 tx.add(new TransactionInstruction({
@@ -629,18 +684,20 @@ async function claimFeesForBeneficiary(pendingInfo) {
 
                 logger.info('[PAGS Fee Scanner] Adding TransferCreatorFeesToPump instruction', {
                     mint: pendingInfo.mint,
-                    ammFeesLamports: pendingInfo.ammFeesLamports
+                    ammFeesLamports: pendingInfo.ammFeesLamports,
+                    coinCreator: coinCreator.toString(),
+                    ammVaultAuth: ammVaultAuth.toString()
                 });
             }
 
             const distributeDiscriminator = pump.buildDistributeFeesData();
 
-            // v25.105: Fixed account structure from successful Robinhood tx analysis
+            // v25.109: Use the same coin_creator for DistributeCreatorFees
             // DistributeCreatorFees accounts: mint, fee_sharing_config, coin_creator, creator_vault, system, event_auth, program, ...shareholders
             const distributeKeys = [
                 { pubkey: mintPubkey, isSigner: false, isWritable: false },           // 0: mint
                 { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },      // 1: fee_sharing_config
-                { pubkey: creatorPubkey, isSigner: false, isWritable: true },         // 2: coin_creator (original token creator)
+                { pubkey: coinCreator, isSigner: false, isWritable: true },           // 2: coin_creator
                 { pubkey: bcVault, isSigner: false, isWritable: true },               // 3: creator_vault
                 { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 4: system_program
                 { pubkey: eventAuthority, isSigner: false, isWritable: false },       // 5: event_authority
