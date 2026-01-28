@@ -241,6 +241,7 @@ function getAmmFeeSharingConfigPDA(creator) {
  * When distribute_creator_fees is called, it reads the config and distributes from the creator vault.
  *
  * v25.16 FIX: Derive vaults from the original creator, not the sharing config PDA
+ * v25.105: Now returns ammVaultAuth for TransferCreatorFeesToPump instruction
  *
  * @param {PublicKey} originalCreator - The original token creator
  * @returns {Object} Vault addresses for the original creator
@@ -256,11 +257,13 @@ function getShareholderFeeVaults(originalCreator) {
         PROGRAMS.PUMP
     );
 
+    // v25.105: AMM vault authority for TransferCreatorFeesToPump
     const [ammVaultAuth] = PublicKey.findProgramAddressSync(
         [Buffer.from("creator_vault"), originalCreator.toBuffer()],
         PROGRAMS.PUMP_AMM
     );
 
+    // AMM vault ATA is a wSOL token account owned by ammVaultAuth
     const ammVaultAta = getAssociatedTokenAddress(TOKENS.WSOL, ammVaultAuth, true);
 
     return { bcVault, ammVaultAuth, ammVaultAta, sharingConfigPDA };

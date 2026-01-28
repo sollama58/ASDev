@@ -26,7 +26,7 @@
  *          (fixes "0 pending" issue when config PDA derivation didn't match)
  */
 const { PublicKey, SystemProgram, Transaction, TransactionInstruction } = require('@solana/web3.js');
-const { getAssociatedTokenAddress } = require('@solana/spl-token');
+const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const { BN } = require('@coral-xyz/anchor');
 const logger = require('../services/logger');
 const config = require('../config/env');
@@ -490,8 +490,10 @@ async function claimFeesForBeneficiary(pendingInfo) {
         return null;
     }
 
-    // Only claim from BC vault if there are fees (AMM vault needs separate handling)
-    if (pendingInfo.bcFeesLamports <= 0) {
+    // v25.105: Now handles both BC and AMM fees
+    // AMM fees are transferred to BC vault first via TransferCreatorFeesToPump
+    const totalFeesLamports = (pendingInfo.bcFeesLamports || 0) + (pendingInfo.ammFeesLamports || 0);
+    if (totalFeesLamports <= 0) {
         return null;
     }
 
@@ -596,23 +598,53 @@ async function claimFeesForBeneficiary(pendingInfo) {
                 return null;
             }
 
-            const { bcVault, sharingConfigPDA } = pump.getShareholderFeeVaults(creatorPubkey);
+            const { bcVault, sharingConfigPDA, ammVaultAuth, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkey);
+            const mintPubkey = new PublicKey(pendingInfo.mint);
+
+            // v25.105: If there are AMM fees, transfer them to BC vault first
+            // Reference tx: 2cGnFzu4w12n995MxTHo8BKFbb2V5FHJ4aeCQh69mxhkmhuyrnBH9zMSMwQ2tt9GhoZMardqgSXDPjm4SAA3i8AV
+            if (pendingInfo.ammFeesLamports > 0) {
+                const transferDiscriminator = pump.buildTransferFeesToPumpData();
+                const { pool } = pump.getPumpAmmPDAs(mintPubkey);
+
+                // TransferCreatorFeesToPump accounts from reference tx
+                const transferKeys = [
+                    { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },           // 0: wsol_mint
+                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },     // 1: token_program
+                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 2: system_program
+                    { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // 3: ata_program
+                    { pubkey: creatorPubkey, isSigner: false, isWritable: false },        // 4: coin_creator
+                    { pubkey: ammVaultAuth, isSigner: false, isWritable: true },          // 5: amm_vault_auth
+                    { pubkey: ammVaultAta, isSigner: false, isWritable: true },           // 6: amm_vault_ata (wSOL)
+                    { pubkey: bcVault, isSigner: false, isWritable: true },               // 7: bc_vault (destination)
+                    { pubkey: pool, isSigner: false, isWritable: false },                 // 8: pool
+                    { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false },    // 9: pump_amm_program
+                ];
+
+                tx.add(new TransactionInstruction({
+                    keys: transferKeys,
+                    programId: PROGRAMS.PUMP_AMM,
+                    data: transferDiscriminator
+                }));
+
+                logger.info('[PAGS Fee Scanner] Adding TransferCreatorFeesToPump instruction', {
+                    mint: pendingInfo.mint,
+                    ammFeesLamports: pendingInfo.ammFeesLamports
+                });
+            }
 
             const distributeDiscriminator = pump.buildDistributeFeesData();
 
-            // v25.104: Exact account structure from successful tx
-            // DistributeCreatorFees: mint, bonding_curve, sharing_config, creator_vault, system, event_auth, program, ...shareholders
-            // NO separate claimer account - signer is implicit in transaction
-            const mintPubkey = new PublicKey(pendingInfo.mint);
-            const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
+            // v25.105: Fixed account structure from successful Robinhood tx analysis
+            // DistributeCreatorFees accounts: mint, fee_sharing_config, coin_creator, creator_vault, system, event_auth, program, ...shareholders
             const distributeKeys = [
-                { pubkey: mintPubkey, isSigner: false, isWritable: false },
-                { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },  // sharing_config
-                { pubkey: bcVault, isSigner: false, isWritable: true },  // creator_vault
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
+                { pubkey: mintPubkey, isSigner: false, isWritable: false },           // 0: mint
+                { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },      // 1: fee_sharing_config
+                { pubkey: creatorPubkey, isSigner: false, isWritable: true },         // 2: coin_creator (original token creator)
+                { pubkey: bcVault, isSigner: false, isWritable: true },               // 3: creator_vault
+                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 4: system_program
+                { pubkey: eventAuthority, isSigner: false, isWritable: false },       // 5: event_authority
+                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },        // 6: pump program
             ];
 
             // Add ALL shareholders as writable accounts
@@ -630,12 +662,15 @@ async function claimFeesForBeneficiary(pendingInfo) {
                 data: distributeDiscriminator
             }));
 
-            // Calculate our share of the vault
-            claimedLamports = Math.floor(pendingInfo.bcFeesLamports * (pendingInfo.shareBps / 10000));
+            // v25.105: Calculate our share of combined BC + AMM fees
+            const totalVaultFees = (pendingInfo.bcFeesLamports || 0) + (pendingInfo.ammFeesLamports || 0);
+            claimedLamports = Math.floor(totalVaultFees * (pendingInfo.shareBps / 10000));
 
             logger.info('[PAGS Fee Scanner] Distributing as shareholder', {
                 mint: pendingInfo.mint,
-                totalFees: pendingInfo.bcFeesLamports,
+                bcFees: pendingInfo.bcFeesLamports,
+                ammFees: pendingInfo.ammFeesLamports,
+                totalFees: totalVaultFees,
                 ourShare: claimedLamports,
                 shareBps: pendingInfo.shareBps,
                 shareholderCount: configData.shareholders.length
