@@ -600,13 +600,14 @@ async function claimFeesForBeneficiary(pendingInfo) {
 
             const distributeDiscriminator = pump.buildDistributeFeesData();
 
-            // v25.101: Correct account structure from successful tx analysis
-            // DistributeCreatorFees: mint, coin_creator, claimer, bc_vault, system, event_auth, program, ...shareholders
+            // v25.102: Correct account structure - account #2 is bonding_curve PDA
+            // DistributeCreatorFees: mint, bonding_curve, claimer, creator_vault, system, event_auth, program, ...shareholders
             const mintPubkey = new PublicKey(pendingInfo.mint);
+            const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
             const distributeKeys = [
                 { pubkey: mintPubkey, isSigner: false, isWritable: false },
-                { pubkey: sharingConfigPDA, isSigner: false, isWritable: true },  // coin_creator
-                { pubkey: pagsKeypair.publicKey, isSigner: false, isWritable: true },  // claimer
+                { pubkey: bondingCurve, isSigner: false, isWritable: true },
+                { pubkey: pagsKeypair.publicKey, isSigner: false, isWritable: true },
                 { pubkey: bcVault, isSigner: false, isWritable: true },
                 { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                 { pubkey: eventAuthority, isSigner: false, isWritable: false },
