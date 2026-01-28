@@ -21,6 +21,7 @@
  * v25.101 - Fix DistributeCreatorFees: correct discriminator and account structure from tx analysis
  * v25.102 - Fix DistributeCreatorFees: account #2 is bonding_curve PDA, not coinCreator
  * v25.103 - Fix DistributeCreatorFees: need BOTH bonding_curve AND sharing_config accounts
+ * v25.104 - Fix DistributeCreatorFees: remove claimer account (not in successful tx)
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -751,16 +752,16 @@ async function claimRobinhoodFees(deps) {
                                 [Buffer.from("__event_authority")], PROGRAMS.PUMP
                             );
 
-                            // v25.103: Need BOTH bonding_curve AND sharing_config accounts
-                            // DistributeCreatorFees: mint, bonding_curve, sharing_config, claimer, creator_vault, system, event_auth, program, ...shareholders
+                            // v25.104: Exact account structure from successful tx 2cGnFzu4w12n995MxTHo8BKFbb2V5FHJ4aeCQh69mxhkmhuyrnBH9zMSMwQ2tt9GhoZMardqgSXDPjm4SAA3i8AV
+                            // DistributeCreatorFees: mint, bonding_curve, sharing_config, creator_vault, system, event_auth, program, ...shareholders
+                            // NO separate claimer account - signer is implicit in transaction
                             const mintPubkey = new PublicKey(token.mint);
                             const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
                             const distributeKeys = [
                                 { pubkey: mintPubkey, isSigner: false, isWritable: false },
                                 { pubkey: bondingCurve, isSigner: false, isWritable: true },
                                 { pubkey: coinCreator, isSigner: false, isWritable: true },  // sharing_config (feeVaultAddress)
-                                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
-                                { pubkey: pumpBcVault, isSigner: false, isWritable: true },
+                                { pubkey: pumpBcVault, isSigner: false, isWritable: true },  // creator_vault
                                 { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                                 { pubkey: eventAuthority, isSigner: false, isWritable: false },
                                 { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },

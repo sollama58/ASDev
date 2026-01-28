@@ -1349,16 +1349,16 @@ function init(deps) {
                                     [Buffer.from("__event_authority")], PROGRAMS.PUMP
                                 );
 
-                                // v25.103: Need BOTH bonding_curve AND sharing_config accounts
-                                // DistributeCreatorFees: mint, bonding_curve, sharing_config, claimer, creator_vault, system, event_auth, program, ...shareholders
+                                // v25.104: Exact account structure from successful tx
+                                // DistributeCreatorFees: mint, bonding_curve, sharing_config, creator_vault, system, event_auth, program, ...shareholders
+                                // NO separate claimer account - signer is implicit in transaction
                                 const mintPubkey = new PublicKey(token.mint);
                                 const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
                                 const distributeKeys = [
                                     { pubkey: mintPubkey, isSigner: false, isWritable: false },
                                     { pubkey: bondingCurve, isSigner: false, isWritable: true },
                                     { pubkey: coinCreator, isSigner: false, isWritable: true },  // sharing_config (feeVaultAddress)
-                                    { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
-                                    { pubkey: pumpBcVault, isSigner: false, isWritable: true },
+                                    { pubkey: pumpBcVault, isSigner: false, isWritable: true },  // creator_vault
                                     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
                                     { pubkey: eventAuthority, isSigner: false, isWritable: false },
                                     { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
