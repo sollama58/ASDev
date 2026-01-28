@@ -77,6 +77,16 @@
             background: rgba(34, 197, 94, 0.5);
         }
 
+        .btn-warning {
+            background: rgba(234, 179, 8, 0.3);
+            border: 1px solid rgba(234, 179, 8, 0.5);
+            color: #fde047;
+        }
+
+        .btn-warning:hover {
+            background: rgba(234, 179, 8, 0.5);
+        }
+
         .input-field {
             background: rgba(0, 0, 0, 0.5);
             border: 1px solid rgba(234, 88, 12, 0.3);
@@ -577,6 +587,79 @@
 
             <!-- Airdrop Debug Tab -->
             <div id="tab-airdrop" class="tab-content hidden">
+                <!-- Airdrop Simulation Panel (Full Width) -->
+                <div class="panel mb-6">
+                    <div class="panel-header flex justify-between items-center">
+                        <h3 class="text-orange-500 font-bold">Airdrop Simulation</h3>
+                        <div class="flex gap-2">
+                            <input type="number" id="sim-limit" class="input-field w-24" placeholder="Limit" value="50" min="10" max="500">
+                            <button onclick="simulateAirdrop()" class="btn btn-warning">Run Simulation</button>
+                        </div>
+                    </div>
+                    <div id="sim-loading" class="hidden text-center py-8">
+                        <div class="text-blue-400 animate-pulse">Running simulation...</div>
+                    </div>
+                    <div id="sim-result" class="hidden">
+                        <!-- Summary -->
+                        <div id="sim-summary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                            <!-- Will be populated by JS -->
+                        </div>
+
+                        <!-- Distribution Tables -->
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <!-- Community Distribution -->
+                            <div class="bg-gray-800/50 rounded p-4">
+                                <h4 class="text-sm font-bold text-orange-400 mb-2">Community Pot (90%)</h4>
+                                <div id="sim-community-stats" class="text-xs text-gray-400 mb-2"></div>
+                                <div class="max-h-64 overflow-y-auto">
+                                    <table class="w-full text-xs">
+                                        <thead class="sticky top-0 bg-gray-800">
+                                            <tr>
+                                                <th class="text-left">#</th>
+                                                <th class="text-left">Wallet</th>
+                                                <th class="text-right">Points</th>
+                                                <th class="text-right">SOL</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="sim-community-table">
+                                            <tr><td colspan="4" class="text-center text-gray-500">No data</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- KOTH Distribution -->
+                            <div class="bg-gray-800/50 rounded p-4">
+                                <h4 class="text-sm font-bold text-purple-400 mb-2">KOTH Pot (10%)</h4>
+                                <div id="sim-koth-stats" class="text-xs text-gray-400 mb-2"></div>
+                                <div class="max-h-64 overflow-y-auto">
+                                    <table class="w-full text-xs">
+                                        <thead class="sticky top-0 bg-gray-800">
+                                            <tr>
+                                                <th class="text-left">#</th>
+                                                <th class="text-left">Wallet</th>
+                                                <th class="text-right">Share %</th>
+                                                <th class="text-right">SOL</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="sim-koth-table">
+                                            <tr><td colspan="4" class="text-center text-gray-500">No data</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Warnings -->
+                        <div id="sim-warnings" class="mt-4 hidden">
+                            <!-- Will be populated if there are warnings -->
+                        </div>
+                    </div>
+                    <div id="sim-empty" class="text-center py-8 text-gray-500">
+                        Click "Run Simulation" to see expected airdrop distribution
+                    </div>
+                </div>
+
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <!-- Airdrop Calculation -->
                     <div class="panel">
@@ -909,6 +992,7 @@
                             <button onclick="triggerHolderScan()" class="btn btn-secondary w-full">Force Holder Scan</button>
                             <button onclick="triggerRobinhoodScan()" class="btn btn-secondary w-full">Force Robinhood Scan</button>
                             <button onclick="triggerFeeClaim()" class="btn btn-success w-full">Trigger Fee Claim</button>
+                            <button onclick="simulateAirdrop()" class="btn btn-warning w-full">Simulate Airdrop</button>
                             <button onclick="triggerAirdrop()" class="btn btn-primary w-full">Trigger Airdrop</button>
                         </div>
                         <div id="action-result" class="result-box mt-4 text-green-400">
@@ -2757,6 +2841,156 @@
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Airdrop error: ${e.message}`, 'error');
+            }
+        }
+
+        async function simulateAirdrop() {
+            const loadingEl = document.getElementById('sim-loading');
+            const resultEl = document.getElementById('sim-result');
+            const emptyEl = document.getElementById('sim-empty');
+            const actionResultEl = document.getElementById('action-result');
+            const limitInput = document.getElementById('sim-limit');
+            const limit = parseInt(limitInput?.value) || 50;
+
+            // Show loading state
+            if (loadingEl) loadingEl.classList.remove('hidden');
+            if (resultEl) resultEl.classList.add('hidden');
+            if (emptyEl) emptyEl.classList.add('hidden');
+            if (actionResultEl) actionResultEl.innerHTML = '<span class="text-blue-400">Running simulation...</span>';
+
+            log('Running airdrop simulation...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/simulate-airdrop?limit=${limit}`, {
+                    headers: { 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (loadingEl) loadingEl.classList.add('hidden');
+
+                if (!data.success) {
+                    if (emptyEl) {
+                        emptyEl.classList.remove('hidden');
+                        emptyEl.innerHTML = `<span class="text-red-400">Error: ${data.error || 'Unknown error'}</span>`;
+                    }
+                    if (actionResultEl) actionResultEl.innerHTML = `<span class="text-red-400">Simulation failed</span>`;
+                    log(`Simulation failed: ${data.error}`, 'error');
+                    return;
+                }
+
+                // Show result container
+                if (resultEl) resultEl.classList.remove('hidden');
+
+                // Populate summary
+                const summaryEl = document.getElementById('sim-summary');
+                if (summaryEl && data.summary) {
+                    const s = data.summary;
+                    const triggerClass = s.wouldTrigger ? 'text-green-400' : 'text-red-400';
+                    const triggerIcon = s.wouldTrigger ? '✓' : '✗';
+                    summaryEl.innerHTML = `
+                        <div class="bg-blue-900/30 border border-blue-700/50 rounded p-3 text-center">
+                            <div class="text-xs text-blue-400">Current Balance</div>
+                            <div class="text-lg font-bold text-blue-300">${s.currentBalanceSOL} SOL</div>
+                        </div>
+                        <div class="bg-green-900/30 border border-green-700/50 rounded p-3 text-center">
+                            <div class="text-xs text-green-400">Available for Airdrop</div>
+                            <div class="text-lg font-bold text-green-300">${s.availableForAirdropSOL} SOL</div>
+                        </div>
+                        <div class="bg-orange-900/30 border border-orange-700/50 rounded p-3 text-center">
+                            <div class="text-xs text-orange-400">Total Planned</div>
+                            <div class="text-lg font-bold text-orange-300">${s.totalPlannedSOL} SOL</div>
+                        </div>
+                        <div class="${s.wouldTrigger ? 'bg-green-900/30 border-green-700/50' : 'bg-red-900/30 border-red-700/50'} border rounded p-3 text-center">
+                            <div class="text-xs ${triggerClass}">Would Trigger</div>
+                            <div class="text-lg font-bold ${triggerClass}">${triggerIcon} ${s.wouldTrigger ? 'Yes' : 'No'}</div>
+                        </div>
+                    `;
+                }
+
+                // Populate community stats
+                const commStatsEl = document.getElementById('sim-community-stats');
+                if (commStatsEl && data.communityPot) {
+                    const cp = data.communityPot;
+                    commStatsEl.innerHTML = `${cp.amountSOL} SOL | ${cp.recipientCount} recipients | ${cp.totalPoints} total points`;
+                }
+
+                // Populate community table
+                const commTableEl = document.getElementById('sim-community-table');
+                if (commTableEl && data.communityPot?.topRecipients) {
+                    const recipients = data.communityPot.topRecipients;
+                    if (recipients.length === 0) {
+                        commTableEl.innerHTML = '<tr><td colspan="4" class="text-center text-gray-500">No recipients</td></tr>';
+                    } else {
+                        commTableEl.innerHTML = recipients.map((r, i) => `
+                            <tr class="border-b border-gray-700/50 hover:bg-gray-700/30">
+                                <td class="text-gray-500">${i + 1}</td>
+                                <td class="text-cyan-400 font-mono">${r.walletShort}</td>
+                                <td class="text-right text-gray-300">${r.points?.toFixed(1) || 0}</td>
+                                <td class="text-right text-green-400">${r.amountSOL}</td>
+                            </tr>
+                        `).join('');
+                        if (data.communityPot.hasMore) {
+                            commTableEl.innerHTML += `<tr><td colspan="4" class="text-center text-gray-500 text-xs">... and ${data.communityPot.recipientCount - recipients.length} more</td></tr>`;
+                        }
+                    }
+                }
+
+                // Populate KOTH stats
+                const kothStatsEl = document.getElementById('sim-koth-stats');
+                if (kothStatsEl && data.kothPot) {
+                    const kp = data.kothPot;
+                    const tokenInfo = kp.token ? `${kp.token.ticker} | ` : '';
+                    kothStatsEl.innerHTML = `${tokenInfo}${kp.amountSOL} SOL | ${kp.holderCount} holders`;
+                }
+
+                // Populate KOTH table
+                const kothTableEl = document.getElementById('sim-koth-table');
+                if (kothTableEl && data.kothPot?.distribution) {
+                    const holders = data.kothPot.distribution;
+                    if (holders.length === 0) {
+                        kothTableEl.innerHTML = '<tr><td colspan="4" class="text-center text-gray-500">No KOTH holders</td></tr>';
+                    } else {
+                        kothTableEl.innerHTML = holders.map((h, i) => `
+                            <tr class="border-b border-gray-700/50 hover:bg-gray-700/30">
+                                <td class="text-gray-500">${i + 1}</td>
+                                <td class="text-purple-400 font-mono">${h.walletShort}</td>
+                                <td class="text-right text-gray-300">${h.sharePercent}</td>
+                                <td class="text-right text-green-400">${h.amountSOL}</td>
+                            </tr>
+                        `).join('');
+                        if (data.kothPot.hasMore) {
+                            kothTableEl.innerHTML += `<tr><td colspan="4" class="text-center text-gray-500 text-xs">... and ${data.kothPot.holderCount - holders.length} more</td></tr>`;
+                        }
+                    }
+                }
+
+                // Show warnings if any
+                const warningsEl = document.getElementById('sim-warnings');
+                if (warningsEl && data.warnings && data.warnings.length > 0) {
+                    warningsEl.classList.remove('hidden');
+                    warningsEl.innerHTML = `
+                        <div class="bg-yellow-900/30 border border-yellow-700/50 rounded p-3">
+                            <div class="text-xs text-yellow-400 font-bold mb-1">Warnings</div>
+                            ${data.warnings.map(w => `<div class="text-xs text-yellow-300">${w}</div>`).join('')}
+                        </div>
+                    `;
+                } else if (warningsEl) {
+                    warningsEl.classList.add('hidden');
+                }
+
+                if (actionResultEl) {
+                    actionResultEl.innerHTML = `<span class="text-green-400">✓ Simulation complete - ${data.communityPot?.recipientCount || 0} community + ${data.kothPot?.holderCount || 0} KOTH recipients</span>`;
+                }
+                log(`Airdrop simulation complete: ${data.summary?.totalPlannedSOL} SOL to ${data.communityPot?.recipientCount || 0} recipients`, 'success');
+
+            } catch (e) {
+                if (loadingEl) loadingEl.classList.add('hidden');
+                if (emptyEl) {
+                    emptyEl.classList.remove('hidden');
+                    emptyEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                }
+                if (actionResultEl) actionResultEl.innerHTML = `<span class="text-red-400">Simulation error: ${e.message}</span>`;
+                log(`Simulation error: ${e.message}`, 'error');
             }
         }
 

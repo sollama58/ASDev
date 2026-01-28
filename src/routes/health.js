@@ -2950,6 +2950,176 @@ function init(deps) {
         }
     });
 
+    /**
+     * GET /admin/simulate-airdrop
+     * v25.114: Simulate airdrop distribution without executing transactions
+     * Shows expected values for each wallet before actual distribution
+     */
+    router.get('/admin/simulate-airdrop', adminAuth, async (req, res) => {
+        try {
+            const holderScanner = require('../tasks/holderScanner');
+            const flywheel = require('../tasks/flywheel');
+
+            // Get current SOL balance
+            const solBalance = await connection.getBalance(devKeypair.publicKey);
+            const SAFETY_RESERVE = 0.1 * LAMPORTS_PER_SOL;
+            const MIN_AIRDROP_POOL = (config.AIRDROP_THRESHOLD_SOL || 1.0) * LAMPORTS_PER_SOL;
+            const availableForAirdrop = solBalance - SAFETY_RESERVE;
+
+            // Check if airdrop would be triggered
+            const wouldTrigger = availableForAirdrop >= MIN_AIRDROP_POOL;
+
+            // Calculate distribution pools (99% distributed, 1% dust buffer)
+            const totalDistributable = Math.floor(availableForAirdrop * 0.99);
+            let kothAmount = 0;
+            let communityAmount = totalDistributable;
+            let kothToken = null;
+            let kothHolderDistribution = [];
+
+            // Get KOTH token info
+            const KOTH_MIN_HOLDERS = 10;
+            const KOTH_MAX_PERCENT = 0.10; // 10% cap
+
+            const kothResult = await flywheel.getAiSelectedKoth(db);
+            if (kothResult?.token?.mint) {
+                kothToken = await db.get(
+                    'SELECT "userPubkey", ticker, mint, "marketCap" FROM tokens WHERE mint = $1',
+                    [kothResult.token.mint]
+                );
+
+                if (kothToken) {
+                    const kothHolders = await db.all(
+                        'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
+                        [kothToken.mint]
+                    );
+
+                    if (kothHolders && kothHolders.length >= KOTH_MIN_HOLDERS) {
+                        kothAmount = Math.floor(totalDistributable * KOTH_MAX_PERCENT);
+                        communityAmount = totalDistributable - kothAmount;
+
+                        // Calculate KOTH holder distribution
+                        const totalBalance = kothHolders.reduce((sum, h) => sum + BigInt(h.balance || '0'), BigInt(0));
+
+                        for (const holder of kothHolders) {
+                            const holderBalance = BigInt(holder.balance || '0');
+                            if (holderBalance <= BigInt(0)) continue;
+
+                            const share = totalBalance > BigInt(0)
+                                ? Number((BigInt(kothAmount) * holderBalance) / totalBalance)
+                                : 0;
+
+                            if (share > 0) {
+                                kothHolderDistribution.push({
+                                    wallet: holder.holderPubkey,
+                                    walletShort: holder.holderPubkey.slice(0, 8) + '...',
+                                    amountLamports: share,
+                                    amountSOL: (share / LAMPORTS_PER_SOL).toFixed(6),
+                                    sharePercent: ((holderBalance * BigInt(10000) / totalBalance) / BigInt(100)).toString() + '%'
+                                });
+                            }
+                        }
+
+                        kothHolderDistribution.sort((a, b) => b.amountLamports - a.amountLamports);
+                    }
+                }
+            }
+
+            // Get user points for community distribution
+            const userPointsMap = await redis.getAllUserPoints();
+            const totalPoints = await redis.getTotalPoints();
+
+            const communityDistribution = [];
+            let plannedCommunityAmount = 0;
+
+            if (totalPoints > 0) {
+                for (const [pubkey, points] of userPointsMap.entries()) {
+                    if (points <= 0) continue;
+
+                    const share = Math.floor((communityAmount * points) / totalPoints);
+                    if (share > 0) {
+                        plannedCommunityAmount += share;
+                        communityDistribution.push({
+                            wallet: pubkey,
+                            walletShort: pubkey.slice(0, 8) + '...',
+                            points: points,
+                            amountLamports: share,
+                            amountSOL: (share / LAMPORTS_PER_SOL).toFixed(6),
+                            sharePercent: ((points / totalPoints) * 100).toFixed(4) + '%'
+                        });
+                    }
+                }
+
+                communityDistribution.sort((a, b) => b.amountLamports - a.amountLamports);
+            }
+
+            // Calculate total planned distribution
+            const kothTotalLamports = kothHolderDistribution.reduce((sum, h) => sum + h.amountLamports, 0);
+            const totalPlannedLamports = plannedCommunityAmount + kothTotalLamports;
+
+            // Summary statistics
+            const summary = {
+                wouldTrigger,
+                thresholdMet: wouldTrigger,
+                currentBalanceSOL: (solBalance / LAMPORTS_PER_SOL).toFixed(4),
+                safetyReserveSOL: (SAFETY_RESERVE / LAMPORTS_PER_SOL).toFixed(4),
+                availableForAirdropSOL: (availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4),
+                minimumRequiredSOL: (MIN_AIRDROP_POOL / LAMPORTS_PER_SOL).toFixed(4),
+                totalDistributableSOL: (totalDistributable / LAMPORTS_PER_SOL).toFixed(4),
+                totalPlannedSOL: (totalPlannedLamports / LAMPORTS_PER_SOL).toFixed(4),
+                dustRemainingSOL: ((totalDistributable - totalPlannedLamports) / LAMPORTS_PER_SOL).toFixed(6)
+            };
+
+            const communityPotInfo = {
+                amountSOL: (communityAmount / LAMPORTS_PER_SOL).toFixed(4),
+                percentOfTotal: '90%',
+                totalPoints: totalPoints.toFixed(2),
+                recipientCount: communityDistribution.length,
+                plannedDistributionSOL: (plannedCommunityAmount / LAMPORTS_PER_SOL).toFixed(4)
+            };
+
+            const kothPotInfo = {
+                amountSOL: (kothAmount / LAMPORTS_PER_SOL).toFixed(4),
+                percentOfTotal: '10%',
+                token: kothToken ? {
+                    ticker: kothToken.ticker,
+                    mint: kothToken.mint,
+                    marketCap: kothToken.marketCap
+                } : null,
+                holderCount: kothHolderDistribution.length,
+                reasoning: kothResult?.reasoning || null,
+                minimumHoldersRequired: KOTH_MIN_HOLDERS,
+                meetsHolderRequirement: kothHolderDistribution.length >= KOTH_MIN_HOLDERS
+            };
+
+            // Limit detailed distribution to prevent huge response
+            const maxDetailedRecipients = parseInt(req.query.limit) || 100;
+
+            res.json({
+                success: true,
+                simulation: true,
+                timestamp: new Date().toISOString(),
+                summary,
+                communityPot: {
+                    ...communityPotInfo,
+                    topRecipients: communityDistribution.slice(0, maxDetailedRecipients),
+                    hasMore: communityDistribution.length > maxDetailedRecipients
+                },
+                kothPot: {
+                    ...kothPotInfo,
+                    distribution: kothHolderDistribution.slice(0, maxDetailedRecipients),
+                    hasMore: kothHolderDistribution.length > maxDetailedRecipients
+                },
+                warnings: !wouldTrigger ? [
+                    `Airdrop would NOT trigger: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available, need ${(MIN_AIRDROP_POOL / LAMPORTS_PER_SOL).toFixed(4)} SOL`
+                ] : [],
+                note: 'This is a SIMULATION only. No transactions have been executed.'
+            });
+        } catch (e) {
+            logger.error('[Admin] Simulate airdrop error', { error: e.message, stack: e.stack });
+            res.status(500).json({ error: 'Failed to simulate airdrop', details: e.message });
+        }
+    });
+
     return router;
 }
 
