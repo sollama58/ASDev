@@ -22,6 +22,7 @@
  * v25.102 - Fix DistributeCreatorFees: account #2 is bonding_curve PDA, not coinCreator
  * v25.103 - Fix DistributeCreatorFees: need BOTH bonding_curve AND sharing_config accounts
  * v25.104 - Fix DistributeCreatorFees: remove claimer account (not in successful tx)
+ * v25.105 - Fix: check balance at PUMP creator-vault (same vault used for distribution)
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -675,24 +676,21 @@ async function claimRobinhoodFees(deps) {
                 let isFeeProgram = false;
 
                 if (token.feeVaultAddress) {
-                    // v25.101: FEE program tokens have two separate concepts:
-                    // 1. coin_creator (feeVaultAddress) - stores shareholder config, passed to distribute instruction
-                    // 2. PUMP bc_vault - derived from original creator, where fees are distributed FROM
-                    //
-                    // For balance checking, we check feeVaultAddress (where fees may accumulate)
-                    // For distribution, we pass both coin_creator AND the PUMP bc_vault
+                    // v25.105: FEE program tokens - fees are in PUMP creator-vault, NOT feeVaultAddress
+                    // From successful tx analysis: creator_vault (account 3) is PUMP PDA where SOL fees are
+                    // The feeVaultAddress is only the sharing_config (account 2), not where fees are stored
                     const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
 
-                    // coin_creator = feeVaultAddress (shareholder config, passed to instruction)
+                    // coin_creator = feeVaultAddress (sharing_config for instruction account 2)
                     coinCreator = feeVaultPubkey;
 
-                    // PUMP bc_vault derived from original creator (for distribute instruction)
+                    // PUMP bc_vault derived from original creator - THIS IS WHERE FEES ARE
                     const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
                     pumpBcVault = creatorVaults.bcVault;
                     sharingConfigPDA = creatorVaults.sharingConfigPDA;
 
-                    // For balance checking, check feeVaultAddress (where BC fees accumulate for FEE tokens)
-                    bcVault = feeVaultPubkey;
+                    // v25.105: Check balance at PUMP creator-vault (same as where we distribute from)
+                    bcVault = pumpBcVault;
 
                     // v25.100: AMM vaults derived from feeVaultPubkey (matches AMM pool.coin_creator)
                     const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
@@ -700,7 +698,7 @@ async function claimRobinhoodFees(deps) {
                     ammVaultAta = feeVaults.ammVaultAta;
                     isFeeProgram = true;
 
-                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - coinCreator=${token.feeVaultAddress.slice(0, 8)}..., pumpBcVault from creator ${token.creatorPubkey.slice(0, 8)}...`);
+                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - coinCreator=${token.feeVaultAddress.slice(0, 8)}..., bcVault/pumpBcVault from creator ${token.creatorPubkey.slice(0, 8)}...`);
                 } else {
                     // Legacy path: PUMP program fee sharing - derive from original creator
                     const vaults = pump.getShareholderFeeVaults(creatorPubkey);

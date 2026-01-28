@@ -965,11 +965,12 @@ function init(deps) {
 
             if (isFeeProgram) {
                 const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                bcVault = feeVaultPubkey;
                 coinCreator = feeVaultPubkey;
                 const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
                 pumpBcVault = creatorVaults.bcVault;
                 sharingConfigPDA = creatorVaults.sharingConfigPDA;
+                // v25.105: Check balance at PUMP creator-vault (same as distribution)
+                bcVault = pumpBcVault;
                 // v25.100: AMM vaults from feeVaultPubkey (matches AMM pool.coin_creator)
                 const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
                 ammVaultAuth = feeVaults.ammVaultAuth;
@@ -1232,14 +1233,14 @@ function init(deps) {
 
             if (isFeeProgram) {
                 const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                // For balance checking
-                bcVault = feeVaultPubkey;
-                // For distribute instruction: coin_creator = feeVaultAddress
+                // coin_creator = feeVaultAddress (sharing_config for instruction)
                 coinCreator = feeVaultPubkey;
-                // PUMP bc_vault derived from original creator
+                // PUMP bc_vault derived from original creator - THIS IS WHERE FEES ARE
                 const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
                 pumpBcVault = creatorVaults.bcVault;
                 sharingConfigPDA = creatorVaults.sharingConfigPDA;
+                // v25.105: Check balance at PUMP creator-vault (same as distribution)
+                bcVault = pumpBcVault;
                 // v25.100: AMM vaults from feeVaultPubkey (matches AMM pool.coin_creator)
                 const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
                 ammVaultAuth = feeVaults.ammVaultAuth;
