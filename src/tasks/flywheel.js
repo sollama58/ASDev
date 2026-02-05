@@ -23,6 +23,8 @@
  * v25.103 - Fix DistributeCreatorFees: need BOTH bonding_curve AND sharing_config accounts
  * v25.104 - Fix DistributeCreatorFees: remove claimer account (not in successful tx)
  * v25.105 - Fix: check balance at PUMP creator-vault (same vault used for distribution)
+ * v25.110 - CRITICAL: Reordered airdrop flow - validate ALL data BEFORE sending ANY transactions
+ *           Previously KOTH was sent before community validation, causing partial airdrops on failure
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -1142,105 +1144,10 @@ async function processAirdrop(deps) {
         let communityAmount = totalDistributable;
         let kothTxSignature = null;
 
-        // 1. Identify King of the Hill using AI scoring system
-        // v25.38: AI-based selection considers multiple metrics (volume, holders, age, etc.)
-        // v25.22 SECURITY: Minimum requirements still enforced
-        const KOTH_MIN_HOLDERS = 10;
-        const KOTH_MAX_PERCENT = 0.10; // 10% cap
+        // v25.110: CRITICAL FIX - Validate ALL data BEFORE sending ANY transactions
+        // Previously KOTH was sent before community validation, causing partial airdrops on failure
 
-        // Use AI-selected KOTH (re-evaluates hourly)
-        const kothResult = await getAiSelectedKoth(db);
-        const kothToken = kothResult.token ? await db.get(
-            'SELECT "userPubkey", ticker, mint, "marketCap" FROM tokens WHERE mint = $1',
-            [kothResult.token.mint]
-        ) : null;
-
-        // Log AI reasoning
-        if (kothResult.reasoning) {
-            logger.info(`[KOTH] AI Reasoning: ${kothResult.reasoning}`);
-        }
-
-        // 2. Process KOTH Payout (10%) - v13.0: Now distributed to all holders of the king token
-        // v25.22 SECURITY: Only process if token meets minimum requirements
-        if (kothToken && kothToken.mint) {
-            // Get all holders of the king token
-            const kothHolders = await db.all(
-                'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
-                [kothToken.mint]
-            );
-
-            // v25.22 SECURITY: Require minimum holder count to prevent single-holder manipulation
-            if (kothHolders && kothHolders.length >= KOTH_MIN_HOLDERS) {
-                kothAmount = Math.floor(totalDistributable * KOTH_MAX_PERCENT);
-                communityAmount = totalDistributable - kothAmount;
-
-                logger.info(`👑 King of the Hill: ${kothToken.ticker} (MCAP: $${kothToken.marketCap?.toFixed(0) || 0}) - Distributing ${(kothAmount / LAMPORTS_PER_SOL).toFixed(2)} SOL to ${kothHolders.length} holders`);
-
-                try {
-                    // Calculate total balance for proportional distribution
-                    const totalBalance = kothHolders.reduce((sum, h) => sum + BigInt(h.balance || '0'), BigInt(0));
-
-                    // Build KOTH distribution batch (proportional to holdings)
-                    const kothBatch = [];
-                    for (const holder of kothHolders) {
-                        try {
-                            const holderBalance = BigInt(holder.balance || '0');
-                            if (holderBalance <= BigInt(0)) continue;
-
-                            // Calculate proportional share
-                            // BUG FIX: Added check for kothHolders.length to prevent division by zero
-                            const share = totalBalance > BigInt(0)
-                                ? Number((BigInt(kothAmount) * holderBalance) / totalBalance)
-                                : (kothHolders.length > 0 ? Math.floor(kothAmount / kothHolders.length) : 0);
-
-                            if (share > 0) {
-                                kothBatch.push({ user: new PublicKey(holder.holderPubkey), amount: share });
-                            }
-                        } catch (e) {
-                            logger.debug(`Skipping invalid KOTH holder: ${holder.holderPubkey}`);
-                        }
-                    }
-
-                    // v25.22 SCALABILITY: Increased batch size
-                    // Send KOTH distributions in batches
-                    // v25.23: Use optimized batch size constant
-                    let kothSignatures = [];
-                    for (let i = 0; i < kothBatch.length; i += KOTH_BATCH_SIZE) {
-                        const batch = kothBatch.slice(i, i + KOTH_BATCH_SIZE);
-                        const sig = await sendSolAirdropBatch(batch, deps);
-                        if (sig) {
-                            kothSignatures.push(sig);
-                        }
-                        if (i + KOTH_BATCH_SIZE < kothBatch.length) {
-                            await new Promise(r => setTimeout(r, 500));
-                        }
-                    }
-
-                    if (kothSignatures.length > 0) {
-                        kothTxSignature = kothSignatures.join(',');
-                        logger.info(`✅ KOTH Holder Payout Complete: ${kothSignatures.length} transactions sent to ${kothBatch.length} holders`);
-                    } else {
-                        logger.error("❌ KOTH Payout Failed - returning funds to community pool");
-                        communityAmount += kothAmount;
-                        kothAmount = 0;
-                    }
-                } catch (e) {
-                    logger.error(`KOTH Logic Error: ${e.message}`);
-                    communityAmount += kothAmount;
-                    kothAmount = 0;
-                }
-            } else {
-                // v25.22 SECURITY: Not enough holders (< KOTH_MIN_HOLDERS), skip KOTH to prevent manipulation
-                logger.info(`👑 King of the Hill: ${kothToken.ticker} - Only ${kothHolders?.length || 0} holders (need ${KOTH_MIN_HOLDERS} min), skipping KOTH bonus`);
-                // kothAmount stays 0, communityAmount stays totalDistributable
-            }
-        } else {
-            // v25.22: No qualifying KOTH token found (none meets $1000 market cap minimum)
-            logger.debug('[Airdrop] No KOTH token qualifies (needs $1000 min market cap)');
-        }
-
-        // 3. Process Community Distribution (Remaining 90%)
-        // v13.0: Fetch from Redis for cross-process consistency
+        // 1. Fetch community distribution data first (validation before any sends)
         const userPointsMap = await redis.getAllUserPoints();
         const totalPoints = await redis.getTotalPoints();
 
@@ -1250,14 +1157,68 @@ async function processAirdrop(deps) {
 
         if (totalPoints === 0 || userPoints.length === 0) {
             logger.warn('[Airdrop] No eligible users found (totalPoints=0 or no users with points). Skipping distribution.');
-            // v25.29: Still update timestamp so countdown stays synchronized
             const airdropInterval = config.AIRDROP_INTERVAL || 900000;
             const nextAirdropTime = Date.now() + airdropInterval;
             await db.run('UPDATE stats SET value = $1 WHERE key = $2', [nextAirdropTime, 'nextAirdropTimestamp']).catch(() => {});
             return; // Lock will be released in finally block
         }
 
-        // v25.13: Pre-calculate total distribution to validate against available balance
+        // 2. Identify King of the Hill using AI scoring system
+        // v25.38: AI-based selection considers multiple metrics (volume, holders, age, etc.)
+        const KOTH_MIN_HOLDERS = 10;
+        const KOTH_MAX_PERCENT = 0.10; // 10% cap
+
+        const kothResult = await getAiSelectedKoth(db);
+        const kothToken = kothResult.token ? await db.get(
+            'SELECT "userPubkey", ticker, mint, "marketCap" FROM tokens WHERE mint = $1',
+            [kothResult.token.mint]
+        ) : null;
+
+        if (kothResult.reasoning) {
+            logger.info(`[KOTH] AI Reasoning: ${kothResult.reasoning}`);
+        }
+
+        // 3. Build KOTH distribution plan (but don't send yet)
+        let kothBatch = [];
+        let kothHolders = [];
+        if (kothToken && kothToken.mint) {
+            kothHolders = await db.all(
+                'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
+                [kothToken.mint]
+            );
+
+            if (kothHolders && kothHolders.length >= KOTH_MIN_HOLDERS) {
+                kothAmount = Math.floor(totalDistributable * KOTH_MAX_PERCENT);
+                communityAmount = totalDistributable - kothAmount;
+
+                logger.info(`👑 King of the Hill: ${kothToken.ticker} (MCAP: $${kothToken.marketCap?.toFixed(0) || 0}) - Planning ${(kothAmount / LAMPORTS_PER_SOL).toFixed(2)} SOL to ${kothHolders.length} holders`);
+
+                const totalBalance = kothHolders.reduce((sum, h) => sum + BigInt(h.balance || '0'), BigInt(0));
+
+                for (const holder of kothHolders) {
+                    try {
+                        const holderBalance = BigInt(holder.balance || '0');
+                        if (holderBalance <= BigInt(0)) continue;
+
+                        const share = totalBalance > BigInt(0)
+                            ? Number((BigInt(kothAmount) * holderBalance) / totalBalance)
+                            : (kothHolders.length > 0 ? Math.floor(kothAmount / kothHolders.length) : 0);
+
+                        if (share > 0) {
+                            kothBatch.push({ user: new PublicKey(holder.holderPubkey), amount: share });
+                        }
+                    } catch (e) {
+                        logger.debug(`Skipping invalid KOTH holder: ${holder.holderPubkey}`);
+                    }
+                }
+            } else {
+                logger.info(`👑 King of the Hill: ${kothToken.ticker} - Only ${kothHolders?.length || 0} holders (need ${KOTH_MIN_HOLDERS} min), skipping KOTH bonus`);
+            }
+        } else {
+            logger.debug('[Airdrop] No KOTH token qualifies (needs $1000 min market cap)');
+        }
+
+        // 4. Build community distribution plan
         let plannedDistribution = 0;
         const distributionPlan = [];
         for (const user of userPoints) {
@@ -1268,32 +1229,64 @@ async function processAirdrop(deps) {
             }
         }
 
-        // Validate we're not trying to send more than available
+        // 5. Validate total planned distribution
         const totalPlannedWithKoth = plannedDistribution + kothAmount;
         if (totalPlannedWithKoth > availableForAirdrop) {
             logger.error(`[Airdrop] ABORTED: Planned distribution (${totalPlannedWithKoth / LAMPORTS_PER_SOL} SOL) exceeds available (${availableForAirdrop / LAMPORTS_PER_SOL} SOL)`);
             return;
         }
 
-        // v25.22 SECURITY: RACE CONDITION FIX - Use atomic balance verification
-        // Re-check balance right before distribution starts and require exact match or surplus
+        // 6. Final balance check before ANY transactions
         const finalBalanceCheck = await connection.getBalance(devKeypair.publicKey);
         const finalAvailable = finalBalanceCheck - SAFETY_RESERVE;
 
-        // v25.22: If balance decreased significantly since calculation, abort
-        // Allow small variance (up to 0.01 SOL for tx fees that may have occurred)
         const BALANCE_TOLERANCE = 0.01 * LAMPORTS_PER_SOL;
         if (finalAvailable < totalPlannedWithKoth - BALANCE_TOLERANCE) {
             logger.error(`[Airdrop] ABORTED: Balance changed during preparation (race condition detected). Initial: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL, Now: ${(finalAvailable / LAMPORTS_PER_SOL).toFixed(4)} SOL, Planned: ${(totalPlannedWithKoth / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
             return;
         }
 
-        // v25.22: If balance increased, recalculate with new balance (don't overspend original calculation)
-        // We use the ORIGINAL planned amounts to prevent mid-airdrop manipulation
         if (finalAvailable > availableForAirdrop) {
             logger.info(`[Airdrop] Balance increased during preparation (${((finalAvailable - availableForAirdrop) / LAMPORTS_PER_SOL).toFixed(4)} SOL). Using original plan to prevent manipulation.`);
         }
 
+        // ============================================================
+        // ALL VALIDATIONS PASSED - NOW SAFE TO SEND TRANSACTIONS
+        // ============================================================
+
+        logger.info(`Distributing ${(totalDistributable / LAMPORTS_PER_SOL).toFixed(4)} SOL total (${(kothAmount / LAMPORTS_PER_SOL).toFixed(4)} KOTH + ${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} Community)`);
+
+        // 7. Send KOTH distributions (now safe - all validations passed)
+        if (kothBatch.length > 0) {
+            try {
+                let kothSignatures = [];
+                for (let i = 0; i < kothBatch.length; i += KOTH_BATCH_SIZE) {
+                    const batch = kothBatch.slice(i, i + KOTH_BATCH_SIZE);
+                    const sig = await sendSolAirdropBatch(batch, deps);
+                    if (sig) {
+                        kothSignatures.push(sig);
+                    }
+                    if (i + KOTH_BATCH_SIZE < kothBatch.length) {
+                        await new Promise(r => setTimeout(r, 500));
+                    }
+                }
+
+                if (kothSignatures.length > 0) {
+                    kothTxSignature = kothSignatures.join(',');
+                    logger.info(`✅ KOTH Holder Payout Complete: ${kothSignatures.length} transactions sent to ${kothBatch.length} holders`);
+                } else {
+                    logger.error("❌ KOTH Payout Failed - returning funds to community pool");
+                    communityAmount += kothAmount;
+                    kothAmount = 0;
+                }
+            } catch (e) {
+                logger.error(`KOTH Logic Error: ${e.message}`);
+                communityAmount += kothAmount;
+                kothAmount = 0;
+            }
+        }
+
+        // 8. Send community distributions
         logger.info(`Distributing ${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL to ${distributionPlan.length} users (Community Pool)`);
 
         // v25.13: Generate unique airdrop ID for idempotency protection

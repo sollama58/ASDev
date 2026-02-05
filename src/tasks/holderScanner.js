@@ -10,6 +10,8 @@
  *         Dynamic scaling based on current eligible tokens' volume range
  * v25.20 - STABILITY: Added RPC retry logic with exponential backoff
  * v25.22 - SCALABILITY: Added mutex to prevent task overlap, parallel RPC batching
+ * v25.110 - CRITICAL: Fixed Redis sync - points/airdrops now synced after calculation
+ *           This fixes airdrop sending only one transaction (stale Redis data)
  */
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
@@ -17,7 +19,7 @@ const { BN } = require('@coral-xyz/anchor');
 const axios = require('axios');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, mutex, postgres } = require('../services');
+const { logger, mutex, postgres, redis } = require('../services');
 
 // v25.22 SCALABILITY: Mutex to prevent overlapping holder scans
 const holderScannerMutex = mutex.getMutex('holder_scanner');
@@ -659,6 +661,18 @@ async function updateGlobalState(deps) {
             if (!globalState.userExpectedAirdrops.has(pubkey) && kothShare > 0) {
                 globalState.userExpectedAirdrops.set(pubkey, kothShare);
             }
+        }
+
+        // v25.110: CRITICAL FIX - Sync points and expected airdrops to Redis
+        // The setter on globalState only triggers when assigning a new Map, not when using .set()
+        // This ensures airdrop distribution reads fresh data from Redis
+        try {
+            await redis.setTotalPoints(globalState.totalPoints);
+            await redis.setAllUserPoints(globalState.userPointsMap);
+            await redis.setAllUserExpectedAirdrops(globalState.userExpectedAirdrops);
+            logger.info(`[HolderScanner] Synced to Redis: ${globalState.userPointsMap.size} users, ${globalState.totalPoints.toFixed(2)} total points`);
+        } catch (redisErr) {
+            logger.error('[HolderScanner] Failed to sync to Redis', { error: redisErr.message });
         }
 
     } catch (e) {
