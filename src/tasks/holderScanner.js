@@ -12,6 +12,7 @@
  * v25.22 - SCALABILITY: Added mutex to prevent task overlap, parallel RPC batching
  * v25.110 - CRITICAL: Fixed Redis sync - points/airdrops now synced after calculation
  *           This fixes airdrop sending only one transaction (stale Redis data)
+ * v25.112 - KOTH selection now reads AI-selected KOTH from Redis to match flywheel
  */
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
@@ -257,7 +258,26 @@ async function updateGlobalState(deps) {
         const communityPot = totalDistributable * 0.90;
 
         // 2. Identify KOTH Token (for expected airdrop calculation)
-        const kothToken = await db.get('SELECT mint, userPubkey FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
+        // v25.112: Read AI-selected KOTH from Redis (set by flywheel) to match actual distribution
+        // Falls back to highest market cap if Redis data unavailable
+        let kothToken = null;
+        try {
+            const redisConn = redis.getConnection();
+            if (redisConn) {
+                const kothData = await redisConn.get('koth_ai_selection');
+                if (kothData) {
+                    const parsed = JSON.parse(kothData);
+                    if (parsed.mint) {
+                        kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens WHERE mint = $1', [parsed.mint]);
+                    }
+                }
+            }
+        } catch (e) {
+            logger.debug('[HolderScanner] Failed to read KOTH from Redis, using fallback', { error: e.message });
+        }
+        if (!kothToken) {
+            kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
+        }
 
         // --- END CALCULATION PREP ---
 

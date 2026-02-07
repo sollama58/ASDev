@@ -587,6 +587,25 @@
 
             <!-- Airdrop Debug Tab -->
             <div id="tab-airdrop" class="tab-content hidden">
+                <!-- Airdrop History Panel -->
+                <div class="panel mb-6">
+                    <div class="panel-header flex justify-between items-center">
+                        <h3 class="text-orange-500 font-bold">Airdrop History</h3>
+                        <div class="flex gap-2">
+                            <select id="airdrop-history-limit" class="input-field w-24" style="padding:4px 8px;font-size:12px;">
+                                <option value="5">Last 5</option>
+                                <option value="10">Last 10</option>
+                                <option value="20" selected>Last 20</option>
+                                <option value="50">Last 50</option>
+                            </select>
+                            <button onclick="fetchAirdropHistory()" class="btn btn-primary text-xs">Load History</button>
+                        </div>
+                    </div>
+                    <div id="airdrop-history-container">
+                        <div class="text-center py-6 text-gray-500 text-sm">Click "Load History" to view past airdrops</div>
+                    </div>
+                </div>
+
                 <!-- Airdrop Simulation Panel (Full Width) -->
                 <div class="panel mb-6">
                     <div class="panel-header flex justify-between items-center">
@@ -2537,6 +2556,129 @@
             } catch (e) {
                 document.getElementById('register-result').textContent = `Error: ${e.message}`;
                 log(`Registration error: ${e.message}`, 'error');
+            }
+        }
+
+        // ===== AIRDROP HISTORY =====
+        async function fetchAirdropHistory() {
+            const container = document.getElementById('airdrop-history-container');
+            const limit = document.getElementById('airdrop-history-limit')?.value || 20;
+            container.innerHTML = '<div class="text-center py-6 text-blue-400 animate-pulse">Loading airdrop history...</div>';
+            log('Fetching airdrop history...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/airdrop-logs?limit=${limit}`, {
+                    headers: { 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (!data.success || !data.logs || data.logs.length === 0) {
+                    container.innerHTML = '<div class="text-center py-6 text-gray-500">No airdrop history found</div>';
+                    return;
+                }
+
+                container.innerHTML = data.logs.map((log, idx) => {
+                    const d = log.details || {};
+                    const succeeded = d.airdropSucceeded !== false;
+                    const statusColor = succeeded ? 'text-green-400' : 'text-red-400';
+                    const statusIcon = succeeded ? '&check;' : '&cross;';
+                    const statusText = succeeded ? 'Success' : 'Failed';
+                    const ts = log.timestamp ? new Date(log.timestamp).toLocaleString() : 'Unknown';
+                    const events = d.log?.events || [];
+                    const timing = d.log?.timing || {};
+                    const dist = d.log?.distribution || {};
+                    const durationSec = timing.durationMs ? (timing.durationMs / 1000).toFixed(1) : '?';
+
+                    const eventRows = events.map(ev => {
+                        const elapsedSec = (ev.elapsed / 1000).toFixed(1);
+                        const typeColors = {
+                            TRIGGERED: 'bg-blue-900 text-blue-300',
+                            HOLDER_REFRESH: 'bg-gray-700 text-gray-300',
+                            FEE_SHARE_REFRESH: 'bg-gray-700 text-gray-300',
+                            DATA_LOADED: 'bg-indigo-900 text-indigo-300',
+                            KOTH_SELECTED: 'bg-purple-900 text-purple-300',
+                            KOTH_SKIPPED: 'bg-gray-700 text-yellow-400',
+                            PLAN_BUILT: 'bg-cyan-900 text-cyan-300',
+                            VALIDATION_PASSED: 'bg-green-900 text-green-300',
+                            KOTH_SENT: 'bg-purple-900 text-green-300',
+                            KOTH_FAILED: 'bg-red-900 text-red-300',
+                            KOTH_REDISTRIBUTED: 'bg-yellow-900 text-yellow-300',
+                            COMMUNITY_SENT: 'bg-green-900 text-green-300',
+                            RETRY: 'bg-yellow-900 text-yellow-300',
+                            COMPLETED: 'bg-green-900 text-green-300',
+                            ABORTED: 'bg-red-900 text-red-300'
+                        };
+                        const badgeClass = typeColors[ev.type] || 'bg-gray-700 text-gray-300';
+                        const dataStr = ev.data ? '<span class="text-gray-500 ml-2">' + Object.entries(ev.data).map(([k,v]) => `${k}=${typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : v}`).join(', ') + '</span>' : '';
+                        return `<div class="flex items-start gap-2 py-1 border-b border-gray-800">
+                            <span class="text-gray-600 text-xs w-12 shrink-0 text-right">+${elapsedSec}s</span>
+                            <span class="text-xs px-1.5 py-0.5 rounded ${badgeClass} shrink-0" style="font-size:10px;">${ev.type}</span>
+                            <span class="text-xs text-gray-300 break-all">${ev.message}${dataStr}</span>
+                        </div>`;
+                    }).join('');
+
+                    const topRecipients = (dist.topRecipients || []).map((r, i) =>
+                        `<tr><td class="text-orange-500 text-xs">${i + 1}</td><td class="text-white text-xs">${r.wallet}</td><td class="text-green-400 text-xs text-right">${r.sol.toFixed(6)}</td><td class="text-blue-400 text-xs text-right">${r.points.toFixed(0)}</td></tr>`
+                    ).join('');
+
+                    return `<div class="mb-3 border border-gray-700 rounded-lg overflow-hidden">
+                        <div class="flex items-center justify-between px-4 py-2.5 bg-gray-800/80 cursor-pointer hover:bg-gray-700/80" onclick="this.parentElement.querySelector('.airdrop-detail').classList.toggle('hidden')">
+                            <div class="flex items-center gap-3">
+                                <span class="${statusColor} font-bold text-sm">${statusIcon}</span>
+                                <span class="text-white text-sm font-medium">${log.amount.toFixed(4)} SOL</span>
+                                <span class="text-gray-400 text-xs">&rarr; ${log.recipients} recipients</span>
+                                <span class="text-gray-500 text-xs">${durationSec}s</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-xs ${statusColor}">${statusText}</span>
+                                <span class="text-gray-500 text-xs">${ts}</span>
+                                <span class="text-gray-600 text-xs">&darr;</span>
+                            </div>
+                        </div>
+                        <div class="airdrop-detail hidden px-4 py-3 bg-gray-900/60">
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                                <div class="bg-gray-800/60 rounded p-2 text-center">
+                                    <div class="text-gray-500 text-xs">Planned</div>
+                                    <div class="text-orange-400 font-bold text-sm">${(d.plannedAmount || 0).toFixed(4)} SOL</div>
+                                </div>
+                                <div class="bg-gray-800/60 rounded p-2 text-center">
+                                    <div class="text-gray-500 text-xs">Actual Sent</div>
+                                    <div class="text-green-400 font-bold text-sm">${log.amount.toFixed(4)} SOL</div>
+                                </div>
+                                <div class="bg-gray-800/60 rounded p-2 text-center">
+                                    <div class="text-gray-500 text-xs">KOTH</div>
+                                    <div class="text-purple-400 font-bold text-sm">${d.kothWinner || 'None'} (${(d.kothAmount || 0).toFixed(4)})</div>
+                                </div>
+                                <div class="bg-gray-800/60 rounded p-2 text-center">
+                                    <div class="text-gray-500 text-xs">Batches</div>
+                                    <div class="text-blue-400 font-bold text-sm">${d.success || 0} ok / ${d.failed || 0} fail</div>
+                                </div>
+                            </div>
+                            ${events.length > 0 ? `
+                            <div class="mb-3">
+                                <h4 class="text-orange-400 text-xs font-bold mb-1">Event Timeline</h4>
+                                <div class="bg-black/40 rounded p-2 max-h-64 overflow-y-auto" style="font-size:11px;">
+                                    ${eventRows}
+                                </div>
+                            </div>` : '<div class="text-gray-500 text-xs mb-3">No event timeline (pre-v25.113 airdrop)</div>'}
+                            ${topRecipients ? `
+                            <div>
+                                <h4 class="text-orange-400 text-xs font-bold mb-1">Top 10 Recipients</h4>
+                                <table class="w-full text-xs"><thead><tr><th class="text-left">#</th><th class="text-left">Wallet</th><th class="text-right">SOL</th><th class="text-right">Points</th></tr></thead><tbody>${topRecipients}</tbody></table>
+                            </div>` : ''}
+                            ${d.failedUsers && d.failedUsers.length > 0 ? `
+                            <div class="mt-2">
+                                <h4 class="text-red-400 text-xs font-bold mb-1">Failed Users (${d.failedUsers.length})</h4>
+                                <div class="text-xs text-gray-500 break-all">${d.failedUsers.join(', ')}</div>
+                            </div>` : ''}
+                        </div>
+                    </div>`;
+                }).join('');
+
+                log(`Loaded ${data.logs.length} airdrop history entries`, 'success');
+            } catch (e) {
+                container.innerHTML = `<div class="text-center py-6 text-red-400">Error: ${e.message}</div>`;
+                log(`Airdrop history fetch failed: ${e.message}`, 'error');
             }
         }
 

@@ -25,6 +25,9 @@
  * v25.105 - Fix: check balance at PUMP creator-vault (same vault used for distribution)
  * v25.110 - CRITICAL: Reordered airdrop flow - validate ALL data BEFORE sending ANY transactions
  *           Previously KOTH was sent before community validation, causing partial airdrops on failure
+ * v25.111 - CRITICAL: Fixed airdrop recording - now tracks ACTUAL lamports sent, not planned pool
+ *           Fixed KOTH failure: rebuilds community plan with full pool instead of losing funds
+ *           Fixed airdrop_logs.amount and user_airdrop_history to reflect reality
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -1084,6 +1087,20 @@ async function processAirdrop(deps) {
     let airdropCompleted = false;
     let airdropId = null;
 
+    // v25.113: Structured event timeline for full airdrop process logging
+    const airdropStartTime = Date.now();
+    const airdropLog = {
+        events: [],
+        balances: {},
+        distribution: {},
+        timing: { startedAt: airdropStartTime }
+    };
+    const logEvent = (type, message, data = null) => {
+        const event = { type, message, ts: Date.now(), elapsed: Date.now() - airdropStartTime };
+        if (data) event.data = data;
+        airdropLog.events.push(event);
+    };
+
     try {
         // Get current SOL balance available for airdrop
         const solBalance = await connection.getBalance(devKeypair.publicKey);
@@ -1115,26 +1132,39 @@ async function processAirdrop(deps) {
         }
 
         logger.info(`SOL AIRDROP TRIGGERED: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available for distribution`);
+        airdropLog.balances.initial = solBalance / LAMPORTS_PER_SOL;
+        airdropLog.balances.available = availableForAirdrop / LAMPORTS_PER_SOL;
+        logEvent('TRIGGERED', `Airdrop triggered with ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available`, {
+            walletBalance: solBalance / LAMPORTS_PER_SOL,
+            available: availableForAirdrop / LAMPORTS_PER_SOL,
+            safetyReserve: 0.1,
+            threshold: config.AIRDROP_THRESHOLD_SOL || 1.0
+        });
 
         // v25.39: Refresh holder data BEFORE distribution to ensure fresh points
         // This is critical - without fresh data, users who bought/sold recently won't have accurate points
         logger.info('[Airdrop] Refreshing holder data and points before distribution...');
+        const holderRefreshStart = Date.now();
         try {
             await holderScanner.updateGlobalState(deps);
             logger.info('[Airdrop] Holder data refreshed successfully');
+            logEvent('HOLDER_REFRESH', 'Holder data refreshed successfully', { durationMs: Date.now() - holderRefreshStart });
         } catch (holderError) {
             // Log but don't abort - proceed with last known data
             logger.warn('[Airdrop] Holder refresh failed, using cached data', { error: holderError.message });
+            logEvent('HOLDER_REFRESH', `Holder refresh failed, using cached data: ${holderError.message}`, { durationMs: Date.now() - holderRefreshStart, error: holderError.message });
         }
 
         // v23.0: Refresh fee share BPS for all Robinhood tokens before calculating points
         // This ensures points reflect current on-chain reward percentages
         logger.info('[Airdrop] Refreshing fee share percentages before distribution...');
         await refreshAllFeeShares(deps);
+        logEvent('FEE_SHARE_REFRESH', 'Fee share percentages refreshed');
 
         // v25.13: Verify Redis is connected before proceeding
         if (!redis.isRedisConnected()) {
             logger.error('[Airdrop] ABORTED: Redis not connected - cannot fetch user points safely');
+            logEvent('ABORTED', 'Redis not connected - cannot fetch user points safely');
             return;
         }
 
@@ -1155,8 +1185,15 @@ async function processAirdrop(deps) {
             .map(([pubkey, points]) => ({ pubkey: new PublicKey(pubkey), points }))
             .filter(user => user.points > 0);
 
+        logEvent('DATA_LOADED', `Loaded ${userPoints.length} eligible users with ${totalPoints.toFixed(2)} total points from Redis`, {
+            eligibleUsers: userPoints.length,
+            totalPoints,
+            totalDistributable: totalDistributable / LAMPORTS_PER_SOL
+        });
+
         if (totalPoints === 0 || userPoints.length === 0) {
             logger.warn('[Airdrop] No eligible users found (totalPoints=0 or no users with points). Skipping distribution.');
+            logEvent('ABORTED', 'No eligible users found');
             const airdropInterval = config.AIRDROP_INTERVAL || 900000;
             const nextAirdropTime = Date.now() + airdropInterval;
             await db.run('UPDATE stats SET value = $1 WHERE key = $2', [nextAirdropTime, 'nextAirdropTimestamp']).catch(() => {});
@@ -1211,28 +1248,52 @@ async function processAirdrop(deps) {
                         logger.debug(`Skipping invalid KOTH holder: ${holder.holderPubkey}`);
                     }
                 }
+                logEvent('KOTH_SELECTED', `KOTH: ${kothToken.ticker} - ${kothBatch.length} recipients, ${(kothAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL allocated`, {
+                    ticker: kothToken.ticker,
+                    mint: kothToken.mint,
+                    marketCap: kothToken.marketCap,
+                    holderCount: kothHolders.length,
+                    recipientCount: kothBatch.length,
+                    amountSOL: kothAmount / LAMPORTS_PER_SOL,
+                    reasoning: kothResult.reasoning
+                });
             } else {
                 logger.info(`👑 King of the Hill: ${kothToken.ticker} - Only ${kothHolders?.length || 0} holders (need ${KOTH_MIN_HOLDERS} min), skipping KOTH bonus`);
+                logEvent('KOTH_SKIPPED', `${kothToken.ticker} has only ${kothHolders?.length || 0} holders (need ${KOTH_MIN_HOLDERS} min)`, { ticker: kothToken.ticker, holderCount: kothHolders?.length || 0, minRequired: KOTH_MIN_HOLDERS });
             }
         } else {
             logger.debug('[Airdrop] No KOTH token qualifies (needs $1000 min market cap)');
+            logEvent('KOTH_SKIPPED', 'No KOTH token qualifies');
         }
 
         // 4. Build community distribution plan
         let plannedDistribution = 0;
         const distributionPlan = [];
+        let dustFilteredCount = 0;
         for (const user of userPoints) {
             const share = Math.floor((communityAmount * user.points) / totalPoints);
             if (share > 0) {
                 plannedDistribution += share;
                 distributionPlan.push({ user: user.pubkey, amount: share, points: user.points });
+            } else {
+                dustFilteredCount++;
             }
         }
+
+        logEvent('PLAN_BUILT', `Distribution plan: ${distributionPlan.length} community recipients + ${kothBatch.length} KOTH recipients`, {
+            communityRecipients: distributionPlan.length,
+            kothRecipients: kothBatch.length,
+            communitySOL: communityAmount / LAMPORTS_PER_SOL,
+            kothSOL: kothAmount / LAMPORTS_PER_SOL,
+            plannedSOL: (plannedDistribution + kothAmount) / LAMPORTS_PER_SOL,
+            dustFiltered: dustFilteredCount
+        });
 
         // 5. Validate total planned distribution
         const totalPlannedWithKoth = plannedDistribution + kothAmount;
         if (totalPlannedWithKoth > availableForAirdrop) {
             logger.error(`[Airdrop] ABORTED: Planned distribution (${totalPlannedWithKoth / LAMPORTS_PER_SOL} SOL) exceeds available (${availableForAirdrop / LAMPORTS_PER_SOL} SOL)`);
+            logEvent('ABORTED', `Planned ${totalPlannedWithKoth / LAMPORTS_PER_SOL} SOL exceeds available ${availableForAirdrop / LAMPORTS_PER_SOL} SOL`);
             return;
         }
 
@@ -1243,8 +1304,14 @@ async function processAirdrop(deps) {
         const BALANCE_TOLERANCE = 0.01 * LAMPORTS_PER_SOL;
         if (finalAvailable < totalPlannedWithKoth - BALANCE_TOLERANCE) {
             logger.error(`[Airdrop] ABORTED: Balance changed during preparation (race condition detected). Initial: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL, Now: ${(finalAvailable / LAMPORTS_PER_SOL).toFixed(4)} SOL, Planned: ${(totalPlannedWithKoth / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+            logEvent('ABORTED', 'Balance changed during preparation (race condition)', { initial: availableForAirdrop / LAMPORTS_PER_SOL, now: finalAvailable / LAMPORTS_PER_SOL });
             return;
         }
+
+        logEvent('VALIDATION_PASSED', 'All pre-flight checks passed, starting transactions', {
+            finalBalance: finalBalanceCheck / LAMPORTS_PER_SOL,
+            plannedTotal: totalPlannedWithKoth / LAMPORTS_PER_SOL
+        });
 
         if (finalAvailable > availableForAirdrop) {
             logger.info(`[Airdrop] Balance increased during preparation (${((finalAvailable - availableForAirdrop) / LAMPORTS_PER_SOL).toFixed(4)} SOL). Using original plan to prevent manipulation.`);
@@ -1256,44 +1323,10 @@ async function processAirdrop(deps) {
 
         logger.info(`Distributing ${(totalDistributable / LAMPORTS_PER_SOL).toFixed(4)} SOL total (${(kothAmount / LAMPORTS_PER_SOL).toFixed(4)} KOTH + ${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} Community)`);
 
-        // 7. Send KOTH distributions (now safe - all validations passed)
-        if (kothBatch.length > 0) {
-            try {
-                let kothSignatures = [];
-                for (let i = 0; i < kothBatch.length; i += KOTH_BATCH_SIZE) {
-                    const batch = kothBatch.slice(i, i + KOTH_BATCH_SIZE);
-                    const sig = await sendSolAirdropBatch(batch, deps);
-                    if (sig) {
-                        kothSignatures.push(sig);
-                    }
-                    if (i + KOTH_BATCH_SIZE < kothBatch.length) {
-                        await new Promise(r => setTimeout(r, 500));
-                    }
-                }
-
-                if (kothSignatures.length > 0) {
-                    kothTxSignature = kothSignatures.join(',');
-                    logger.info(`✅ KOTH Holder Payout Complete: ${kothSignatures.length} transactions sent to ${kothBatch.length} holders`);
-                } else {
-                    logger.error("❌ KOTH Payout Failed - returning funds to community pool");
-                    communityAmount += kothAmount;
-                    kothAmount = 0;
-                }
-            } catch (e) {
-                logger.error(`KOTH Logic Error: ${e.message}`);
-                communityAmount += kothAmount;
-                kothAmount = 0;
-            }
-        }
-
-        // 8. Send community distributions
-        logger.info(`Distributing ${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL to ${distributionPlan.length} users (Community Pool)`);
-
-        // v25.13: Generate unique airdrop ID for idempotency protection
+        // v25.111: Generate airdrop ID early for pending record
         airdropId = `airdrop_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
-        // v25.13: Create pending airdrop record before distribution starts
-        // This allows recovery if server crashes mid-airdrop
+        // Create pending airdrop record before distribution starts
         try {
             await db.run(
                 `INSERT INTO stats (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
@@ -1309,23 +1342,77 @@ async function processAirdrop(deps) {
             logger.warn('[Airdrop] Failed to create pending record', { error: e.message });
         }
 
-        // v25.22 SCALABILITY: Increased batch size and parallel processing
-        // SOL transfers can handle more per batch since no ATA creation needed
-        // Transaction size: ~80 bytes per transfer, limit ~1232 bytes = ~15 transfers safe
-        // With optimized instruction packing: 21 transfers fit safely
-        // v25.23: Use optimized batch size constant (AIRDROP_BATCH_SIZE = 25)
-        const PARALLEL_BATCHES = 3; // Process 3 batches concurrently
+        // v25.111: Track actual lamports sent for accurate recording
+        let actualKothLamportsSent = 0;
+        let actualCommunityLamportsSent = 0;
         let allSignatures = [];
-
-        // Add KOTH sig if it exists
-        if (kothTxSignature) allSignatures.push(`KOTH:${kothTxSignature}`);
-
         let successfulBatches = 0;
         let failedBatches = 0;
-        let failedUsers = []; // v25.13: Track failed recipients for potential retry
+        let failedUsers = [];
 
-        // v25.22 SCALABILITY: Split distribution plan into batches
-        // v25.23: Using optimized AIRDROP_BATCH_SIZE (25 transfers)
+        // 7. Send KOTH distributions (now safe - all validations passed)
+        if (kothBatch.length > 0) {
+            try {
+                let kothSignatures = [];
+                for (let i = 0; i < kothBatch.length; i += KOTH_BATCH_SIZE) {
+                    const batch = kothBatch.slice(i, i + KOTH_BATCH_SIZE);
+                    const result = await sendSolAirdropBatch(batch, deps);
+                    if (result?.signature) {
+                        kothSignatures.push(result.signature);
+                        // v25.112: Track ACTUAL lamports sent (excludes dust-filtered items)
+                        actualKothLamportsSent += result.actualLamports;
+                    }
+                    // result is non-null but no signature = dust-only batch (not a failure)
+                    if (i + KOTH_BATCH_SIZE < kothBatch.length) {
+                        await new Promise(r => setTimeout(r, 500));
+                    }
+                }
+
+                if (kothSignatures.length > 0) {
+                    kothTxSignature = kothSignatures.join(',');
+                    allSignatures.push(`KOTH:${kothTxSignature}`);
+                    logger.info(`✅ KOTH Holder Payout Complete: ${kothSignatures.length} transactions, ${(actualKothLamportsSent / LAMPORTS_PER_SOL).toFixed(4)} SOL sent to ${kothBatch.length} holders`);
+                    logEvent('KOTH_SENT', `KOTH payout complete: ${(actualKothLamportsSent / LAMPORTS_PER_SOL).toFixed(4)} SOL in ${kothSignatures.length} tx`, {
+                        txCount: kothSignatures.length,
+                        actualSOL: actualKothLamportsSent / LAMPORTS_PER_SOL,
+                        recipients: kothBatch.length
+                    });
+                } else {
+                    logger.error("❌ KOTH Payout Failed - funds remain in wallet for next cycle");
+                    logEvent('KOTH_FAILED', 'All KOTH batches failed - funds remain for next cycle');
+                    kothAmount = 0;
+                }
+            } catch (e) {
+                logger.error(`KOTH Logic Error: ${e.message}`);
+                logEvent('KOTH_FAILED', `KOTH error: ${e.message}`, { error: e.message });
+                kothAmount = 0;
+            }
+        }
+
+        // 8. Send community distributions
+        // v25.111: If KOTH failed, rebuild distribution plan with full pool
+        if (kothBatch.length > 0 && kothAmount === 0 && actualKothLamportsSent === 0) {
+            // KOTH completely failed - recalculate community shares with full pool
+            communityAmount = totalDistributable;
+            distributionPlan.length = 0;
+            plannedDistribution = 0;
+            for (const user of userPoints) {
+                const share = Math.floor((communityAmount * user.points) / totalPoints);
+                if (share > 0) {
+                    plannedDistribution += share;
+                    distributionPlan.push({ user: user.pubkey, amount: share, points: user.points });
+                }
+            }
+            logger.info(`[Airdrop] KOTH failed - redistributing full pool to ${distributionPlan.length} community users (${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL)`);
+            logEvent('KOTH_REDISTRIBUTED', `KOTH failed - full pool redistributed to ${distributionPlan.length} community users`, { communitySOL: communityAmount / LAMPORTS_PER_SOL, recipients: distributionPlan.length });
+        }
+
+        logger.info(`Distributing ${(communityAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL to ${distributionPlan.length} users (Community Pool)`);
+
+        // v25.23: Use optimized batch size constant (AIRDROP_BATCH_SIZE = 25)
+        const PARALLEL_BATCHES = 3;
+
+        // Split distribution plan into batches
         const batches = [];
         for (let i = 0; i < distributionPlan.length; i += AIRDROP_BATCH_SIZE) {
             batches.push(distributionPlan.slice(i, i + AIRDROP_BATCH_SIZE).map(r => ({
@@ -1334,48 +1421,52 @@ async function processAirdrop(deps) {
             })));
         }
 
-        // v25.22 SCALABILITY: Process batches in parallel groups
+        // Process batches in parallel groups
         for (let i = 0; i < batches.length; i += PARALLEL_BATCHES) {
             const parallelGroup = batches.slice(i, i + PARALLEL_BATCHES);
 
-            // Send all batches in this group concurrently
             const results = await Promise.allSettled(
                 parallelGroup.map(batch => sendSolAirdropBatch(batch, deps))
             );
 
-            // Process results
             results.forEach((result, idx) => {
                 const batch = parallelGroup[idx];
-                if (result.status === 'fulfilled' && result.value) {
-                    allSignatures.push(result.value);
+                if (result.status === 'fulfilled' && result.value?.signature) {
+                    allSignatures.push(result.value.signature);
                     successfulBatches++;
+                    // v25.112: Track ACTUAL lamports sent (excludes dust-filtered items)
+                    actualCommunityLamportsSent += result.value.actualLamports;
+                } else if (result.status === 'fulfilled' && result.value !== null) {
+                    // v25.112: Dust-only batch - all items were below dust threshold, not a failure
+                    logger.debug(`[Airdrop] Batch had no sendable items (all dust-filtered)`);
                 } else {
                     failedBatches++;
                     failedUsers.push(...batch.map(u => u.user.toString()));
                 }
             });
 
-            // Small delay between parallel groups to avoid overwhelming RPC
             if (i + PARALLEL_BATCHES < batches.length) {
                 await new Promise(r => setTimeout(r, 300));
             }
         }
 
-        // v25.13: Retry failed batches once before giving up
-        // v25.22 SCALABILITY: Use parallel retry processing
+        logEvent('COMMUNITY_SENT', `Community batches complete: ${successfulBatches} succeeded, ${failedBatches} failed, ${(actualCommunityLamportsSent / LAMPORTS_PER_SOL).toFixed(4)} SOL sent`, {
+            successfulBatches,
+            failedBatches,
+            actualSOL: actualCommunityLamportsSent / LAMPORTS_PER_SOL,
+            failedUserCount: failedUsers.length,
+            totalBatches: batches.length
+        });
+
+        // Retry failed batches once before giving up
         if (failedUsers.length > 0 && failedBatches > 0) {
             logger.info(`[Airdrop] Retrying ${failedUsers.length} users from ${failedBatches} failed batches...`);
-
-            // Wait a bit before retrying
             await new Promise(r => setTimeout(r, 1000));
 
-            // Rebuild failed batches from distribution plan
             const failedRecipients = distributionPlan.filter(r => failedUsers.includes(r.user.toString()));
             let retrySuccesses = 0;
             const stillFailedUsers = [];
 
-            // v25.22 SCALABILITY: Split into batches for parallel retry
-            // v25.23: Using optimized AIRDROP_BATCH_SIZE (25 transfers)
             const retryBatches = [];
             for (let i = 0; i < failedRecipients.length; i += AIRDROP_BATCH_SIZE) {
                 retryBatches.push(failedRecipients.slice(i, i + AIRDROP_BATCH_SIZE).map(r => ({
@@ -1384,7 +1475,6 @@ async function processAirdrop(deps) {
                 })));
             }
 
-            // Process retry batches in parallel (2 at a time for retries - more conservative)
             const PARALLEL_RETRIES = 2;
             for (let i = 0; i < retryBatches.length; i += PARALLEL_RETRIES) {
                 const parallelGroup = retryBatches.slice(i, i + PARALLEL_RETRIES);
@@ -1395,17 +1485,21 @@ async function processAirdrop(deps) {
 
                 results.forEach((result, idx) => {
                     const batch = parallelGroup[idx];
-                    if (result.status === 'fulfilled' && result.value) {
-                        allSignatures.push(`RETRY:${result.value}`);
+                    if (result.status === 'fulfilled' && result.value?.signature) {
+                        allSignatures.push(`RETRY:${result.value.signature}`);
                         retrySuccesses++;
                         successfulBatches++;
                         failedBatches--;
+                        // v25.112: Track ACTUAL recovered lamports (excludes dust-filtered)
+                        actualCommunityLamportsSent += result.value.actualLamports;
+                    } else if (result.status === 'fulfilled' && result.value !== null) {
+                        // v25.112: Dust-only retry batch - not a failure
+                        logger.debug(`[Airdrop] Retry batch had no sendable items (all dust-filtered)`);
                     } else {
                         stillFailedUsers.push(...batch.map(u => u.user.toString()));
                     }
                 });
 
-                // Longer delay between retry groups
                 if (i + PARALLEL_RETRIES < retryBatches.length) {
                     await new Promise(r => setTimeout(r, 500));
                 }
@@ -1416,22 +1510,27 @@ async function processAirdrop(deps) {
             }
             if (stillFailedUsers.length > 0) {
                 logger.error(`[Airdrop] PERMANENT FAILURES: ${stillFailedUsers.length} users could not receive airdrop: ${stillFailedUsers.slice(0, 5).join(', ')}${stillFailedUsers.length > 5 ? '...' : ''}`);
-                // Update failedUsers to only contain permanently failed users
                 failedUsers.length = 0;
                 failedUsers.push(...stillFailedUsers);
             } else {
-                failedUsers.length = 0; // All retries succeeded
+                failedUsers.length = 0;
             }
+
+            logEvent('RETRY', `Retry complete: ${retrySuccesses} recovered, ${stillFailedUsers.length} permanent failures`, {
+                recovered: retrySuccesses,
+                permanentFailures: stillFailedUsers.length,
+                failedWallets: stillFailedUsers.slice(0, 10)
+            });
         }
 
-        // Mark airdrop as successful (used for timestamp update logic)
+        // v25.111: Calculate ACTUAL amounts sent (not planned amounts)
+        const actualTotalLamportsSent = actualKothLamportsSent + actualCommunityLamportsSent;
+        const actualTotalSolSent = actualTotalLamportsSent / LAMPORTS_PER_SOL;
+        const actualKothSolSent = actualKothLamportsSent / LAMPORTS_PER_SOL;
+
         const airdropSucceeded = successfulBatches > 0 || failedBatches === 0;
 
-        logger.info(`SOL Airdrop Complete. Success: ${successfulBatches}, Failed: ${failedBatches}`);
-
-        // Log in SOL (convert from lamports for display)
-        const totalDistributedSol = totalDistributable / LAMPORTS_PER_SOL;
-        const kothAmountSol = kothAmount / LAMPORTS_PER_SOL;
+        logger.info(`SOL Airdrop Complete. Success: ${successfulBatches}, Failed: ${failedBatches}, Actual sent: ${actualTotalSolSent.toFixed(4)} SOL (KOTH: ${actualKothSolSent.toFixed(4)}, Community: ${(actualCommunityLamportsSent / LAMPORTS_PER_SOL).toFixed(4)})`);
 
         // v13.0: Track KOTH holder recipients count
         const kothHolderCount = kothToken?.mint ? (await db.get(
@@ -1439,43 +1538,68 @@ async function processAirdrop(deps) {
             [kothToken.mint]
         ))?.count || 0 : 0;
 
-        const details = JSON.stringify({
-            id: airdropId, // v25.13: Include airdrop ID for tracking
-            success: successfulBatches,
-            failed: failedBatches,
-            failedUsers: failedUsers.length > 0 ? failedUsers.slice(0, 20) : [], // v25.13: Track failed users (max 20)
-            kothWinner: kothToken?.ticker || 'None',
-            kothAmount: kothAmountSol,
-            kothHolders: kothAmount > 0 ? kothHolderCount : 0, // v13.0: Number of KOTH holders who received
-            currency: 'SOL', // Mark as SOL airdrop for backwards compatibility
-            airdropSucceeded // v25.13: Track overall success status
+        // v25.113: Finalize airdrop event log
+        airdropLog.timing.completedAt = Date.now();
+        airdropLog.timing.durationMs = Date.now() - airdropStartTime;
+        airdropLog.balances.finalSent = actualTotalSolSent;
+        airdropLog.distribution = {
+            totalRecipients: (distributionPlan.filter(r => !failedUsers.includes(r.user.toString())).length) + (actualKothLamportsSent > 0 ? kothBatch.length : 0),
+            communityRecipients: distributionPlan.filter(r => !failedUsers.includes(r.user.toString())).length,
+            kothRecipients: actualKothLamportsSent > 0 ? kothBatch.length : 0,
+            topRecipients: distributionPlan
+                .filter(r => !failedUsers.includes(r.user.toString()))
+                .sort((a, b) => b.amount - a.amount)
+                .slice(0, 10)
+                .map(r => ({ wallet: r.user.toString().slice(0, 8) + '...' + r.user.toString().slice(-4), sol: r.amount / LAMPORTS_PER_SOL, points: r.points }))
+        };
+        logEvent('COMPLETED', `Airdrop complete: ${actualTotalSolSent.toFixed(4)} SOL sent to ${airdropLog.distribution.totalRecipients} recipients in ${(airdropLog.timing.durationMs / 1000).toFixed(1)}s`, {
+            actualSOL: actualTotalSolSent,
+            kothSOL: actualKothSolSent,
+            communitySOL: actualCommunityLamportsSent / LAMPORTS_PER_SOL,
+            successBatches: successfulBatches,
+            failedBatches,
+            durationMs: airdropLog.timing.durationMs
         });
 
-        // v13.0: Recipients now includes KOTH holders instead of just creator
-        // v25.13: Use distributionPlan.length for accurate recipient count
-        const totalRecipients = distributionPlan.length + (kothAmount > 0 ? kothHolderCount : 0);
+        // v25.113: Include full event timeline in details JSON
+        const details = JSON.stringify({
+            id: airdropId,
+            success: successfulBatches,
+            failed: failedBatches,
+            failedUsers: failedUsers.length > 0 ? failedUsers.slice(0, 20) : [],
+            kothWinner: kothToken?.ticker || 'None',
+            kothAmount: actualKothSolSent,
+            communityAmount: actualCommunityLamportsSent / LAMPORTS_PER_SOL,
+            plannedAmount: totalDistributable / LAMPORTS_PER_SOL,
+            kothHolders: actualKothLamportsSent > 0 ? kothHolderCount : 0,
+            currency: 'SOL',
+            airdropSucceeded,
+            log: airdropLog
+        });
 
+        // v25.111: Use actual recipient count (successful only)
+        const successfulCommunityRecipients = distributionPlan.filter(r => !failedUsers.includes(r.user.toString()));
+        const totalRecipients = successfulCommunityRecipients.length + (actualKothLamportsSent > 0 ? kothBatch.length : 0);
+
+        // v25.111: Record ACTUAL SOL sent, not planned pool
         await db.run(
             'INSERT INTO airdrop_logs (amount, recipients, "totalPoints", signatures, details, timestamp) VALUES ($1, $2, $3, $4, $5, $6)',
-            [totalDistributedSol, totalRecipients, totalPoints, allSignatures.join(','), details, new Date().toISOString()]
+            [actualTotalSolSent, totalRecipients, totalPoints, allSignatures.join(','), details, new Date().toISOString()]
         );
 
-        // v25.18: Log individual user airdrop distributions for shareable stats
+        // Log individual user airdrop distributions (only successful ones)
         const airdropTimestamp = Date.now();
         try {
-            // Batch insert user distributions (only for successful distributions)
-            const successfulRecipients = distributionPlan.filter(r => !failedUsers.includes(r.user.toString()));
-            if (successfulRecipients.length > 0) {
-                // Build batch insert with multiple VALUES (5 params per row)
-                const values = successfulRecipients.map((r, i) => {
+            if (successfulCommunityRecipients.length > 0) {
+                const values = successfulCommunityRecipients.map((r, i) => {
                     const base = i * 5;
                     return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
                 }).join(', ');
 
-                const params = successfulRecipients.flatMap(r => [
+                const params = successfulCommunityRecipients.flatMap(r => [
                     r.user.toString(),
                     airdropId,
-                    r.amount / LAMPORTS_PER_SOL, // Store in SOL
+                    r.amount / LAMPORTS_PER_SOL,
                     r.points,
                     airdropTimestamp
                 ]);
@@ -1484,14 +1608,12 @@ async function processAirdrop(deps) {
                     `INSERT INTO user_airdrop_history ("userPubkey", "airdropId", amount, points, timestamp) VALUES ${values}`,
                     params
                 );
-                logger.debug(`[Airdrop] Logged ${successfulRecipients.length} user distributions to history`);
+                logger.debug(`[Airdrop] Logged ${successfulCommunityRecipients.length} user distributions to history`);
             }
         } catch (historyErr) {
             logger.warn('[Airdrop] Failed to log user airdrop history', { error: historyErr.message });
-            // Don't fail the airdrop for history logging errors
         }
 
-        // v25.13: Mark airdrop as completed for finally block
         airdropCompleted = airdropSucceeded;
 
         // Clear status after run
@@ -1539,7 +1661,10 @@ async function processAirdrop(deps) {
  *
  * @param {Array} batch - Array of {user: PublicKey, amount: number (lamports)}
  * @param {Object} deps - Dependencies including connection and devKeypair
- * @returns {string|null} - Transaction signature or null on failure
+ * @returns {{signature: string, actualLamports: number}|{signature: null, actualLamports: 0}|null}
+ *          Object with signature and actual lamports on success,
+ *          {signature: null, actualLamports: 0} if all items were dust-filtered (not a failure),
+ *          null on actual transaction failure
  */
 async function sendSolAirdropBatch(batch, deps) {
     const { connection, devKeypair } = deps;
@@ -1568,7 +1693,8 @@ async function sendSolAirdropBatch(batch, deps) {
             }
         }
 
-        if (validItems.length === 0) return null;
+        // v25.112: Return non-null for dust-only batches (not a failure, just nothing to send)
+        if (validItems.length === 0) return { signature: null, actualLamports: 0 };
 
         // Add SOL transfer instructions for each valid recipient
         for (const item of validItems) {
@@ -1580,7 +1706,9 @@ async function sendSolAirdropBatch(batch, deps) {
         }
 
         const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
-        return sig;
+        // v25.112: Return actual lamports sent (only valid items, excludes dust-filtered)
+        const actualLamports = validItems.reduce((sum, item) => sum + item.amount, 0);
+        return { signature: sig, actualLamports };
     } catch (e) {
         logger.error(`SOL Airdrop batch failed`, { error: e.message });
         return null;

@@ -353,7 +353,25 @@ function initHolderScannerWorker(deps) {
             const communityPot = totalDistributable * 0.90;
 
             // 4. Identify KOTH Token and holders (not just creator)
-            const kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
+            // v25.112: Read AI-selected KOTH from Redis (set by flywheel) to match actual distribution
+            let kothToken = null;
+            try {
+                const redisConn = redis.getConnection();
+                if (redisConn) {
+                    const kothData = await redisConn.get('koth_ai_selection');
+                    if (kothData) {
+                        const parsed = JSON.parse(kothData);
+                        if (parsed.mint) {
+                            kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens WHERE mint = $1', [parsed.mint]);
+                        }
+                    }
+                }
+            } catch (e) {
+                logger.debug('[Worker] Failed to read KOTH from Redis, using fallback', { error: e.message });
+            }
+            if (!kothToken) {
+                kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
+            }
 
             // 5. Update holders for ALL eligible tokens (not just top 10)
             for (const token of eligibleTokens) {

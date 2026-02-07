@@ -805,6 +805,45 @@ function init(deps) {
     });
 
     /**
+     * GET /admin/airdrop-logs
+     * v25.113: Detailed airdrop history with parsed event timeline
+     * Returns recent airdrop logs with full details for admin review
+     */
+    router.get('/admin/airdrop-logs', adminAuth, async (req, res) => {
+        try {
+            const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 50);
+
+            const logs = await db.all(
+                'SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT $1',
+                [limit]
+            );
+
+            const parsed = logs.map(log => {
+                let details = null;
+                try {
+                    details = log.details ? JSON.parse(log.details) : null;
+                } catch (e) {
+                    details = { raw: log.details };
+                }
+                return {
+                    id: log.id,
+                    amount: parseFloat(log.amount) || 0,
+                    recipients: log.recipients,
+                    totalPoints: log.totalPoints,
+                    signatures: log.signatures ? log.signatures.split(',').length : 0,
+                    timestamp: log.timestamp,
+                    details
+                };
+            });
+
+            res.json({ success: true, logs: parsed });
+        } catch (e) {
+            logger.error('[Admin] Airdrop logs error', { error: e.message });
+            res.status(500).json({ error: 'Failed to fetch airdrop logs' });
+        }
+    });
+
+    /**
      * POST /admin/trigger-robinhood-scan
      * Force an immediate Robinhood token scan and verification
      * v25.68: Now also scans holders, not just verification
