@@ -1207,10 +1207,22 @@ async function processAirdrop(deps) {
         const KOTH_MAX_PERCENT = 0.10; // 10% cap
 
         const kothResult = await getAiSelectedKoth(db);
-        const kothToken = kothResult.token ? await db.get(
+        // v25.113: Check both platform and robinhood token tables
+        let kothToken = kothResult.token ? await db.get(
             'SELECT "userPubkey", ticker, mint, "marketCap" FROM tokens WHERE mint = $1',
             [kothResult.token.mint]
         ) : null;
+        let kothSource = 'platform';
+        if (!kothToken && kothResult.token) {
+            const rhToken = await db.get(
+                'SELECT "partnerPubkey" as "userPubkey", ticker, mint, "marketCap" FROM robinhood_tokens WHERE mint = $1',
+                [kothResult.token.mint]
+            );
+            if (rhToken) {
+                kothToken = rhToken;
+                kothSource = 'robinhood';
+            }
+        }
 
         if (kothResult.reasoning) {
             logger.info(`[KOTH] AI Reasoning: ${kothResult.reasoning}`);
@@ -1220,8 +1232,10 @@ async function processAirdrop(deps) {
         let kothBatch = [];
         let kothHolders = [];
         if (kothToken && kothToken.mint) {
+            // v25.113: Query correct holder table based on token source
+            const holdersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
             kothHolders = await db.all(
-                'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
+                `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1 ORDER BY rank ASC`,
                 [kothToken.mint]
             );
 

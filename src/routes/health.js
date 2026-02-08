@@ -3056,14 +3056,28 @@ function init(deps) {
 
             const kothResult = await flywheel.getAiSelectedKoth(db);
             if (kothResult?.token?.mint) {
+                // v25.113: Check both platform and robinhood token tables
                 kothToken = await db.get(
                     'SELECT "userPubkey", ticker, mint, "marketCap" FROM tokens WHERE mint = $1',
                     [kothResult.token.mint]
                 );
+                let kothSource = 'platform';
+                if (!kothToken) {
+                    const rhToken = await db.get(
+                        'SELECT "partnerPubkey" as "userPubkey", ticker, mint, "marketCap" FROM robinhood_tokens WHERE mint = $1',
+                        [kothResult.token.mint]
+                    );
+                    if (rhToken) {
+                        kothToken = rhToken;
+                        kothSource = 'robinhood';
+                    }
+                }
 
                 if (kothToken) {
+                    // v25.113: Query correct holder table based on token source
+                    const holdersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
                     const kothHolders = await db.all(
-                        'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
+                        `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1 ORDER BY rank ASC`,
                         [kothToken.mint]
                     );
 

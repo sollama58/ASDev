@@ -355,6 +355,7 @@ function initHolderScannerWorker(deps) {
             // 4. Identify KOTH Token and holders (not just creator)
             // v25.112: Read AI-selected KOTH from Redis (set by flywheel) to match actual distribution
             let kothToken = null;
+            let kothSource = 'platform';
             try {
                 const redisConn = redis.getConnection();
                 if (redisConn) {
@@ -362,7 +363,15 @@ function initHolderScannerWorker(deps) {
                     if (kothData) {
                         const parsed = JSON.parse(kothData);
                         if (parsed.mint) {
+                            // v25.113: Check both platform and robinhood token tables
                             kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens WHERE mint = $1', [parsed.mint]);
+                            if (!kothToken) {
+                                const rhToken = await db.get('SELECT mint, "partnerPubkey" as "userPubkey" FROM robinhood_tokens WHERE mint = $1', [parsed.mint]);
+                                if (rhToken) {
+                                    kothToken = rhToken;
+                                    kothSource = 'robinhood';
+                                }
+                            }
                         }
                     }
                 }
@@ -573,10 +582,12 @@ function initHolderScannerWorker(deps) {
             await redis.clearUserPoints();
 
             // Calculate KOTH holders' share (proportional, not just creator)
+            // v25.113: Query correct holder table based on token source
             let kothHoldersMap = new Map();
             if (kothToken && kothToken.mint) {
+                const holdersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
                 const kothHolders = await db.all(
-                    'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1',
+                    `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1`,
                     [kothToken.mint]
                 );
                 let kothTotalBalance = BigInt(0);

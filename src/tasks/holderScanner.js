@@ -261,6 +261,7 @@ async function updateGlobalState(deps) {
         // v25.112: Read AI-selected KOTH from Redis (set by flywheel) to match actual distribution
         // Falls back to highest market cap if Redis data unavailable
         let kothToken = null;
+        let kothSource = 'platform';
         try {
             const redisConn = redis.getConnection();
             if (redisConn) {
@@ -268,7 +269,15 @@ async function updateGlobalState(deps) {
                 if (kothData) {
                     const parsed = JSON.parse(kothData);
                     if (parsed.mint) {
+                        // v25.113: Check both platform and robinhood token tables
                         kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens WHERE mint = $1', [parsed.mint]);
+                        if (!kothToken) {
+                            const rhToken = await db.get('SELECT mint, "partnerPubkey" as "userPubkey" FROM robinhood_tokens WHERE mint = $1', [parsed.mint]);
+                            if (rhToken) {
+                                kothToken = rhToken;
+                                kothSource = 'robinhood';
+                            }
+                        }
                     }
                 }
             }
@@ -626,10 +635,12 @@ async function updateGlobalState(deps) {
         globalState.userPointsMap.clear();
 
         // Get KOTH holders for expected airdrop calculation
+        // v25.113: Query correct holder table based on token source
         let kothHoldersMap = new Map(); // pubkey -> proportional share of KOTH pot
         if (kothToken && kothToken.mint) {
+            const holdersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
             const kothHolders = await db.all(
-                'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1',
+                `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1`,
                 [kothToken.mint]
             );
 
