@@ -844,6 +844,41 @@ function init(deps) {
     });
 
     /**
+     * GET /admin/fee-claim-logs
+     * v25.115: Fee collection history showing claims, threshold checks, and pending amounts
+     */
+    router.get('/admin/fee-claim-logs', adminAuth, async (req, res) => {
+        try {
+            const limit = Math.min(Math.max(parseInt(req.query.limit) || 30, 1), 100);
+
+            const logs = await db.all(
+                `SELECT * FROM logs WHERE type IN ('FEE_CLAIM', 'FEE_CHECK') ORDER BY timestamp DESC LIMIT $1`,
+                [limit]
+            );
+
+            const parsed = logs.map(log => {
+                let data = null;
+                try {
+                    data = log.data ? JSON.parse(log.data) : null;
+                } catch (e) {
+                    data = { raw: log.data };
+                }
+                return {
+                    id: log.id,
+                    type: log.type,
+                    timestamp: log.timestamp,
+                    data
+                };
+            });
+
+            res.json({ success: true, logs: parsed });
+        } catch (e) {
+            logger.error('[Admin] Fee claim logs error', { error: e.message });
+            res.status(500).json({ error: 'Failed to fetch fee claim logs' });
+        }
+    });
+
+    /**
      * POST /admin/trigger-robinhood-scan
      * Force an immediate Robinhood token scan and verification
      * v25.68: Now also scans holders, not just verification

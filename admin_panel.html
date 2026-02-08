@@ -360,6 +360,24 @@
                         </div>
                     </div>
 
+                    <!-- Fee Claim History (v25.115) -->
+                    <div class="panel lg:col-span-2">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">Fee Claim History</h3>
+                            <div class="flex gap-2 items-center">
+                                <select id="fee-log-limit" class="input-field text-xs py-1 px-2 w-20">
+                                    <option value="10">10</option>
+                                    <option value="20" selected>20</option>
+                                    <option value="50">50</option>
+                                </select>
+                                <button onclick="fetchFeeClaimLogs()" class="btn btn-secondary text-xs">Load</button>
+                            </div>
+                        </div>
+                        <div id="fee-claim-logs-container" class="space-y-2 mt-2" style="max-height: 400px; overflow-y: auto;">
+                            <div class="text-gray-500 text-sm text-center py-4">Click "Load" to fetch fee claim history</div>
+                        </div>
+                    </div>
+
                     <!-- Raw Health Response -->
                     <div class="panel">
                         <div class="panel-header">
@@ -2556,6 +2574,93 @@
             } catch (e) {
                 document.getElementById('register-result').textContent = `Error: ${e.message}`;
                 log(`Registration error: ${e.message}`, 'error');
+            }
+        }
+
+        // ===== FEE CLAIM HISTORY (v25.115) =====
+        async function fetchFeeClaimLogs() {
+            const container = document.getElementById('fee-claim-logs-container');
+            const limit = document.getElementById('fee-log-limit')?.value || 20;
+            container.innerHTML = '<div class="text-center py-4 text-blue-400 animate-pulse">Loading fee claim logs...</div>';
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/fee-claim-logs?limit=${limit}`, {
+                    headers: { 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (!data.success || !data.logs || data.logs.length === 0) {
+                    container.innerHTML = '<div class="text-center py-4 text-gray-500">No fee claim logs found</div>';
+                    return;
+                }
+
+                container.innerHTML = data.logs.map(entry => {
+                    const d = entry.data || {};
+                    const isClaim = entry.type === 'FEE_CLAIM';
+                    const isError = d.status === 'ERROR';
+                    const ts = entry.timestamp ? new Date(entry.timestamp).toLocaleString() : 'Unknown';
+
+                    if (isClaim) {
+                        return `<div class="rounded border border-green-800 bg-green-900/10 px-3 py-2">
+                            <div class="flex justify-between items-center">
+                                <span class="text-green-400 font-bold text-sm">CLAIMED</span>
+                                <span class="text-gray-500 text-xs">${ts}</span>
+                            </div>
+                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-1 text-xs">
+                                <div><span class="text-gray-400">Total:</span> <span class="text-green-300">${d.feesClaimedSol || '?'} SOL</span></div>
+                                <div><span class="text-gray-400">Platform Fee:</span> <span class="text-yellow-300">${d.platformFeeSol || '?'} SOL</span></div>
+                                <div><span class="text-gray-400">Platform Pending:</span> <span class="text-blue-300">${d.platformPendingSol || '?'} SOL</span></div>
+                                <div><span class="text-gray-400">Robinhood Pending:</span> <span class="text-pink-300">${d.robinhoodPendingSol || '?'} SOL</span></div>
+                            </div>
+                        </div>`;
+                    }
+
+                    if (isError) {
+                        return `<div class="rounded border border-red-800 bg-red-900/10 px-3 py-2">
+                            <div class="flex justify-between items-center">
+                                <span class="text-red-400 font-bold text-sm">ERROR</span>
+                                <span class="text-gray-500 text-xs">${ts}</span>
+                            </div>
+                            <div class="text-xs text-red-300 mt-1">${d.reason || 'Unknown error'}</div>
+                        </div>`;
+                    }
+
+                    // FEE_CHECK (below threshold)
+                    const pending = parseFloat(d.pendingSol) || 0;
+                    const threshold = parseFloat(d.thresholdSol) || 0.05;
+                    const progress = d.progressPercent || (threshold > 0 ? Math.min(100, Math.round((pending / threshold) * 100)) : 0);
+                    const noPending = pending === 0;
+                    const borderColor = noPending ? 'border-gray-700' : 'border-yellow-800';
+                    const bgColor = noPending ? 'bg-gray-900/10' : 'bg-yellow-900/10';
+                    const statusText = noPending ? 'NO FEES' : 'BELOW THRESHOLD';
+                    const statusColor = noPending ? 'text-gray-500' : 'text-yellow-400';
+
+                    return `<div class="rounded border ${borderColor} ${bgColor} px-3 py-2">
+                        <div class="flex justify-between items-center">
+                            <span class="${statusColor} font-bold text-sm">${statusText}</span>
+                            <span class="text-gray-500 text-xs">${ts}</span>
+                        </div>
+                        ${!noPending ? `<div class="mt-1">
+                            <div class="flex items-center gap-2">
+                                <div class="flex-1 bg-gray-700 rounded-full h-2 overflow-hidden">
+                                    <div class="h-full rounded-full ${progress >= 80 ? 'bg-yellow-400' : progress >= 50 ? 'bg-orange-500' : 'bg-gray-500'}" style="width: ${progress}%"></div>
+                                </div>
+                                <span class="text-xs text-gray-400">${progress}%</span>
+                            </div>
+                        </div>` : ''}
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-1 text-xs">
+                            <div><span class="text-gray-400">Pending:</span> <span class="text-white">${d.pendingSol || '0'} SOL</span></div>
+                            <div><span class="text-gray-400">Threshold:</span> <span class="text-gray-300">${d.thresholdSol || '?'} SOL</span></div>
+                            <div><span class="text-gray-400">Platform:</span> <span class="text-blue-300">${d.platformPendingSol || '0'} SOL</span></div>
+                            <div><span class="text-gray-400">Robinhood:</span> <span class="text-pink-300">${d.robinhoodPendingSol || '0'} SOL</span></div>
+                        </div>
+                    </div>`;
+                }).join('');
+
+                log(`Loaded ${data.logs.length} fee claim log entries`, 'success');
+            } catch (e) {
+                container.innerHTML = `<div class="text-center py-4 text-red-400">Error: ${e.message}</div>`;
+                log(`Fee claim logs fetch failed: ${e.message}`, 'error');
             }
         }
 

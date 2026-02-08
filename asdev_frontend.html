@@ -4610,22 +4610,38 @@
     const closeUserHoldingsModal = () => { ui.userHoldingsModal.style.display = 'none'; };
     window.closeUserHoldingsModal = closeUserHoldingsModal;
 
-    const toggleLogModal = () => { 
-        ui.modalLogContent.innerHTML = ''; 
+    const toggleLogModal = () => {
+        ui.modalLogContent.innerHTML = '';
         if(allLogs && allLogs.length > 0) {
             ui.modalLogContent.innerHTML = allLogs.map(log => {
                 const time = new Date(log.timestamp).toLocaleTimeString();
                 let logDetailsHtml = '';
-                const excludedKeys = ['type', 'timestamp'];
+                const excludedKeys = ['type', 'timestamp', 'progressPercent'];
                 const formatKey = (str) => str.replace(/([A-Z])/g, ' $1').trim();
                 let statusBadge = '';
                 if (log.status) {
                     let badgeClass = 'badge-skipped';
                     if (log.status === 'SUCCESS') badgeClass = 'badge-success';
-                    else if (log.status === 'PENDING') badgeClass = 'badge-pending';
+                    else if (log.status === 'PENDING' || log.status === 'BELOW_THRESHOLD') badgeClass = 'badge-pending';
                     else if (log.status.includes('FAIL') || log.status.includes('ERROR')) badgeClass = 'badge-error';
-                    statusBadge = `<span class="status-badge ${badgeClass}">${log.status}</span>`;
+                    const statusLabel = log.status === 'BELOW_THRESHOLD' ? 'BELOW THRESHOLD' : log.status;
+                    statusBadge = `<span class="status-badge ${badgeClass}">${statusLabel}</span>`;
                 }
+
+                // v25.115: Progress bar for FEE_CHECK entries with pending fees
+                let progressBarHtml = '';
+                if (log.type === 'FEE_CHECK' && log.progressPercent !== undefined && log.progressPercent > 0) {
+                    const pct = Math.min(100, log.progressPercent);
+                    const barColor = pct >= 80 ? '#facc15' : pct >= 50 ? '#f97316' : '#6b7280';
+                    progressBarHtml = `
+                        <div style="margin: 6px 0; display: flex; align-items: center; gap: 8px;">
+                            <div style="flex: 1; background: rgba(255,255,255,0.1); border-radius: 9999px; height: 6px; overflow: hidden;">
+                                <div style="width: ${pct}%; height: 100%; border-radius: 9999px; background: ${barColor};"></div>
+                            </div>
+                            <span style="font-size: 11px; color: #9ca3af; min-width: 32px;">${pct}%</span>
+                        </div>`;
+                }
+
                 for (const [key, value] of Object.entries(log)) {
                     if (excludedKeys.includes(key)) continue;
                     let displayValue = value;
@@ -4650,6 +4666,7 @@
                         ${statusBadge}
                     </div>
                     <div class="bg-black/20 p-2 rounded border border-orange-900/30">
+                        ${progressBarHtml}
                         ${logDetailsHtml}
                     </div>
                 </div>`;
@@ -4657,7 +4674,7 @@
         } else {
             ui.modalLogContent.innerHTML = '<p class="text-center text-orange-400">No logs yet.</p>';
         }
-        ui.logModal.style.display = 'block'; 
+        ui.logModal.style.display = 'block';
     };
     window.toggleLogModal = toggleLogModal;
     const closeLogModal = () => { ui.logModal.style.display = 'none'; };

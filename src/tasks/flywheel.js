@@ -2024,26 +2024,32 @@ async function runFeeCollection(deps) {
                 }
 
                 // v25.4: Log to frontend
+                // v25.115: Enhanced with full breakdown
                 if (logPurchase) {
                     await logPurchase('FEE_CLAIM', {
                         status: 'SUCCESS',
                         feesClaimedSol: (claimedAmount / LAMPORTS_PER_SOL).toFixed(4),
-                        platformFeeSol: ((claimedAmount * 0.05) / LAMPORTS_PER_SOL).toFixed(4)
+                        platformFeeSol: ((claimedAmount * 0.05) / LAMPORTS_PER_SOL).toFixed(4),
+                        pendingBeforeClaimSol: (totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
+                        platformPendingSol: (platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
+                        robinhoodPendingSol: (robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
+                        thresholdSol: (config.FEE_THRESHOLD_SOL || 0.05).toFixed(2)
                     });
                 }
             }
         } else {
             // v25.77: Log with breakdown of platform vs robinhood
             logger.info(`[FeeCollection] Below threshold: ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL pending (platform: ${(platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} + robinhood: ${(robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)}), need ${config.FEE_THRESHOLD_SOL || 0.05} SOL`);
-            // v25.12: Log skip events to frontend so users know system is working
-            if (logPurchase && totalPendingFees.toNumber() > 0) {
+            // v25.115: Always log fee check to frontend (even at 0 pending)
+            if (logPurchase) {
                 await logPurchase('FEE_CHECK', {
-                    status: 'PENDING',
+                    status: 'BELOW_THRESHOLD',
                     pendingSol: (totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
                     platformPendingSol: (platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
                     robinhoodPendingSol: (robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
                     thresholdSol: (config.FEE_THRESHOLD_SOL || 0.05).toFixed(2),
-                    reason: 'Below threshold'
+                    progressPercent: Math.min(100, Math.round((totalPendingFees.toNumber() / threshold.toNumber()) * 100)),
+                    reason: totalPendingFees.toNumber() === 0 ? 'No pending fees' : 'Below threshold'
                 });
             }
         }
