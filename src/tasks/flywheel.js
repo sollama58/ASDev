@@ -67,11 +67,12 @@ let totalPendingAmmFees = 0; // Track for monitoring
 
 // v25.23: Optimized batch sizes
 // SOL transfers: ~40 bytes instruction + ~32 bytes per account = ~72 bytes per transfer
-// Transaction limit: ~1232 bytes, with overhead ~200 bytes = ~1032 bytes available
-// Safe calculation: 1032 / 72 ≈ 14 transfers (conservative) to 1032 / 40 ≈ 25 (optimistic)
-// Testing shows 25 transfers work reliably with priority fees
-const AIRDROP_BATCH_SIZE = 25; // Increased from 21 for better throughput
-const KOTH_BATCH_SIZE = 25; // Increased from 21 for consistency
+// v25.114: Transaction size limit is 1232 bytes. Each transfer adds 49 bytes (32 key + 17 instruction).
+// Fixed overhead: ~219 bytes (sig + header + blockhash + 3 fixed accounts + 2 compute budget ix).
+// Max recipients: floor((1232 - 219) / 49) = 20. Going above 20 causes TX serialization failures.
+// Previous value of 25 caused 7/8 batches to fail (only last partial batch succeeded).
+const AIRDROP_BATCH_SIZE = 20;
+const KOTH_BATCH_SIZE = 20;
 
 // v25.38: AI-based KOTH selection system
 // Evaluates tokens on multiple metrics instead of just market cap
@@ -1710,7 +1711,7 @@ async function sendSolAirdropBatch(batch, deps) {
         const actualLamports = validItems.reduce((sum, item) => sum + item.amount, 0);
         return { signature: sig, actualLamports };
     } catch (e) {
-        logger.error(`SOL Airdrop batch failed`, { error: e.message });
+        logger.error(`SOL Airdrop batch failed (${validItems?.length || batch.length} transfers)`, { error: e.message });
         return null;
     }
 }
