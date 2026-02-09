@@ -2084,6 +2084,242 @@ function init(deps) {
         }
     });
 
+    /**
+     * GET /admin/eligible-tokens
+     * Returns all eligible tokens (platform + robinhood) with holder counts and point stats
+     */
+    router.get('/admin/eligible-tokens', adminAuth, async (req, res) => {
+        try {
+            const MIN_VOL = config.AIRDROP_MIN_VOLUME_USD || 100;
+            const WEIGHT_MIN = 0.1;
+            const WEIGHT_MAX = 5.0;
+            const BASE_PTS = 1000;
+            const TOTAL_SUPPLY = BigInt('1000000000000000');
+
+            function calcWeight(vol, minVol, maxVol) {
+                if (maxVol <= minVol || minVol <= 0) return 1.0;
+                const logMin = Math.log10(minVol);
+                const logMax = Math.log10(maxVol);
+                const logVol = Math.log10(Math.max(vol, minVol));
+                const normalized = (logVol - logMin) / (logMax - logMin);
+                return Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, WEIGHT_MIN + (normalized * (WEIGHT_MAX - WEIGHT_MIN))));
+            }
+
+            // Get platform eligible tokens
+            const platformTokens = await db.all(
+                'SELECT mint, ticker, volume24h, "marketCap" FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
+                [MIN_VOL]
+            );
+
+            // Get robinhood eligible tokens
+            const robinhoodTokens = await db.all(
+                'SELECT mint, ticker, volume24h, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1 ORDER BY volume24h DESC',
+                [MIN_VOL]
+            );
+
+            // Volume ranges per source (matches holderScanner.js logic)
+            const pVols = platformTokens.map(t => parseFloat(t.volume24h) || MIN_VOL);
+            const pMinVol = pVols.length > 0 ? Math.min(...pVols) : MIN_VOL;
+            const pMaxVol = pVols.length > 0 ? Math.max(...pVols) : MIN_VOL;
+
+            const rVols = robinhoodTokens.map(t => parseFloat(t.volume24h) || MIN_VOL);
+            const rMinVol = rVols.length > 0 ? Math.min(...rVols) : MIN_VOL;
+            const rMaxVol = rVols.length > 0 ? Math.max(...rVols) : MIN_VOL;
+
+            // Platform holder counts (batch query)
+            const platformMints = platformTokens.map(t => t.mint);
+            let platformHolderCounts = {};
+            let platformTotalBalances = {};
+            if (platformMints.length > 0) {
+                const phRows = await db.all(
+                    `SELECT mint, COUNT(*) as count, SUM(CAST(balance AS BIGINT)) as total_bal FROM token_holders WHERE mint = ANY($1) GROUP BY mint`,
+                    [platformMints]
+                );
+                for (const row of phRows) {
+                    platformHolderCounts[row.mint] = parseInt(row.count) || 0;
+                    platformTotalBalances[row.mint] = row.total_bal || '0';
+                }
+            }
+
+            // Robinhood holder counts (batch query)
+            const robinhoodMints = robinhoodTokens.map(t => t.mint);
+            let robinhoodHolderCounts = {};
+            let robinhoodTotalBalances = {};
+            if (robinhoodMints.length > 0) {
+                const rhRows = await db.all(
+                    `SELECT mint, COUNT(*) as count, SUM(CAST(balance AS BIGINT)) as total_bal FROM robinhood_token_holders WHERE mint = ANY($1) GROUP BY mint`,
+                    [robinhoodMints]
+                );
+                for (const row of rhRows) {
+                    robinhoodHolderCounts[row.mint] = parseInt(row.count) || 0;
+                    robinhoodTotalBalances[row.mint] = row.total_bal || '0';
+                }
+            }
+
+            const platformResults = platformTokens.map(token => {
+                const vol = parseFloat(token.volume24h) || MIN_VOL;
+                const weight = calcWeight(vol, pMinVol, pMaxVol);
+                const weightedPts = BASE_PTS * weight;
+                const totalBal = BigInt(platformTotalBalances[token.mint] || '0');
+                const totalDistributed = Number((totalBal * BigInt(Math.round(weightedPts * 1000))) / TOTAL_SUPPLY) / 1000;
+
+                return {
+                    mint: token.mint,
+                    ticker: token.ticker,
+                    source: 'platform',
+                    volume24h: parseFloat(token.volume24h) || 0,
+                    holderCount: platformHolderCounts[token.mint] || 0,
+                    volumeWeight: Math.round(weight * 100) / 100,
+                    weightedPoints: Math.round(weightedPts * 100) / 100,
+                    totalPointsDistributed: Math.round(totalDistributed * 100) / 100,
+                    feeSharePercent: 100
+                };
+            });
+
+            const robinhoodResults = robinhoodTokens.map(token => {
+                const vol = parseFloat(token.volume24h) || MIN_VOL;
+                const weight = calcWeight(vol, rMinVol, rMaxVol);
+                const feeShareBps = token.feeShareBps || 10000;
+                const feeShareMul = feeShareBps / 10000;
+                const effectivePts = BASE_PTS * weight * feeShareMul;
+                const totalBal = BigInt(robinhoodTotalBalances[token.mint] || '0');
+                const totalDistributed = Number((totalBal * BigInt(Math.round(effectivePts * 1000))) / TOTAL_SUPPLY) / 1000;
+
+                return {
+                    mint: token.mint,
+                    ticker: token.ticker,
+                    source: 'robinhood',
+                    volume24h: parseFloat(token.volume24h) || 0,
+                    holderCount: robinhoodHolderCounts[token.mint] || 0,
+                    volumeWeight: Math.round(weight * 100) / 100,
+                    weightedPoints: Math.round(effectivePts * 100) / 100,
+                    totalPointsDistributed: Math.round(totalDistributed * 100) / 100,
+                    feeSharePercent: Math.round(feeShareMul * 100)
+                };
+            });
+
+            const allTokens = [...platformResults, ...robinhoodResults];
+
+            res.json({
+                success: true,
+                tokens: allTokens,
+                summary: {
+                    platformCount: platformResults.length,
+                    robinhoodCount: robinhoodResults.length,
+                    totalHolders: allTokens.reduce((s, t) => s + t.holderCount, 0),
+                    totalPointsDistributed: Math.round(allTokens.reduce((s, t) => s + t.totalPointsDistributed, 0) * 100) / 100
+                }
+            });
+        } catch (e) {
+            logger.error('[Admin] Eligible tokens error', { error: e.message });
+            res.status(500).json({ success: false, error: 'Failed to get eligible tokens' });
+        }
+    });
+
+    /**
+     * GET /admin/token-holders-points/:mint
+     * Returns holders of a specific token with their per-token points
+     */
+    router.get('/admin/token-holders-points/:mint', adminAuth, async (req, res) => {
+        try {
+            const { mint } = req.params;
+            const MIN_VOL = config.AIRDROP_MIN_VOLUME_USD || 100;
+            const WEIGHT_MIN = 0.1;
+            const WEIGHT_MAX = 5.0;
+            const BASE_PTS = 1000;
+            const TOTAL_SUPPLY = BigInt('1000000000000000');
+
+            function calcWeight(vol, minVol, maxVol) {
+                if (maxVol <= minVol || minVol <= 0) return 1.0;
+                const logMin = Math.log10(minVol);
+                const logMax = Math.log10(maxVol);
+                const logVol = Math.log10(Math.max(vol, minVol));
+                const normalized = (logVol - logMin) / (logMax - logMin);
+                return Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, WEIGHT_MIN + (normalized * (WEIGHT_MAX - WEIGHT_MIN))));
+            }
+
+            // Try platform token first
+            let token = await db.get('SELECT mint, ticker, volume24h FROM tokens WHERE mint = $1', [mint]);
+            let source = 'platform';
+            let holders = [];
+            let feeShareMul = 1;
+
+            if (token) {
+                holders = await db.all(
+                    'SELECT rank, "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
+                    [mint]
+                );
+                const volRange = await db.get(
+                    'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM tokens WHERE volume24h >= $1',
+                    [MIN_VOL]
+                );
+                const minVol = parseFloat(volRange?.min_vol) || MIN_VOL;
+                const maxVol = parseFloat(volRange?.max_vol) || MIN_VOL;
+                const vol = parseFloat(token.volume24h) || MIN_VOL;
+                const weight = calcWeight(vol, minVol, maxVol);
+                const weightedPts = BASE_PTS * weight;
+
+                return res.json({
+                    success: true,
+                    token: {
+                        mint: token.mint, ticker: token.ticker, source,
+                        volume24h: parseFloat(token.volume24h) || 0,
+                        volumeWeight: Math.round(weight * 100) / 100,
+                        weightedPoints: Math.round(weightedPts * 100) / 100,
+                        feeSharePercent: 100
+                    },
+                    holders: holders.map(h => {
+                        const balance = BigInt(h.balance || '0');
+                        const pts = Number((balance * BigInt(Math.round(weightedPts * 1000))) / TOTAL_SUPPLY) / 1000;
+                        return { rank: h.rank, holderPubkey: h.holderPubkey, balance: h.balance, points: Math.round(pts * 1000) / 1000 };
+                    })
+                });
+            }
+
+            // Try robinhood token
+            token = await db.get('SELECT mint, ticker, volume24h, "feeShareBps" FROM robinhood_tokens WHERE mint = $1', [mint]);
+            if (!token) {
+                return res.status(404).json({ success: false, error: 'Token not found' });
+            }
+
+            source = 'robinhood';
+            feeShareMul = (token.feeShareBps || 10000) / 10000;
+            holders = await db.all(
+                'SELECT rank, "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC',
+                [mint]
+            );
+
+            const volRange = await db.get(
+                'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
+                [MIN_VOL]
+            );
+            const minVol = parseFloat(volRange?.min_vol) || MIN_VOL;
+            const maxVol = parseFloat(volRange?.max_vol) || MIN_VOL;
+            const vol = parseFloat(token.volume24h) || MIN_VOL;
+            const weight = calcWeight(vol, minVol, maxVol);
+            const effectivePts = BASE_PTS * weight * feeShareMul;
+
+            res.json({
+                success: true,
+                token: {
+                    mint: token.mint, ticker: token.ticker, source,
+                    volume24h: parseFloat(token.volume24h) || 0,
+                    volumeWeight: Math.round(weight * 100) / 100,
+                    weightedPoints: Math.round(effectivePts * 100) / 100,
+                    feeSharePercent: Math.round(feeShareMul * 100)
+                },
+                holders: holders.map(h => {
+                    const balance = BigInt(h.balance || '0');
+                    const pts = Number((balance * BigInt(Math.round(effectivePts * 1000))) / TOTAL_SUPPLY) / 1000;
+                    return { rank: h.rank, holderPubkey: h.holderPubkey, balance: h.balance, points: Math.round(pts * 1000) / 1000 };
+                })
+            });
+        } catch (e) {
+            logger.error('[Admin] Token holder points error', { error: e.message });
+            res.status(500).json({ success: false, error: 'Failed to get token holder points' });
+        }
+    });
+
     // Admin panel password verification
     // Uses ADMIN_API_KEY environment variable as the password
     // v24.0: Updated to async for Redis-based rate limiting

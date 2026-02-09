@@ -916,6 +916,84 @@
                             </table>
                         </div>
                     </div>
+
+                    <!-- Eligible Token Points Breakdown (Token-Centric View) -->
+                    <div class="panel lg:col-span-3">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">Eligible Token Points Breakdown</h3>
+                            <div class="flex gap-2 items-center">
+                                <select id="token-points-source-filter" class="input-field text-xs" style="width: auto; padding: 4px 8px;" onchange="renderEligibleTokensTable()">
+                                    <option value="all">All Sources</option>
+                                    <option value="platform">Platform Only</option>
+                                    <option value="robinhood">Robinhood Only</option>
+                                </select>
+                                <button onclick="fetchEligibleTokenPoints()" class="btn btn-secondary text-xs">Refresh</button>
+                            </div>
+                        </div>
+                        <div id="eligible-tokens-summary" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4" style="display: none;">
+                            <div class="bg-blue-900/30 border border-blue-700/50 rounded p-2 text-center">
+                                <div class="text-xs text-blue-400">Platform Tokens</div>
+                                <div id="et-platform-count" class="text-lg font-bold text-blue-300">--</div>
+                            </div>
+                            <div class="bg-pink-900/30 border border-pink-700/50 rounded p-2 text-center">
+                                <div class="text-xs text-pink-400">Robinhood Tokens</div>
+                                <div id="et-robinhood-count" class="text-lg font-bold text-pink-300">--</div>
+                            </div>
+                            <div class="bg-green-900/30 border border-green-700/50 rounded p-2 text-center">
+                                <div class="text-xs text-green-400">Total Holders</div>
+                                <div id="et-total-holders" class="text-lg font-bold text-green-300">--</div>
+                            </div>
+                            <div class="bg-purple-900/30 border border-purple-700/50 rounded p-2 text-center">
+                                <div class="text-xs text-purple-400">Total Points Distributed</div>
+                                <div id="et-total-points" class="text-lg font-bold text-purple-300">--</div>
+                            </div>
+                        </div>
+                        <div id="eligible-tokens-table-container" class="max-h-96 overflow-y-auto">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Ticker</th>
+                                        <th>Source</th>
+                                        <th class="text-right">Volume 24h</th>
+                                        <th class="text-right">Weight</th>
+                                        <th class="text-right">Holders</th>
+                                        <th class="text-right">Pts/Token</th>
+                                        <th class="text-right">Total Distributed</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="eligible-tokens-table-body">
+                                    <tr><td colspan="8" class="text-center text-gray-500">Click refresh to load data</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Token Holder Detail (shown when clicking a token row) -->
+                    <div id="token-holder-detail-panel" class="panel lg:col-span-3" style="display: none;">
+                        <div class="panel-header flex justify-between items-center">
+                            <h3 class="text-orange-500 font-bold">
+                                <span id="thd-title">Token Holders</span>
+                            </h3>
+                            <button onclick="closeTokenHolderDetail()" class="btn btn-secondary text-xs">Close</button>
+                        </div>
+                        <div id="thd-token-info" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4"></div>
+                        <div id="thd-holders-container" class="max-h-96 overflow-y-auto">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Wallet</th>
+                                        <th class="text-right">Balance</th>
+                                        <th class="text-right">% Supply</th>
+                                        <th class="text-right">Points</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="thd-holders-table-body">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -4154,6 +4232,146 @@
                 tbody.innerHTML = `<tr><td colspan="6" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
                 log(`Top point holders fetch failed: ${e.message}`, 'error');
             }
+        }
+
+        // ===== ELIGIBLE TOKEN POINTS (Token-Centric View) =====
+        let eligibleTokensCache = [];
+
+        async function fetchEligibleTokenPoints() {
+            const tbody = document.getElementById('eligible-tokens-table-body');
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-gray-500">Loading...</td></tr>';
+            log('Fetching eligible token points...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/eligible-tokens`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json', 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    eligibleTokensCache = data.tokens || [];
+                    const summaryEl = document.getElementById('eligible-tokens-summary');
+                    summaryEl.style.display = 'grid';
+                    document.getElementById('et-platform-count').textContent = data.summary.platformCount;
+                    document.getElementById('et-robinhood-count').textContent = data.summary.robinhoodCount;
+                    document.getElementById('et-total-holders').textContent = formatNumber(data.summary.totalHolders);
+                    document.getElementById('et-total-points').textContent = formatNumber(data.summary.totalPointsDistributed);
+                    renderEligibleTokensTable();
+                    log(`Loaded ${data.tokens.length} eligible tokens`, 'success');
+                } else {
+                    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-red-400">Error: ${data.error}</td></tr>`;
+                    log(`Eligible tokens error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="8" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
+                log(`Eligible tokens fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        function renderEligibleTokensTable() {
+            const filter = document.getElementById('token-points-source-filter').value;
+            const filtered = filter === 'all' ? eligibleTokensCache : eligibleTokensCache.filter(t => t.source === filter);
+            const tbody = document.getElementById('eligible-tokens-table-body');
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center text-gray-500">No tokens found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filtered.map((t, i) => `
+                <tr onclick="fetchTokenHolderDetail('${t.mint}')" style="cursor: pointer;" title="Click to see holders">
+                    <td class="text-orange-500">${i + 1}</td>
+                    <td class="text-white font-bold">${t.ticker || shortenPubkey(t.mint, 4)}</td>
+                    <td><span class="text-xs px-1 py-0.5 rounded ${t.source === 'platform' ? 'bg-orange-900/50 text-orange-400' : 'bg-pink-900/50 text-pink-400'}">${t.source}${t.source === 'robinhood' ? ' (' + t.feeSharePercent + '%)' : ''}</span></td>
+                    <td class="text-right text-green-400">$${formatNumber(t.volume24h)}</td>
+                    <td class="text-right text-cyan-400">${t.volumeWeight.toFixed(2)}x</td>
+                    <td class="text-right text-blue-400">${t.holderCount}</td>
+                    <td class="text-right text-yellow-400">${formatNumber(t.weightedPoints)}</td>
+                    <td class="text-right text-purple-400 font-bold">${formatNumber(t.totalPointsDistributed)}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function fetchTokenHolderDetail(mint) {
+            const panel = document.getElementById('token-holder-detail-panel');
+            panel.style.display = 'block';
+            panel.scrollIntoView({ behavior: 'smooth' });
+
+            const tbody = document.getElementById('thd-holders-table-body');
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500">Loading holders...</td></tr>';
+            document.getElementById('thd-title').textContent = 'Loading...';
+            document.getElementById('thd-token-info').innerHTML = '';
+            log(`Fetching holder points for ${shortenPubkey(mint)}...`);
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/token-holders-points/${mint}`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json', 'x-admin-key': adminToken }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    const t = data.token;
+                    document.getElementById('thd-title').textContent = `${t.ticker || shortenPubkey(t.mint, 4)} Holders (${t.source})`;
+
+                    document.getElementById('thd-token-info').innerHTML = `
+                        <div class="bg-blue-900/30 border border-blue-700/50 rounded p-2 text-center">
+                            <div class="text-xs text-blue-400">Mint</div>
+                            <div class="text-xs font-bold text-blue-300">${shortenPubkey(t.mint)}</div>
+                        </div>
+                        <div class="bg-green-900/30 border border-green-700/50 rounded p-2 text-center">
+                            <div class="text-xs text-green-400">Volume 24h</div>
+                            <div class="text-sm font-bold text-green-300">$${formatNumber(t.volume24h)}</div>
+                        </div>
+                        <div class="bg-cyan-900/30 border border-cyan-700/50 rounded p-2 text-center">
+                            <div class="text-xs text-cyan-400">Weight</div>
+                            <div class="text-sm font-bold text-cyan-300">${t.volumeWeight.toFixed(2)}x</div>
+                        </div>
+                        <div class="bg-yellow-900/30 border border-yellow-700/50 rounded p-2 text-center">
+                            <div class="text-xs text-yellow-400">Points/Token</div>
+                            <div class="text-sm font-bold text-yellow-300">${formatNumber(t.weightedPoints)}</div>
+                        </div>
+                        <div class="bg-purple-900/30 border border-purple-700/50 rounded p-2 text-center">
+                            <div class="text-xs text-purple-400">Fee Share</div>
+                            <div class="text-sm font-bold text-purple-300">${t.feeSharePercent}%</div>
+                        </div>
+                    `;
+
+                    const DISPLAY_SUPPLY = 1000000000; // 1B tokens
+                    if (data.holders && data.holders.length > 0) {
+                        tbody.innerHTML = data.holders.map(h => {
+                            const balanceDisplay = parseFloat(h.balance) / 1e6;
+                            const pctSupply = (balanceDisplay / DISPLAY_SUPPLY * 100).toFixed(4);
+                            return `
+                                <tr onclick="document.getElementById('point-lookup-user').value='${h.holderPubkey}'; lookupUserPoints();" style="cursor: pointer;" title="Click to look up user points">
+                                    <td class="text-orange-500">${h.rank}</td>
+                                    <td class="text-white">${shortenPubkey(h.holderPubkey)}</td>
+                                    <td class="text-right text-gray-400">${formatNumber(balanceDisplay)}</td>
+                                    <td class="text-right text-cyan-400">${pctSupply}%</td>
+                                    <td class="text-right text-yellow-400 font-bold">${h.points.toFixed(3)}</td>
+                                </tr>
+                            `;
+                        }).join('');
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500">No holders found</td></tr>';
+                    }
+
+                    log(`Loaded ${data.holders.length} holders for ${t.ticker || shortenPubkey(mint)}`, 'success');
+                } else {
+                    document.getElementById('thd-title').textContent = 'Error';
+                    tbody.innerHTML = `<tr><td colspan="5" class="text-center text-red-400">Error: ${data.error}</td></tr>`;
+                    log(`Token holder detail error: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                document.getElementById('thd-title').textContent = 'Error';
+                tbody.innerHTML = `<tr><td colspan="5" class="text-center text-red-400">Error: ${e.message}</td></tr>`;
+                log(`Token holder detail fetch failed: ${e.message}`, 'error');
+            }
+        }
+
+        function closeTokenHolderDetail() {
+            document.getElementById('token-holder-detail-panel').style.display = 'none';
         }
 
         // ===== PAGS MANAGEMENT =====
