@@ -217,7 +217,7 @@ async function updateGlobalState(deps) {
         // v25.4: Include volume24h for dynamic volume weighting
         // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
         const eligibleTokens = await db.all(
-            'SELECT mint, userPubkey, volume24h, ticker FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
+            'SELECT mint, "userPubkey", volume24h, ticker FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
             [MIN_VOLUME_USD]
         );
         const eligibleMints = eligibleTokens.map(t => t.mint);
