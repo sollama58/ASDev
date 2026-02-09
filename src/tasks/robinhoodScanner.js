@@ -572,10 +572,16 @@ async function updateRobinhoodHolders(deps) {
                 // Previously Promise.all would reject if either TOKEN or TOKEN_2022 query failed,
                 // discarding successful results from the other program
                 async function queryWithRetry(program, label) {
+                    // v25.115: dataSize: 165 for TOKEN program (standard SPL token accounts are exactly 165 bytes)
+                    // Token-2022 accounts can be > 165 bytes due to extensions, so no dataSize filter
+                    const isStandardToken = program.equals(PROGRAMS.TOKEN);
+                    const filters = isStandardToken
+                        ? [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: token.mint } }]
+                        : [{ memcmp: { offset: 0, bytes: token.mint } }];
                     for (let attempt = 0; attempt < 2; attempt++) {
                         try {
                             return await connection.getProgramAccounts(program, {
-                                filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                                filters,
                                 encoding: 'base64'
                             });
                         } catch (e) {
@@ -1026,10 +1032,15 @@ async function scanSingleTokenHolders(deps, mint, ticker = null) {
         let token2022Accounts = [];
 
         async function queryWithRetry(program, label) {
+            // v25.115: dataSize: 165 for TOKEN program optimization
+            const isStandardToken = program.equals(PROGRAMS.TOKEN);
+            const filters = isStandardToken
+                ? [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: mint } }]
+                : [{ memcmp: { offset: 0, bytes: mint } }];
             for (let attempt = 0; attempt < 2; attempt++) {
                 try {
                     return await connection.getProgramAccounts(program, {
-                        filters: [{ memcmp: { offset: 0, bytes: mint } }],
+                        filters,
                         encoding: 'base64'
                     });
                 } catch (e) {

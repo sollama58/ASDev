@@ -317,7 +317,7 @@ async function updateGlobalState(deps) {
                     const results = await Promise.allSettled([
                         withRetry(
                             () => connection.getProgramAccounts(PROGRAMS.TOKEN, {
-                                filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                                filters: [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: token.mint } }],
                                 encoding: 'base64'
                             }),
                             `getProgramAccounts(TOKEN) for ${token.mint.slice(0, 8)}`
@@ -331,10 +331,21 @@ async function updateGlobalState(deps) {
                         )
                     ]);
 
-                    const tokenAccounts = results[0].status === 'fulfilled' ? results[0].value : [];
-                    const token2022Accounts = results[1].status === 'fulfilled' ? results[1].value : [];
+                    let tokenAccounts = results[0].status === 'fulfilled' ? results[0].value : [];
+                    let token2022Accounts = results[1].status === 'fulfilled' ? results[1].value : [];
                     if (results[0].status === 'rejected') logger.debug(`[HolderScanner] TOKEN query failed for ${token.mint.slice(0, 8)}: ${results[0].reason?.message}`);
                     if (results[1].status === 'rejected') logger.debug(`[HolderScanner] TOKEN_2022 query failed for ${token.mint.slice(0, 8)}: ${results[1].reason?.message}`);
+
+                    // v25.115: Detect "too many accounts" from settled results to trigger DAS fallback
+                    // Promise.allSettled never throws, so the outer catch block can't detect this
+                    const tooManyToken = results[0].status === 'rejected' && (results[0].reason?.message?.includes('Too many accounts') || results[0].reason?.message?.includes('too many'));
+                    const tooManyToken2022 = results[1].status === 'rejected' && (results[1].reason?.message?.includes('Too many accounts') || results[1].reason?.message?.includes('too many'));
+                    if (tooManyToken || tooManyToken2022) {
+                        logger.debug(`[HolderScanner] ${token.ticker || token.mint.slice(0, 8)} has too many holders, using Helius DAS API`);
+                        usedFallback = true;
+                        tokenAccounts = [];
+                        token2022Accounts = [];
+                    }
 
                     const accounts = [...tokenAccounts, ...token2022Accounts];
 
@@ -368,15 +379,14 @@ async function updateGlobalState(deps) {
                             });
                         }
                     }
-                    scanSucceeded = true;
-                } catch (scanErr) {
-                    // v25.66: Check if this is a "too many accounts" error - use Helius DAS API fallback
-                    if (scanErr.message?.includes('Too many accounts') || scanErr.message?.includes('too many')) {
-                        logger.debug(`[HolderScanner] ${token.ticker || token.mint.slice(0, 8)} has too many holders, using Helius DAS API`);
-                        usedFallback = true;
-                    } else {
-                        logger.error(`Failed to scan holders for ${token.mint}`, { error: scanErr.message });
+                    // v25.115: If "too many accounts" was detected above, usedFallback is already set
+                    // and accounts array is empty - don't mark as succeeded yet, let DAS fallback handle it
+                    if (!usedFallback) {
+                        scanSucceeded = true;
                     }
+                } catch (scanErr) {
+                    // Note: Promise.allSettled never throws, but other code in the try block could
+                    logger.error(`Failed to scan holders for ${token.mint}`, { error: scanErr.message });
                 }
 
                 // v25.66: Use Helius DAS API fallback for tokens with many holders (gets all 250)

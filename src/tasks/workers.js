@@ -401,10 +401,16 @@ function initHolderScannerWorker(deps) {
                         // v25.115: Use Promise.allSettled so one failing query doesn't discard the other's results
                         // v25.115: Added basic retry (2 attempts) for RPC resilience
                         async function queryWithRetry(program, label) {
+                            // v25.115: dataSize: 165 for TOKEN program (standard SPL token accounts)
+                            // Token-2022 accounts can be > 165 bytes due to extensions, so no dataSize filter
+                            const isStandardToken = program.equals(PROGRAMS.TOKEN);
+                            const filters = isStandardToken
+                                ? [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: token.mint } }]
+                                : [{ memcmp: { offset: 0, bytes: token.mint } }];
                             for (let attempt = 0; attempt < 2; attempt++) {
                                 try {
                                     return await connection.getProgramAccounts(program, {
-                                        filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                                        filters,
                                         encoding: 'base64'
                                     });
                                 } catch (e) {
@@ -428,13 +434,17 @@ function initHolderScannerWorker(deps) {
                         const accounts = [...tokenAccounts, ...token2022Accounts];
 
                         const parsedAccounts = accounts.map(acc => {
-                            const data = Array.isArray(acc.account.data)
-                                ? Buffer.from(acc.account.data[0], 'base64')
-                                : Buffer.from(acc.account.data);
-                            if (data.length < 72) return null;
-                            const owner = new PublicKey(data.slice(32, 64)).toString();
-                            const amount = new BN(data.slice(64, 72), 'le');
-                            return { owner, amount };
+                            try {
+                                const data = Array.isArray(acc.account.data)
+                                    ? Buffer.from(acc.account.data[0], 'base64')
+                                    : Buffer.from(acc.account.data);
+                                if (data.length < 72) return null;
+                                const owner = new PublicKey(data.slice(32, 64)).toString();
+                                const amount = new BN(data.slice(64, 72), 'le');
+                                return { owner, amount };
+                            } catch (parseErr) {
+                                return null;
+                            }
                         })
                         .filter(a => a !== null)
                         .sort((a, b) => b.amount.cmp(a.amount));
