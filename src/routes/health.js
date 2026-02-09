@@ -2117,14 +2117,20 @@ function init(deps) {
                 [MIN_VOL]
             );
 
-            // Volume ranges per source (matches holderScanner.js logic)
-            const pVols = platformTokens.map(t => parseFloat(t.volume24h) || MIN_VOL);
-            const pMinVol = pVols.length > 0 ? Math.min(...pVols) : MIN_VOL;
-            const pMaxVol = pVols.length > 0 ? Math.max(...pVols) : MIN_VOL;
+            // Volume ranges per source — use SQL MIN/MAX for consistent calculation (matches tokens.js)
+            const pVolRange = await db.get(
+                'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM tokens WHERE volume24h >= $1',
+                [MIN_VOL]
+            );
+            const pMinVol = parseFloat(pVolRange?.min_vol) || MIN_VOL;
+            const pMaxVol = parseFloat(pVolRange?.max_vol) || MIN_VOL;
 
-            const rVols = robinhoodTokens.map(t => parseFloat(t.volume24h) || MIN_VOL);
-            const rMinVol = rVols.length > 0 ? Math.min(...rVols) : MIN_VOL;
-            const rMaxVol = rVols.length > 0 ? Math.max(...rVols) : MIN_VOL;
+            const rVolRange = await db.get(
+                'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
+                [MIN_VOL]
+            );
+            const rMinVol = parseFloat(rVolRange?.min_vol) || MIN_VOL;
+            const rMaxVol = parseFloat(rVolRange?.max_vol) || MIN_VOL;
 
             // Platform holder counts (batch query)
             const platformMints = platformTokens.map(t => t.mint);

@@ -314,13 +314,13 @@ function initHolderScannerWorker(deps) {
             const eligibleMints = eligibleTokens.map(t => t.mint);
 
             // Calculate volume range for dynamic weighting
-            let platformMinVolume = MIN_VOLUME_USD;
-            let platformMaxVolume = MIN_VOLUME_USD;
-            if (eligibleTokens.length > 0) {
-                const volumes = eligibleTokens.map(t => parseFloat(t.volume24h) || MIN_VOLUME_USD);
-                platformMinVolume = Math.min(...volumes);
-                platformMaxVolume = Math.max(...volumes);
-            }
+            // Use SQL MIN/MAX for consistent range calculation (matches tokens.js)
+            const platformVolumeRange = await db.get(
+                'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM tokens WHERE volume24h >= $1',
+                [MIN_VOLUME_USD]
+            );
+            const platformMinVolume = parseFloat(platformVolumeRange?.min_vol) || MIN_VOLUME_USD;
+            const platformMaxVolume = parseFloat(platformVolumeRange?.max_vol) || MIN_VOLUME_USD;
             logger.info(`[Worker] Found ${eligibleTokens.length} eligible tokens (vol range: $${platformMinVolume.toFixed(0)} - $${platformMaxVolume.toFixed(0)})`);
 
             // 2. Cache dev wallet PUMP holdings (legacy)
@@ -547,12 +547,13 @@ function initHolderScannerWorker(deps) {
                     [MIN_VOLUME_USD]
                 );
 
-                let rhMinVolume = MIN_VOLUME_USD, rhMaxVolume = MIN_VOLUME_USD;
-                if (robinhoodTokens.length > 0) {
-                    const rhVolumes = robinhoodTokens.map(t => parseFloat(t.volume24h) || MIN_VOLUME_USD);
-                    rhMinVolume = Math.min(...rhVolumes);
-                    rhMaxVolume = Math.max(...rhVolumes);
-                }
+                // Use SQL MIN/MAX for consistent range calculation (matches tokens.js)
+                const rhVolumeRange = await db.get(
+                    'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
+                    [MIN_VOLUME_USD]
+                );
+                const rhMinVolume = parseFloat(rhVolumeRange?.min_vol) || MIN_VOLUME_USD;
+                const rhMaxVolume = parseFloat(rhVolumeRange?.max_vol) || MIN_VOLUME_USD;
 
                 // v25.64: Enhanced logging to debug Robinhood token eligibility issues
                 logger.info(`[Worker] Robinhood: ${totalRobinhoodTokens?.count || 0} total active, ${robinhoodTokens.length} with volume >= $${MIN_VOLUME_USD} (range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);

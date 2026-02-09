@@ -4566,10 +4566,10 @@
 
             for (const h of holdings) {
                 const imgSrc = resolveTokenImage(h.image);
-                const pts = h.isEligible ? `<span class="text-yellow-400">${h.basePoints.toFixed(1)}</span>` : '<span class="text-gray-600">-</span>';
+                const pts = h.isEligible ? `<span class="text-yellow-400">${h.basePoints.toFixed(2)}</span>` : '<span class="text-gray-600">-</span>';
                 const rhBadge = h.source === 'robinhood' ? '<span class="text-[9px] text-green-400 ml-1 font-medium">RH</span>' : '';
                 // v25.72: Show volume weight multiplier
-                const volWeight = h.isEligible && h.volumeWeight ? `<span class="text-cyan-400">${h.volumeWeight.toFixed(1)}x</span>` : '<span class="text-gray-600">-</span>';
+                const volWeight = h.isEligible && h.volumeWeight ? `<span class="text-cyan-400">${h.volumeWeight.toFixed(2)}x</span>` : '<span class="text-gray-600">-</span>';
 
                 html += `
                     <tr>
