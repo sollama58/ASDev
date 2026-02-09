@@ -2117,20 +2117,16 @@ function init(deps) {
                 [MIN_VOL]
             );
 
-            // Volume ranges per source — use SQL MIN/MAX for consistent calculation (matches tokens.js)
-            const pVolRange = await db.get(
-                'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM tokens WHERE volume24h >= $1',
-                [MIN_VOL]
+            // Combined volume range across all sources — matches frontend leaderboard
+            const combinedVolRange = await db.get(`
+                SELECT MIN(vol) as min_vol, MAX(vol) as max_vol FROM (
+                    SELECT volume24h as vol FROM tokens WHERE volume24h >= $1
+                    UNION ALL
+                    SELECT volume24h as vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1
+                ) combined`, [MIN_VOL]
             );
-            const pMinVol = parseFloat(pVolRange?.min_vol) || MIN_VOL;
-            const pMaxVol = parseFloat(pVolRange?.max_vol) || MIN_VOL;
-
-            const rVolRange = await db.get(
-                'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
-                [MIN_VOL]
-            );
-            const rMinVol = parseFloat(rVolRange?.min_vol) || MIN_VOL;
-            const rMaxVol = parseFloat(rVolRange?.max_vol) || MIN_VOL;
+            const gMinVol = parseFloat(combinedVolRange?.min_vol) || MIN_VOL;
+            const gMaxVol = parseFloat(combinedVolRange?.max_vol) || MIN_VOL;
 
             // Platform holder counts (batch query)
             const platformMints = platformTokens.map(t => t.mint);
@@ -2164,7 +2160,7 @@ function init(deps) {
 
             const platformResults = platformTokens.map(token => {
                 const vol = parseFloat(token.volume24h) || MIN_VOL;
-                const weight = calcWeight(vol, pMinVol, pMaxVol);
+                const weight = calcWeight(vol, gMinVol, gMaxVol);
                 const weightedPts = BASE_PTS * weight;
                 const totalBal = BigInt(platformTotalBalances[token.mint] || '0');
                 const totalDistributed = Number((totalBal * BigInt(Math.round(weightedPts * 1000))) / TOTAL_SUPPLY) / 1000;
@@ -2184,7 +2180,7 @@ function init(deps) {
 
             const robinhoodResults = robinhoodTokens.map(token => {
                 const vol = parseFloat(token.volume24h) || MIN_VOL;
-                const weight = calcWeight(vol, rMinVol, rMaxVol);
+                const weight = calcWeight(vol, gMinVol, gMaxVol);
                 const feeShareBps = token.feeShareBps || 10000;
                 const feeShareMul = feeShareBps / 10000;
                 // Match holderScanner.js: weightedBasePoints uses only volume weight,
@@ -2259,9 +2255,13 @@ function init(deps) {
                     'SELECT rank, "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
                     [mint]
                 );
-                const volRange = await db.get(
-                    'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM tokens WHERE volume24h >= $1',
-                    [MIN_VOL]
+                // Combined volume range across all sources — matches frontend leaderboard
+                const volRange = await db.get(`
+                    SELECT MIN(vol) as min_vol, MAX(vol) as max_vol FROM (
+                        SELECT volume24h as vol FROM tokens WHERE volume24h >= $1
+                        UNION ALL
+                        SELECT volume24h as vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1
+                    ) combined`, [MIN_VOL]
                 );
                 const minVol = parseFloat(volRange?.min_vol) || MIN_VOL;
                 const maxVol = parseFloat(volRange?.max_vol) || MIN_VOL;
@@ -2302,9 +2302,13 @@ function init(deps) {
                 [mint]
             );
 
-            const volRange = await db.get(
-                'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
-                [MIN_VOL]
+            // Combined volume range across all sources — matches frontend leaderboard
+            const volRange = await db.get(`
+                SELECT MIN(vol) as min_vol, MAX(vol) as max_vol FROM (
+                    SELECT volume24h as vol FROM tokens WHERE volume24h >= $1
+                    UNION ALL
+                    SELECT volume24h as vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1
+                ) combined`, [MIN_VOL]
             );
             const minVol = parseFloat(volRange?.min_vol) || MIN_VOL;
             const maxVol = parseFloat(volRange?.max_vol) || MIN_VOL;

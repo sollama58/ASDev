@@ -222,16 +222,19 @@ async function updateGlobalState(deps) {
         );
         const eligibleMints = eligibleTokens.map(t => t.mint);
 
-        // v25.4: Calculate volume range for dynamic weighting
-        // Use SQL MIN/MAX for consistent range calculation (matches tokens.js)
-        const platformVolumeRange = await db.get(
-            'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM tokens WHERE volume24h >= $1',
-            [MIN_VOLUME_USD]
+        // v25.4: Calculate COMBINED volume range across all sources for dynamic weighting
+        // Must match frontend leaderboard which uses a single combined range for all tokens
+        const combinedVolumeRange = await db.get(`
+            SELECT MIN(vol) as min_vol, MAX(vol) as max_vol FROM (
+                SELECT volume24h as vol FROM tokens WHERE volume24h >= $1
+                UNION ALL
+                SELECT volume24h as vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1
+            ) combined`, [MIN_VOLUME_USD]
         );
-        const platformMinVolume = parseFloat(platformVolumeRange?.min_vol) || MIN_VOLUME_USD;
-        const platformMaxVolume = parseFloat(platformVolumeRange?.max_vol) || MIN_VOLUME_USD;
+        const globalMinVolume = parseFloat(combinedVolumeRange?.min_vol) || MIN_VOLUME_USD;
+        const globalMaxVolume = parseFloat(combinedVolumeRange?.max_vol) || MIN_VOLUME_USD;
 
-        logger.info(`[HolderScanner] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume (range: $${platformMinVolume.toFixed(0)} - $${platformMaxVolume.toFixed(0)})`);
+        logger.info(`[HolderScanner] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume (combined range: $${globalMinVolume.toFixed(0)} - $${globalMaxVolume.toFixed(0)})`);
 
         // v17.0: Get actual SOL balance for expected airdrop calculation (not PUMP holdings)
         let availableSolForAirdrop = 0;
@@ -485,7 +488,7 @@ async function updateGlobalState(deps) {
 
                 // v25.4: Calculate volume weight for this token (0.5x to 2.0x)
                 const tokenVolume = parseFloat(token.volume24h) || MIN_VOLUME_USD;
-                const volumeWeight = calculateVolumeWeight(tokenVolume, platformMinVolume, platformMaxVolume);
+                const volumeWeight = calculateVolumeWeight(tokenVolume, globalMinVolume, globalMaxVolume);
                 const weightedPointsForToken = BASE_POINTS_PER_TOKEN * volumeWeight;
 
                 // Get all holders with balances for this token
@@ -553,17 +556,9 @@ async function updateGlobalState(deps) {
                 logger.info(`[HolderScanner] Robinhood tokens below volume threshold ($${MIN_VOLUME_USD}): ${belowVolumeList}`);
             }
 
-            // v25.4: Calculate volume range for Robinhood tokens
-            // Use SQL MIN/MAX for consistent range calculation (matches tokens.js)
-            const rhVolumeRange = await db.get(
-                'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
-                [MIN_VOLUME_USD]
-            );
-            const rhMinVolume = parseFloat(rhVolumeRange?.min_vol) || MIN_VOLUME_USD;
-            const rhMaxVolume = parseFloat(rhVolumeRange?.max_vol) || MIN_VOLUME_USD;
-
             // v25.64: Enhanced logging to debug Robinhood token eligibility issues
-            logger.info(`[HolderScanner] Robinhood: ${totalRobinhoodTokens?.count || 0} total active, ${robinhoodMints.length} with volume >= $${MIN_VOLUME_USD} (range: $${rhMinVolume.toFixed(0)} - $${rhMaxVolume.toFixed(0)})`);
+            // Volume range uses combined global range (computed above) to match frontend leaderboard
+            logger.info(`[HolderScanner] Robinhood: ${totalRobinhoodTokens?.count || 0} total active, ${robinhoodMints.length} with volume >= $${MIN_VOLUME_USD} (using combined range: $${globalMinVolume.toFixed(0)} - $${globalMaxVolume.toFixed(0)})`);
 
             // v25.67: Also check holder counts for eligible tokens
             if (robinhoodMints.length > 0) {
@@ -585,7 +580,7 @@ async function updateGlobalState(deps) {
 
                     // v25.4: Calculate volume weight for this Robinhood token
                     const tokenVolume = parseFloat(rhToken.volume24h) || MIN_VOLUME_USD;
-                    const volumeWeight = calculateVolumeWeight(tokenVolume, rhMinVolume, rhMaxVolume);
+                    const volumeWeight = calculateVolumeWeight(tokenVolume, globalMinVolume, globalMaxVolume);
                     const weightedBasePoints = BASE_POINTS_PER_TOKEN * volumeWeight;
 
                     // Get fee share multiplier (100% = 10000 bps = 1.0 multiplier)

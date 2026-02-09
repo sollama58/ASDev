@@ -599,13 +599,17 @@ function init(deps) {
                 const POINTS_PER_TOKEN = 1000;
                 const holdings = [];
 
-                // v25.25: Get volume ranges for weighting calculation
-                const platformVolumeRange = await db.get(`
-                    SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol
-                    FROM tokens WHERE volume24h >= $1
+                // v25.25: Get COMBINED volume range across all sources for weighting
+                // Must match frontend leaderboard which uses a single combined range for all tokens
+                const combinedVolumeRange = await db.get(`
+                    SELECT MIN(vol) as min_vol, MAX(vol) as max_vol FROM (
+                        SELECT volume24h as vol FROM tokens WHERE volume24h >= $1
+                        UNION ALL
+                        SELECT volume24h as vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1
+                    ) combined
                 `, [MIN_VOLUME_USD]);
-                const platformMinVol = parseFloat(platformVolumeRange?.min_vol) || MIN_VOLUME_USD;
-                const platformMaxVol = parseFloat(platformVolumeRange?.max_vol) || MIN_VOLUME_USD;
+                const globalMinVol = parseFloat(combinedVolumeRange?.min_vol) || MIN_VOLUME_USD;
+                const globalMaxVol = parseFloat(combinedVolumeRange?.max_vol) || MIN_VOLUME_USD;
 
                 // v24.0: Single optimized query with JOINs for launched tokens
                 // v25.36: Removed total_balance subquery - no longer needed (using fixed 1B supply)
@@ -631,7 +635,7 @@ function init(deps) {
                     if (userBalance === 0n) continue;
 
                     const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
-                    const volumeWeight = calculateVolumeWeight(tokenVolume, platformMinVol, platformMaxVol);
+                    const volumeWeight = calculateVolumeWeight(tokenVolume, globalMinVol, globalMaxVol);
                     const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
                     // v25.36: Calculate points based on % of TOTAL SUPPLY (1B tokens), not tracked holders
                     const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
@@ -653,14 +657,7 @@ function init(deps) {
                     });
                 }
 
-                // v25.25: Get volume range for robinhood tokens
-                // mint IS NOT NULL matches holderScanner.js filter for consistent weighting
-                const robinhoodVolumeRange = await db.get(`
-                    SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol
-                    FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1
-                `, [MIN_VOLUME_USD]);
-                const rhMinVol = parseFloat(robinhoodVolumeRange?.min_vol) || MIN_VOLUME_USD;
-                const rhMaxVol = parseFloat(robinhoodVolumeRange?.max_vol) || MIN_VOLUME_USD;
+                // Robinhood tokens use the same combined volume range (computed above)
 
                 // v24.0: Single optimized query with JOINs for Robinhood tokens
                 // v25.36: Removed total_balance subquery - no longer needed (using fixed 1B supply)
@@ -686,7 +683,7 @@ function init(deps) {
                     if (userBalance === 0n) continue;
 
                     const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
-                    const volumeWeight = calculateVolumeWeight(tokenVolume, rhMinVol, rhMaxVol);
+                    const volumeWeight = calculateVolumeWeight(tokenVolume, globalMinVol, globalMaxVol);
                     const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
                     // v25.36: Calculate points based on % of TOTAL SUPPLY (1B tokens), not tracked holders
                     const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
