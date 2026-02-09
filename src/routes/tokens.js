@@ -654,9 +654,10 @@ function init(deps) {
                 }
 
                 // v25.25: Get volume range for robinhood tokens
+                // mint IS NOT NULL matches holderScanner.js filter for consistent weighting
                 const robinhoodVolumeRange = await db.get(`
                     SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol
-                    FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1
+                    FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1
                 `, [MIN_VOLUME_USD]);
                 const rhMinVol = parseFloat(robinhoodVolumeRange?.min_vol) || MIN_VOLUME_USD;
                 const rhMaxVol = parseFloat(robinhoodVolumeRange?.max_vol) || MIN_VOLUME_USD;
