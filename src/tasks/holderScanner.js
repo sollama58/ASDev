@@ -310,16 +310,27 @@ async function updateGlobalState(deps) {
                 let usedFallback = false;
 
                 try {
-                    // v25.20: Use retry logic for RPC calls
-                    const accounts = await withRetry(
-                        () => connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
-                            filters: [
-                                { memcmp: { offset: 0, bytes: token.mint } }
-                            ],
-                            encoding: 'base64'
-                        }),
-                        `getProgramAccounts for ${token.mint.slice(0, 8)}`
-                    );
+                    // v25.114: Query BOTH Token and Token-2022 programs
+                    // Some tokens use standard SPL Token, others use Token-2022
+                    // Previously only queried TOKEN_2022 which missed standard Token holders
+                    const [tokenAccounts, token2022Accounts] = await Promise.all([
+                        withRetry(
+                            () => connection.getProgramAccounts(PROGRAMS.TOKEN, {
+                                filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                                encoding: 'base64'
+                            }),
+                            `getProgramAccounts(TOKEN) for ${token.mint.slice(0, 8)}`
+                        ),
+                        withRetry(
+                            () => connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
+                                filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                                encoding: 'base64'
+                            }),
+                            `getProgramAccounts(TOKEN_2022) for ${token.mint.slice(0, 8)}`
+                        )
+                    ]);
+
+                    const accounts = [...tokenAccounts, ...token2022Accounts];
 
                     // v25.65: Handle both Buffer and base64 array tuple formats from RPC
                     const parsedAccounts = accounts.map(acc => {

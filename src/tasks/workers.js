@@ -396,13 +396,25 @@ function initHolderScannerWorker(deps) {
                     const holdersToInsert = [];
 
                     try {
-                        const accounts = await connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
-                            filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
-                            encoding: 'base64'
-                        });
+                        // v25.114: Query BOTH Token and Token-2022 programs
+                        // Previously only queried TOKEN_2022 which missed standard Token holders
+                        const [tokenAccounts, token2022Accounts] = await Promise.all([
+                            connection.getProgramAccounts(PROGRAMS.TOKEN, {
+                                filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                                encoding: 'base64'
+                            }),
+                            connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
+                                filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                                encoding: 'base64'
+                            })
+                        ]);
+
+                        const accounts = [...tokenAccounts, ...token2022Accounts];
 
                         const parsedAccounts = accounts.map(acc => {
-                            const data = Buffer.from(acc.account.data);
+                            const data = Array.isArray(acc.account.data)
+                                ? Buffer.from(acc.account.data[0], 'base64')
+                                : Buffer.from(acc.account.data);
                             if (data.length < 72) return null;
                             const owner = new PublicKey(data.slice(32, 64)).toString();
                             const amount = new BN(data.slice(64, 72), 'le');

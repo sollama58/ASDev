@@ -798,6 +798,39 @@ async function claimRobinhoodFees(deps) {
                             );
 
                             logger.info(`[Robinhood] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+
+                            // v25.113: Cross-record to PAGS if this token is also a PAGS beneficiary
+                            // v25.114: Use on-chain shareholder BPS for PAGS wallet, not DB value
+                            try {
+                                const pagsBeneficiary = await db.get(
+                                    'SELECT id, "feeShareBps" FROM pags_beneficiaries WHERE mint = $1 AND "isActive" = 1',
+                                    [token.mint]
+                                );
+                                if (pagsBeneficiary) {
+                                    const pagsService = require('../services/pags');
+                                    // Look up PAGS wallet's actual on-chain share from configData
+                                    let pagsShareBps = pagsBeneficiary.feeShareBps; // fallback to DB
+                                    if (config.PAGS_WALLET && configData && configData.shareholders) {
+                                        const pagsShareholder = configData.shareholders.find(
+                                            sh => sh.pubkey.toString() === config.PAGS_WALLET
+                                        );
+                                        if (pagsShareholder) {
+                                            pagsShareBps = pagsShareholder.shareBps;
+                                            logger.debug(`[Robinhood] PAGS on-chain share for ${token.ticker}: ${pagsShareBps/100}% (DB: ${pagsBeneficiary.feeShareBps/100}%)`);
+                                        }
+                                    }
+                                    const pagsShareLamports = Math.floor(bcPendingLamports * (pagsShareBps / 10000));
+                                    const pagsShareSol = pagsShareLamports / LAMPORTS_PER_SOL;
+                                    if (pagsShareSol > 0.000001) {
+                                        await pagsService.recordFeeCollection(token.mint, pagsShareSol, 'robinhood_cross_claim', null, false);
+                                        logger.info(`[Robinhood] Cross-recorded ${pagsShareSol.toFixed(6)} SOL to PAGS for ${token.ticker} (${pagsShareBps/100}% on-chain)`);
+                                    }
+                                    // Update PAGS vault balance cache to prevent double-count
+                                    pagsFeeScanner.updateVaultBalanceCache(token.mint, 5000, 0);
+                                }
+                            } catch (crossErr) {
+                                logger.debug('[Robinhood] PAGS cross-record failed (non-critical)', { mint: token.mint, error: crossErr.message });
+                            }
                         } else {
                             logger.warn(`[Robinhood] ${token.ticker}: No sharing config found at ${sharingConfigPDA.toString().slice(0, 8)}...`);
                         }
@@ -934,6 +967,38 @@ async function claimRobinhoodFees(deps) {
                             );
 
                             logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL via TransferCreatorFeesToPump (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+
+                            // v25.113: Cross-record to PAGS if this token is also a PAGS beneficiary
+                            // v25.114: Use on-chain shareholder BPS for PAGS wallet, not DB value
+                            try {
+                                const pagsBeneficiary = await db.get(
+                                    'SELECT id, "feeShareBps" FROM pags_beneficiaries WHERE mint = $1 AND "isActive" = 1',
+                                    [token.mint]
+                                );
+                                if (pagsBeneficiary) {
+                                    const pagsService = require('../services/pags');
+                                    // Look up PAGS wallet's actual on-chain share from ammConfigData
+                                    let pagsShareBps = pagsBeneficiary.feeShareBps; // fallback to DB
+                                    if (config.PAGS_WALLET && ammConfigData && ammConfigData.shareholders) {
+                                        const pagsShareholder = ammConfigData.shareholders.find(
+                                            sh => sh.pubkey.toString() === config.PAGS_WALLET
+                                        );
+                                        if (pagsShareholder) {
+                                            pagsShareBps = pagsShareholder.shareBps;
+                                            logger.debug(`[Robinhood/AMM] PAGS on-chain share for ${token.ticker}: ${pagsShareBps/100}% (DB: ${pagsBeneficiary.feeShareBps/100}%)`);
+                                        }
+                                    }
+                                    const pagsShareLamports = Math.floor(ammFeeLamports * (pagsShareBps / 10000));
+                                    const pagsShareSol = pagsShareLamports / LAMPORTS_PER_SOL;
+                                    if (pagsShareSol > 0.000001) {
+                                        await pagsService.recordFeeCollection(token.mint, pagsShareSol, 'robinhood_cross_claim', null, false);
+                                        logger.info(`[Robinhood/AMM] Cross-recorded ${pagsShareSol.toFixed(6)} SOL to PAGS for ${token.ticker} (${pagsShareBps/100}% on-chain)`);
+                                    }
+                                    pagsFeeScanner.updateVaultBalanceCache(token.mint, 5000, 0);
+                                }
+                            } catch (crossErr) {
+                                logger.debug('[Robinhood/AMM] PAGS cross-record failed (non-critical)', { mint: token.mint, error: crossErr.message });
+                            }
 
                         } catch (claimErr) {
                             // AMM distribution failed - track as pending for monitoring
@@ -2117,9 +2182,10 @@ async function start(deps) {
     }
 
     // v25.51: Initialize PAGS fee scanner
+    // v25.113: Awaited to allow DB cache hydration for external claim detection
     try {
         const pags = require('../services/pags');
-        pagsFeeScanner.init({
+        await pagsFeeScanner.init({
             db: deps.db,
             connection: deps.connection,
             pagsKeypair: deps.pagsKeypair,

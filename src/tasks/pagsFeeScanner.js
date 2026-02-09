@@ -54,9 +54,37 @@ const VAULT_BALANCE_TTL = 30 * 60 * 1000; // 30 min TTL
 const RENT_EXEMPT_MIN = 5000; // lamports
 
 /**
- * Initialize the fee scanner
+ * v25.113: Persist vault balance to database for cross-restart detection
  */
-function init(deps) {
+function persistVaultBalance(mint, totalBalance) {
+    if (!db) return;
+    db.run(`
+        UPDATE pags_beneficiaries
+        SET "lastKnownVaultBalance" = $1, "lastVaultCheckAt" = $2
+        WHERE mint = $3
+    `, [totalBalance, Date.now(), mint]).catch(e => {
+        logger.debug('[PAGS Fee Scanner] Failed to persist vault balance', { mint, error: e.message });
+    });
+}
+
+/**
+ * v25.113: Update vault balance cache (in-memory + DB)
+ * Used by external callers (e.g. flywheel Robinhood cross-recording) to prevent double-count
+ */
+function updateVaultBalanceCache(mint, bcBalance, ammBalance) {
+    lastVaultBalances.set(mint, {
+        bcBalance,
+        ammBalance,
+        timestamp: Date.now()
+    });
+    persistVaultBalance(mint, bcBalance + ammBalance);
+}
+
+/**
+ * Initialize the fee scanner
+ * v25.113: Now async to hydrate vault balance cache from database
+ */
+async function init(deps) {
     db = deps.db;
     connection = deps.connection;
     pagsKeypair = deps.pagsKeypair || deps.devKeypair;
@@ -76,6 +104,33 @@ function init(deps) {
     logger.info('[PAGS Fee Scanner] Initialized', {
         pagsWallet: pagsKeypair.publicKey.toString().slice(0, 8) + '...'
     });
+
+    // v25.113: Hydrate vault balance cache from database on startup
+    try {
+        const rows = await db.all(`
+            SELECT mint, "lastKnownVaultBalance", "lastVaultCheckAt"
+            FROM pags_beneficiaries
+            WHERE "isActive" = 1
+              AND "lastKnownVaultBalance" > 0
+              AND "lastVaultCheckAt" IS NOT NULL
+        `);
+        for (const row of rows) {
+            const age = Date.now() - (row.lastVaultCheckAt || 0);
+            if (age < VAULT_BALANCE_TTL) {
+                lastVaultBalances.set(row.mint, {
+                    bcBalance: Number(row.lastKnownVaultBalance),
+                    ammBalance: 0,
+                    timestamp: row.lastVaultCheckAt
+                });
+            }
+        }
+        logger.info('[PAGS Fee Scanner] Hydrated vault balance cache from DB', {
+            loaded: lastVaultBalances.size,
+            totalRows: rows.length
+        });
+    } catch (e) {
+        logger.warn('[PAGS Fee Scanner] Failed to hydrate vault balance cache', { error: e.message });
+    }
 
     return true;
 }
@@ -811,6 +866,8 @@ function detectExternalClaim(mint, currentBcBalance, currentAmmBalance) {
             ammBalance: currentAmmBalance,
             timestamp: Date.now()
         });
+        // v25.113: Persist baseline to DB
+        persistVaultBalance(mint, currentBcBalance + currentAmmBalance);
         return { externalClaim: false, bcClaimedExternally: 0, ammClaimedExternally: 0 };
     }
 
@@ -822,6 +879,8 @@ function detectExternalClaim(mint, currentBcBalance, currentAmmBalance) {
             ammBalance: currentAmmBalance,
             timestamp: Date.now()
         });
+        // v25.113: Persist refreshed baseline to DB
+        persistVaultBalance(mint, currentBcBalance + currentAmmBalance);
         return { externalClaim: false, bcClaimedExternally: 0, ammClaimedExternally: 0 };
     }
 
@@ -850,6 +909,8 @@ function detectExternalClaim(mint, currentBcBalance, currentAmmBalance) {
         ammBalance: currentAmmBalance,
         timestamp: Date.now()
     });
+    // v25.113: Persist updated balance to DB
+    persistVaultBalance(mint, currentBcBalance + currentAmmBalance);
 
     return {
         externalClaim,
@@ -860,6 +921,7 @@ function detectExternalClaim(mint, currentBcBalance, currentAmmBalance) {
 
 /**
  * v25.45: Update vault balance cache after successful claim
+ * v25.113: Also persists to database for cross-restart detection
  */
 function updateVaultBalanceAfterClaim(mint, newBcBalance, newAmmBalance) {
     lastVaultBalances.set(mint, {
@@ -867,6 +929,132 @@ function updateVaultBalanceAfterClaim(mint, newBcBalance, newAmmBalance) {
         ammBalance: newAmmBalance,
         timestamp: Date.now()
     });
+    persistVaultBalance(mint, newBcBalance + newAmmBalance);
+}
+
+/**
+ * v25.113: Detect and record externally-claimed fees for ALL active beneficiaries
+ *
+ * This runs independently because collectAllFees() only processes beneficiaries
+ * with ourShareLamports > 0, missing fully-drained vaults (the most common
+ * external claim scenario from Robinhood, dashboard, or other shareholders).
+ */
+async function detectAndRecordExternalClaims() {
+    if (!config.PAGS_ENABLED || !pagsKeypair || !db || !connection) {
+        return { detected: 0, recorded: 0, totalRecordedSol: 0 };
+    }
+
+    try {
+        const beneficiaries = await db.all(`
+            SELECT * FROM pags_beneficiaries
+            WHERE "isActive" = 1
+              AND "creatorPubkey" IS NOT NULL
+              AND "creatorPubkey" != 'unknown'
+            LIMIT 100
+        `);
+
+        let detected = 0;
+        let recorded = 0;
+        let totalRecordedSol = 0;
+
+        for (const b of beneficiaries) {
+            try {
+                const creatorPubkey = new PublicKey(b.creatorPubkey);
+                const { bcVault, ammVaultAta } = pump.getCreatorFeeVaults(creatorPubkey);
+
+                // Check current vault balances
+                let currentBcBalance = 0;
+                try {
+                    const bcInfo = await connection.getAccountInfo(bcVault);
+                    if (bcInfo) currentBcBalance = bcInfo.lamports;
+                } catch (e) { /* vault may not exist */ }
+
+                let currentAmmBalance = 0;
+                try {
+                    const ammVaultAtaKey = await ammVaultAta;
+                    const bal = await connection.getTokenAccountBalance(ammVaultAtaKey)
+                        .catch(() => ({ value: { amount: '0' } }));
+                    currentAmmBalance = parseInt(bal.value.amount) || 0;
+                } catch (e) { /* vault may not exist */ }
+
+                // Compare with last known balance
+                const externalCheck = detectExternalClaim(b.mint, currentBcBalance, currentAmmBalance);
+
+                if (externalCheck.externalClaim) {
+                    detected++;
+
+                    const totalDecrease = externalCheck.bcClaimedExternally + externalCheck.ammClaimedExternally;
+
+                    // v25.113: Re-verify PAGS wallet's fee share on-chain before recording
+                    // This ensures we use the PAGS wallet's share, not the Robinhood wallet's
+                    const verification = await verifyCurrentFeeShare(
+                        b.mint, b.creatorPubkey, b.feeShareBps || 10000
+                    );
+                    const feeShareBps = verification.verified
+                        ? verification.currentFeeShareBps
+                        : (b.feeShareBps || 10000);
+
+                    if (verification.removed) {
+                        logger.info('[PAGS Fee Scanner] Skipping external claim - fee share removed', { mint: b.mint });
+                        continue;
+                    }
+
+                    const ourShareLamports = Math.floor(totalDecrease * (feeShareBps / 10000));
+                    const ourShareSol = ourShareLamports / 1e9;
+
+                    if (ourShareSol > 0.000001 && pags && pags.recordFeeCollection) {
+                        try {
+                            await pags.recordFeeCollection(
+                                b.mint,
+                                ourShareSol,
+                                'external_claim',
+                                null,
+                                false // amount is already our share
+                            );
+                            recorded++;
+                            totalRecordedSol += ourShareSol;
+
+                            logger.info('[PAGS Fee Scanner] Recorded external claim', {
+                                mint: b.mint,
+                                twitterUsername: b.twitterUsername,
+                                totalDecreaseLamports: totalDecrease,
+                                ourShareSol: ourShareSol.toFixed(6),
+                                feeShareBps,
+                                verifiedOnChain: verification.verified
+                            });
+                        } catch (e) {
+                            logger.warn('[PAGS Fee Scanner] Failed to record external claim', {
+                                mint: b.mint,
+                                error: e.message
+                            });
+                        }
+                    }
+                }
+
+                // Small delay to avoid RPC rate limiting
+                await new Promise(resolve => setTimeout(resolve, 200));
+            } catch (e) {
+                logger.debug('[PAGS Fee Scanner] Error checking beneficiary for external claims', {
+                    mint: b.mint,
+                    error: e.message
+                });
+            }
+        }
+
+        if (detected > 0) {
+            logger.info('[PAGS Fee Scanner] External claim detection complete', {
+                checked: beneficiaries.length,
+                detected,
+                recorded,
+                totalRecordedSol: totalRecordedSol.toFixed(6)
+            });
+        }
+
+        return { detected, recorded, totalRecordedSol };
+    } catch (e) {
+        logger.error('[PAGS Fee Scanner] External claim detection failed', { error: e.message });
+        return { detected: 0, recorded: 0, totalRecordedSol: 0 };
+    }
 }
 
 /**
@@ -874,6 +1062,7 @@ function updateVaultBalanceAfterClaim(mint, newBcBalance, newAmmBalance) {
  * This should be called periodically (e.g., every 5 minutes)
  *
  * v25.45: Now detects external claims and re-verifies fee shares
+ * v25.113: External claim detection runs first for ALL beneficiaries
  */
 async function collectAllFees() {
     if (!config.PAGS_ENABLED || !pagsKeypair || !db || !connection) {
@@ -883,11 +1072,23 @@ async function collectAllFees() {
     logger.info('[PAGS Fee Scanner] Starting fee collection cycle');
 
     try {
+        // v25.113: Detect and record external claims FIRST (checks ALL beneficiaries)
+        let externalResult = { detected: 0, recorded: 0, totalRecordedSol: 0 };
+        try {
+            externalResult = await detectAndRecordExternalClaims();
+        } catch (e) {
+            logger.warn('[PAGS Fee Scanner] External claim detection error', { error: e.message });
+        }
+
         const pending = await getAllPendingFees();
 
         if (pending.beneficiaries.length === 0) {
             logger.debug('[PAGS Fee Scanner] No pending fees to claim');
-            return { totalClaimed: 0, claimedCount: 0, claims: [] };
+            return {
+                totalClaimed: 0, claimedCount: 0, claims: [],
+                externalClaimsDetected: externalResult.detected,
+                externalClaimsRecorded: externalResult.recorded
+            };
         }
 
         logger.info('[PAGS Fee Scanner] Found pending fees', {
@@ -897,21 +1098,8 @@ async function collectAllFees() {
 
         const claims = [];
         let totalClaimedSol = 0;
-        let externalClaimsDetected = 0;
 
         for (const beneficiary of pending.beneficiaries) {
-            // v25.45: Check for external claims (Robinhood, manual dashboard claims)
-            const externalCheck = detectExternalClaim(
-                beneficiary.mint,
-                beneficiary.bcFeesLamports,
-                beneficiary.ammFeesLamports
-            );
-
-            if (externalCheck.externalClaim) {
-                externalClaimsDetected++;
-                // Log but continue - the current balance is what we can claim now
-            }
-
             // v25.45: Skip if fee sharing was removed
             if (beneficiary.feeShareRemoved) {
                 logger.info('[PAGS Fee Scanner] Skipping - fee share removed', {
@@ -958,14 +1146,17 @@ async function collectAllFees() {
         logger.info('[PAGS Fee Scanner] Collection cycle complete', {
             claimedCount: claims.length,
             totalClaimedSol: totalClaimedSol.toFixed(6),
-            externalClaimsDetected
+            externalClaimsDetected: externalResult.detected,
+            externalClaimsRecorded: externalResult.recorded
         });
 
         return {
             totalClaimed: totalClaimedSol,
             claimedCount: claims.length,
             claims,
-            externalClaimsDetected
+            externalClaimsDetected: externalResult.detected,
+            externalClaimsRecorded: externalResult.recorded,
+            externalClaimsSol: externalResult.totalRecordedSol
         };
 
     } catch (e) {
@@ -1008,5 +1199,8 @@ module.exports = {
     // v25.45: New exports
     verifyCurrentFeeShare,
     detectExternalClaim,
-    clearCaches
+    clearCaches,
+    // v25.113: External claim detection and vault balance management
+    detectAndRecordExternalClaims,
+    updateVaultBalanceCache
 };

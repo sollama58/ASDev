@@ -521,6 +521,13 @@ async function createSchema() {
     } catch (e) {
         // Ignore if columns already exist
     }
+    // v25.113: Persist vault balances for external claim detection across restarts
+    try {
+        await pool.query(`ALTER TABLE pags_beneficiaries ADD COLUMN IF NOT EXISTS "lastKnownVaultBalance" BIGINT DEFAULT 0`);
+        await pool.query(`ALTER TABLE pags_beneficiaries ADD COLUMN IF NOT EXISTS "lastVaultCheckAt" BIGINT`);
+    } catch (e) {
+        // Ignore if columns already exist
+    }
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_twitter ON pags_beneficiaries("twitterUsername")`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_active ON pags_beneficiaries("isActive") WHERE "isActive" = 1`);
     // v25.47 SCALABILITY: Add missing indexes for high-frequency PAGS queries
