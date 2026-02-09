@@ -2111,9 +2111,9 @@ function init(deps) {
                 [MIN_VOL]
             );
 
-            // Get robinhood eligible tokens
+            // Get robinhood eligible tokens (mint IS NOT NULL matches holderScanner.js filter)
             const robinhoodTokens = await db.all(
-                'SELECT mint, ticker, volume24h, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1 ORDER BY volume24h DESC',
+                'SELECT mint, ticker, volume24h, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1 ORDER BY volume24h DESC',
                 [MIN_VOL]
             );
 
@@ -2181,9 +2181,12 @@ function init(deps) {
                 const weight = calcWeight(vol, rMinVol, rMaxVol);
                 const feeShareBps = token.feeShareBps || 10000;
                 const feeShareMul = feeShareBps / 10000;
-                const effectivePts = BASE_PTS * weight * feeShareMul;
+                // Match holderScanner.js: weightedBasePoints uses only volume weight,
+                // feeShare is applied AFTER BigInt division to match rounding behavior
+                const weightedBasePts = BASE_PTS * weight;
                 const totalBal = BigInt(robinhoodTotalBalances[token.mint] || '0');
-                const totalDistributed = Number((totalBal * BigInt(Math.round(effectivePts * 1000))) / TOTAL_SUPPLY) / 1000;
+                const baseDistributed = Number((totalBal * BigInt(Math.round(weightedBasePts * 1000))) / TOTAL_SUPPLY) / 1000;
+                const totalDistributed = baseDistributed * feeShareMul;
 
                 return {
                     mint: token.mint,
@@ -2192,7 +2195,7 @@ function init(deps) {
                     volume24h: parseFloat(token.volume24h) || 0,
                     holderCount: robinhoodHolderCounts[token.mint] || 0,
                     volumeWeight: Math.round(weight * 100) / 100,
-                    weightedPoints: Math.round(effectivePts * 100) / 100,
+                    weightedPoints: Math.round((weightedBasePts * feeShareMul) * 100) / 100,
                     totalPointsDistributed: Math.round(totalDistributed * 100) / 100,
                     feeSharePercent: Math.round(feeShareMul * 100)
                 };
@@ -2223,6 +2226,7 @@ function init(deps) {
     router.get('/admin/token-holders-points/:mint', adminAuth, async (req, res) => {
         try {
             const { mint } = req.params;
+            const requestedSource = req.query.source; // 'platform' or 'robinhood' — used for dual-listed tokens
             const MIN_VOL = config.AIRDROP_MIN_VOLUME_USD || 100;
             const WEIGHT_MIN = 0.1;
             const WEIGHT_MAX = 5.0;
@@ -2238,14 +2242,14 @@ function init(deps) {
                 return Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, WEIGHT_MIN + (normalized * (WEIGHT_MAX - WEIGHT_MIN))));
             }
 
-            // Try platform token first
-            let token = await db.get('SELECT mint, ticker, volume24h FROM tokens WHERE mint = $1', [mint]);
-            let source = 'platform';
-            let holders = [];
-            let feeShareMul = 1;
+            // Check platform token (skip if source explicitly set to 'robinhood')
+            let token = null;
+            if (requestedSource !== 'robinhood') {
+                token = await db.get('SELECT mint, ticker, volume24h FROM tokens WHERE mint = $1', [mint]);
+            }
 
             if (token) {
-                holders = await db.all(
+                const holders = await db.all(
                     'SELECT rank, "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
                     [mint]
                 );
@@ -2262,7 +2266,7 @@ function init(deps) {
                 return res.json({
                     success: true,
                     token: {
-                        mint: token.mint, ticker: token.ticker, source,
+                        mint: token.mint, ticker: token.ticker, source: 'platform',
                         volume24h: parseFloat(token.volume24h) || 0,
                         volumeWeight: Math.round(weight * 100) / 100,
                         weightedPoints: Math.round(weightedPts * 100) / 100,
@@ -2276,41 +2280,46 @@ function init(deps) {
                 });
             }
 
-            // Try robinhood token
-            token = await db.get('SELECT mint, ticker, volume24h, "feeShareBps" FROM robinhood_tokens WHERE mint = $1', [mint]);
-            if (!token) {
+            // Check robinhood token (skip if source explicitly set to 'platform')
+            let rhToken = null;
+            if (requestedSource !== 'platform') {
+                rhToken = await db.get('SELECT mint, ticker, volume24h, "feeShareBps" FROM robinhood_tokens WHERE mint = $1 AND mint IS NOT NULL', [mint]);
+            }
+
+            if (!rhToken) {
                 return res.status(404).json({ success: false, error: 'Token not found' });
             }
 
-            source = 'robinhood';
-            feeShareMul = (token.feeShareBps || 10000) / 10000;
-            holders = await db.all(
+            const feeShareMul = (rhToken.feeShareBps || 10000) / 10000;
+            const holders = await db.all(
                 'SELECT rank, "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC',
                 [mint]
             );
 
             const volRange = await db.get(
-                'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
+                'SELECT MIN(volume24h) as min_vol, MAX(volume24h) as max_vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
                 [MIN_VOL]
             );
             const minVol = parseFloat(volRange?.min_vol) || MIN_VOL;
             const maxVol = parseFloat(volRange?.max_vol) || MIN_VOL;
-            const vol = parseFloat(token.volume24h) || MIN_VOL;
+            const vol = parseFloat(rhToken.volume24h) || MIN_VOL;
             const weight = calcWeight(vol, minVol, maxVol);
-            const effectivePts = BASE_PTS * weight * feeShareMul;
+            const weightedBasePts = BASE_PTS * weight;
 
             res.json({
                 success: true,
                 token: {
-                    mint: token.mint, ticker: token.ticker, source,
-                    volume24h: parseFloat(token.volume24h) || 0,
+                    mint: rhToken.mint, ticker: rhToken.ticker, source: 'robinhood',
+                    volume24h: parseFloat(rhToken.volume24h) || 0,
                     volumeWeight: Math.round(weight * 100) / 100,
-                    weightedPoints: Math.round(effectivePts * 100) / 100,
+                    weightedPoints: Math.round((weightedBasePts * feeShareMul) * 100) / 100,
                     feeSharePercent: Math.round(feeShareMul * 100)
                 },
                 holders: holders.map(h => {
                     const balance = BigInt(h.balance || '0');
-                    const pts = Number((balance * BigInt(Math.round(effectivePts * 1000))) / TOTAL_SUPPLY) / 1000;
+                    // Match holderScanner.js: apply feeShare AFTER BigInt division (not before)
+                    const basePts = Number((balance * BigInt(Math.round(weightedBasePts * 1000))) / TOTAL_SUPPLY) / 1000;
+                    const pts = basePts * feeShareMul;
                     return { rank: h.rank, holderPubkey: h.holderPubkey, balance: h.balance, points: Math.round(pts * 1000) / 1000 };
                 })
             });

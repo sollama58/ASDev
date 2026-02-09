@@ -4280,7 +4280,7 @@
             }
 
             tbody.innerHTML = filtered.map((t, i) => `
-                <tr onclick="fetchTokenHolderDetail('${t.mint}')" style="cursor: pointer;" title="Click to see holders">
+                <tr onclick="fetchTokenHolderDetail('${t.mint}', '${t.source}')" style="cursor: pointer;" title="Click to see holders">
                     <td class="text-orange-500">${i + 1}</td>
                     <td class="text-white font-bold">${t.ticker || shortenPubkey(t.mint, 4)}</td>
                     <td><span class="text-xs px-1 py-0.5 rounded ${t.source === 'platform' ? 'bg-orange-900/50 text-orange-400' : 'bg-pink-900/50 text-pink-400'}">${t.source}${t.source === 'robinhood' ? ' (' + t.feeSharePercent + '%)' : ''}</span></td>
@@ -4293,7 +4293,7 @@
             `).join('');
         }
 
-        async function fetchTokenHolderDetail(mint) {
+        async function fetchTokenHolderDetail(mint, source) {
             const panel = document.getElementById('token-holder-detail-panel');
             panel.style.display = 'block';
             panel.scrollIntoView({ behavior: 'smooth' });
@@ -4302,10 +4302,11 @@
             tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500">Loading holders...</td></tr>';
             document.getElementById('thd-title').textContent = 'Loading...';
             document.getElementById('thd-token-info').innerHTML = '';
-            log(`Fetching holder points for ${shortenPubkey(mint)}...`);
+            log(`Fetching holder points for ${shortenPubkey(mint)} (${source || 'auto'})...`);
 
             try {
-                const response = await fetch(`${backendUrl}/api/admin/token-holders-points/${mint}`, {
+                const sourceParam = source ? `?source=${source}` : '';
+                const response = await fetch(`${backendUrl}/api/admin/token-holders-points/${mint}${sourceParam}`, {
                     method: 'GET',
                     headers: { 'Content-Type': 'application/json', 'x-admin-key': adminToken }
                 });
