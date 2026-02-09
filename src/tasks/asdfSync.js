@@ -37,8 +37,11 @@ async function updateAsdfHolders(deps) {
 
         const parsedAccounts = accounts.map(acc => {
             try {
-                const data = Buffer.from(acc.account.data);
-                // BUG FIX: Validate data length before parsing
+                // Handle base64 array tuple format from encoding: 'base64'
+                // acc.account.data is ['base64string', 'base64'], not a raw Buffer
+                const data = Array.isArray(acc.account.data)
+                    ? Buffer.from(acc.account.data[0], 'base64')
+                    : Buffer.from(acc.account.data);
                 if (data.length < 72) {
                     logger.debug('ASDF Sync: Skipping malformed account data', { length: data.length });
                     return null;

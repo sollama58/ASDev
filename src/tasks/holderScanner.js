@@ -511,10 +511,12 @@ async function updateGlobalState(deps) {
                     // Accumulate points
                     const entry = rawPointsMap.get(holder.holderPubkey) || {
                         basePoints: 0,
-                        robinhoodPoints: 0
+                        robinhoodPoints: 0,
+                        positionsCount: 0
                     };
 
                     entry.basePoints += proportionalPoints;
+                    entry.positionsCount++;
                     rawPointsMap.set(holder.holderPubkey, entry);
                 }
 
@@ -611,9 +613,11 @@ async function updateGlobalState(deps) {
 
                         const entry = rawPointsMap.get(holder.holderPubkey) || {
                             basePoints: 0,
-                            robinhoodPoints: 0
+                            robinhoodPoints: 0,
+                            positionsCount: 0
                         };
                         entry.robinhoodPoints += scaledPoints;
+                        entry.positionsCount++;
                         rawPointsMap.set(holder.holderPubkey, entry);
 
                         tokenPointsDistributed += scaledPoints;
@@ -630,12 +634,17 @@ async function updateGlobalState(deps) {
             logger.error('[HolderScanner] Robinhood holder points calculation error', { error: e.message });
         }
 
+        // Fetch ASDF Top 100 holders from Redis (single source of truth)
+        // globalState.asdfTop50Holders may be empty if asdfSync.start() was never called
+        const asdfTop100Holders = await redis.getAsdfTop100Holders();
+        logger.info(`[HolderScanner] ASDF Top 100: ${asdfTop100Holders.size} holders loaded from Redis`);
+
         // Calculate final points including ASDF multiplier
         for (const [pubkey, data] of rawPointsMap.entries()) {
             if (pubkey === devKeypair.publicKey.toString()) continue;
 
             // CHECK ASDF MULTIPLIER (Top 100)
-            const isAsdfTop100 = globalState.asdfTop50Holders.has(pubkey);
+            const isAsdfTop100 = asdfTop100Holders.has(pubkey);
 
             // Total base points from all sources (v23.0: removed creatorBonus)
             const basePoints = data.basePoints + data.robinhoodPoints;
@@ -682,12 +691,14 @@ async function updateGlobalState(deps) {
             }
         }
 
+        const userPointsData = [];
         for (const [pubkey, data] of rawPointsMap.entries()) {
             if (pubkey === devKeypair.publicKey.toString()) continue;
 
-            const isAsdfTop100 = globalState.asdfTop50Holders.has(pubkey);
+            const isAsdfTop100 = asdfTop100Holders.has(pubkey);
+            const multiplier = isAsdfTop100 ? 2 : 1;
             const basePoints = data.basePoints + data.robinhoodPoints;
-            const points = basePoints * (isAsdfTop100 ? 2 : 1);
+            const points = basePoints * multiplier;
 
             if (points > 0) {
                 globalState.userPointsMap.set(pubkey, points);
@@ -705,6 +716,17 @@ async function updateGlobalState(deps) {
                 expected += kothBonus;
 
                 globalState.userExpectedAirdrops.set(pubkey, expected);
+
+                userPointsData.push({
+                    pubkey,
+                    basePoints: data.basePoints,
+                    robinhoodPoints: data.robinhoodPoints,
+                    multiplier,
+                    totalPoints: points,
+                    expectedAirdropSol: expected,
+                    positionsCount: data.positionsCount || 0,
+                    isAsdfHolder: isAsdfTop100
+                });
             }
         }
 
@@ -713,6 +735,16 @@ async function updateGlobalState(deps) {
             if (pubkey === devKeypair.publicKey.toString()) continue;
             if (!globalState.userExpectedAirdrops.has(pubkey) && kothShare > 0) {
                 globalState.userExpectedAirdrops.set(pubkey, kothShare);
+                userPointsData.push({
+                    pubkey,
+                    basePoints: 0,
+                    robinhoodPoints: 0,
+                    multiplier: 1,
+                    totalPoints: 0,
+                    expectedAirdropSol: kothShare,
+                    positionsCount: 0,
+                    isAsdfHolder: false
+                });
             }
         }
 
@@ -726,6 +758,36 @@ async function updateGlobalState(deps) {
             logger.info(`[HolderScanner] Synced to Redis: ${globalState.userPointsMap.size} users, ${globalState.totalPoints.toFixed(2)} total points`);
         } catch (redisErr) {
             logger.error('[HolderScanner] Failed to sync to Redis', { error: redisErr.message });
+        }
+
+        // Write to user_points table (matches workers.js - single source of truth for check-holder API)
+        const now = Date.now();
+        try {
+            await db.run('DELETE FROM user_points WHERE updated_at < $1 OR updated_at IS NULL', [now - 3600000]);
+            const BATCH_SIZE = 100;
+            for (let i = 0; i < userPointsData.length; i += BATCH_SIZE) {
+                const batch = userPointsData.slice(i, i + BATCH_SIZE);
+                const values = batch.map((_, idx) => {
+                    const base = idx * 9;
+                    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`;
+                }).join(', ');
+                const params = batch.flatMap(u => [
+                    u.pubkey, u.basePoints, u.robinhoodPoints, u.multiplier,
+                    u.totalPoints, u.expectedAirdropSol, u.positionsCount, u.isAsdfHolder, now
+                ]);
+                await db.run(`
+                    INSERT INTO user_points (pubkey, base_points, robinhood_points, multiplier, total_points, expected_airdrop_sol, positions_count, is_asdf_holder, updated_at)
+                    VALUES ${values}
+                    ON CONFLICT (pubkey) DO UPDATE SET
+                        base_points = EXCLUDED.base_points, robinhood_points = EXCLUDED.robinhood_points,
+                        multiplier = EXCLUDED.multiplier, total_points = EXCLUDED.total_points,
+                        expected_airdrop_sol = EXCLUDED.expected_airdrop_sol, positions_count = EXCLUDED.positions_count,
+                        is_asdf_holder = EXCLUDED.is_asdf_holder, updated_at = EXCLUDED.updated_at
+                `, params);
+            }
+            logger.info(`[HolderScanner] Wrote ${userPointsData.length} users to user_points table`);
+        } catch (dbErr) {
+            logger.error('[HolderScanner] Failed to write user_points table', { error: dbErr.message });
         }
 
     } catch (e) {

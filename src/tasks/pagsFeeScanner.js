@@ -38,6 +38,7 @@ const { PROGRAMS, TOKENS } = require('../config/constants');
 let db = null;
 let connection = null;
 let pagsKeypair = null;
+let devKeypair = null;
 let solana = null;
 let pags = null;
 
@@ -52,6 +53,10 @@ const VAULT_BALANCE_TTL = 30 * 60 * 1000; // 30 min TTL
 
 // Minimum rent-exempt balance to leave in vaults
 const RENT_EXEMPT_MIN = 5000; // lamports
+
+// v25.116: Transaction-based external claim detection
+// Tracks last processed tx signature per mint for incremental scanning
+const lastProcessedSigs = new Map();
 
 /**
  * v25.113: Persist vault balance to database for cross-restart detection
@@ -88,6 +93,7 @@ async function init(deps) {
     db = deps.db;
     connection = deps.connection;
     pagsKeypair = deps.pagsKeypair || deps.devKeypair;
+    devKeypair = deps.devKeypair; // v25.116: Track for tx-based external claim filtering
     solana = deps.solana;
     pags = deps.pags;
 
@@ -933,6 +939,125 @@ function updateVaultBalanceAfterClaim(mint, newBcBalance, newAmmBalance) {
 }
 
 /**
+ * v25.116: Transaction-based external claim detection
+ *
+ * Checks BC vault transaction history for distribute/claim transactions
+ * NOT signed by our wallets (PAGS or dev keypair). For each external tx,
+ * parses PAGS wallet's balance change to determine the exact SOL received.
+ *
+ * This catches external claims that balance-based detection misses:
+ * e.g. when fees accumulate AND are claimed between polls, returning
+ * the vault to the same rent-exempt level as our cached baseline.
+ *
+ * @param {string} mint - Token mint address
+ * @param {PublicKey} bcVaultKey - BC vault public key
+ * @param {Object} beneficiary - DB beneficiary row
+ * @returns {Promise<Array<{signature, receivedLamports, receivedSol, blockTime, feePayer}>>}
+ */
+async function detectExternalClaimsByTx(mint, bcVaultKey, beneficiary) {
+    const pagsWalletStr = pagsKeypair ? pagsKeypair.publicKey.toString() : null;
+    if (!pagsWalletStr || !connection) return [];
+
+    // Build set of "our" wallet addresses to filter out
+    const ourWallets = new Set();
+    ourWallets.add(pagsWalletStr);
+    if (devKeypair) ourWallets.add(devKeypair.publicKey.toString());
+
+    try {
+        // On first run for this mint, just establish the baseline signature
+        if (!lastProcessedSigs.has(mint)) {
+            const initSigs = await connection.getSignaturesForAddress(bcVaultKey, {
+                limit: 1, commitment: 'confirmed'
+            });
+            if (initSigs.length > 0) {
+                lastProcessedSigs.set(mint, initSigs[0].signature);
+            } else {
+                lastProcessedSigs.set(mint, 'none');
+            }
+            return []; // Skip detection on first run (baseline established)
+        }
+
+        const lastSig = lastProcessedSigs.get(mint);
+        const opts = { limit: 10, commitment: 'confirmed' };
+        if (lastSig && lastSig !== 'none') opts.until = lastSig;
+
+        const sigs = await connection.getSignaturesForAddress(bcVaultKey, opts);
+
+        if (sigs.length === 0) return [];
+
+        // Update to newest signature for next incremental scan
+        lastProcessedSigs.set(mint, sigs[0].signature);
+
+        const claims = [];
+
+        for (const sig of sigs) {
+            if (sig.err) continue; // Skip failed transactions
+
+            try {
+                // Dedup: check if this signature was already recorded in fee logs
+                const existing = await db.get(
+                    'SELECT id FROM pags_fee_logs WHERE "txSignature" = $1',
+                    [sig.signature]
+                );
+                if (existing) continue;
+
+                // Parse the transaction
+                const tx = await connection.getParsedTransaction(sig.signature, {
+                    commitment: 'confirmed',
+                    maxSupportedTransactionVersion: 0
+                });
+
+                if (!tx || !tx.meta) continue;
+
+                // Check if fee payer is one of our wallets
+                const accountKeys = tx.transaction.message.accountKeys;
+                const feePayer = accountKeys[0].pubkey
+                    ? accountKeys[0].pubkey.toString()
+                    : accountKeys[0].toString();
+
+                if (ourWallets.has(feePayer)) continue; // Our own transaction
+
+                // Find PAGS wallet's balance change in this transaction
+                const pagsIdx = accountKeys.findIndex(k => {
+                    const key = k.pubkey ? k.pubkey.toString() : k.toString();
+                    return key === pagsWalletStr;
+                });
+
+                if (pagsIdx === -1) continue; // PAGS wallet not involved in this tx
+
+                const preBal = tx.meta.preBalances[pagsIdx];
+                const postBal = tx.meta.postBalances[pagsIdx];
+                const receivedLamports = postBal - preBal;
+
+                if (receivedLamports > 0) {
+                    claims.push({
+                        signature: sig.signature,
+                        receivedLamports,
+                        receivedSol: receivedLamports / 1e9,
+                        blockTime: sig.blockTime,
+                        feePayer
+                    });
+                }
+            } catch (e) {
+                logger.debug('[PAGS Fee Scanner] Failed to parse vault tx', {
+                    mint, signature: sig.signature, error: e.message
+                });
+            }
+
+            // Small delay to avoid RPC rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        return claims;
+    } catch (e) {
+        logger.debug('[PAGS Fee Scanner] Tx-based detection failed', {
+            mint, error: e.message
+        });
+        return [];
+    }
+}
+
+/**
  * v25.113: Detect and record externally-claimed fees for ALL active beneficiaries
  *
  * This runs independently because collectAllFees() only processes beneficiaries
@@ -962,7 +1087,7 @@ async function detectAndRecordExternalClaims() {
                 const creatorPubkey = new PublicKey(b.creatorPubkey);
                 const { bcVault, ammVaultAta } = pump.getCreatorFeeVaults(creatorPubkey);
 
-                // Check current vault balances
+                // Check current vault balances (still needed for cache updates)
                 let currentBcBalance = 0;
                 try {
                     const bcInfo = await connection.getAccountInfo(bcVault);
@@ -977,7 +1102,7 @@ async function detectAndRecordExternalClaims() {
                     currentAmmBalance = parseInt(bal.value.amount) || 0;
                 } catch (e) { /* vault may not exist */ }
 
-                // Compare with last known balance
+                // Phase 1: Balance-based detection (fast, catches obvious vault decreases)
                 const externalCheck = detectExternalClaim(b.mint, currentBcBalance, currentAmmBalance);
 
                 if (externalCheck.externalClaim) {
@@ -985,8 +1110,6 @@ async function detectAndRecordExternalClaims() {
 
                     const totalDecrease = externalCheck.bcClaimedExternally + externalCheck.ammClaimedExternally;
 
-                    // v25.113: Re-verify PAGS wallet's fee share on-chain before recording
-                    // This ensures we use the PAGS wallet's share, not the Robinhood wallet's
                     const verification = await verifyCurrentFeeShare(
                         b.mint, b.creatorPubkey, b.feeShareBps || 10000
                     );
@@ -1009,12 +1132,12 @@ async function detectAndRecordExternalClaims() {
                                 ourShareSol,
                                 'external_claim',
                                 null,
-                                false // amount is already our share
+                                false
                             );
                             recorded++;
                             totalRecordedSol += ourShareSol;
 
-                            logger.info('[PAGS Fee Scanner] Recorded external claim', {
+                            logger.info('[PAGS Fee Scanner] Recorded external claim (balance-based)', {
                                 mint: b.mint,
                                 twitterUsername: b.twitterUsername,
                                 totalDecreaseLamports: totalDecrease,
@@ -1028,6 +1151,59 @@ async function detectAndRecordExternalClaims() {
                                 error: e.message
                             });
                         }
+                    }
+
+                    // v25.116: Advance tx-based baseline so we don't re-detect this claim
+                    try {
+                        const advanceSigs = await connection.getSignaturesForAddress(bcVault, {
+                            limit: 1, commitment: 'confirmed'
+                        });
+                        if (advanceSigs.length > 0) {
+                            lastProcessedSigs.set(b.mint, advanceSigs[0].signature);
+                        }
+                    } catch (e) { /* non-critical */ }
+                } else {
+                    // Phase 2: Transaction-based detection (catches claims missed by balance comparison)
+                    // This handles the case where fees accumulated AND were claimed between polls,
+                    // returning the vault to the same rent-exempt level as our cached baseline.
+                    try {
+                        const txClaims = await detectExternalClaimsByTx(b.mint, bcVault, b);
+
+                        for (const claim of txClaims) {
+                            detected++;
+
+                            if (claim.receivedSol > 0.000001 && pags && pags.recordFeeCollection) {
+                                try {
+                                    await pags.recordFeeCollection(
+                                        b.mint,
+                                        claim.receivedSol,
+                                        'external_claim',
+                                        claim.signature,
+                                        false
+                                    );
+                                    recorded++;
+                                    totalRecordedSol += claim.receivedSol;
+
+                                    logger.info('[PAGS Fee Scanner] Recorded external claim (tx-based)', {
+                                        mint: b.mint,
+                                        twitterUsername: b.twitterUsername,
+                                        receivedSol: claim.receivedSol.toFixed(6),
+                                        signature: claim.signature,
+                                        feePayer: claim.feePayer
+                                    });
+                                } catch (e) {
+                                    logger.warn('[PAGS Fee Scanner] Failed to record tx-based external claim', {
+                                        mint: b.mint,
+                                        error: e.message
+                                    });
+                                }
+                            }
+                        }
+                    } catch (txErr) {
+                        logger.debug('[PAGS Fee Scanner] Tx-based detection error', {
+                            mint: b.mint,
+                            error: txErr.message
+                        });
                     }
                 }
 
@@ -1174,7 +1350,8 @@ function getStatus() {
         walletConfigured: !!pagsKeypair,
         pagsWallet: pagsKeypair ? pagsKeypair.publicKey.toString() : null,
         configCacheSize: configCache.size,
-        vaultBalanceCacheSize: lastVaultBalances.size
+        vaultBalanceCacheSize: lastVaultBalances.size,
+        txBaselinesCached: lastProcessedSigs.size
     };
 }
 
@@ -1184,6 +1361,7 @@ function getStatus() {
 function clearCaches() {
     configCache.clear();
     lastVaultBalances.clear();
+    lastProcessedSigs.clear();
     logger.info('[PAGS Fee Scanner] Caches cleared');
 }
 
@@ -1202,5 +1380,7 @@ module.exports = {
     clearCaches,
     // v25.113: External claim detection and vault balance management
     detectAndRecordExternalClaims,
-    updateVaultBalanceCache
+    updateVaultBalanceCache,
+    // v25.116: Transaction-based external claim detection
+    detectExternalClaimsByTx
 };
