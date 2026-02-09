@@ -263,9 +263,15 @@ async function reverifyRobinhoodTokens(deps) {
                 );
 
                 if (!result.isRecipient) {
-                    // We're no longer a fee recipient - deactivate token
-                    logger.warn(`[Robinhood] ${token.ticker} (${token.mint.slice(0, 8)}...) - No longer a fee recipient, deactivating`);
-                    await db.run('UPDATE robinhood_tokens SET "isActive" = 0 WHERE id = $1', [token.id]);
+                    // v25.115: Check if verification actually succeeded or failed due to RPC error
+                    // Previously, RPC errors returned isRecipient: false which incorrectly deactivated tokens
+                    if (result.error) {
+                        logger.debug(`[Robinhood] Skipping deactivation of ${token.ticker} (${token.mint.slice(0, 8)}...) - verification failed due to RPC error: ${result.error}`);
+                    } else {
+                        // Verification succeeded and we're genuinely no longer a fee recipient
+                        logger.warn(`[Robinhood] ${token.ticker} (${token.mint.slice(0, 8)}...) - No longer a fee recipient, deactivating`);
+                        await db.run('UPDATE robinhood_tokens SET "isActive" = 0 WHERE id = $1', [token.id]);
+                    }
                 } else if (result.feeShareBps !== token.feeShareBps) {
                     // Fee share changed - update it
                     logger.info(`[Robinhood] ${token.ticker} - Fee share changed: ${token.feeShareBps} -> ${result.feeShareBps} bps`);
@@ -1015,30 +1021,54 @@ async function scanSingleTokenHolders(deps, mint, ticker = null) {
         const threshold = new BN(1000000);
         let usedFallback = false;
 
-        // Fetch token accounts from both Token Program and Token-2022
+        // v25.115: Use Promise.allSettled so one failing program query doesn't discard the other's results
         let tokenAccounts = [];
         let token2022Accounts = [];
 
-        try {
-            [tokenAccounts, token2022Accounts] = await Promise.all([
-                connection.getProgramAccounts(PROGRAMS.TOKEN, {
-                    filters: [{ memcmp: { offset: 0, bytes: mint } }],
-                    encoding: 'base64'
-                }),
-                connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
-                    filters: [{ memcmp: { offset: 0, bytes: mint } }],
-                    encoding: 'base64'
-                })
-            ]);
-        } catch (rpcError) {
-            // v25.66: Check if this is a "too many accounts" error - use fallback
-            if (rpcError.message?.includes('Too many accounts') || rpcError.message?.includes('too many')) {
-                logger.debug(`[Robinhood] ${ticker || mint.slice(0, 8)} has too many holders, using Helius DAS API`);
-                usedFallback = true;
-            } else {
-                logger.warn(`[Robinhood] Immediate scan RPC failed for ${ticker || mint.slice(0, 8)}: ${rpcError.message}`);
-                return { success: false, holdersCount: 0, error: rpcError.message };
+        async function queryWithRetry(program, label) {
+            for (let attempt = 0; attempt < 2; attempt++) {
+                try {
+                    return await connection.getProgramAccounts(program, {
+                        filters: [{ memcmp: { offset: 0, bytes: mint } }],
+                        encoding: 'base64'
+                    });
+                } catch (e) {
+                    if (e.message?.includes('Too many accounts') || e.message?.includes('too many')) {
+                        throw e; // Don't retry "too many accounts" - use fallback
+                    }
+                    if (attempt === 0) {
+                        await new Promise(r => setTimeout(r, 1000));
+                    } else {
+                        throw e;
+                    }
+                }
             }
+        }
+
+        const results = await Promise.allSettled([
+            queryWithRetry(PROGRAMS.TOKEN, 'TOKEN'),
+            queryWithRetry(PROGRAMS.TOKEN_2022, 'TOKEN_2022')
+        ]);
+
+        tokenAccounts = results[0].status === 'fulfilled' ? results[0].value : [];
+        token2022Accounts = results[1].status === 'fulfilled' ? results[1].value : [];
+
+        // Check for "too many accounts" errors - use Helius DAS API fallback
+        const tooManyToken = results[0].status === 'rejected' && (results[0].reason?.message?.includes('Too many accounts') || results[0].reason?.message?.includes('too many'));
+        const tooManyToken2022 = results[1].status === 'rejected' && (results[1].reason?.message?.includes('Too many accounts') || results[1].reason?.message?.includes('too many'));
+
+        if (tooManyToken || tooManyToken2022) {
+            logger.debug(`[Robinhood] ${ticker || mint.slice(0, 8)} has too many holders, using Helius DAS API`);
+            usedFallback = true;
+            tokenAccounts = [];
+            token2022Accounts = [];
+        } else if (results[0].status === 'rejected' && results[1].status === 'rejected') {
+            // Both failed - return error
+            logger.warn(`[Robinhood] Immediate scan RPC failed for ${ticker || mint.slice(0, 8)}: TOKEN=${results[0].reason?.message}, TOKEN_2022=${results[1].reason?.message}`);
+            return { success: false, holdersCount: 0, error: results[0].reason?.message };
+        } else {
+            if (results[0].status === 'rejected') logger.debug(`[Robinhood] Immediate scan TOKEN query failed for ${ticker || mint.slice(0, 8)}: ${results[0].reason?.message}`);
+            if (results[1].status === 'rejected') logger.debug(`[Robinhood] Immediate scan TOKEN_2022 query failed for ${ticker || mint.slice(0, 8)}: ${results[1].reason?.message}`);
         }
 
         // v25.66: Use Helius DAS API fallback for tokens with many holders

@@ -1251,6 +1251,11 @@ async function getCoinCreator(mintPubkey, connection) {
     );
     logger.info(`[MintExtractor] Derived BC PDA: ${bondingCurve.toString()}`);
 
+    // v25.115: Track RPC errors separately from "account not found" to prevent
+    // incorrectly deactivating tokens when RPC is temporarily unavailable
+    let bcRpcError = null;
+    let ammRpcError = null;
+
     try {
         const bcAccountInfo = await connection.getAccountInfo(bondingCurve);
         if (bcAccountInfo) {
@@ -1268,6 +1273,7 @@ async function getCoinCreator(mintPubkey, connection) {
         }
     } catch (e) {
         logger.info(`[MintExtractor] BC fetch error: ${e.message}`);
+        bcRpcError = e;
     }
 
     // Try AMM pool (post-graduation)
@@ -1300,6 +1306,13 @@ async function getCoinCreator(mintPubkey, connection) {
         }
     } catch (e) {
         logger.info(`[MintExtractor] AMM fetch error: ${e.message}`);
+        ammRpcError = e;
+    }
+
+    // v25.115: If BOTH attempts failed due to RPC errors, throw so caller knows
+    // verification was inconclusive (don't return null which would deactivate the token)
+    if (bcRpcError && ammRpcError) {
+        throw new Error(`Both BC and AMM RPC calls failed: BC=${bcRpcError.message}, AMM=${ammRpcError.message}`);
     }
 
     logger.info(`[MintExtractor] ${mintStr.slice(0, 8)}... - No coin_creator found in BC or AMM`);
