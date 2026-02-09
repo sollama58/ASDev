@@ -313,13 +313,6 @@ function initHolderScannerWorker(deps) {
             );
             const eligibleMints = eligibleTokens.map(t => t.mint);
 
-            // v25.114: Always include ASDF in eligible tokens
-            const asdfMint = TOKENS.ASDF?.toString();
-            if (asdfMint && asdfMint !== '11111111111111111111111111111111' && !eligibleMints.includes(asdfMint)) {
-                eligibleTokens.push({ mint: asdfMint, userPubkey: null, volume24h: 0, ticker: 'ASDF' });
-                eligibleMints.push(asdfMint);
-            }
-
             // Calculate volume range for dynamic weighting
             let platformMinVolume = MIN_VOLUME_USD;
             let platformMaxVolume = MIN_VOLUME_USD;
@@ -405,16 +398,32 @@ function initHolderScannerWorker(deps) {
                     try {
                         // v25.114: Query BOTH Token and Token-2022 programs
                         // Previously only queried TOKEN_2022 which missed standard Token holders
-                        const [tokenAccounts, token2022Accounts] = await Promise.all([
-                            connection.getProgramAccounts(PROGRAMS.TOKEN, {
-                                filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
-                                encoding: 'base64'
-                            }),
-                            connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
-                                filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
-                                encoding: 'base64'
-                            })
+                        // v25.115: Use Promise.allSettled so one failing query doesn't discard the other's results
+                        // v25.115: Added basic retry (2 attempts) for RPC resilience
+                        async function queryWithRetry(program, label) {
+                            for (let attempt = 0; attempt < 2; attempt++) {
+                                try {
+                                    return await connection.getProgramAccounts(program, {
+                                        filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                                        encoding: 'base64'
+                                    });
+                                } catch (e) {
+                                    if (attempt === 0) {
+                                        await delay(1000);
+                                    } else {
+                                        throw e;
+                                    }
+                                }
+                            }
+                        }
+
+                        const results = await Promise.allSettled([
+                            queryWithRetry(PROGRAMS.TOKEN, 'TOKEN'),
+                            queryWithRetry(PROGRAMS.TOKEN_2022, 'TOKEN_2022')
                         ]);
+
+                        const tokenAccounts = results[0].status === 'fulfilled' ? results[0].value : [];
+                        const token2022Accounts = results[1].status === 'fulfilled' ? results[1].value : [];
 
                         const accounts = [...tokenAccounts, ...token2022Accounts];
 

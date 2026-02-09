@@ -222,15 +222,6 @@ async function updateGlobalState(deps) {
         );
         const eligibleMints = eligibleTokens.map(t => t.mint);
 
-        // v25.114: Always include ASDF in eligible tokens - it's the platform token
-        // ASDF may not be in the tokens table but its holders should always be tracked and earn points
-        const asdfMint = TOKENS.ASDF?.toString();
-        if (asdfMint && asdfMint !== '11111111111111111111111111111111' && !eligibleMints.includes(asdfMint)) {
-            eligibleTokens.push({ mint: asdfMint, userPubkey: null, volume24h: 0, ticker: 'ASDF' });
-            eligibleMints.push(asdfMint);
-            logger.info(`[HolderScanner] Added ASDF to eligible tokens (not in tokens table)`);
-        }
-
         // v25.4: Calculate volume range for dynamic weighting
         let platformMinVolume = MIN_VOLUME_USD;
         let platformMaxVolume = MIN_VOLUME_USD;
@@ -322,7 +313,8 @@ async function updateGlobalState(deps) {
                     // v25.114: Query BOTH Token and Token-2022 programs
                     // Some tokens use standard SPL Token, others use Token-2022
                     // Previously only queried TOKEN_2022 which missed standard Token holders
-                    const [tokenAccounts, token2022Accounts] = await Promise.all([
+                    // v25.115: Use Promise.allSettled so one failing query doesn't discard results from the other
+                    const results = await Promise.allSettled([
                         withRetry(
                             () => connection.getProgramAccounts(PROGRAMS.TOKEN, {
                                 filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
@@ -338,6 +330,11 @@ async function updateGlobalState(deps) {
                             `getProgramAccounts(TOKEN_2022) for ${token.mint.slice(0, 8)}`
                         )
                     ]);
+
+                    const tokenAccounts = results[0].status === 'fulfilled' ? results[0].value : [];
+                    const token2022Accounts = results[1].status === 'fulfilled' ? results[1].value : [];
+                    if (results[0].status === 'rejected') logger.debug(`[HolderScanner] TOKEN query failed for ${token.mint.slice(0, 8)}: ${results[0].reason?.message}`);
+                    if (results[1].status === 'rejected') logger.debug(`[HolderScanner] TOKEN_2022 query failed for ${token.mint.slice(0, 8)}: ${results[1].reason?.message}`);
 
                     const accounts = [...tokenAccounts, ...token2022Accounts];
 
