@@ -562,29 +562,56 @@ async function updateRobinhoodHolders(deps) {
                 let tokenAccounts = [];
                 let token2022Accounts = [];
 
-                // Fetch token accounts from both Token Program and Token-2022
-                try {
-                    [tokenAccounts, token2022Accounts] = await Promise.all([
-                        connection.getProgramAccounts(PROGRAMS.TOKEN, {
-                            filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
-                            encoding: 'base64'
-                        }),
-                        connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
-                            filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
-                            encoding: 'base64'
-                        })
-                    ]);
-                } catch (rpcError) {
-                    // v25.66: Check if this is a "too many accounts" error - use Helius DAS API fallback
-                    if (rpcError.message?.includes('Too many accounts') || rpcError.message?.includes('too many')) {
-                        logger.debug(`[Robinhood] ${token.ticker || token.mint.slice(0, 8)} has too many holders, using Helius DAS API`);
-                        usedFallback = true;
-                        tokensUsedFallback++;
-                    } else {
-                        logger.warn(`[Robinhood] RPC failed for ${token.ticker || token.mint.slice(0, 8)}: ${rpcError.message}`);
-                        rpcFailed = true;
-                        tokensSkippedRpcFail++;
+                // v25.115: Use Promise.allSettled so one failing program query doesn't discard the other's results
+                // Previously Promise.all would reject if either TOKEN or TOKEN_2022 query failed,
+                // discarding successful results from the other program
+                async function queryWithRetry(program, label) {
+                    for (let attempt = 0; attempt < 2; attempt++) {
+                        try {
+                            return await connection.getProgramAccounts(program, {
+                                filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
+                                encoding: 'base64'
+                            });
+                        } catch (e) {
+                            if (e.message?.includes('Too many accounts') || e.message?.includes('too many')) {
+                                throw e; // Don't retry "too many accounts" - use fallback
+                            }
+                            if (attempt === 0) {
+                                await new Promise(r => setTimeout(r, 1000));
+                            } else {
+                                throw e;
+                            }
+                        }
                     }
+                }
+
+                const results = await Promise.allSettled([
+                    queryWithRetry(PROGRAMS.TOKEN, 'TOKEN'),
+                    queryWithRetry(PROGRAMS.TOKEN_2022, 'TOKEN_2022')
+                ]);
+
+                tokenAccounts = results[0].status === 'fulfilled' ? results[0].value : [];
+                token2022Accounts = results[1].status === 'fulfilled' ? results[1].value : [];
+
+                // Check for "too many accounts" errors - use Helius DAS API fallback
+                const tooManyToken = results[0].status === 'rejected' && (results[0].reason?.message?.includes('Too many accounts') || results[0].reason?.message?.includes('too many'));
+                const tooManyToken2022 = results[1].status === 'rejected' && (results[1].reason?.message?.includes('Too many accounts') || results[1].reason?.message?.includes('too many'));
+
+                if (tooManyToken || tooManyToken2022) {
+                    logger.debug(`[Robinhood] ${token.ticker || token.mint.slice(0, 8)} has too many holders, using Helius DAS API`);
+                    usedFallback = true;
+                    tokensUsedFallback++;
+                    tokenAccounts = [];
+                    token2022Accounts = [];
+                } else if (results[0].status === 'rejected' && results[1].status === 'rejected') {
+                    // Both failed (non-"too many") - skip token
+                    logger.warn(`[Robinhood] RPC failed for ${token.ticker || token.mint.slice(0, 8)}: TOKEN=${results[0].reason?.message}, TOKEN_2022=${results[1].reason?.message}`);
+                    rpcFailed = true;
+                    tokensSkippedRpcFail++;
+                } else {
+                    // At least one succeeded - log the failure for visibility
+                    if (results[0].status === 'rejected') logger.debug(`[Robinhood] TOKEN query failed for ${token.ticker || token.mint.slice(0, 8)}: ${results[0].reason?.message}`);
+                    if (results[1].status === 'rejected') logger.debug(`[Robinhood] TOKEN_2022 query failed for ${token.ticker || token.mint.slice(0, 8)}: ${results[1].reason?.message}`);
                 }
 
                 // v25.65: Skip this token if RPC failed - don't delete existing holders
