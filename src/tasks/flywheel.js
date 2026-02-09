@@ -1215,7 +1215,7 @@ async function processAirdrop(deps) {
         let kothSource = 'platform';
         if (!kothToken && kothResult.token) {
             const rhToken = await db.get(
-                'SELECT "partnerPubkey" as "userPubkey", ticker, mint, "marketCap" FROM robinhood_tokens WHERE mint = $1',
+                'SELECT "creatorPubkey" as "userPubkey", ticker, mint, "marketCap" FROM robinhood_tokens WHERE mint = $1',
                 [kothResult.token.mint]
             );
             if (rhToken) {

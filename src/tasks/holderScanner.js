@@ -272,7 +272,7 @@ async function updateGlobalState(deps) {
                         // v25.113: Check both platform and robinhood token tables
                         kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens WHERE mint = $1', [parsed.mint]);
                         if (!kothToken) {
-                            const rhToken = await db.get('SELECT mint, "partnerPubkey" as "userPubkey" FROM robinhood_tokens WHERE mint = $1', [parsed.mint]);
+                            const rhToken = await db.get('SELECT mint, "creatorPubkey" as "userPubkey" FROM robinhood_tokens WHERE mint = $1', [parsed.mint]);
                             if (rhToken) {
                                 kothToken = rhToken;
                                 kothSource = 'robinhood';
