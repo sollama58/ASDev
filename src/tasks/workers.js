@@ -448,9 +448,10 @@ function initHolderScannerWorker(deps) {
                         logger.debug(`[Worker] Failed to scan holders for ${token.mint.slice(0, 8)}`, { error: scanErr.message });
                     }
 
-                    // Update database
-                    await db.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
+                    // v25.115: Only delete+insert if scan found holders (matches holderScanner.js safeguard)
+                    // Previously deleted unconditionally, which wiped existing holders when RPC failed
                     if (holdersToInsert.length > 0) {
+                        await db.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
                         const BATCH_SIZE = 50;
                         const now = Date.now();
                         for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
@@ -466,6 +467,8 @@ function initHolderScannerWorker(deps) {
                                 ON CONFLICT (mint, "holderPubkey") DO UPDATE SET rank = EXCLUDED.rank, balance = EXCLUDED.balance, "lastUpdated" = EXCLUDED."lastUpdated"
                             `, params);
                         }
+                    } else {
+                        logger.debug(`[Worker] No holders found for ${token.mint.slice(0, 8)} - preserving existing`);
                     }
                 } catch (e) {
                     logger.error(`[Worker] Holder update error for ${token.mint?.slice(0, 8)}: ${e.message}`);
@@ -1008,12 +1011,17 @@ function initAsdfSyncWorker(deps) {
                 encoding: 'base64'
             });
 
+            // v25.115: Handle base64 array tuple format from encoding: 'base64'
+            // Previously Buffer.from(array) produced garbage data, breaking ASDF top 100 list
             const parsedAccounts = accounts.map(acc => {
-                const data = Buffer.from(acc.account.data);
+                const data = Array.isArray(acc.account.data)
+                    ? Buffer.from(acc.account.data[0], 'base64')
+                    : Buffer.from(acc.account.data);
+                if (data.length < 72) return null;
                 const owner = new PublicKey(data.slice(32, 64)).toString();
                 const amount = new BN(data.slice(64, 72), 'le');
                 return { owner, amount };
-            })
+            }).filter(a => a !== null)
                 .sort((a, b) => b.amount.cmp(a.amount));
 
             const top100 = [];
