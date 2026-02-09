@@ -21,6 +21,7 @@ const { redis, mintExtractor, logger, circuitBreaker, imageUtils, signatureVerif
 const robinhoodScanner = require('../tasks/robinhoodScanner');
 const { safeBalance, safeTotalBalance } = require('../utils');
 const config = require('../config/env');
+const { TOKENS } = require('../config/constants');
 
 const router = express.Router();
 
@@ -535,9 +536,12 @@ function init(deps) {
             // If user not found in user_points, check if they have any holdings
             if (!userPoints) {
                 // Quick check for any holdings (for isHolder flag)
+                // v25.114: Check both platform and robinhood holder tables
                 const holdingsCount = await db.get(`
-                    SELECT COUNT(*) as count FROM token_holders
-                    WHERE "holderPubkey" = $1
+                    SELECT (
+                        (SELECT COUNT(*) FROM token_holders WHERE "holderPubkey" = $1) +
+                        (SELECT COUNT(*) FROM robinhood_token_holders WHERE "holderPubkey" = $1)
+                    ) as count
                 `, [userPubkey]);
 
                 return res.json({
@@ -649,6 +653,37 @@ function init(deps) {
                         totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
                         source: 'launched'
                     });
+                }
+
+                // v25.114: Include ASDF holding if in token_holders but not in tokens table
+                const asdfMint = TOKENS.ASDF?.toString();
+                if (asdfMint && asdfMint !== '11111111111111111111111111111111' && !holdings.some(h => h.mint === asdfMint)) {
+                    const asdfHolding = await db.get(`
+                        SELECT balance, rank FROM token_holders
+                        WHERE mint = $1 AND "holderPubkey" = $2
+                    `, [asdfMint, userPubkey]);
+
+                    if (asdfHolding && safeBalance(asdfHolding.balance) > 0n) {
+                        const userBalance = safeBalance(asdfHolding.balance);
+                        const volumeWeight = calculateVolumeWeight(MIN_VOLUME_USD, platformMinVol, platformMaxVol);
+                        const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
+                        const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
+
+                        holdings.push({
+                            mint: asdfMint,
+                            ticker: 'ASDF',
+                            name: 'ASDF',
+                            image: null,
+                            volume24h: 0,
+                            marketCap: 0,
+                            rank: asdfHolding.rank,
+                            isEligible: true,
+                            volumeWeight: Math.round(volumeWeight * 100) / 100,
+                            basePoints: Math.round(proportionalPts * 100) / 100,
+                            totalPoints: Math.round(proportionalPts * 100) / 100,
+                            source: 'launched'
+                        });
+                    }
                 }
 
                 // v25.25: Get volume range for robinhood tokens

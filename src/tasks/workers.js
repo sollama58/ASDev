@@ -308,10 +308,17 @@ function initHolderScannerWorker(deps) {
         try {
             // 1. Get all tokens with >$100 volume (not just top 10)
             const eligibleTokens = await db.all(
-                'SELECT mint, "userPubkey", volume24h FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
+                'SELECT mint, "userPubkey", volume24h, ticker FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
                 [MIN_VOLUME_USD]
             );
             const eligibleMints = eligibleTokens.map(t => t.mint);
+
+            // v25.114: Always include ASDF in eligible tokens
+            const asdfMint = TOKENS.ASDF?.toString();
+            if (asdfMint && asdfMint !== '11111111111111111111111111111111' && !eligibleMints.includes(asdfMint)) {
+                eligibleTokens.push({ mint: asdfMint, userPubkey: null, volume24h: 0, ticker: 'ASDF' });
+                eligibleMints.push(asdfMint);
+            }
 
             // Calculate volume range for dynamic weighting
             let platformMinVolume = MIN_VOLUME_USD;

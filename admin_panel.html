@@ -2043,7 +2043,7 @@
             if (!mint) return;
 
             try {
-                const data = await apiCall(`/api/tokens/check-registration/${mint}`);
+                const data = await apiCall(`/api/check-registration/${mint}`);
                 document.getElementById('token-lookup-result').textContent = formatJson(data);
                 log(`Looked up token ${shortenPubkey(mint)}`, 'success');
             } catch (e) {
@@ -2809,7 +2809,7 @@
             }
 
             try {
-                const data = await apiCall(`/api/tokens/check-holder?userPubkey=${user}`);
+                const data = await apiCall(`/api/check-holder?userPubkey=${user}`);
                 document.getElementById('holdings-result').textContent = formatJson(data);
                 log(`Fetched holdings for ${shortenPubkey(user)}`, 'success');
             } catch (e) {
@@ -2861,7 +2861,7 @@
             if (!mint) return;
 
             try {
-                const data = await apiCall(`/api/tokens/holders/${mint}`);
+                const data = await apiCall(`/api/token-holders/${mint}`);
                 document.getElementById('holder-lookup-result').textContent = formatJson(data);
                 log(`Found ${data.holders?.length || 0} holders`, 'success');
             } catch (e) {
@@ -4069,8 +4069,8 @@
             try {
                 // v25.33: Use check-holder for summary, user-holdings for breakdown
                 const [checkData, holdingsData] = await Promise.all([
-                    apiCall(`/api/tokens/check-holder?userPubkey=${user}`),
-                    apiCall(`/api/tokens/user-holdings?userPubkey=${user}`)
+                    apiCall(`/api/check-holder?userPubkey=${user}`),
+                    apiCall(`/api/user-holdings?userPubkey=${user}`)
                 ]);
 
                 let html = '<div class="space-y-2">';
