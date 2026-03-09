@@ -28,8 +28,10 @@ function initDeployWorker(deps) {
      * Build and send a token create+buy transaction on-chain
      * Reusable for both real tokens and anti-bundling duds
      */
-    async function launchTokenOnChain({ tokenName, tokenTicker, tokenMetadataUri, useMayhemMode }) {
-        const mintKeypair = await vanity.getMintKeypair();
+    async function launchTokenOnChain({ tokenName, tokenTicker, tokenMetadataUri, useMayhemMode, isDud = false }) {
+        // Use random keypair for dud tokens, vanity keypair for real tokens
+        const { Keypair } = require('@solana/web3.js');
+        const mintKeypair = isDud ? Keypair.generate() : await vanity.getMintKeypair();
         const mint = mintKeypair.publicKey;
         const creator = devKeypair.publicKey;
 
@@ -64,9 +66,12 @@ function initDeployWorker(deps) {
 
         const feeRecipient = useMayhemMode ? WALLETS.MAYHEM_FEE : WALLETS.FEE_STANDARD;
         const associatedUser = pump.getATA(mint, creator, PROGRAMS.TOKEN_2022);
-        const solBuyAmount = Math.floor(0.01 * LAMPORTS_PER_SOL);
-        const tokenBuyAmount = pump.calculateTokensForSol(solBuyAmount);
-        const buyData = pump.buildBuyInstructionData(tokenBuyAmount, new BN(Math.floor(solBuyAmount * 1.05)));
+        // v25.47 FIX: Use small fixed token amount to avoid u64 overflow on-chain
+        // On-chain check: tokenAmount * virtualSolReserves must fit u64 (max ~1.8e19)
+        // 100M raw tokens (100 with 6 decimals) * 30B VSR = 3e18 — safely under u64 max
+        const tokenBuyAmount = new BN(100_000_000); // 100 tokens (6 decimals)
+        const maxSolCost = new BN(Math.floor(0.001 * LAMPORTS_PER_SOL)); // ~0.001 SOL max
+        const buyData = pump.buildBuyInstructionData(tokenBuyAmount, maxSolCost);
         const buyKeys = [
             { pubkey: global, isSigner: false, isWritable: false },
             { pubkey: feeRecipient, isSigner: false, isWritable: true },
@@ -162,7 +167,8 @@ function initDeployWorker(deps) {
                     tokenName: DUD_NAME,
                     tokenTicker: DUD_TICKER,
                     tokenMetadataUri: dudMetadataUri,
-                    useMayhemMode: false
+                    useMayhemMode: false,
+                    isDud: true
                 });
                 logger.info(`[Anti-Bundle] Dud ${i + 1}/${dudCount} launched: ${result.mint.toString().substring(0, 12)}...`);
             } catch (dudErr) {
