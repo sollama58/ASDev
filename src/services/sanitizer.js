@@ -212,6 +212,7 @@ function sanitizeDeploymentRequest(body) {
         metadataUri: body.metadataUri,
         imageUrl: body.imageUrl,
         image: body.image,
+        userTx: body.userTx,
         userPubkey: body.userPubkey,
         isMayhemMode: body.isMayhemMode,
     };
