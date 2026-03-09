@@ -310,9 +310,10 @@ async function evaluateKothCandidates(db) {
 
         // Score each candidate
         const scoredCandidates = candidates.map(token => {
-            // Calculate token age in hours
-            const ageHours = token.timestamp
-                ? (Date.now() - token.timestamp) / (1000 * 60 * 60)
+            // Calculate token age in hours (timestamp is epoch ms BIGINT)
+            const ts = typeof token.timestamp === 'number' ? token.timestamp : parseInt(token.timestamp) || 0;
+            const ageHours = ts > 0
+                ? (Date.now() - ts) / (1000 * 60 * 60)
                 : 0;
 
             const tokenWithMetrics = {
@@ -744,7 +745,7 @@ async function claimRobinhoodFees(deps) {
                         // v25.98: Get sharing config from correct source
                         // FEE program tokens: shareholders embedded in bcVault (feeVaultAddress)
                         // PUMP program tokens: shareholders in separate sharingConfigPDA
-                        const configAccount = isFeeProgram ? bcVault : sharingConfigPDA;
+                        const configAccount = isFeeProgram ? coinCreator : sharingConfigPDA;
                         const configData = await getCachedFeeSharingConfig(connection, configAccount, creatorPubkey, isFeeProgram);
 
                         if (configData && configData.shareholders && configData.shareholders.length > 0) {
@@ -1612,9 +1613,10 @@ async function processAirdrop(deps) {
 
         logger.info(`SOL Airdrop Complete. Success: ${successfulBatches}, Failed: ${failedBatches}, Actual sent: ${actualTotalSolSent.toFixed(4)} SOL (KOTH: ${actualKothSolSent.toFixed(4)}, Community: ${(actualCommunityLamportsSent / LAMPORTS_PER_SOL).toFixed(4)})`);
 
-        // v13.0: Track KOTH holder recipients count
+        // v13.0: Track KOTH holder recipients count (check correct table based on source)
+        const kothHoldersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
         const kothHolderCount = kothToken?.mint ? (await db.get(
-            'SELECT COUNT(*) as count FROM token_holders WHERE mint = $1',
+            `SELECT COUNT(*) as count FROM ${kothHoldersTable} WHERE mint = $1`,
             [kothToken.mint]
         ))?.count || 0 : 0;
 
@@ -1993,9 +1995,13 @@ async function runFeeCollection(deps) {
                     let ammVaultAta;
 
                     if (token.feeVaultAddress) {
-                        // FEE program token - both vaults derived from feeVaultAddress
+                        // FEE program token - BC vault is PUMP creator-vault PDA (where fees accumulate)
+                        // Must match claimRobinhoodFees which uses pumpBcVault from creatorPubkey
+                        const creatorPubkey = new PublicKey(token.creatorPubkey);
+                        const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
+                        bcVaultAddr = creatorVaults.bcVault;
+                        // AMM vaults derived from feeVaultAddress (matches AMM pool.coin_creator)
                         const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                        bcVaultAddr = feeVaultPubkey;
                         const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
                         ammVaultAta = feeVaults.ammVaultAta;
                     } else {

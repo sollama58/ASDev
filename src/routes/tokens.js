@@ -51,6 +51,19 @@ function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
     return Math.max(VOLUME_WEIGHT_MIN, Math.min(VOLUME_WEIGHT_MAX, weight));
 }
 
+// Admin auth middleware for sensitive endpoints
+const adminAuth = (req, res, next) => {
+    const apiKey = req.headers['x-admin-key'];
+    const expectedKey = process.env.ADMIN_API_KEY;
+    if (!expectedKey) return res.status(403).json({ error: 'Admin endpoints not configured' });
+    const crypto = require('crypto');
+    if (!apiKey || apiKey.length !== expectedKey.length ||
+        !crypto.timingSafeEqual(Buffer.from(apiKey), Buffer.from(expectedKey))) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    next();
+};
+
 // v24.0 SECURITY: Rate limiter for token registration (expensive on-chain operations)
 const tokenRegistrationLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
@@ -216,9 +229,13 @@ function init(deps) {
                             if (fallbackImage) {
                                 image = fallbackImage;
                                 // v25.71: Update correct table based on source
-                                const updateTable = source === 'robinhood' ? 'robinhood_tokens' : 'tokens';
-                                db.run(`UPDATE ${updateTable} SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = '' OR image = 'null')`,
-                                    [fallbackImage, koth.mint]).catch(() => {});
+                                if (source === 'robinhood') {
+                                    db.run(`UPDATE robinhood_tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = '' OR image = 'null')`,
+                                        [fallbackImage, koth.mint]).catch(() => {});
+                                } else {
+                                    db.run(`UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = '' OR image = 'null')`,
+                                        [fallbackImage, koth.mint]).catch(() => {});
+                                }
                             }
                         } catch (e) { /* silent fail */ }
                     }
@@ -482,6 +499,7 @@ function init(deps) {
     router.get('/token-holders/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
+            if (!isValidPubkey(mint)) return res.status(400).json({ error: "Invalid mint address" });
             const holders = await db.all(
                 'SELECT rank, "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 250',
                 [mint]
@@ -1355,8 +1373,7 @@ function init(deps) {
             logger.error('[TokenLookup] Error', { mint: req.params.mint, error: e.message, stack: e.stack });
             res.status(500).json({
                 registered: false,
-                error: 'Database error',
-                details: e.message
+                error: 'Database error'
             });
         }
     });
@@ -1450,8 +1467,7 @@ function init(deps) {
             logger.error('[TokenMetadata] Error', { mint: req.params.mint, error: e.message });
             res.status(500).json({
                 success: false,
-                error: 'Failed to fetch token metadata',
-                details: e.message
+                error: 'Failed to fetch token metadata'
             });
         }
     });
@@ -1558,7 +1574,7 @@ function init(deps) {
      * Force refresh metadata for a registered token
      * Fetches fresh data from DexScreener, Helius, and Pump.fun API
      */
-    router.post('/refresh-metadata/:mint', async (req, res) => {
+    router.post('/refresh-metadata/:mint', adminAuth, async (req, res) => {
         try {
             const { mint } = req.params;
 
@@ -1681,7 +1697,7 @@ function init(deps) {
      * Admin endpoint for fixing tokens that were registered without metadata
      * v25.5: Also handles 'null' string values and tries metadataUri fallback
      */
-    router.post('/refresh-all-metadata', async (req, res) => {
+    router.post('/refresh-all-metadata', adminAuth, async (req, res) => {
         try {
             // v25.5: Find all robinhood tokens with missing metadata (including 'null' string)
             const robinhoodTokens = await db.all(`

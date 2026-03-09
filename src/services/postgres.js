@@ -698,8 +698,19 @@ function convertSqliteToPostgres(sql) {
     // Replace ? with $1, $2, etc.
     pgSql = pgSql.replace(/\?/g, () => `$${paramIndex++}`);
 
-    // Handle INSERT OR REPLACE (basic conversion)
-    pgSql = pgSql.replace(/INSERT OR REPLACE INTO/gi, 'INSERT INTO');
+    // Handle INSERT OR REPLACE - convert to upsert
+    // Extracts table name and column list to build ON CONFLICT DO UPDATE
+    const insertOrReplaceMatch = pgSql.match(/INSERT OR REPLACE INTO\s+(\w+)\s*\(([^)]+)\)/i);
+    if (insertOrReplaceMatch) {
+        const tableName = insertOrReplaceMatch[1];
+        const columns = insertOrReplaceMatch[2].split(',').map(c => c.trim());
+        // Use first UNIQUE column as conflict target (mint for tokens)
+        const conflictCol = columns.includes('mint') ? 'mint' : columns[0];
+        const updateCols = columns.filter(c => c !== conflictCol)
+            .map(c => `${c} = EXCLUDED.${c}`).join(', ');
+        pgSql = pgSql.replace(/INSERT OR REPLACE INTO/gi, 'INSERT INTO');
+        pgSql = pgSql.replace(/(VALUES\s*\([^)]+\))/i, `$1 ON CONFLICT (${conflictCol}) DO UPDATE SET ${updateCols}`);
+    }
 
     // Handle INSERT OR IGNORE
     pgSql = pgSql.replace(/INSERT OR IGNORE INTO (\w+)/gi, 'INSERT INTO $1');

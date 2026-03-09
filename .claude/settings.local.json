@@ -21,7 +21,8 @@
       "Bash(dir:*)",
       "WebFetch(domain:api.solscan.io)",
       "Bash(python3:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(xargs grep -l \"launcher\\\\|disable.*tab\\\\|tab.*enable\\\\|hidden.*launcher\")"
     ]
   }
 }

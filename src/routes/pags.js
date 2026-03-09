@@ -34,14 +34,15 @@ function timingSafeEqual(a, b) {
     const bufA = Buffer.from(a);
     const bufB = Buffer.from(b);
 
-    // Must be same length for timing-safe comparison
-    if (bufA.length !== bufB.length) {
-        // Still do a comparison to maintain constant time
-        crypto.timingSafeEqual(bufA, Buffer.alloc(bufA.length));
-        return false;
-    }
+    // Pad to same length to prevent timing-based length leakage
+    const maxLen = Math.max(bufA.length, bufB.length);
+    const paddedA = Buffer.alloc(maxLen);
+    const paddedB = Buffer.alloc(maxLen);
+    bufA.copy(paddedA);
+    bufB.copy(paddedB);
 
-    return crypto.timingSafeEqual(bufA, bufB);
+    const lengthMatch = bufA.length === bufB.length;
+    return crypto.timingSafeEqual(paddedA, paddedB) && lengthMatch;
 }
 
 /**

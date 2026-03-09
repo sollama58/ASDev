@@ -572,7 +572,7 @@ async function getKothWithFallback(db, algorithmFallback) {
         const lastResortResult = {
             token: winner,
             score: 50,
-            reasoning: `${winner.ticker} selected based on highest market cap ($${winner.marketCap?.toLocaleString()}). AI selection unavailable.`,
+            reasoning: `${winner.ticker} selected based on highest volume ($${winner.volume24h?.toLocaleString()}). AI selection unavailable.`,
             isAI: false
         };
 

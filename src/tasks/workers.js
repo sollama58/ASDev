@@ -10,13 +10,169 @@ const { getAssociatedTokenAddress, createCloseAccountInstruction, ASSOCIATED_TOK
 const axios = require('axios');
 const config = require('../config/env');
 const { PROGRAMS, WALLETS, TOKENS } = require('../config/constants');
-const { logger, redis, pump, vanity, solana, twitter, imageUtils } = require('../services');
+const { logger, redis, pump, vanity, solana, twitter, imageUtils, pinata } = require('../services');
 
 /**
  * Initialize deploy worker
  */
 function initDeployWorker(deps) {
     const { connection, devKeypair, db, saveTokenData, refundUser } = deps;
+
+    // Anti-bundling dud token constants
+    const DUD_NAME = 'ASDFGHJKL';
+    const DUD_TICKER = 'ASDFGHJKL';
+    const DUD_IMAGE = 'https://i.imgur.com/dBRNdzu.png';
+    const DUD_DESCRIPTION = '';
+
+    /**
+     * Build and send a token create+buy transaction on-chain
+     * Reusable for both real tokens and anti-bundling duds
+     */
+    async function launchTokenOnChain({ tokenName, tokenTicker, tokenMetadataUri, useMayhemMode }) {
+        const mintKeypair = await vanity.getMintKeypair();
+        const mint = mintKeypair.publicKey;
+        const creator = devKeypair.publicKey;
+
+        const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = pump.getPumpPDAs(mint);
+        const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PROGRAMS.PUMP);
+        const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), PROGRAMS.METADATA.toBuffer(), mint.toBuffer()], PROGRAMS.METADATA);
+        const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PROGRAMS.PUMP);
+        const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PROGRAMS.PUMP);
+        const [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], PROGRAMS.MAYHEM);
+        const mayhemTokenVault = pump.getATA(mint, WALLETS.SOL_VAULT, PROGRAMS.TOKEN_2022);
+
+        const createData = pump.buildCreateInstructionData(tokenName, tokenTicker, tokenMetadataUri, creator, useMayhemMode);
+        const createKeys = [
+            { pubkey: mint, isSigner: true, isWritable: true },
+            { pubkey: mintAuthority, isSigner: false, isWritable: false },
+            { pubkey: bondingCurve, isSigner: false, isWritable: true },
+            { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+            { pubkey: global, isSigner: false, isWritable: false },
+            { pubkey: creator, isSigner: true, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
+            { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: PROGRAMS.MAYHEM, isSigner: false, isWritable: true },
+            { pubkey: WALLETS.GLOBAL_PARAMS, isSigner: false, isWritable: false },
+            { pubkey: WALLETS.SOL_VAULT, isSigner: false, isWritable: true },
+            { pubkey: mayhemState, isSigner: false, isWritable: true },
+            { pubkey: mayhemTokenVault, isSigner: false, isWritable: true },
+            { pubkey: eventAuthority, isSigner: false, isWritable: false },
+            { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
+        ];
+        const createIx = new TransactionInstruction({ keys: createKeys, programId: PROGRAMS.PUMP, data: createData });
+
+        const feeRecipient = useMayhemMode ? WALLETS.MAYHEM_FEE : WALLETS.FEE_STANDARD;
+        const associatedUser = pump.getATA(mint, creator, PROGRAMS.TOKEN_2022);
+        const solBuyAmount = Math.floor(0.01 * LAMPORTS_PER_SOL);
+        const tokenBuyAmount = pump.calculateTokensForSol(solBuyAmount);
+        const buyData = pump.buildBuyInstructionData(tokenBuyAmount, new BN(Math.floor(solBuyAmount * 1.05)));
+        const buyKeys = [
+            { pubkey: global, isSigner: false, isWritable: false },
+            { pubkey: feeRecipient, isSigner: false, isWritable: true },
+            { pubkey: mint, isSigner: false, isWritable: false },
+            { pubkey: bondingCurve, isSigner: false, isWritable: true },
+            { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+            { pubkey: associatedUser, isSigner: false, isWritable: true },
+            { pubkey: creator, isSigner: true, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
+            { pubkey: creatorVault, isSigner: false, isWritable: true },
+            { pubkey: eventAuthority, isSigner: false, isWritable: false },
+            { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
+            { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: false },
+            { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
+            { pubkey: feeConfig, isSigner: false, isWritable: false },
+            { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
+        ];
+        const buyIx = new TransactionInstruction({ keys: buyKeys, programId: PROGRAMS.PUMP, data: buyData });
+
+        const createATAIx = new TransactionInstruction({
+            keys: [
+                { pubkey: creator, isSigner: true, isWritable: true },
+                { pubkey: associatedUser, isSigner: false, isWritable: true },
+                { pubkey: creator, isSigner: false, isWritable: false },
+                { pubkey: mint, isSigner: false, isWritable: false },
+                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
+            ],
+            programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+            data: Buffer.alloc(0),
+        });
+
+        const tx = new Transaction();
+        solana.addPriorityFee(tx);
+        tx.add(createIx).add(createATAIx).add(buyIx);
+        tx.feePayer = creator;
+
+        const sig = await solana.sendTxWithRetry(tx, [devKeypair, mintKeypair]);
+
+        // Fire-and-forget sell to recoup SOL
+        setTimeout(async () => {
+            try {
+                const bal = await connection.getTokenAccountBalance(associatedUser);
+                if (bal.value?.uiAmount > 0) {
+                    const sellData = pump.buildSellInstructionData(new BN(bal.value.amount));
+                    const sellKeys = [
+                        { pubkey: global, isSigner: false, isWritable: false },
+                        { pubkey: feeRecipient, isSigner: false, isWritable: true },
+                        { pubkey: mint, isSigner: false, isWritable: false },
+                        { pubkey: bondingCurve, isSigner: false, isWritable: true },
+                        { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+                        { pubkey: associatedUser, isSigner: false, isWritable: true },
+                        { pubkey: creator, isSigner: true, isWritable: true },
+                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                        { pubkey: creatorVault, isSigner: false, isWritable: true },
+                        { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
+                        { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                        { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
+                        { pubkey: feeConfig, isSigner: false, isWritable: false },
+                        { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
+                    ];
+                    const sellIx = new TransactionInstruction({ keys: sellKeys, programId: PROGRAMS.PUMP, data: sellData });
+                    const closeIx = createCloseAccountInstruction(associatedUser, creator, creator, [], PROGRAMS.TOKEN_2022);
+                    const sellTx = new Transaction();
+                    solana.addPriorityFee(sellTx);
+                    sellTx.add(sellIx).add(closeIx);
+                    await solana.sendTxWithRetry(sellTx, [devKeypair]);
+                    logger.info(`Sold & Closed Account for ${tokenTicker} (${mint.toString().substring(0, 8)}...)`);
+                }
+            } catch (e) { logger.error("Sell error", { ticker: tokenTicker, msg: e.message }); }
+        }, 1500);
+
+        return { mint, mintKeypair, sig };
+    }
+
+    /**
+     * Launch anti-bundling dud tokens before the real token
+     * Creates 1-5 throwaway tokens to obscure the real launch from bundlers
+     */
+    async function launchDudTokens(job) {
+        const dudCount = Math.floor(Math.random() * 5) + 1; // 1-5 duds
+        logger.info(`[Anti-Bundle] Launching ${dudCount} dud token(s) for job ${job.id}`);
+
+        // Upload dud metadata once (reuse for all duds)
+        const dudMeta = await pinata.uploadMetadata(DUD_NAME, DUD_TICKER, DUD_DESCRIPTION, '', '', DUD_IMAGE);
+        const dudMetadataUri = dudMeta.metadataUri;
+
+        for (let i = 0; i < dudCount; i++) {
+            await job.updateProgress({ phase: 'anti-bundle', current: i + 1, total: dudCount });
+            try {
+                const result = await launchTokenOnChain({
+                    tokenName: DUD_NAME,
+                    tokenTicker: DUD_TICKER,
+                    tokenMetadataUri: dudMetadataUri,
+                    useMayhemMode: false
+                });
+                logger.info(`[Anti-Bundle] Dud ${i + 1}/${dudCount} launched: ${result.mint.toString().substring(0, 12)}...`);
+            } catch (dudErr) {
+                // Dud failure is non-fatal - log and continue
+                logger.warn(`[Anti-Bundle] Dud ${i + 1}/${dudCount} failed (non-fatal)`, { error: dudErr.message });
+            }
+        }
+
+        logger.info(`[Anti-Bundle] Dud phase complete for job ${job.id}`);
+    }
 
     const worker = redis.createWorker('deployQueue', async (job) => {
         logger.info(`STARTING JOB ${job.id}: ${job.data.ticker}`);
@@ -34,88 +190,22 @@ function initDeployWorker(deps) {
 
         try {
             if (!metadataUri) throw new Error("Metadata URI missing");
-            const mintKeypair = await vanity.getMintKeypair();
-            const mint = mintKeypair.publicKey;
-            const creator = devKeypair.publicKey;
 
-            // ... (Keep existing PDA derivation and Transaction Construction logic) ...
-            const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = pump.getPumpPDAs(mint);
-            const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PROGRAMS.PUMP);
-            const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), PROGRAMS.METADATA.toBuffer(), mint.toBuffer()], PROGRAMS.METADATA);
-            const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PROGRAMS.PUMP);
-            const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PROGRAMS.PUMP);
-            const [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], PROGRAMS.MAYHEM);
-            const mayhemTokenVault = pump.getATA(mint, WALLETS.SOL_VAULT, PROGRAMS.TOKEN_2022);
+            // Anti-bundling: Launch dud tokens first
+            await launchDudTokens(job);
 
-            const createData = pump.buildCreateInstructionData(name, ticker, metadataUri, creator, isMayhemMode);
-            // ... (Keep keys array) ...
-            const createKeys = [
-                { pubkey: mint, isSigner: true, isWritable: true },
-                { pubkey: mintAuthority, isSigner: false, isWritable: false },
-                { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-                { pubkey: global, isSigner: false, isWritable: false },
-                { pubkey: creator, isSigner: true, isWritable: true },
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-                { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.MAYHEM, isSigner: false, isWritable: true },
-                { pubkey: WALLETS.GLOBAL_PARAMS, isSigner: false, isWritable: false },
-                { pubkey: WALLETS.SOL_VAULT, isSigner: false, isWritable: true },
-                { pubkey: mayhemState, isSigner: false, isWritable: true },
-                { pubkey: mayhemTokenVault, isSigner: false, isWritable: true },
-                { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-            ];
-            const createIx = new TransactionInstruction({ keys: createKeys, programId: PROGRAMS.PUMP, data: createData });
+            // Now launch the real token
+            await job.updateProgress({ phase: 'deploying', message: 'Launching your token...' });
+            logger.info(`[Deploy] Launching real token: ${ticker}`);
 
-            const feeRecipient = isMayhemMode ? WALLETS.MAYHEM_FEE : WALLETS.FEE_STANDARD;
-            const associatedUser = pump.getATA(mint, creator, PROGRAMS.TOKEN_2022);
-            const solBuyAmount = Math.floor(0.01 * LAMPORTS_PER_SOL);
-            const tokenBuyAmount = pump.calculateTokensForSol(solBuyAmount);
-            const buyData = pump.buildBuyInstructionData(tokenBuyAmount, new BN(Math.floor(solBuyAmount * 1.05)));
-            // ... (Keep buy keys) ...
-            const buyKeys = [
-                { pubkey: global, isSigner: false, isWritable: false },
-                { pubkey: feeRecipient, isSigner: false, isWritable: true },
-                { pubkey: mint, isSigner: false, isWritable: false },
-                { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-                { pubkey: associatedUser, isSigner: false, isWritable: true },
-                { pubkey: creator, isSigner: true, isWritable: true },
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-                { pubkey: creatorVault, isSigner: false, isWritable: true },
-                { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-                { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: false },
-                { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
-                { pubkey: feeConfig, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
-            ];
-            const buyIx = new TransactionInstruction({ keys: buyKeys, programId: PROGRAMS.PUMP, data: buyData });
-
-            const createATAIx = new TransactionInstruction({
-                keys: [
-                    { pubkey: creator, isSigner: true, isWritable: true },
-                    { pubkey: associatedUser, isSigner: false, isWritable: true },
-                    { pubkey: creator, isSigner: false, isWritable: false },
-                    { pubkey: mint, isSigner: false, isWritable: false },
-                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                    { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-                ],
-                programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-                data: Buffer.alloc(0),
+            const { mint, sig } = await launchTokenOnChain({
+                tokenName: name,
+                tokenTicker: ticker,
+                tokenMetadataUri: metadataUri,
+                useMayhemMode: isMayhemMode
             });
 
-            const tx = new Transaction();
-            solana.addPriorityFee(tx);
-            tx.add(createIx).add(createATAIx).add(buyIx);
-            tx.feePayer = creator;
-
-            logger.info(`Sending Transaction...`);
-            const sig = await solana.sendTxWithRetry(tx, [devKeypair, mintKeypair]);
-            logger.info(`Transaction Confirmed: ${sig}`);
+            logger.info(`[Deploy] Real token confirmed: ${ticker} ${mint.toString()} sig=${sig}`);
 
             // CRITICAL: Ensure we have the image URL
             // v25.6: If image is missing, fetch it from the metadataUri (IPFS)
@@ -165,40 +255,6 @@ function initDeployWorker(deps) {
             // Queue social post
             await redis.addSocialJob({ name, ticker, mint: mint.toString() });
 
-            // Sell tokens logic (Keep existing)
-            setTimeout(async () => {
-                try {
-                    const bal = await connection.getTokenAccountBalance(associatedUser);
-                    if (bal.value?.uiAmount > 0) {
-                        const sellData = pump.buildSellInstructionData(new BN(bal.value.amount));
-                        // ... (Keep sell keys) ...
-                        const sellKeys = [
-                            { pubkey: global, isSigner: false, isWritable: false },
-                            { pubkey: feeRecipient, isSigner: false, isWritable: true },
-                            { pubkey: mint, isSigner: false, isWritable: false },
-                            { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                            { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-                            { pubkey: associatedUser, isSigner: false, isWritable: true },
-                            { pubkey: creator, isSigner: true, isWritable: true },
-                            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                            { pubkey: creatorVault, isSigner: false, isWritable: true },
-                            { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-                            { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                            { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-                            { pubkey: feeConfig, isSigner: false, isWritable: false },
-                            { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
-                        ];
-                        const sellIx = new TransactionInstruction({ keys: sellKeys, programId: PROGRAMS.PUMP, data: sellData });
-                        const closeIx = createCloseAccountInstruction(associatedUser, creator, creator, [], PROGRAMS.TOKEN_2022);
-                        const sellTx = new Transaction();
-                        solana.addPriorityFee(sellTx);
-                        sellTx.add(sellIx).add(closeIx);
-                        await solana.sendTxWithRetry(sellTx, [devKeypair]);
-                        logger.info(`Sold & Closed Account for ${ticker}`);
-                    }
-                } catch (e) { logger.error("Sell error", { msg: e.message }); }
-            }, 1500);
-
             return { mint: mint.toString(), signature: sig };
 
         } catch (jobError) {
@@ -247,7 +303,7 @@ function initSocialWorker(deps) {
         const { name, ticker, mint } = job.data;
         const tweetUrl = await twitter.postLaunchTweet(name, ticker, mint);
         if (tweetUrl && db) {
-            await db.run('UPDATE tokens SET tweetUrl = ? WHERE mint = ?', [tweetUrl, mint]);
+            await db.run('UPDATE tokens SET "tweetUrl" = $1 WHERE mint = $2', [tweetUrl, mint]);
         }
         return tweetUrl;
     });
@@ -796,7 +852,7 @@ function initMetadataUpdaterWorker(deps) {
             let totalScanned = 0;
 
             while (true) {
-                const tokens = await db.all('SELECT mint FROM tokens ORDER BY "lastUpdated" ASC NULLS FIRST LIMIT $1 OFFSET $2', [TOKENS_PER_PAGE, offset]);
+                const tokens = await db.all('SELECT mint, image FROM tokens ORDER BY "lastUpdated" ASC NULLS FIRST LIMIT $1 OFFSET $2', [TOKENS_PER_PAGE, offset]);
                 if (tokens.length === 0) break;
 
                 totalScanned += tokens.length;

@@ -212,25 +212,8 @@ async function main() {
     };
     app.use(cors(corsOptions));
 
-    // Log incoming PAGS API requests for debugging
-    app.use('/api/pags', (req, res, next) => {
-        logger.info('[PAGS API] Request received', {
-            method: req.method,
-            path: req.path,
-            origin: req.headers.origin,
-            hasAuth: !!req.headers.authorization
-        });
-        next();
-    });
-    app.use('/api/auth', (req, res, next) => {
-        logger.info('[PAGS Auth] Request received', {
-            method: req.method,
-            path: req.path,
-            origin: req.headers.origin
-        });
-        next();
-    });
-    app.use(cookieParser()); // v25.47: Required for PAGS session cookies
+    // PAGS middleware disabled
+    app.use(cookieParser());
     app.use(express.json({ limit: '10mb' })); // SECURITY FIX: Reduced from 50mb to 10mb
 
     // v25.4: Rate limiting - More permissive for frontend polling, strict for deployments
@@ -275,7 +258,7 @@ async function main() {
             tx.add(SystemProgram.transfer({
                 fromPubkey: devKeypair.publicKey,
                 toPubkey: userPubkey,
-                lamports: (config.DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL
+                lamports: Math.floor((config.DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL)
             }));
             const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
             logger.info(`REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
@@ -286,38 +269,13 @@ async function main() {
         }
     };
 
-    // PAGS: Initialize dedicated PAGS wallet keypair if configured
-    // This wallet holds fees and signs claim transactions
-    let pagsKeypair = null;
-    if (config.PAGS_ENABLED && config.PAGS_WALLET_PRIVATE_KEY) {
-        try {
-            pagsKeypair = Keypair.fromSecretKey(bs58.decode(config.PAGS_WALLET_PRIVATE_KEY));
-            const pagsWalletPubkey = pagsKeypair.publicKey.toString();
-
-            // Verify the keypair matches the configured PAGS_WALLET public key
-            if (config.PAGS_WALLET && pagsWalletPubkey !== config.PAGS_WALLET) {
-                logger.error(`[PAGS] CRITICAL: Wallet mismatch! PAGS_WALLET=${config.PAGS_WALLET}, derived=${pagsWalletPubkey}`);
-                logger.error('[PAGS] Check PAGS_WALLET_PRIVATE_KEY - keypair does not match PAGS_WALLET public key');
-                pagsKeypair = null; // Disable to prevent issues
-            } else {
-                logger.info(`[PAGS] Wallet initialized: ${pagsWalletPubkey}`);
-            }
-        } catch (e) {
-            logger.error(`[PAGS] Failed to initialize wallet keypair: ${e.message}`);
-            logger.error('[PAGS] Claims will not be processed - check PAGS_WALLET_PRIVATE_KEY format (should be base58)');
-            pagsKeypair = null;
-        }
-    } else if (config.PAGS_ENABLED && !config.PAGS_WALLET_PRIVATE_KEY) {
-        logger.warn('[PAGS] PAGS_WALLET_PRIVATE_KEY not configured - falling back to devKeypair for claims');
-        logger.warn('[PAGS] For production, configure a dedicated PAGS wallet for security');
-        pagsKeypair = devKeypair; // Fallback to dev wallet
-    }
+    // PAGS wallet initialization disabled
 
     // Dependencies object for modules
     const deps = {
         connection,
         devKeypair,
-        pagsKeypair, // Dedicated PAGS wallet (or null/devKeypair fallback)
+        pagsKeypair: null, // PAGS disabled
         wallet,
         db,
         redis,

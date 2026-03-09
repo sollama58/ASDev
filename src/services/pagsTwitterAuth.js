@@ -515,8 +515,7 @@ function verifySessionToken(token) {
         logger.warn('[PAGS Session] JWT verification error', {
             errorName: e.name,
             errorMessage: e.message,
-            secretConfigured: !!config.PAGS_SESSION_SECRET,
-            secretLength: config.PAGS_SESSION_SECRET ? config.PAGS_SESSION_SECRET.length : 0
+            secretConfigured: !!config.PAGS_SESSION_SECRET
         });
         if (e.name === 'TokenExpiredError') {
             return { valid: false, error: 'Session expired' };

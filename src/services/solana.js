@@ -2,7 +2,7 @@
  * Solana Service
  * Connection, transaction helpers, and wallet management
  */
-const { Connection, Keypair, ComputeBudgetProgram, sendAndConfirmTransaction, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { Connection, Keypair, ComputeBudgetProgram, sendAndConfirmTransaction, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
 const { Wallet } = require('@coral-xyz/anchor');
 const bs58 = require('bs58');
 const config = require('../config/env');

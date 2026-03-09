@@ -11,7 +11,7 @@ const { PublicKey } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
 const axios = require('axios');
 const config = require('../config/env');
-const { PROGRAMS } = require('../config/constants');
+const { PROGRAMS, WALLETS } = require('../config/constants');
 const { logger, pump, mutex, mintExtractor, imageUtils } = require('../services');
 
 // RACE CONDITION FIX: Use mutex instead of boolean flag
@@ -685,7 +685,7 @@ async function updateRobinhoodHolders(deps) {
                         if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
                         if (acc.amount.lte(threshold)) continue;
 
-                        if (acc.owner !== bondingCurvePDAStr) {
+                        if (acc.owner !== bondingCurvePDAStr && acc.owner !== WALLETS.PUMP_LIQUIDITY) {
                             holdersToInsert.push({ mint: token.mint, owner: acc.owner, balance: acc.balance });
                         }
                     }

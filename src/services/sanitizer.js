@@ -8,20 +8,20 @@ const logger = require('./logger');
 
 // Characters that could be dangerous in various contexts
 const DANGEROUS_PATTERNS = [
-    /<script\b[^>]*>/gi,           // Script tags
-    /javascript:/gi,                // JavaScript protocol
-    /on\w+\s*=/gi,                 // Event handlers (onclick=, onerror=, etc.)
-    /data:\s*text\/html/gi,        // Data URLs with HTML
-    /vbscript:/gi,                 // VBScript protocol
-    /expression\s*\(/gi,           // CSS expression
-    /&#x?[0-9a-f]+;?/gi,           // HTML entities (potential XSS)
+    /<script\b[^>]*>/i,            // Script tags
+    /javascript:/i,                 // JavaScript protocol
+    /on\w+\s*=/i,                  // Event handlers (onclick=, onerror=, etc.)
+    /data:\s*text\/html/i,         // Data URLs with HTML
+    /vbscript:/i,                  // VBScript protocol
+    /expression\s*\(/i,            // CSS expression
+    /&#x?[0-9a-f]+;?/i,            // HTML entities (potential XSS)
 ];
 
-// SQL injection patterns
+// SQL injection patterns (no /g flag — stateful regex causes .test() to alternate results)
 const SQL_INJECTION_PATTERNS = [
-    /(\b(union|select|insert|update|delete|drop|truncate|alter|exec|execute)\b)/gi,
-    /('|"|;|--|\bor\b|\band\b)/gi,
-    /\b(1\s*=\s*1|0\s*=\s*0)\b/gi,
+    /(\b(union|select|insert|update|delete|drop|truncate|alter|exec|execute)\b)/i,
+    /('|"|;|--|\bor\b|\band\b)/i,
+    /\b(1\s*=\s*1|0\s*=\s*0)\b/i,
 ];
 
 /**
@@ -77,7 +77,9 @@ function sanitizeString(input, options = {}) {
             logger.warn('[Sanitizer] Dangerous pattern detected and removed', {
                 pattern: pattern.toString()
             });
-            sanitized = sanitized.replace(pattern, '');
+            // Use global version for replace to remove all occurrences
+            const globalPattern = new RegExp(pattern.source, pattern.flags + 'g');
+            sanitized = sanitized.replace(globalPattern, '');
         }
     }
 

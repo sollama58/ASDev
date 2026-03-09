@@ -4,7 +4,7 @@
  */
 const { PublicKey, TransactionInstruction, SystemProgram } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
-const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const { PROGRAMS, TOKENS, WALLETS } = require('../config/constants');
 const logger = require('./logger');
 
@@ -101,7 +101,7 @@ function getCreatorFeeVaults(creator) {
         PROGRAMS.PUMP_AMM
     );
 
-    const ammVaultAta = getAssociatedTokenAddress(TOKENS.WSOL, ammVaultAuth, true);
+    const ammVaultAta = getAssociatedTokenAddressSync(TOKENS.WSOL, ammVaultAuth, true);
 
     return { bcVault, ammVaultAuth, ammVaultAta };
 }
@@ -264,7 +264,7 @@ function getShareholderFeeVaults(originalCreator) {
     );
 
     // AMM vault ATA is a wSOL token account owned by ammVaultAuth
-    const ammVaultAta = getAssociatedTokenAddress(TOKENS.WSOL, ammVaultAuth, true);
+    const ammVaultAta = getAssociatedTokenAddressSync(TOKENS.WSOL, ammVaultAuth, true);
 
     return { bcVault, ammVaultAuth, ammVaultAta, sharingConfigPDA };
 }

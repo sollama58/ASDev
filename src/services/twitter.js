@@ -175,7 +175,7 @@ https://pump.fun/coin/${mint}
         } else {
             logger.error("Tweet Failed", { error: e.message, code: e.code });
         }
-        throw e;
+        return null;
     }
 }
 

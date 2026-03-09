@@ -1255,7 +1255,7 @@ function init(deps) {
             });
         } catch (e) {
             logger.error('[Admin] Token fee status error', { error: e.message });
-            res.status(500).json({ error: e.message });
+            res.status(500).json({ error: 'Token fee status check failed' });
         }
     });
 
@@ -1638,7 +1638,7 @@ function init(deps) {
             });
         } catch (e) {
             logger.error('[Admin] Claim token fees error', { error: e.message });
-            res.status(500).json({ error: e.message });
+            res.status(500).json({ error: 'Fee claim failed' });
         }
     });
 

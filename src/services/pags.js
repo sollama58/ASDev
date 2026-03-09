@@ -93,7 +93,7 @@ async function acquireClaimLock(twitterId) {
     const lockKey = `pags:claim:lock:${twitterId}`;
     try {
         // SET NX with expiration (atomic operation)
-        const result = await redis.getClient().set(lockKey, Date.now().toString(), 'PX', CLAIM_LOCK_TIMEOUT_MS, 'NX');
+        const result = await redis.getConnection().set(lockKey, Date.now().toString(), 'PX', CLAIM_LOCK_TIMEOUT_MS, 'NX');
         return result === 'OK';
     } catch (e) {
         logger.error('[PAGS] Failed to acquire claim lock', { error: e.message, twitterId });
@@ -109,7 +109,7 @@ async function releaseClaimLock(twitterId) {
 
     const lockKey = `pags:claim:lock:${twitterId}`;
     try {
-        await redis.getClient().del(lockKey);
+        await redis.getConnection().del(lockKey);
     } catch (e) {
         logger.error('[PAGS] Failed to release claim lock', { error: e.message, twitterId });
     }
@@ -247,7 +247,7 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
                 RETURNING id
             `, [mint, creatorValue, primaryUsername, feeShareBps, timestamp]);
 
-            beneficiaryId = result.lastID;
+            beneficiaryId = result.rows && result.rows[0] ? result.rows[0].id : result.lastID;
         }
 
         // v25.48: Insert beneficiary shares
@@ -610,15 +610,16 @@ async function processClaim(twitterId, executeTransfer = false) {
         const claimResult = await db.run(`
             INSERT INTO pags_claims ("twitterId", "twitterUsername", "recipientWallet", amount, status, "createdAt")
             VALUES ($1, $2, $3, $4, 'pending', $5)
+            RETURNING id
         `, [twitterId, user.twitterUsername, claimInfo.linkedWallet, claimInfo.claimable, Date.now()]);
 
-        const claimId = claimResult.lastID;
+        const claimId = claimResult.rows && claimResult.rows[0] ? claimResult.rows[0].id : claimResult.lastID;
 
         logger.info('[PAGS] Claim created', {
             claimId,
             twitterUsername: user.twitterUsername,
             amount: claimInfo.claimable,
-            wallet: claimInfo.linkedWallet.slice(0, 8) + '...'
+            wallet: claimInfo.linkedWallet ? claimInfo.linkedWallet.slice(0, 8) + '...' : 'none'
         });
 
         // If we should execute the transfer immediately
@@ -1276,7 +1277,7 @@ async function lookupUsername(twitterUsername) {
 
     // Check if user has already claimed/linked
     const user = await db.get(
-        'SELECT "linkedWallet" FROM pags_twitter_users WHERE "twitterUsername" = $1 AND "isActive" = 1',
+        'SELECT "linkedWallet" FROM pags_twitter_users WHERE LOWER("twitterUsername") = LOWER($1) AND "isActive" = 1',
         [normalizedUsername]
     );
 

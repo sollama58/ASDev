@@ -250,30 +250,33 @@ async function smartCache(key, ttlSeconds, fetchFunction) {
         return await fetchFunction();
     }
 
+    let fetchedData = undefined;
     try {
         const cached = await redisConnection.get(key);
         if (cached) {
             return JSON.parse(cached);
         }
 
-        const data = await fetchFunction();
-        if (data !== undefined && data !== null) {
+        fetchedData = await fetchFunction();
+        if (fetchedData !== undefined && fetchedData !== null) {
             // v25.27: Check memory before writing to cache
             const hasMemory = await hasAvailableMemory();
             if (hasMemory) {
-                await redisConnection.set(key, JSON.stringify(data), 'EX', ttlSeconds);
+                await redisConnection.set(key, JSON.stringify(fetchedData), 'EX', ttlSeconds);
             } else {
                 logger.warn(`[Redis] Skipping cache write for ${key} - memory near limit`);
             }
         }
-        return data;
+        return fetchedData;
     } catch (e) {
         // v25.27: Handle OOM errors gracefully
         if (e.message && e.message.includes('OOM')) {
             logger.warn(`[Redis] OOM error on cache [${key}] - returning fresh data`);
-            return await fetchFunction();
+        } else {
+            logger.error(`Cache Error [${key}]`, { error: e.message });
         }
-        logger.error(`Cache Error [${key}]`, { error: e.message });
+        // Return already-fetched data if available, otherwise fetch fresh
+        if (fetchedData !== undefined) return fetchedData;
         return await fetchFunction();
     }
 }
@@ -372,16 +375,19 @@ async function getLastBackendUpdate() {
  */
 async function setAsdfTop100Holders(holders) {
     if (!redisConnection) return;
-    await redisConnection.del(GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS);
     if (holders.length > 0) {
-        // SCALABILITY FIX: Chunk large arrays to prevent memory issues
+        // Atomic swap: write to temp key then rename to avoid empty-set window for readers
+        const tempKey = GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS + ':tmp';
+        await redisConnection.del(tempKey);
         const CHUNK_SIZE = 100;
         for (let i = 0; i < holders.length; i += CHUNK_SIZE) {
             const chunk = holders.slice(i, i + CHUNK_SIZE);
-            await redisConnection.sadd(GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS, ...chunk);
+            await redisConnection.sadd(tempKey, ...chunk);
         }
-        // SCALABILITY FIX: Add TTL
+        await redisConnection.rename(tempKey, GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS);
         await redisConnection.expire(GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS, GLOBAL_STATE_TTL.ASDF_TOP100_HOLDERS);
+    } else {
+        await redisConnection.del(GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS);
     }
 }
 

@@ -17,7 +17,7 @@ const metadataUpdater = require('./metadataUpdater');
 const asdfSync = require('./asdfSync');
 const flywheel = require('./flywheel');
 const robinhoodScanner = require('./robinhoodScanner');
-const pagsClaimProcessor = require('./pagsClaimProcessor');
+// const pagsClaimProcessor = require('./pagsClaimProcessor'); // PAGS disabled
 const workers = require('./workers');
 const { vanity, logger } = require('../services');
 const config = require('../config/env');
@@ -88,13 +88,7 @@ function startAll(deps) {
     }, 600000); // 10 minutes
     registerInterval(redisCleanupInterval);
 
-    // v25.47: Start PAGS claim processor
-    if (config.PAGS_ENABLED) {
-        const pagsInterval = pagsClaimProcessor.start(deps);
-        if (pagsInterval) {
-            registerInterval(pagsInterval);
-        }
-    }
+    // PAGS claim processor disabled
 
     logger.info("All background tasks started (v25.73 - feeVaultAddress fix for fee sharing tokens)");
 }
@@ -146,7 +140,7 @@ module.exports = {
     asdfSync,
     flywheel,
     robinhoodScanner,
-    pagsClaimProcessor,
+    // pagsClaimProcessor, // PAGS disabled
     workers,
     startAll,
     stopAll,

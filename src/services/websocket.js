@@ -147,16 +147,16 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
             ] = await Promise.all([
                 db.get('SELECT COUNT(*) as total FROM tokens'),
                 db.all(`
-                    SELECT mint, name, ticker, image, metadataUri, volume24h, "marketCap", price, "isBonded"
+                    SELECT mint, name, ticker, image, "metadataUri", volume24h, "marketCap", "priceUsd", complete
                     FROM tokens
                     ORDER BY volume24h DESC
                     LIMIT 20
                 `),
-                db.get('SELECT mint, name, ticker, image, metadataUri, "marketCap" FROM tokens ORDER BY "marketCap" DESC LIMIT 1'),
+                db.get('SELECT mint, name, ticker, image, "metadataUri", "marketCap" FROM tokens ORDER BY "marketCap" DESC LIMIT 1'),
                 db.all(`
-                    SELECT mint, name, ticker, image, metadataUri, "userPubkey", "createdAt"
+                    SELECT mint, name, ticker, image, "metadataUri", "userPubkey", timestamp
                     FROM tokens
-                    ORDER BY "createdAt" DESC
+                    ORDER BY timestamp DESC
                     LIMIT 10
                 `),
                 db.get(`

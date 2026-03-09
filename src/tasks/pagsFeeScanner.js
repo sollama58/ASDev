@@ -61,15 +61,17 @@ const lastProcessedSigs = new Map();
 /**
  * v25.113: Persist vault balance to database for cross-restart detection
  */
-function persistVaultBalance(mint, totalBalance) {
+async function persistVaultBalance(mint, totalBalance) {
     if (!db) return;
-    db.run(`
-        UPDATE pags_beneficiaries
-        SET "lastKnownVaultBalance" = $1, "lastVaultCheckAt" = $2
-        WHERE mint = $3
-    `, [totalBalance, Date.now(), mint]).catch(e => {
+    try {
+        await db.run(`
+            UPDATE pags_beneficiaries
+            SET "lastKnownVaultBalance" = $1, "lastVaultCheckAt" = $2
+            WHERE mint = $3
+        `, [totalBalance, Date.now(), mint]);
+    } catch (e) {
         logger.debug('[PAGS Fee Scanner] Failed to persist vault balance', { mint, error: e.message });
-    });
+    }
 }
 
 /**

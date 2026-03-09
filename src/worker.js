@@ -171,7 +171,7 @@ async function startWorker() {
             tx.add(SystemProgram.transfer({
                 fromPubkey: devKeypair.publicKey,
                 toPubkey: userPubkey,
-                lamports: (config.DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL
+                lamports: Math.floor((config.DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL)
             }));
             const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
             logger.info(`REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
@@ -240,7 +240,7 @@ async function startWorker() {
     const MEMORY_CHECK_INTERVAL = 60000; // Check every 60 seconds
     const MEMORY_WARNING_THRESHOLD_MB = 400; // Warn if heap exceeds 400MB
 
-    setInterval(() => {
+    memoryMonitorInterval = setInterval(() => {
         const mem = process.memoryUsage();
         const heapMB = Math.round(mem.heapUsed / 1024 / 1024);
         const rssMB = Math.round(mem.rss / 1024 / 1024);
@@ -263,9 +263,12 @@ async function startWorker() {
 }
 
 // Graceful shutdown
+let memoryMonitorInterval = null; // Tracked for cleanup in shutdown
+
 const shutdown = async (signal) => {
     logger.info(`${signal} received, shutting down worker gracefully...`);
     try {
+        if (memoryMonitorInterval) clearInterval(memoryMonitorInterval);
         const db = database.getDB();
         if (db) await db.close();
         redis.getConnection()?.disconnect();

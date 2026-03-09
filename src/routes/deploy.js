@@ -87,7 +87,7 @@ function init(deps) {
 
             // v25.1: Validate imageUrl is from allowed domain (Imgur, etc.)
             if (!isValidImageUrl(imageUrl)) {
-                logger.warn('[Deploy] Invalid image URL rejected', { imageUrl: imageUrl.substring(0, 50) });
+                logger.warn('[Deploy] Invalid image URL rejected', { imageUrl: typeof imageUrl === 'string' ? imageUrl.substring(0, 50) : String(imageUrl) });
                 return res.status(400).json({ error: "Invalid image URL. Please use Imgur (i.imgur.com)." });
             }
 
@@ -124,7 +124,7 @@ function init(deps) {
         try {
             // v24.0 SECURITY: Sanitize user inputs
             const sanitized = sanitizer.sanitizeDeploymentRequest(req.body);
-            const { metadataUri, userTx, userPubkey, isMayhemMode } = req.body;
+            const { metadataUri, userTx, userPubkey, isMayhemMode } = sanitized;
 
             if (!metadataUri) return res.status(400).json({ error: "Missing metadata URI" });
             if (!userPubkey || !isValidPubkey(userPubkey)) return res.status(400).json({ error: "Invalid Address" });
@@ -210,10 +210,15 @@ function init(deps) {
 
     // Job status
     router.get('/job-status/:id', async (req, res) => {
-        const job = await redis.getJob(req.params.id);
-        if (!job) return res.status(404).json({ error: "Job not found" });
-        const state = await job.getState();
-        res.json({ id: job.id, state, result: job.returnvalue, failedReason: job.failedReason });
+        try {
+            const job = await redis.getJob(req.params.id);
+            if (!job) return res.status(404).json({ error: "Job not found" });
+            const state = await job.getState();
+            res.json({ id: job.id, state, progress: job.progress, result: job.returnvalue, failedReason: job.failedReason });
+        } catch (err) {
+            logger.error('[Deploy] Job status error', { error: err.message, jobId: req.params.id });
+            res.status(500).json({ error: "Failed to fetch job status" });
+        }
     });
 
     return router;
