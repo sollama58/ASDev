@@ -22,7 +22,13 @@
       "WebFetch(domain:api.solscan.io)",
       "Bash(python3:*)",
       "Bash(git log:*)",
-      "Bash(xargs grep -l \"launcher\\\\|disable.*tab\\\\|tab.*enable\\\\|hidden.*launcher\")"
+      "Bash(xargs grep -l \"launcher\\\\|disable.*tab\\\\|tab.*enable\\\\|hidden.*launcher\")",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:allenhark.com)",
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(gh api repos/pump-fun/pump-public-docs/contents/docs/PUMP_PROGRAM_README.md --jq '.content')",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

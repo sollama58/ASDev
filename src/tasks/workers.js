@@ -35,7 +35,7 @@ function initDeployWorker(deps) {
         const mint = mintKeypair.publicKey;
         const creator = devKeypair.publicKey;
 
-        const { global, bondingCurve, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = pump.getPumpPDAs(mint);
+        const { global, bondingCurve, bondingCurveV2, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = pump.getPumpPDAs(mint);
         const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PROGRAMS.PUMP);
         const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), PROGRAMS.METADATA.toBuffer(), mint.toBuffer()], PROGRAMS.METADATA);
         const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PROGRAMS.PUMP);
@@ -66,12 +66,9 @@ function initDeployWorker(deps) {
 
         const feeRecipient = useMayhemMode ? WALLETS.MAYHEM_FEE : WALLETS.FEE_STANDARD;
         const associatedUser = pump.getATA(mint, creator, PROGRAMS.TOKEN_2022);
-        // v25.47 FIX: Use small fixed token amount to avoid u64 overflow on-chain
-        // On-chain check: tokenAmount * virtualSolReserves must fit u64 (max ~1.8e19)
-        // 100M raw tokens (100 with 6 decimals) * 30B VSR = 3e18 — safely under u64 max
-        const tokenBuyAmount = new BN(100_000_000); // 100 tokens (6 decimals)
-        const maxSolCost = new BN(Math.floor(0.001 * LAMPORTS_PER_SOL)); // ~0.001 SOL max
-        const buyData = pump.buildBuyInstructionData(tokenBuyAmount, maxSolCost);
+        const solBuyAmount = Math.floor(0.01 * LAMPORTS_PER_SOL);
+        const tokenBuyAmount = pump.calculateTokensForSol(solBuyAmount);
+        const buyData = pump.buildBuyInstructionData(tokenBuyAmount, new BN(Math.floor(solBuyAmount * 1.05)));
         const buyKeys = [
             { pubkey: global, isSigner: false, isWritable: false },
             { pubkey: feeRecipient, isSigner: false, isWritable: true },
@@ -88,7 +85,9 @@ function initDeployWorker(deps) {
             { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: false },
             { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
             { pubkey: feeConfig, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
+            { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false },
+            // v25.47: bondingCurveV2 trailing account — required to prevent 6024 Overflow
+            { pubkey: bondingCurveV2, isSigner: false, isWritable: false }
         ];
         const buyIx = new TransactionInstruction({ keys: buyKeys, programId: PROGRAMS.PUMP, data: buyData });
 
@@ -132,7 +131,9 @@ function initDeployWorker(deps) {
                         { pubkey: eventAuthority, isSigner: false, isWritable: false },
                         { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
                         { pubkey: feeConfig, isSigner: false, isWritable: false },
-                        { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
+                        { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false },
+                        // v25.47: bondingCurveV2 trailing account — required to prevent 6024 Overflow
+                        { pubkey: bondingCurveV2, isSigner: false, isWritable: false }
                     ];
                     const sellIx = new TransactionInstruction({ keys: sellKeys, programId: PROGRAMS.PUMP, data: sellData });
                     const closeIx = createCloseAccountInstruction(associatedUser, creator, creator, [], PROGRAMS.TOKEN_2022);

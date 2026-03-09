@@ -46,9 +46,16 @@ function getPumpPDAs(mint) {
         PROGRAMS.PUMP
     );
 
+    // v25.47: bondingCurveV2 trailing account — required to prevent 6024 Overflow
+    const [bondingCurveV2] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bonding-curve-v2"), mint.toBuffer()],
+        PROGRAMS.PUMP
+    );
+
     return {
         global,
         bondingCurve,
+        bondingCurveV2,
         associatedBondingCurve,
         eventAuthority,
         feeConfig,
@@ -152,9 +159,23 @@ function buildBuyInstructionData(tokenAmount, maxSolCost) {
     const discriminator = Buffer.from([102, 6, 61, 18, 1, 218, 235, 234]);
     const amountBuf = tokenAmount.toArrayLike(Buffer, 'le', 8);
     const maxSolCostBuf = maxSolCost.toArrayLike(Buffer, 'le', 8);
+    // v25.47: track_volume is Option<bool> in Borsh — [0] = None (don't track)
     const trackVolumeBuf = Buffer.from([0]);
 
     return Buffer.concat([discriminator, amountBuf, maxSolCostBuf, trackVolumeBuf]);
+}
+
+/**
+ * Build buy-exact-SOL-in instruction data
+ * v25.47: Alternative buy where you specify SOL amount instead of token amount
+ */
+function buildBuyExactSolInData(solAmount, minTokensOut) {
+    const discriminator = Buffer.from([56, 252, 116, 8, 158, 223, 205, 95]);
+    const solBuf = solAmount.toArrayLike(Buffer, 'le', 8);
+    const minTokensBuf = minTokensOut.toArrayLike(Buffer, 'le', 8);
+    const trackVolumeBuf = Buffer.from([0]); // Option<bool> None
+
+    return Buffer.concat([discriminator, solBuf, minTokensBuf, trackVolumeBuf]);
 }
 
 /**
@@ -281,6 +302,7 @@ module.exports = {
     serializeString,
     buildCreateInstructionData,
     buildBuyInstructionData,
+    buildBuyExactSolInData,
     buildSellInstructionData,
     buildClaimFeesData,
     buildDistributeFeesData,
