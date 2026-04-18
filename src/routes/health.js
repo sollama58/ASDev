@@ -365,6 +365,8 @@ function init(deps) {
                 // v25.78: Current airdrop pool available (SOL balance minus 0.1 SOL reserve)
                 airdropPoolSol: Math.max(0, (cachedHealth.currentBalance / LAMPORTS_PER_SOL) - 0.1).toFixed(4),
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
+                // M-8 FIX: Expose deployment fee so frontend stays in sync with backend config
+                deploymentFee: config.DEPLOYMENT_FEE_SOL,
                 // Pass dynamic conservation status to frontend
                 conservationStatus: globalState.conservationStatus || null,
                 // v12.0: Robinhood Bot stats (v23.0: Added pending fees)

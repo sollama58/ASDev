@@ -57,6 +57,13 @@ const holderScanner = require('./holderScanner');
 // Key: creatorPubkey string, Value: { config, timestamp }
 const feeSharingConfigCache = new Map();
 const CONFIG_CACHE_TTL_MS = 600000; // 10 minutes - configs rarely change
+// M-5/L-3 FIX: Proactively evict stale cache entries every 20 minutes to prevent unbounded growth
+setInterval(() => {
+    const cutoff = Date.now() - CONFIG_CACHE_TTL_MS * 2;
+    for (const [key, val] of feeSharingConfigCache.entries()) {
+        if (val.timestamp < cutoff) feeSharingConfigCache.delete(key);
+    }
+}, CONFIG_CACHE_TTL_MS * 2);
 
 // v25.23: AMM fee monitoring configuration
 // Track pending AMM fees and alert when they accumulate above threshold
@@ -77,6 +84,14 @@ const KOTH_BATCH_SIZE = 20;
 // v25.38: AI-based KOTH selection system
 // Evaluates tokens on multiple metrics instead of just market cap
 const KOTH_EVALUATION_INTERVAL_MS = 30 * 60 * 1000; // v25.41: Every 30 minutes (reduced from hourly)
+// M-6 FIX: Single module-level constant used by both evaluateKothCandidates and processAirdrop
+const KOTH_MIN_HOLDERS = 10;
+const KOTH_MIN_MARKET_CAP = 1000;
+const KOTH_MIN_VOLUME = 100;
+// H-6 FIX: Cooldown prevents same token from winning KOTH repeatedly
+// Map<mint, expiresAtMs> — populated when a token wins, cleared after COOLDOWN_MS
+const KOTH_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
+const kothCooldowns = new Map();
 let lastKothEvaluation = 0;
 let currentKothMint = null;
 let currentKothScore = 0;
@@ -187,10 +202,7 @@ function calculateKothScore(token, stats) {
  * @returns {Object} Selected KOTH token with score and reasoning
  */
 async function evaluateKothCandidates(db) {
-    const KOTH_MIN_HOLDERS = 10;
-    const KOTH_MIN_MARKET_CAP = 1000;
-    const KOTH_MIN_VOLUME = 100;
-
+    // Uses module-level KOTH_MIN_HOLDERS, KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME constants
     try {
         // Get all eligible tokens with their metrics (combined query for platform + robinhood tokens)
         // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
@@ -338,8 +350,27 @@ async function evaluateKothCandidates(db) {
         // Sort by total score
         scoredCandidates.sort((a, b) => b.totalScore - a.totalScore);
 
+        // H-6 FIX: Skip tokens still in KOTH cooldown (won within last 6 hours)
+        const now6 = Date.now();
+        const eligibleCandidates = scoredCandidates.filter(c => {
+            const cooldownExpiry = kothCooldowns.get(c.mint);
+            if (cooldownExpiry && now6 < cooldownExpiry) {
+                logger.debug(`[KOTH] ${c.ticker} skipped — in cooldown for ${Math.ceil((cooldownExpiry - now6) / 60000)} more min`);
+                return false;
+            }
+            return true;
+        });
+
+        if (eligibleCandidates.length === 0) {
+            logger.info('[KOTH] All top candidates are in cooldown — clearing oldest cooldown to allow selection');
+            // Remove the earliest-expiring cooldown so at least one token can win
+            const oldestEntry = [...kothCooldowns.entries()].sort((a, b) => a[1] - b[1])[0];
+            if (oldestEntry) kothCooldowns.delete(oldestEntry[0]);
+            eligibleCandidates.push(...scoredCandidates.filter(c => !kothCooldowns.has(c.mint)));
+        }
+
         // Select the winner
-        const winner = scoredCandidates[0];
+        const winner = eligibleCandidates[0] || scoredCandidates[0];
         const runnerUp = scoredCandidates[1];
 
         // Generate reasoning
@@ -449,6 +480,9 @@ async function getAiSelectedKoth(db) {
             currentKothScore = result.score;
             currentKothReasoning = result.reasoning;
             lastKothEvaluation = now;
+            // H-6 FIX: Apply cooldown so winner can't dominate every cycle
+            kothCooldowns.set(result.token.mint, now + KOTH_COOLDOWN_MS);
+            logger.debug(`[KOTH] Cooldown set for ${result.token.ticker} — eligible again in ${KOTH_COOLDOWN_MS / 3600000}h`);
 
             // Store in Redis for API access
             const redisConn = redis.getConnection();
@@ -961,9 +995,9 @@ async function claimRobinhoodFees(deps) {
                                 source: 'AMM'
                             });
 
-                            // Update database
+                            // Update database — M-7 FIX: also clear pendingAmmFees so dashboard shows correct state
                             await db.run(
-                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2 WHERE id = $3',
+                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingAmmFees" = 0 WHERE id = $3',
                                 [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, token.id]
                             );
 
@@ -1213,9 +1247,18 @@ async function processAirdrop(deps) {
         logger.info('[Airdrop] Refreshing holder data and points before distribution...');
         const holderRefreshStart = Date.now();
         try {
-            await holderScanner.updateGlobalState(deps);
-            logger.info('[Airdrop] Holder data refreshed successfully');
-            logEvent('HOLDER_REFRESH', 'Holder data refreshed successfully', { durationMs: Date.now() - holderRefreshStart });
+            // C-1 FIX: Check return value — if scan was skipped (mutex held by interval),
+            // log a clear warning so we know airdrop may proceed on up-to-5-min stale points.
+            const refreshResult = await holderScanner.updateGlobalState(deps);
+            if (refreshResult?.scanCompleted) {
+                logger.info('[Airdrop] Holder data refreshed successfully');
+                logEvent('HOLDER_REFRESH', 'Holder data refreshed successfully', { durationMs: Date.now() - holderRefreshStart });
+            } else if (refreshResult?.skipped) {
+                logger.warn('[Airdrop] Holder scan was skipped (previous scan in progress) — proceeding with cached points data');
+                logEvent('HOLDER_REFRESH', 'Holder scan skipped — using cached data', { durationMs: Date.now() - holderRefreshStart, skipped: true });
+            } else {
+                logger.warn('[Airdrop] Holder refresh returned unexpected result, using cached data');
+            }
         } catch (holderError) {
             // Log but don't abort - proceed with last known data
             logger.warn('[Airdrop] Holder refresh failed, using cached data', { error: holderError.message });
@@ -1269,7 +1312,6 @@ async function processAirdrop(deps) {
 
         // 2. Identify King of the Hill using AI scoring system
         // v25.38: AI-based selection considers multiple metrics (volume, holders, age, etc.)
-        const KOTH_MIN_HOLDERS = 10;
         const KOTH_MAX_PERCENT = 0.10; // 10% cap
 
         const kothResult = await getAiSelectedKoth(db);
@@ -1297,9 +1339,23 @@ async function processAirdrop(deps) {
         // 3. Build KOTH distribution plan (but don't send yet)
         let kothBatch = [];
         let kothHolders = [];
+        // H-1 FIX: Re-validate KOTH token's current volume before distribution.
+        // Selection may be up to 2h stale (Redis TTL). A token that crashed to 0 volume
+        // after selection must not receive the 10% KOTH bonus.
+        if (kothToken && kothToken.mint) {
+            const kothCurrentRow = kothSource === 'robinhood'
+                ? await db.get('SELECT volume24h FROM robinhood_tokens WHERE mint = $1', [kothToken.mint])
+                : await db.get('SELECT volume24h FROM tokens WHERE mint = $1', [kothToken.mint]);
+            if (!kothCurrentRow || (parseFloat(kothCurrentRow.volume24h) || 0) < KOTH_MIN_VOLUME) {
+                logger.warn(`[KOTH] ${kothToken.ticker} no longer meets minimum volume at distribution time — skipping KOTH bonus`);
+                kothToken = null;
+            }
+        }
         if (kothToken && kothToken.mint) {
             // v25.113: Query correct holder table based on token source
             const holdersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
+            const VALID_HOLDER_TABLES = ['token_holders', 'robinhood_token_holders'];
+            if (!VALID_HOLDER_TABLES.includes(holdersTable)) throw new Error(`Invalid holders table: ${holdersTable}`);
             kothHolders = await db.all(
                 `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1 ORDER BY rank ASC`,
                 [kothToken.mint]
@@ -1609,12 +1665,14 @@ async function processAirdrop(deps) {
         const actualTotalSolSent = actualTotalLamportsSent / LAMPORTS_PER_SOL;
         const actualKothSolSent = actualKothLamportsSent / LAMPORTS_PER_SOL;
 
-        const airdropSucceeded = successfulBatches > 0 || failedBatches === 0;
+        const airdropSucceeded = successfulBatches > 0;
 
         logger.info(`SOL Airdrop Complete. Success: ${successfulBatches}, Failed: ${failedBatches}, Actual sent: ${actualTotalSolSent.toFixed(4)} SOL (KOTH: ${actualKothSolSent.toFixed(4)}, Community: ${(actualCommunityLamportsSent / LAMPORTS_PER_SOL).toFixed(4)})`);
 
         // v13.0: Track KOTH holder recipients count (check correct table based on source)
         const kothHoldersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
+        const VALID_KOTH_TABLES = ['token_holders', 'robinhood_token_holders'];
+        if (!VALID_KOTH_TABLES.includes(kothHoldersTable)) throw new Error(`Invalid holders table: ${kothHoldersTable}`);
         const kothHolderCount = kothToken?.mint ? (await db.get(
             `SELECT COUNT(*) as count FROM ${kothHoldersTable} WHERE mint = $1`,
             [kothToken.mint]

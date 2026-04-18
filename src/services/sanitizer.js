@@ -61,7 +61,21 @@ function sanitizeString(input, options = {}) {
         sanitized = sanitized.replace(/[\r\n]/g, ' ');
     }
 
-    // HTML entity encode if not allowing HTML
+    // M-1 FIX: Check dangerous patterns against the RAW (pre-encode) value so patterns like
+    // <script> are caught before HTML encoding turns them into &lt;script&gt; which bypasses regex checks.
+    const rawForPatternCheck = sanitized; // still pre-encode at this point
+    for (const pattern of DANGEROUS_PATTERNS) {
+        if (pattern.test(rawForPatternCheck)) {
+            logger.warn('[Sanitizer] Dangerous pattern detected and removed', {
+                pattern: pattern.toString()
+            });
+            // Remove from the raw string before encoding
+            const globalPattern = new RegExp(pattern.source, pattern.flags + 'g');
+            sanitized = sanitized.replace(globalPattern, '');
+        }
+    }
+
+    // HTML entity encode if not allowing HTML (after pattern removal)
     if (!allowHtml) {
         sanitized = sanitized
             .replace(/&/g, '&amp;')
@@ -69,18 +83,6 @@ function sanitizeString(input, options = {}) {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#x27;');
-    }
-
-    // Check for dangerous patterns
-    for (const pattern of DANGEROUS_PATTERNS) {
-        if (pattern.test(sanitized)) {
-            logger.warn('[Sanitizer] Dangerous pattern detected and removed', {
-                pattern: pattern.toString()
-            });
-            // Use global version for replace to remove all occurrences
-            const globalPattern = new RegExp(pattern.source, pattern.flags + 'g');
-            sanitized = sanitized.replace(globalPattern, '');
-        }
     }
 
     // Check for SQL injection patterns (warning only, as this is defense in depth)

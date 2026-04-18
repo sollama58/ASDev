@@ -65,8 +65,9 @@ function parseFeeSharingConfig(data, accountPubkey = null) {
             const pubkey = new PublicKey(data.slice(offset, offset + 32));
             const shareBps = data.readUInt16LE(offset + 32);
 
-            // Sanity check - bps should be 0-10000
-            if (shareBps > 10000) return null;
+            // M-8 FIX: Reject 0 BPS — a 0-share entry is invalid and should not be registered.
+            // Also reject > 10000 BPS as before.
+            if (shareBps === 0 || shareBps > 10000) return null;
 
             shareholders.push({ pubkey, shareBps });
             offset += 34;

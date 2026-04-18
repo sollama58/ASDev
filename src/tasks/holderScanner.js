@@ -206,10 +206,11 @@ async function updateGlobalState(deps) {
 
     // v25.22 SCALABILITY: Prevent overlapping holder scans
     // If previous scan still running, skip this one
+    // C-1 FIX: Return { scanCompleted: false } so callers know whether fresh data was written
     const release = await holderScannerMutex.tryAcquire();
     if (!release) {
         logger.info('[HolderScanner] Skipping - previous scan still in progress');
-        return;
+        return { scanCompleted: false, skipped: true };
     }
 
     try {
@@ -437,20 +438,21 @@ async function updateGlobalState(deps) {
                 );
                 const hadExistingHolders = (existingHolders?.count || 0) > 0;
 
-                // v25.20: PostgreSQL compatible - delete then insert (no explicit transaction needed for simple ops)
+                // H-7 FIX: Wrap DELETE + INSERT in a single DB transaction so a write
+                // error after DELETE cannot leave the token with zero holders.
                 try {
-                    // v25.65: Only delete+insert if we got holders, or token is genuinely new with no holders
                     if (holdersToInsert.length > 0) {
-                        await db.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
-
-                        let rank = 1;
-                        for (const h of holdersToInsert) {
-                            await db.run(
-                                'INSERT INTO token_holders (mint, "holderPubkey", rank, balance, "lastUpdated") VALUES ($1, $2, $3, $4, $5) ON CONFLICT (mint, "holderPubkey") DO UPDATE SET rank = $3, balance = $4, "lastUpdated" = $5',
-                                [h.mint, h.owner, rank, h.balance, Date.now()]
-                            );
-                            rank++;
-                        }
+                        await db.transaction(async (tx) => {
+                            await tx.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
+                            let rank = 1;
+                            for (const h of holdersToInsert) {
+                                await tx.run(
+                                    'INSERT INTO token_holders (mint, "holderPubkey", rank, balance, "lastUpdated") VALUES ($1, $2, $3, $4, $5) ON CONFLICT (mint, "holderPubkey") DO UPDATE SET rank = $3, balance = $4, "lastUpdated" = $5',
+                                    [h.mint, h.owner, rank, h.balance, Date.now()]
+                                );
+                                rank++;
+                            }
+                        });
                     } else if (hadExistingHolders) {
                         // v25.65: RPC returned 0 but we had holders - preserve existing, log warning
                         logger.warn(`[HolderScanner] ${token.ticker || token.mint.slice(0, 8)} RPC returned 0 holders but had ${existingHolders.count} - preserving existing`);
@@ -586,7 +588,8 @@ async function updateGlobalState(deps) {
                     const weightedBasePoints = BASE_POINTS_PER_TOKEN * volumeWeight;
 
                     // Get fee share multiplier (100% = 10000 bps = 1.0 multiplier)
-                    const feeShareBps = rhToken.feeShareBps || 10000; // Default to 100% if not set
+                    // C-3 FIX: Use ?? not || — feeShareBps=0 is falsy and must NOT default to 10000
+                    const feeShareBps = rhToken.feeShareBps ?? 10000;
                     const feeShareMultiplier = feeShareBps / 10000; // Convert BPS to decimal (1000 bps = 0.1 = 10%)
 
                     const holders = await db.all(
@@ -761,9 +764,10 @@ async function updateGlobalState(deps) {
         }
 
         // Write to user_points table (matches workers.js - single source of truth for check-holder API)
+        // C-5 FIX: Run UPSERT first, DELETE stale rows AFTER — eliminates the empty-data window
+        // where readers see zero points between the old DELETE and the new inserts.
         const now = Date.now();
         try {
-            await db.run('DELETE FROM user_points WHERE updated_at < $1 OR updated_at IS NULL', [now - 3600000]);
             const BATCH_SIZE = 100;
             for (let i = 0; i < userPointsData.length; i += BATCH_SIZE) {
                 const batch = userPointsData.slice(i, i + BATCH_SIZE);
@@ -785,13 +789,17 @@ async function updateGlobalState(deps) {
                         is_asdf_holder = EXCLUDED.is_asdf_holder, updated_at = EXCLUDED.updated_at
                 `, params);
             }
+            // Delete genuinely stale rows (holders who weren't updated in this scan) AFTER fresh data is written
+            await db.run('DELETE FROM user_points WHERE updated_at < $1 OR updated_at IS NULL', [now - 3600000]);
             logger.info(`[HolderScanner] Wrote ${userPointsData.length} users to user_points table`);
         } catch (dbErr) {
             logger.error('[HolderScanner] Failed to write user_points table', { error: dbErr.message });
         }
 
+        return { scanCompleted: true };
     } catch (e) {
         logger.error("Holder scanner error", { error: e.message });
+        return { scanCompleted: false, error: e.message };
     } finally {
         // v25.22: Always release mutex
         if (release) release();

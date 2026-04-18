@@ -15,8 +15,7 @@ const router = express.Router();
 
 // v25.1: Allowed image hosting domains
 const ALLOWED_IMAGE_DOMAINS = [
-    'i.imgur.com',           // Imgur direct image links
-    'imgur.com',             // Imgur
+    'i.imgur.com',           // Imgur direct image links only (not gallery pages)
     'imagedelivery.net',     // Cloudflare Images (legacy support)
     'cloudflare.com',        // Cloudflare (legacy support)
 ];
@@ -130,17 +129,8 @@ function init(deps) {
             if (!userPubkey || !isValidPubkey(userPubkey)) return res.status(400).json({ error: "Invalid Address" });
             if (!userTx || typeof userTx !== 'string') return res.status(400).json({ error: "Invalid transaction signature" });
 
-            // v25.4: Check for duplicate transaction
-            try {
-                await db.run('INSERT INTO transactions (signature, "userPubkey") VALUES ($1, $2)', [userTx, userPubkey]);
-            } catch (dbErr) {
-                if (dbErr.message.includes('UNIQUE') || dbErr.message.includes('duplicate')) {
-                    return res.status(400).json({ error: "Transaction already used." });
-                }
-                throw dbErr;
-            }
-
-            // v25.4: Payment verification loop
+            // v25.4: Payment verification loop (runs BEFORE inserting transaction record)
+            // H-2 FIX: Insert only after confirmed payment to prevent orphaned records on crash
             let validPayment = false;
             for (let i = 0; i < 15; i++) {
                 try {
@@ -150,6 +140,11 @@ function init(deps) {
                     });
 
                     if (txInfo) {
+                        // H-1 FIX: Check meta.err — transaction may be confirmed but reverted on-chain
+                        if (txInfo.meta?.err) {
+                            logger.warn('[Deploy] TX found but has on-chain error', { userTx: userTx.substring(0, 20), err: JSON.stringify(txInfo.meta.err) });
+                            break;
+                        }
                         validPayment = txInfo.transaction.message.instructions.some(ix => {
                             if (ix.programId.toString() !== '11111111111111111111111111111111') return false;
                             if (!ix.parsed || ix.parsed.type !== 'transfer') return false;
@@ -165,10 +160,19 @@ function init(deps) {
             }
 
             if (!validPayment) {
-                // Remove the transaction record since payment failed
-                await db.run('DELETE FROM transactions WHERE signature = $1', [userTx]);
                 logger.warn('[Deploy] Payment verification failed', { userPubkey, userTx: userTx.substring(0, 20) });
                 return res.status(400).json({ error: "Payment verification failed or timed out." });
+            }
+
+            // C-2 FIX: Insert transaction record AFTER verification — no orphaned records, no DELETE on failure
+            // If the same signature is submitted twice after a successful verification, the UNIQUE constraint blocks it
+            try {
+                await db.run('INSERT INTO transactions (signature, "userPubkey") VALUES ($1, $2)', [userTx, userPubkey]);
+            } catch (dbErr) {
+                if (dbErr.message.includes('UNIQUE') || dbErr.message.includes('duplicate')) {
+                    return res.status(400).json({ error: "Transaction already used." });
+                }
+                throw dbErr;
             }
 
             // Record the fee

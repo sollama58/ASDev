@@ -679,6 +679,40 @@ function getDB() {
                 await pool.end();
                 pool = null;
             }
+        },
+
+        // H-7 FIX: Run a function inside a single DB transaction (BEGIN/COMMIT/ROLLBACK).
+        // Usage: await db.transaction(async (tx) => { await tx.run(...); await tx.run(...); })
+        async transaction(fn) {
+            const client = await pool.connect();
+            try {
+                await client.query('BEGIN');
+                const tx = {
+                    async run(sql, params = []) {
+                        const pgSql = convertSqliteToPostgres(sql);
+                        const result = await client.query(pgSql, params);
+                        return { changes: result.rowCount, lastID: result.rows?.[0]?.id };
+                    },
+                    async get(sql, params = []) {
+                        const pgSql = convertSqliteToPostgres(sql);
+                        const result = await client.query(pgSql, params);
+                        return result.rows[0] || null;
+                    },
+                    async all(sql, params = []) {
+                        const pgSql = convertSqliteToPostgres(sql);
+                        const result = await client.query(pgSql, params);
+                        return result.rows;
+                    }
+                };
+                const result = await fn(tx);
+                await client.query('COMMIT');
+                return result;
+            } catch (e) {
+                await client.query('ROLLBACK');
+                throw e;
+            } finally {
+                client.release();
+            }
         }
     };
 }
@@ -700,6 +734,7 @@ function convertSqliteToPostgres(sql) {
 
     // Handle INSERT OR REPLACE - convert to upsert
     // Extracts table name and column list to build ON CONFLICT DO UPDATE
+    // H-6 FIX: Find the LAST closing paren of the VALUES clause(s) to handle multi-row inserts
     const insertOrReplaceMatch = pgSql.match(/INSERT OR REPLACE INTO\s+(\w+)\s*\(([^)]+)\)/i);
     if (insertOrReplaceMatch) {
         const tableName = insertOrReplaceMatch[1];
@@ -709,13 +744,21 @@ function convertSqliteToPostgres(sql) {
         const updateCols = columns.filter(c => c !== conflictCol)
             .map(c => `${c} = EXCLUDED.${c}`).join(', ');
         pgSql = pgSql.replace(/INSERT OR REPLACE INTO/gi, 'INSERT INTO');
-        pgSql = pgSql.replace(/(VALUES\s*\([^)]+\))/i, `$1 ON CONFLICT (${conflictCol}) DO UPDATE SET ${updateCols}`);
+        // Append ON CONFLICT after the entire VALUES block (handles single and multi-row)
+        const valuesEnd = pgSql.lastIndexOf(')');
+        if (valuesEnd !== -1) {
+            pgSql = pgSql.substring(0, valuesEnd + 1) + ` ON CONFLICT (${conflictCol}) DO UPDATE SET ${updateCols}` + pgSql.substring(valuesEnd + 1);
+        }
     }
 
     // Handle INSERT OR IGNORE
     pgSql = pgSql.replace(/INSERT OR IGNORE INTO (\w+)/gi, 'INSERT INTO $1');
     if (sql.includes('INSERT OR IGNORE')) {
-        pgSql = pgSql.replace(/VALUES\s*\([^)]+\)/gi, match => match + ' ON CONFLICT DO NOTHING');
+        // H-6 FIX: Append ON CONFLICT after the entire VALUES block
+        const valuesEnd = pgSql.lastIndexOf(')');
+        if (valuesEnd !== -1) {
+            pgSql = pgSql.substring(0, valuesEnd + 1) + ' ON CONFLICT DO NOTHING' + pgSql.substring(valuesEnd + 1);
+        }
     }
 
     return pgSql;

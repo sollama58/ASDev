@@ -463,21 +463,26 @@ async function clearUserExpectedAirdrops() {
 
 async function setAllUserExpectedAirdrops(map) {
     if (!redisConnection) return;
-    await redisConnection.del(GLOBAL_STATE_KEYS.USER_EXPECTED_AIRDROPS);
+    // H-3 FIX: Write to a temp key first, then atomically RENAME to live key.
+    // This eliminates the DEL→populate window where readers see an empty hash.
+    const liveKey = GLOBAL_STATE_KEYS.USER_EXPECTED_AIRDROPS;
+    const tempKey = liveKey + ':tmp';
+    await redisConnection.del(tempKey);
     if (map.size > 0) {
-        // SCALABILITY FIX: Chunk pipeline operations to prevent memory issues
         const CHUNK_SIZE = 1000;
         const entries = Array.from(map.entries());
         for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
             const chunk = entries.slice(i, i + CHUNK_SIZE);
             const pipeline = redisConnection.pipeline();
             for (const [key, val] of chunk) {
-                pipeline.hset(GLOBAL_STATE_KEYS.USER_EXPECTED_AIRDROPS, key, val.toString());
+                pipeline.hset(tempKey, key, val.toString());
             }
             await pipeline.exec();
         }
-        // SCALABILITY FIX: Add TTL
-        await redisConnection.expire(GLOBAL_STATE_KEYS.USER_EXPECTED_AIRDROPS, GLOBAL_STATE_TTL.USER_EXPECTED_AIRDROPS);
+        await redisConnection.rename(tempKey, liveKey);
+        await redisConnection.expire(liveKey, GLOBAL_STATE_TTL.USER_EXPECTED_AIRDROPS);
+    } else {
+        await redisConnection.del(liveKey);
     }
 }
 
@@ -512,21 +517,27 @@ async function clearUserPoints() {
 
 async function setAllUserPoints(map) {
     if (!redisConnection) return;
-    await redisConnection.del(GLOBAL_STATE_KEYS.USER_POINTS_MAP);
+    // H-3 FIX: Write to a temp key first, then atomically RENAME to live key.
+    // This eliminates the DEL→populate window where readers see an empty hash,
+    // which previously caused processAirdrop to abort with "No eligible users found".
+    const liveKey = GLOBAL_STATE_KEYS.USER_POINTS_MAP;
+    const tempKey = liveKey + ':tmp';
+    await redisConnection.del(tempKey);
     if (map.size > 0) {
-        // SCALABILITY FIX: Chunk pipeline operations to prevent memory issues
         const CHUNK_SIZE = 1000;
         const entries = Array.from(map.entries());
         for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
             const chunk = entries.slice(i, i + CHUNK_SIZE);
             const pipeline = redisConnection.pipeline();
             for (const [key, val] of chunk) {
-                pipeline.hset(GLOBAL_STATE_KEYS.USER_POINTS_MAP, key, val.toString());
+                pipeline.hset(tempKey, key, val.toString());
             }
             await pipeline.exec();
         }
-        // SCALABILITY FIX: Add TTL
-        await redisConnection.expire(GLOBAL_STATE_KEYS.USER_POINTS_MAP, GLOBAL_STATE_TTL.USER_POINTS_MAP);
+        await redisConnection.rename(tempKey, liveKey);
+        await redisConnection.expire(liveKey, GLOBAL_STATE_TTL.USER_POINTS_MAP);
+    } else {
+        await redisConnection.del(liveKey);
     }
 }
 

@@ -28,7 +28,10 @@
       "WebFetch(domain:allenhark.com)",
       "WebFetch(domain:deepwiki.com)",
       "Bash(gh api repos/pump-fun/pump-public-docs/contents/docs/PUMP_PROGRAM_README.md --jq '.content')",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(xargs grep:*)",
+      "Bash(grep -l \"ASDF\\\\|isAsdfTop100\\\\|multiplier\" src/**/*.js)",
+      "Bash(grep -n \"robinhood_tokens\\\\|robinhood_token_holders\" src/tasks/*.js)"
     ]
   }
 }

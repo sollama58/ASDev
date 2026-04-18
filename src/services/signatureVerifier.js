@@ -10,23 +10,49 @@ const { PublicKey } = require('@solana/web3.js');
 const nacl = require('tweetnacl');
 const bs58 = require('bs58');
 const logger = require('./logger');
+const redis = require('./redis');
 
 // Signature validity window (5 minutes) - prevents replay attacks
 const SIGNATURE_VALIDITY_MS = 300000;
+const NONCE_REDIS_KEY_PREFIX = 'used_nonce:';
 
-// Nonce cache to prevent replay attacks within validity window
-// Map<nonce, timestamp>
-const usedNonces = new Map();
+// H-7 FIX: In-memory fallback for when Redis is unavailable (single-instance only)
+// In multi-instance deployments, Redis is required for correct cross-process replay prevention
+const usedNoncesLocal = new Map();
 
-// Clean up old nonces every 5 minutes
+// Clean up stale in-memory nonces every 5 minutes
 setInterval(() => {
     const now = Date.now();
-    for (const [nonce, timestamp] of usedNonces.entries()) {
+    for (const [nonce, timestamp] of usedNoncesLocal.entries()) {
         if (now - timestamp > SIGNATURE_VALIDITY_MS * 2) {
-            usedNonces.delete(nonce);
+            usedNoncesLocal.delete(nonce);
         }
     }
 }, SIGNATURE_VALIDITY_MS);
+
+async function isNonceUsed(nonce) {
+    const redisConn = redis.getConnection?.();
+    if (redisConn && redis.isRedisConnected()) {
+        const key = NONCE_REDIS_KEY_PREFIX + nonce;
+        const val = await redisConn.get(key).catch(() => null);
+        return val !== null;
+    }
+    return usedNoncesLocal.has(nonce);
+}
+
+async function markNonceUsed(nonce) {
+    const ttlSeconds = Math.ceil(SIGNATURE_VALIDITY_MS * 2 / 1000);
+    const redisConn = redis.getConnection?.();
+    if (redisConn && redis.isRedisConnected()) {
+        const key = NONCE_REDIS_KEY_PREFIX + nonce;
+        await redisConn.set(key, '1', 'EX', ttlSeconds).catch(e => {
+            logger.warn('[SignatureVerifier] Redis nonce write failed, falling back to memory', { error: e.message });
+            usedNoncesLocal.set(nonce, Date.now());
+        });
+        return;
+    }
+    usedNoncesLocal.set(nonce, Date.now());
+}
 
 /**
  * Verify a signed message from a Solana wallet
@@ -70,8 +96,8 @@ function verifySignature({ message, signature, publicKey, expectedAction }) {
             return { valid: false, error: 'Signature expired or invalid timestamp' };
         }
 
-        // Check for replay attack (nonce reuse)
-        if (usedNonces.has(nonce)) {
+        // H-7 FIX: Check for replay attack using Redis (shared across all instances)
+        if (await isNonceUsed(nonce)) {
             logger.warn('[SignatureVerifier] Replay attack detected', { nonce, publicKey: publicKey.slice(0, 8) });
             return { valid: false, error: 'Nonce already used (replay attack prevention)' };
         }
@@ -108,8 +134,8 @@ function verifySignature({ message, signature, publicKey, expectedAction }) {
             return { valid: false, error: 'Signature verification failed' };
         }
 
-        // Mark nonce as used (prevent replay)
-        usedNonces.set(nonce, now);
+        // H-7 FIX: Mark nonce as used in Redis with TTL
+        await markNonceUsed(nonce);
 
         logger.debug('[SignatureVerifier] Signature verified', {
             publicKey: publicKey.slice(0, 8),
@@ -136,7 +162,7 @@ function verifySignature({ message, signature, publicKey, expectedAction }) {
  * @returns Express middleware function
  */
 function requireSignature(action) {
-    return (req, res, next) => {
+    return async (req, res, next) => {
         const { signedMessage, signature, signerPubkey } = req.body;
 
         // Allow bypassing signature check in development (for testing)
@@ -156,7 +182,7 @@ function requireSignature(action) {
             });
         }
 
-        const result = verifySignature({
+        const result = await verifySignature({
             message: signedMessage,
             signature,
             publicKey: signerPubkey,

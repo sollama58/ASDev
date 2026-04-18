@@ -119,42 +119,44 @@ function init(deps) {
                 const robinhoodCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
                 const total = parseInt(platformCount?.count || 0) + parseInt(robinhoodCount?.count || 0);
 
-                return { rows, total };
+                // M-2 FIX: Fetch fallback images INSIDE the cache so N+1 HTTP calls happen at most once per TTL,
+                // not on every request. Results with resolved images are cached together with token rows.
+                const processedRows = await Promise.all(rows.map(async (r) => {
+                    let image = r.image;
+                    if ((!image || image === '' || image === 'null') && r.metadataUri) {
+                        try {
+                            const fallbackImage = await imageUtils.fetchImageFromMetadataUri(r.metadataUri, 2000);
+                            if (fallbackImage) {
+                                image = fallbackImage;
+                                // Persist to DB so future queries return it directly
+                                db.run('UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
+                                    [fallbackImage, r.mint]).catch(() => {});
+                            }
+                        } catch (e) {
+                            // Silently fail - use whatever we have
+                        }
+                    }
+                    return { ...r, image };
+                }));
+
+                return { rows: processedRows, total };
             });
 
-            // v25.4: Process tokens and fetch fallback images for those missing images
-            const allLaunches = await Promise.all(rows.map(async (r) => {
-                // Check if image is missing/null and try to fetch from metadataUri
-                let image = r.image;
-                if ((!image || image === '' || image === 'null') && r.metadataUri) {
-                    try {
-                        const fallbackImage = await imageUtils.fetchImageFromMetadataUri(r.metadataUri, 2000);
-                        if (fallbackImage) {
-                            image = fallbackImage;
-                            // Update the database with the fetched image (async, don't wait)
-                            db.run('UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
-                                [fallbackImage, r.mint]).catch(() => {});
-                        }
-                    } catch (e) {
-                        // Silently fail - use whatever we have
-                    }
-                }
-
-                return {
-                    mint: r.mint,
-                    userPubkey: r.userPubkey,
-                    name: r.name,
-                    ticker: r.ticker,
-                    image: image,
-                    metadataUri: r.metadataUri,
-                    marketCap: r.marketCap || 0,
-                    volume: r.volume24h,
-                    complete: !!r.complete,
-                    // v18.0: Eligibility based on volume threshold
-                    isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD,
-                    // v25.0: Include source to differentiate token types
-                    source: r.source || 'platform'
-                };
+            // v25.4: Images already resolved inside cache — map directly
+            const allLaunches = rows.map((r) => ({
+                mint: r.mint,
+                userPubkey: r.userPubkey,
+                name: r.name,
+                ticker: r.ticker,
+                image: r.image,
+                metadataUri: r.metadataUri,
+                marketCap: r.marketCap || 0,
+                volume: r.volume24h,
+                complete: !!r.complete,
+                // v18.0: Eligibility based on volume threshold
+                isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD,
+                // v25.0: Include source to differentiate token types
+                source: r.source || 'platform'
             }));
             res.json({
                 tokens: allLaunches,
@@ -496,14 +498,22 @@ function init(deps) {
 
     // Token holders
     // v14.0: Now returns top 250 holders with balance info
+    // M-2 FIX: Check both token_holders (platform) and robinhood_token_holders tables
     router.get('/token-holders/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
             if (!isValidPubkey(mint)) return res.status(400).json({ error: "Invalid mint address" });
-            const holders = await db.all(
+            let holders = await db.all(
                 'SELECT rank, "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 250',
                 [mint]
             );
+            if (holders.length === 0) {
+                // Not in platform table — check Robinhood table
+                holders = await db.all(
+                    'SELECT rank, "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 250',
+                    [mint]
+                );
+            }
             res.json(holders);
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
@@ -644,7 +654,7 @@ function init(deps) {
                         th.rank
                     FROM token_holders th
                     INNER JOIN tokens t ON t.mint = th.mint
-                    WHERE th."holderPubkey" = $1 AND CAST(th.balance AS BIGINT) > 0
+                    WHERE th."holderPubkey" = $1 AND CAST(COALESCE(NULLIF(th.balance, ''), '0') AS BIGINT) > 0
                     ORDER BY t.volume24h DESC
                 `, [userPubkey]);
 
@@ -692,7 +702,7 @@ function init(deps) {
                         rth.rank
                     FROM robinhood_token_holders rth
                     INNER JOIN robinhood_tokens rt ON rt.mint = rth.mint AND rt."isActive" = 1
-                    WHERE rth."holderPubkey" = $1 AND CAST(rth.balance AS BIGINT) > 0
+                    WHERE rth."holderPubkey" = $1 AND CAST(COALESCE(NULLIF(rth.balance, ''), '0') AS BIGINT) > 0
                     ORDER BY rt.volume24h DESC
                 `, [userPubkey]);
 
@@ -760,6 +770,9 @@ function init(deps) {
     router.get('/all-eligible-users', async (req, res) => {
         try {
             const devPubkey = devKeypair.publicKey.toString();
+            // M-3 FIX: Add pagination to prevent full table dump on every request
+            const limit = Math.min(parseInt(req.query.limit) || 500, 1000);
+            const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
             // v25.33: Simple query from user_points table
             const users = await db.all(`
@@ -775,27 +788,31 @@ function init(deps) {
                 FROM user_points
                 WHERE total_points > 0 AND pubkey != $1
                 ORDER BY total_points DESC
-            `, [devPubkey]);
+                LIMIT $2 OFFSET $3
+            `, [devPubkey, limit, offset]);
 
-            // Calculate total points
-            let totalPoints = 0;
-            const eligibleUsers = users.map(user => {
-                totalPoints += user.total_points || 0;
-                return {
-                    pubkey: user.pubkey,
-                    points: Math.round((user.total_points || 0) * 100) / 100,
-                    positions: user.positions_count || 0,
-                    isAsdfTop50: user.is_asdf_holder || false,
-                    expectedAirdrop: user.expected_airdrop_sol || 0,
-                    expectedAirdropCurrency: 'SOL'
-                };
-            });
+            // M-1 FIX: Fetch global total separately so paginated responses don't return a partial sum
+            const globalTotalRow = await db.get(
+                'SELECT SUM(total_points) as total FROM user_points WHERE total_points > 0 AND pubkey != $1',
+                [devPubkey]
+            );
+            const globalTotalPoints = Math.round((parseFloat(globalTotalRow?.total) || 0) * 100) / 100;
+
+            const eligibleUsers = users.map(user => ({
+                pubkey: user.pubkey,
+                points: Math.round((user.total_points || 0) * 100) / 100,
+                positions: user.positions_count || 0,
+                isAsdfTop50: user.is_asdf_holder || false,
+                expectedAirdrop: user.expected_airdrop_sol || 0,
+                expectedAirdropCurrency: 'SOL'
+            }));
 
             res.json({
                 users: eligibleUsers,
-                totalPoints: Math.round(totalPoints * 100) / 100,
+                totalPoints: globalTotalPoints,  // global total, not just this page
                 currency: 'SOL',
-                eligibilityThreshold: MIN_VOLUME_USD
+                eligibilityThreshold: MIN_VOLUME_USD,
+                pagination: { limit, offset }
             });
         } catch (e) {
             logger.error('[all-eligible-users] Error', { error: e.message });
