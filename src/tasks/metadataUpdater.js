@@ -182,9 +182,11 @@ async function fetchGeckoTerminalBatch(mints) {
 
 /**
  * v25.13: Update prices for specific tokens (no image/metadata updates)
+ * v25.65: BUGFIX - Now handles both platform and robinhood_tokens tables
+ *         Also sets volume to 0 for tokens without data from DexScreener
  * Used for frequent top token updates
  * @param {Object} deps - Dependencies
- * @param {Array} tokens - Array of token objects with mint field
+ * @param {Array} tokens - Array of token objects with mint field and optional table_name
  */
 async function updatePricesOnly(deps, tokens) {
     const { db } = deps;
@@ -219,12 +221,22 @@ async function updatePricesOnly(deps, tokens) {
             }
         }
 
+        // v25.65: Update tokens with proper table reference
         for (const t of tokens) {
             const data = updates.get(t.mint);
+            const table = t.table_name || 'tokens'; // Default to 'tokens' for backwards compatibility
+
             if (data) {
                 await db.run(
-                    `UPDATE tokens SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4 WHERE mint = $5`,
+                    `UPDATE ${table} SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4 WHERE mint = $5`,
                     [data.volume24h, data.marketCap, data.priceUsd, Date.now(), t.mint]
+                );
+                updated++;
+            } else {
+                // v25.65 BUGFIX: Also update tokens with 0 volume
+                await db.run(
+                    `UPDATE ${table} SET volume24h = 0, "lastUpdated" = $1 WHERE mint = $2`,
+                    [Date.now(), t.mint]
                 );
                 updated++;
             }
@@ -242,16 +254,20 @@ async function updatePricesOnly(deps, tokens) {
 
 /**
  * v25.13: Update prices for top 10 leaderboard tokens + King of the Hill
+ * v25.65: BUGFIX - Now includes robinhood_tokens in top token updates
  * Runs every 1 minute
  */
 async function updateTopTokenPrices(deps) {
     const { db, globalState } = deps;
 
     try {
-        // Get top 10 tokens by market cap (leaderboard)
+        // v25.65: Get top 10 tokens from BOTH tables by market cap
         const topTokens = await db.all(`
-            SELECT mint, ticker FROM tokens
+            SELECT mint, ticker, 'platform' as table_name, "marketCap" FROM tokens
             WHERE "marketCap" > 0
+            UNION ALL
+            SELECT mint, ticker, 'robinhood_tokens' as table_name, "marketCap" FROM robinhood_tokens
+            WHERE "marketCap" > 0 AND "isActive" = 1
             ORDER BY "marketCap" DESC
             LIMIT 10
         `);
@@ -261,7 +277,11 @@ async function updateTopTokenPrices(deps) {
         let tokens = [...topTokens];
 
         if (kothMint && !tokens.find(t => t.mint === kothMint)) {
-            const kothToken = await db.get('SELECT mint, ticker FROM tokens WHERE mint = $1', [kothMint]);
+            // Check both tables for KOTH token
+            let kothToken = await db.get('SELECT mint, ticker, "platform" as table_name FROM tokens WHERE mint = $1', [kothMint]);
+            if (!kothToken) {
+                kothToken = await db.get('SELECT mint, ticker, "robinhood_tokens" as table_name FROM robinhood_tokens WHERE mint = $1 AND "isActive" = 1', [kothMint]);
+            }
             if (kothToken) {
                 tokens.push(kothToken);
             }
@@ -282,21 +302,32 @@ async function updateTopTokenPrices(deps) {
 
 /**
  * v25.13: Full price update for all tokens (no metadata/images)
+ * v25.65: BUGFIX - Now updates BOTH platform tokens AND robinhood_tokens
+ *         Also ensures 0 volume is properly reflected (was holding old data)
  * Runs every 5 minutes
  */
 async function updateAllTokenPrices(deps) {
     const { db, globalState } = deps;
 
-    const tokens = await db.all('SELECT mint, ticker FROM tokens');
+    // v25.65: Fetch tokens from BOTH tables (platform + robinhood)
+    const platformTokens = await db.all('SELECT mint, ticker, "source" FROM tokens');
+    const robinhoodTokens = await db.all('SELECT mint, ticker, "source" FROM robinhood_tokens WHERE "isActive" = 1');
 
-    if (tokens.length === 0) {
+    // Mark source for proper table updates
+    const allTokens = [
+        ...platformTokens.map(t => ({ ...t, table: 'tokens' })),
+        ...robinhoodTokens.map(t => ({ ...t, table: 'robinhood_tokens' }))
+    ];
+
+    if (allTokens.length === 0) {
         return;
     }
 
-    logger.info(`[MetadataUpdater] Full price update: ${tokens.length} tokens`);
+    logger.info(`[MetadataUpdater] Full price update: ${allTokens.length} tokens (${platformTokens.length} platform + ${robinhoodTokens.length} robinhood)`);
 
-    const chunks = chunkArray(tokens, 30);
+    const chunks = chunkArray(allTokens, 30);
     let totalUpdated = 0;
+    let totalWithZeroVolume = 0;
 
     for (const chunk of chunks) {
         const mints = chunk.map(t => t.mint).join(',');
@@ -326,32 +357,45 @@ async function updateAllTokenPrices(deps) {
                 }
             }
 
-            // Update tokens from DexScreener
+            // v25.65: Update BOTH platform tokens AND robinhood_tokens
+            // IMPORTANT: Also update tokens with 0 volume (not just those with data)
             const misses = [];
             for (const t of chunk) {
                 const data = updates.get(t.mint);
+                const table = t.table;
+
                 if (data) {
+                    // Token has data from DexScreener
                     await db.run(
-                        `UPDATE tokens SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4 WHERE mint = $5`,
+                        `UPDATE ${table} SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4 WHERE mint = $5`,
                         [data.volume24h, data.marketCap, data.priceUsd, Date.now(), t.mint]
                     );
                     totalUpdated++;
                 } else {
+                    // v25.65 BUGFIX: Token has NO data from DexScreener - set volume to 0
+                    // This ensures 0 volume is properly reflected (was causing stale data issue)
+                    await db.run(
+                        `UPDATE ${table} SET volume24h = 0, "lastUpdated" = $1 WHERE mint = $2`,
+                        [Date.now(), t.mint]
+                    );
+                    totalUpdated++;
+                    totalWithZeroVolume++;
                     misses.push(t.mint);
                 }
             }
 
-            // Fallback to Helius for DexScreener misses
+            // Fallback to Helius for DexScreener misses (only fetch market cap, not volume)
             if (misses.length > 0) {
                 const heliusData = await fetchHeliusMarketDataBatch(misses);
-                for (const mint of misses) {
-                    const data = heliusData.get(mint);
-                    if (data && data.marketCap > 0) {
-                        await db.run(
-                            `UPDATE tokens SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
-                            [data.marketCap, Date.now(), mint]
-                        );
-                        totalUpdated++;
+                for (const t of chunk) {
+                    if (!updates.has(t.mint)) {  // Only process if DexScreener didn't have data
+                        const data = heliusData.get(t.mint);
+                        if (data && data.marketCap > 0) {
+                            await db.run(
+                                `UPDATE ${t.table} SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
+                                [data.marketCap, Date.now(), t.mint]
+                            );
+                        }
                     }
                 }
             }
@@ -369,7 +413,7 @@ async function updateAllTokenPrices(deps) {
     }
 
     globalState.lastBackendUpdate = Date.now();
-    logger.info(`[MetadataUpdater] Full price update complete: ${totalUpdated}/${tokens.length} tokens`);
+    logger.info(`[MetadataUpdater] Full price update complete: ${totalUpdated}/${allTokens.length} tokens (${totalWithZeroVolume} set to 0 volume)`);
 }
 
 /**

@@ -1710,14 +1710,14 @@
 
         <!-- TAB NAVIGATION -->
         <div class="tab-container">
-            <button class="tab-btn active" onclick="switchTab('dashboard')" data-tab="dashboard">
+            <button id="tab-btn-dashboard" type="button" class="tab-btn active" data-tab="dashboard">
                 <i data-lucide="layout-dashboard" class="inline-block w-4 h-4 mr-2"></i>Dashboard
             </button>
-            <button class="tab-btn" onclick="switchTab('register')" data-tab="register">
+            <button id="tab-btn-register" type="button" class="tab-btn" data-tab="register">
                 <i data-lucide="file-plus" class="inline-block w-4 h-4 mr-2"></i>Robinhood
             </button>
             <!-- PAGS tab disabled -->
-            <button class="tab-btn hidden" onclick="switchTab('pags')" data-tab="pags" style="display: none;">
+            <button id="tab-btn-pags" type="button" class="tab-btn hidden" data-tab="pags" style="display: none;">
                 <i data-lucide="twitter" class="inline-block w-4 h-4 mr-2"></i>PAGS
             </button>
         </div>
@@ -3207,8 +3207,7 @@
 
 <script>
     const FRONTEND_VERSION = "v25.44";
-    // C-3 FIX: Use same origin as the serving host instead of hardcoded URL
-    const BACKEND_URL = window.location.origin;
+    const BACKEND_URL = "https://asdev-1kvy.onrender.com";
     // C-5 FIX: Use URL object to safely construct WebSocket URL
     const _wsUrlObj = new URL(BACKEND_URL);
     _wsUrlObj.protocol = _wsUrlObj.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -3666,7 +3665,7 @@
         ui.kothName.innerText = koth.name || 'Unknown';
         ui.kothMcap.innerText = formatMcap(koth.marketCap);
         ui.kothImg.src = resolveTokenImage(koth.image);
-        ui.kothPanel.onclick = () => window.open(PUMPFUN_URL_BASE + koth.mint, '_blank');
+        if (ui.kothPanel) ui.kothPanel.onclick = () => window.open(PUMPFUN_URL_BASE + koth.mint, '_blank');
     };
 
     const updateRecentLaunchesFromWS = (launches) => {
@@ -4499,7 +4498,7 @@
     // v25.35: Refresh ticker more frequently to keep "time ago" fresh
     registerInterval(setInterval(fetchRecentLaunches, 45000));
 
-    ui.refreshBtn.onclick = () => refreshAllData(true); // Force full refresh on manual click
+    if (ui.refreshBtn) ui.refreshBtn.onclick = () => refreshAllData(true); // Force full refresh on manual click
 
     const toggleStatusModal = () => {
         const list = ui.statusDetailsList;
@@ -4535,8 +4534,8 @@
     const closeStatusModal = () => { ui.statusModal.style.display = 'none'; };
     window.closeStatusModal = closeStatusModal;
 
-    const updateMayhemLabel = () => { if (ui.mayhemToggle.checked) { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: ON (HIGH RISK)"; ui.mayhemStatusLabel.classList.add('active'); } else { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: OFF"; ui.mayhemStatusLabel.classList.remove('active'); } };
-    ui.mayhemToggle.addEventListener('change', updateMayhemLabel); updateMayhemLabel(); 
+    const updateMayhemLabel = () => { if (!ui.mayhemToggle) return; if (ui.mayhemToggle.checked) { if (ui.mayhemStatusLabel) { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: ON (HIGH RISK)"; ui.mayhemStatusLabel.classList.add('active'); } } else { if (ui.mayhemStatusLabel) { ui.mayhemStatusLabel.innerText = "MAYHEM MODE: OFF"; ui.mayhemStatusLabel.classList.remove('active'); } } };
+    if (ui.mayhemToggle) { ui.mayhemToggle.addEventListener('change', updateMayhemLabel); updateMayhemLabel(); }
 
     const updatePreview = () => { ui.previewName.innerText = document.getElementById('name').value || "Token Name"; ui.previewTicker.innerText = document.getElementById('ticker').value ? `$${document.getElementById('ticker').value.toUpperCase()}` : "$TICKER"; };
 
@@ -5325,7 +5324,7 @@
         localStorage.removeItem('connectedWalletType');
         updateWalletUI(null); 
     };
-    ui.disconnectBtn.onclick = disconnectWallet;
+    if (ui.disconnectBtn) ui.disconnectBtn.onclick = disconnectWallet;
 
     // v25.1: Updated validation for Imgur URL input
     const validateInputs = (name, ticker, description, twitter, website, imageUrl) => {
@@ -5345,7 +5344,7 @@
         return null;
     };
 
-    ui.deployBtn.onclick = async () => {
+    if (ui.deployBtn) ui.deployBtn.onclick = async () => {
         if (!userPubkey || !activeWalletProvider) return showStatus("CONNECT WALLET FIRST", 'error');
         const name = document.getElementById('name').value;
         const ticker = document.getElementById('ticker').value;
@@ -5353,7 +5352,7 @@
         const twitter = document.getElementById('twitter').value;
         const website = document.getElementById('website').value;
         const imageUrl = document.getElementById('image-url').value.trim();
-        const isMayhemMode = ui.mayhemToggle.checked;
+        const isMayhemMode = ui.mayhemToggle ? ui.mayhemToggle.checked : false;
 
         // v25.1: Validate with imageUrl instead of file
         const validationError = validateInputs(name, ticker, description, twitter, website, imageUrl);
@@ -5545,6 +5544,27 @@
         lucide.createIcons();
     };
     window.switchTab = switchTab;
+
+    // Attach click event listeners to tab buttons
+    const attachTabButtonListeners = () => {
+        const tabButtons = document.querySelectorAll('.tab-btn:not(.hidden)');
+        tabButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const tabName = btn.dataset.tab;
+                if (tabName) {
+                    switchTab(tabName);
+                }
+            });
+        });
+    };
+
+    // Initialize tab buttons when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', attachTabButtonListeners);
+    } else {
+        attachTabButtonListeners();
+    }
 
     // ========== TOKEN REGISTRATION (v24.0) ==========
     let registrationVerified = false;
