@@ -69,7 +69,7 @@ async function markNonceUsed(nonce) {
  * @param {string} params.expectedAction - The action that should be in the message
  * @returns {Object} { valid: boolean, error?: string }
  */
-function verifySignature({ message, signature, publicKey, expectedAction }) {
+async function verifySignature({ message, signature, publicKey, expectedAction }) {
     try {
         // Validate inputs
         if (!message || !signature || !publicKey) {
