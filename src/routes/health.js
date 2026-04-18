@@ -709,6 +709,35 @@ function init(deps) {
     });
 
     /**
+     * POST /admin/refresh-all-volumes
+     * v25.65: Force immediate price/volume update for ALL tokens (platform + robinhood)
+     * Updates market cap, volume, and price from DexScreener
+     * Ensures 0 volume is properly reflected (doesn't hold stale data)
+     */
+    router.post('/admin/refresh-all-volumes', adminAuth, async (req, res) => {
+        try {
+            const metadataUpdater = require('../tasks/metadataUpdater');
+
+            logger.info('[Admin] Triggering manual refresh of ALL token volumes and market caps...');
+
+            // Run the full price/volume update for all tokens
+            metadataUpdater.updateAllTokenPrices(deps).then(() => {
+                logger.info('[Admin] Full token volume/market cap update completed');
+            }).catch(e => {
+                logger.error('[Admin] Full token volume/market cap update failed', { error: e.message });
+            });
+
+            res.json({
+                success: true,
+                message: 'Volume and market cap refresh triggered for all tokens (platform + robinhood). Updates include 0 volume where applicable. Check logs for progress.'
+            });
+        } catch (e) {
+            logger.error('[Admin] Refresh all volumes error', { error: e.message });
+            res.status(500).json({ error: 'Failed to trigger volume refresh' });
+        }
+    });
+
+    /**
      * POST /admin/trigger-holder-scan
      * Force an immediate holder scan and points recalculation
      */

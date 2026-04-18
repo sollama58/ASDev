@@ -163,6 +163,74 @@
         .log-warning { background: rgba(234, 179, 8, 0.1); border-left: 3px solid #eab308; }
         .log-error { background: rgba(239, 68, 68, 0.1); border-left: 3px solid #ef4444; }
 
+        /* v25.65: Toast notifications */
+        .notification-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+            max-width: 400px;
+        }
+
+        .notification {
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            font-size: 12px;
+            animation: slideInRight 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .notification.success {
+            border-color: #22c55e;
+            color: #86efac;
+        }
+
+        .notification.error {
+            border-color: #ef4444;
+            color: #fca5a5;
+        }
+
+        .notification.warning {
+            border-color: #eab308;
+            color: #fde047;
+        }
+
+        .notification.info {
+            border-color: #3b82f6;
+            color: #93c5fd;
+        }
+
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(400px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes slideOutRight {
+            from {
+                opacity: 1;
+                transform: translateX(0);
+            }
+            to {
+                opacity: 0;
+                transform: translateX(400px);
+            }
+        }
+
+        .notification.hide {
+            animation: slideOutRight 0.3s ease forwards;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -236,6 +304,9 @@
     </style>
 </head>
 <body class="text-gray-200">
+    <!-- v25.65: Toast notifications container -->
+    <div id="notification-container" class="notification-container"></div>
+
     <!-- Password Gate -->
     <div id="auth-gate" class="fixed inset-0 bg-black z-50 flex items-center justify-center">
         <div class="panel w-96">
@@ -470,8 +541,22 @@
                         <button onclick="refreshAllMetadata()" class="btn btn-danger w-full mb-3">
                             Refresh All Missing Metadata
                         </button>
-                        <div id="refresh-all-result" class="result-box text-yellow-400">
-                            // Batch refresh result will appear here
+                    </div>
+
+                    <!-- v25.65: Refresh All Volumes and Market Caps -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3 class="text-green-500 font-bold">🔄 Refresh All Volumes & MCaps</h3>
+                        </div>
+                        <p class="text-xs text-gray-400 mb-3">
+                            Force immediate refresh of ALL token market caps and 24hr volumes from DexScreener.
+                            Updates both platform and Robinhood tokens. Sets volume to 0 where applicable (no stale data).
+                        </p>
+                        <button onclick="refreshAllVolumes()" class="btn btn-success w-full mb-2">
+                            Refresh All Volumes & MCaps Now
+                        </button>
+                        <div id="refresh-volumes-result" class="result-box text-green-400 text-xs">
+                            // Refresh result will appear here
                         </div>
                     </div>
 
@@ -1053,6 +1138,7 @@
                     <div class="panel-header flex justify-between items-center">
                         <h3 class="text-orange-500 font-bold">Activity Log</h3>
                         <div class="flex gap-2">
+                            <button onclick="exportLogs()" class="btn btn-secondary text-xs">Export</button>
                             <button onclick="clearLogs()" class="btn btn-danger text-xs">Clear</button>
                             <label class="flex items-center gap-2 text-xs">
                                 <input type="checkbox" id="auto-scroll" checked class="rounded">
@@ -1899,20 +1985,75 @@
         let refreshInterval = null;
 
         // ===== UTILITIES =====
+        // v25.65: Toast notification system
+        function notify(message, type = 'info', duration = 5000) {
+            const container = document.getElementById('notification-container');
+            if (!container) return;
+
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+
+            // Add icon based on type
+            let icon = 'ℹ️';
+            if (type === 'success') icon = '✓';
+            if (type === 'error') icon = '✕';
+            if (type === 'warning') icon = '⚠';
+
+            notification.innerHTML = `<span>${icon}</span><span>${message}</span>`;
+            container.appendChild(notification);
+
+            // Auto-dismiss after duration
+            if (duration > 0) {
+                setTimeout(() => {
+                    notification.classList.add('hide');
+                    setTimeout(() => notification.remove(), 300);
+                }, duration);
+            }
+        }
+
         function log(message, type = 'info') {
             const container = document.getElementById('log-container');
+            if (!container) {
+                console.log(`[${type}] ${message}`);
+                return;
+            }
+
             const entry = document.createElement('div');
             entry.className = `log-entry log-${type}`;
             entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
             container.appendChild(entry);
 
-            if (document.getElementById('auto-scroll').checked) {
+            const autoScroll = document.getElementById('auto-scroll');
+            if (autoScroll && autoScroll.checked) {
                 container.scrollTop = container.scrollHeight;
             }
         }
 
         function clearLogs() {
-            document.getElementById('log-container').innerHTML = '<div class="log-entry log-info">[System] Logs cleared</div>';
+            const logContainer = document.getElementById('log-container');
+            if (logContainer) {
+                logContainer.innerHTML = '<div class="log-entry log-info">[System] Logs cleared at ' + new Date().toLocaleTimeString() + '</div>';
+                notify('Logs cleared', 'info', 2000);
+            }
+        }
+
+        // v25.65: Export logs to clipboard
+        function exportLogs() {
+            const logContainer = document.getElementById('log-container');
+            if (!logContainer) {
+                notify('Log container not found', 'error');
+                return;
+            }
+
+            const logText = Array.from(logContainer.querySelectorAll('.log-entry'))
+                .map(el => el.textContent)
+                .join('\n');
+
+            navigator.clipboard.writeText(logText).then(() => {
+                notify('Logs copied to clipboard!', 'success', 2000);
+            }).catch(() => {
+                notify('Failed to copy logs', 'error');
+            });
         }
 
         function formatJson(obj) {
@@ -1940,7 +2081,14 @@
                 if (body && method !== 'GET') {
                     options.body = JSON.stringify(body);
                 }
-                const response = await fetch(`${backendUrl}${endpoint}`, options);
+
+                // v25.65: Add request timeout
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+                const response = await fetch(`${backendUrl}${endpoint}`, { ...options, signal: controller.signal });
+                clearTimeout(timeout);
+
                 const contentType = response.headers.get('content-type');
                 if (!contentType || !contentType.includes('application/json')) {
                     const text = await response.text();
@@ -1952,23 +2100,51 @@
                 }
                 return await response.json();
             } catch (e) {
-                log(`API Error: ${e.message}`, 'error');
+                const errorMsg = e.name === 'AbortError' ? 'Request timeout - server took too long to respond' : e.message;
+                log(`API Error on ${endpoint}: ${errorMsg}`, 'error');
                 throw e;
             }
         }
 
         // ===== TAB SWITCHING =====
         function switchTab(tabName) {
+            if (!tabName) {
+                log('Invalid tab name', 'error');
+                return;
+            }
+
             document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
-            event.target.classList.add('active');
+
+            const tabEl = document.getElementById(`tab-${tabName}`);
+            if (tabEl) {
+                tabEl.classList.remove('hidden');
+            } else {
+                log(`Tab "${tabName}" not found`, 'error');
+                return;
+            }
+
+            // Mark the active button
+            if (event && event.target) {
+                event.target.classList.add('active');
+            }
             log(`Switched to ${tabName} tab`);
         }
 
         // ===== CONNECTION =====
         async function connectBackend() {
-            backendUrl = document.getElementById('backend-url').value.replace(/\/$/, '');
+            const urlEl = document.getElementById('backend-url');
+            if (!urlEl) {
+                log('Backend URL input not found', 'error');
+                return;
+            }
+
+            backendUrl = urlEl.value.trim().replace(/\/$/, '');
+            if (!backendUrl) {
+                log('Please enter a backend URL', 'warning');
+                return;
+            }
+
             log(`Connecting to ${backendUrl}...`);
 
             try {
@@ -1992,6 +2168,11 @@
 
         function updateConnectionStatus(connected) {
             const status = document.getElementById('connection-status');
+            if (!status) {
+                log('Connection status element not found', 'error');
+                return;
+            }
+
             if (connected) {
                 status.innerHTML = '<span class="status-indicator status-online"></span><span class="text-green-400">Connected</span>';
             } else {
@@ -2017,32 +2198,42 @@
                 const actualBalance = parseFloat(data.solBalance || 0);
                 const airdropPool = parseFloat(data.airdropPoolSol || 0);
 
-                document.getElementById('stat-sol-balance').textContent = actualBalance.toFixed(4);
-                document.getElementById('stat-airdrop-pool').textContent = airdropPool.toFixed(4) + ' SOL';
-                document.getElementById('stat-pending-fees').textContent = data.currentFeeBalance + ' SOL';
-                document.getElementById('stat-total-points').textContent = formatNumber(data.totalPoints || 0);
+                // v25.65: Add null checks for all elements
+                const statSolBal = document.getElementById('stat-sol-balance');
+                const statAirdrop = document.getElementById('stat-airdrop-pool');
+                const statPending = document.getElementById('stat-pending-fees');
+                const statPoints = document.getElementById('stat-total-points');
+
+                if (statSolBal) statSolBal.textContent = actualBalance.toFixed(4);
+                if (statAirdrop) statAirdrop.textContent = airdropPool.toFixed(4) + ' SOL';
+                if (statPending) statPending.textContent = data.currentFeeBalance + ' SOL';
+                if (statPoints) statPoints.textContent = formatNumber(data.totalPoints || 0);
 
                 // Update system status
                 const systemStatus = document.getElementById('system-status');
-                systemStatus.innerHTML = `
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Platform Wallet:</span><span class="text-orange-300">${shortenPubkey(data.wallet)}</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">SOL Balance:</span><span class="text-green-400">${actualBalance.toFixed(4)} SOL</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Airdrop Pool:</span><span class="text-orange-400">${airdropPool.toFixed(4)} SOL</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Reserve:</span><span class="text-gray-500">0.5 SOL (safety buffer)</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Pending Fees:</span><span class="text-yellow-400">${data.currentFeeBalance} SOL</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Total Airdropped:</span><span class="text-blue-400">${data.totalSolAirdropped || 0} SOL</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Conservation:</span><span class="${data.conservationStatus ? 'text-yellow-400' : 'text-green-400'}">${data.conservationStatus || 'Normal'}</span></div>
-                `;
+                if (systemStatus) {
+                    systemStatus.innerHTML = `
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Platform Wallet:</span><span class="text-orange-300">${shortenPubkey(data.wallet)}</span></div>
+                        <div class="flex justify-between py-1"><span class="text-gray-400">SOL Balance:</span><span class="text-green-400">${actualBalance.toFixed(4)} SOL</span></div>
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Airdrop Pool:</span><span class="text-orange-400">${airdropPool.toFixed(4)} SOL</span></div>
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Reserve:</span><span class="text-gray-500">0.5 SOL (safety buffer)</span></div>
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Pending Fees:</span><span class="text-yellow-400">${data.currentFeeBalance} SOL</span></div>
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Total Airdropped:</span><span class="text-blue-400">${data.totalSolAirdropped || 0} SOL</span></div>
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Conservation:</span><span class="${data.conservationStatus ? 'text-yellow-400' : 'text-green-400'}">${data.conservationStatus || 'Normal'}</span></div>
+                    `;
+                }
 
                 // Update fee tracker
                 const feeTracker = document.getElementById('fee-tracker');
-                feeTracker.innerHTML = `
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Last Claim:</span><span class="text-white">${data.lastClaimTime ? new Date(data.lastClaimTime).toLocaleString() : 'Never'}</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Last Amount:</span><span class="text-green-400">${data.lastClaimAmount} SOL</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Lifetime Fees:</span><span class="text-blue-400">${data.lifetimeFees || 0} SOL</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Robinhood Tokens:</span><span class="text-pink-400">${data.robinhood?.activeTokens || 0}</span></div>
-                    <div class="flex justify-between py-1"><span class="text-gray-400">Robinhood Fees:</span><span class="text-pink-400">${data.robinhood?.totalFeesCollectedSol || 0} SOL</span></div>
-                `;
+                if (feeTracker) {
+                    feeTracker.innerHTML = `
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Last Claim:</span><span class="text-white">${data.lastClaimTime ? new Date(data.lastClaimTime).toLocaleString() : 'Never'}</span></div>
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Last Amount:</span><span class="text-green-400">${data.lastClaimAmount} SOL</span></div>
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Lifetime Fees:</span><span class="text-blue-400">${data.lifetimeFees || 0} SOL</span></div>
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Robinhood Tokens:</span><span class="text-pink-400">${data.robinhood?.activeTokens || 0}</span></div>
+                        <div class="flex justify-between py-1"><span class="text-gray-400">Robinhood Fees:</span><span class="text-pink-400">${data.robinhood?.totalFeesCollectedSol || 0} SOL</span></div>
+                    `;
+                }
 
                 // Update pool diagram - use actual values
                 const totalSol = actualBalance;
@@ -2211,6 +2402,44 @@
             } catch (e) {
                 resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
                 log(`Batch refresh error: ${e.message}`, 'error');
+            }
+        }
+
+        // v25.65: Refresh all token volumes and market caps
+        async function refreshAllVolumes() {
+            const resultEl = document.getElementById('refresh-volumes-result');
+
+            if (!confirm('This will refresh volumes and market caps for ALL tokens (platform + robinhood) from DexScreener. Updates typically complete in 2-5 minutes. Continue?')) {
+                return;
+            }
+
+            resultEl.innerHTML = '<span class="text-blue-400">🔄 Starting volume refresh for all tokens...\nThis will take a few minutes. Includes: DexScreener, Helius fallback, sets 0 volume where appropriate.</span>';
+            log('Starting refresh of all token volumes and market caps...');
+
+            try {
+                const response = await fetch(`${backendUrl}/api/admin/refresh-all-volumes`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': adminToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Volume refresh triggered successfully!</span>\n\n${data.message}`;
+                    log('Volume refresh triggered - check backend logs for progress', 'success');
+                    notify('Volume refresh triggered! Check logs for progress.', 'success');
+                } else {
+                    resultEl.innerHTML = `<span class="text-red-400">✗ ${data.error}</span>`;
+                    log(`Volume refresh failed: ${data.error}`, 'error');
+                    notify(`Volume refresh failed: ${data.error}`, 'error');
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
+                log(`Volume refresh error: ${e.message}`, 'error');
+                notify(`Error: ${e.message}`, 'error');
             }
         }
 
