@@ -68,20 +68,21 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        /* ROBINHOOD DARK THEME v26.0 - Modern glassmorphism overhaul */
+        /* ROBINHOOD DARK THEME v27.0 - Refined glassmorphism */
         :root {
-            --bg-primary: #06060b;
-            --bg-secondary: #0c0c14;
-            --bg-card: rgba(18, 18, 28, 0.8);
-            --bg-card-solid: #12121c;
-            --bg-hover: #1a1a2a;
-            --bg-elevated: rgba(26, 26, 42, 0.6);
-            --border-primary: rgba(255, 255, 255, 0.06);
+            --bg-primary: #05050e;
+            --bg-secondary: #09091a;
+            --bg-card: rgba(14, 14, 26, 0.85);
+            --bg-card-solid: #0e0e1a;
+            --bg-hover: #16162a;
+            --bg-elevated: rgba(22, 22, 40, 0.7);
+            --border-primary: rgba(255, 255, 255, 0.07);
+            --border-subtle: rgba(255, 255, 255, 0.04);
             --border-accent: #f59e0b;
-            --border-glow: rgba(245, 158, 11, 0.15);
-            --text-primary: #f0f0f5;
-            --text-secondary: #9ca3b4;
-            --text-muted: #5c6370;
+            --border-glow: rgba(245, 158, 11, 0.18);
+            --text-primary: #eeeef5;
+            --text-secondary: #8b95aa;
+            --text-muted: #4e5666;
             --accent-orange: #f59e0b;
             --accent-amber: #fbbf24;
             --accent-green: #10b981;
@@ -89,48 +90,54 @@
             --accent-purple: #a855f7;
             --accent-blue: #3b82f6;
             --accent-cyan: #06b6d4;
-            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
-            --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
-            --shadow-glow-orange: 0 0 20px rgba(245, 158, 11, 0.15);
-            --shadow-glow-purple: 0 0 20px rgba(168, 85, 247, 0.15);
-            --shadow-glow-green: 0 0 20px rgba(16, 185, 129, 0.15);
-            --glass-bg: rgba(255, 255, 255, 0.02);
-            --glass-border: rgba(255, 255, 255, 0.05);
+            --shadow-sm: 0 2px 12px rgba(0, 0, 0, 0.4);
+            --shadow-md: 0 4px 24px rgba(0, 0, 0, 0.5);
+            --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.6);
+            --shadow-glow-orange: 0 0 24px rgba(245, 158, 11, 0.18);
+            --shadow-glow-purple: 0 0 24px rgba(168, 85, 247, 0.18);
+            --shadow-glow-green: 0 0 24px rgba(16, 185, 129, 0.18);
+            --glass-bg: rgba(255, 255, 255, 0.025);
+            --glass-border: rgba(255, 255, 255, 0.06);
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
         }
 
         * { box-sizing: border-box; }
         body {
             background-color: var(--bg-primary);
             background-image:
-                radial-gradient(ellipse at 20% 0%, rgba(168, 85, 247, 0.04) 0%, transparent 50%),
-                radial-gradient(ellipse at 80% 100%, rgba(245, 158, 11, 0.03) 0%, transparent 50%);
+                radial-gradient(ellipse at 15% 0%, rgba(168, 85, 247, 0.05) 0%, transparent 55%),
+                radial-gradient(ellipse at 85% 100%, rgba(245, 158, 11, 0.04) 0%, transparent 55%),
+                radial-gradient(ellipse at 50% 50%, rgba(6, 182, 212, 0.02) 0%, transparent 70%);
             color: var(--text-primary);
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             min-height: 100vh;
             margin: 0;
-            padding: 20px;
+            padding: 16px;
         }
+        @media (min-width: 768px) { body { padding: 24px; } }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
 
         #app-container {
             width: 100%;
-            max-width: 1200px;
+            max-width: 1280px;
             margin: 0 auto;
-            background: linear-gradient(180deg, var(--bg-secondary) 0%, rgba(8, 8, 16, 0.95) 100%);
+            background: linear-gradient(175deg, var(--bg-secondary) 0%, rgba(5, 5, 14, 0.98) 100%);
             border: 1px solid var(--border-primary);
-            border-radius: 20px;
+            border-radius: var(--radius-xl);
             overflow: hidden;
-            box-shadow: var(--shadow-lg), 0 0 80px rgba(0, 0, 0, 0.3);
+            box-shadow: var(--shadow-lg), 0 0 100px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255,255,255,0.02);
         }
 
-        /* Ticker - v26.0: Sleek glass ticker */
+        /* Ticker - v27.0 */
         .ticker-wrap {
             width: 100%;
-            background: linear-gradient(90deg, var(--bg-primary) 0%, rgba(245, 158, 11, 0.03) 30%, rgba(168, 85, 247, 0.03) 70%, var(--bg-primary) 100%);
-            border-bottom: 1px solid var(--border-primary);
+            background: rgba(5, 5, 14, 0.8);
+            border-bottom: 1px solid var(--border-subtle);
             overflow: hidden;
-            height: 42px;
+            height: 38px;
             display: flex;
             align-items: center;
             position: relative;
@@ -141,7 +148,7 @@
             position: absolute;
             top: 0;
             bottom: 0;
-            width: 80px;
+            width: 60px;
             z-index: 2;
             pointer-events: none;
         }
@@ -207,35 +214,38 @@
             100% { transform: translateX(-50%); }
         }
 
-        /* Cards/Panels - v26.0: Glassmorphism with depth */
+        /* Cards/Panels - v27.0: Refined depth */
         .panel {
             background: var(--bg-card);
-            backdrop-filter: blur(12px);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
             border: 1px solid var(--border-primary);
-            border-radius: 16px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: var(--shadow-sm);
-            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.04);
+            transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
         }
-        .panel:hover { border-color: rgba(255, 255, 255, 0.1); box-shadow: var(--shadow-md); }
+        @media (min-width: 768px) { .panel { padding: 24px; margin-bottom: 20px; } }
+        .panel:hover { border-color: rgba(255, 255, 255, 0.11); box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255,255,255,0.05); }
 
-        /* Inputs - v26.0: Modern input styling */
+        /* Inputs - v27.0 */
         .input-field {
-            background: rgba(6, 6, 11, 0.6);
+            background: rgba(5, 5, 14, 0.7);
             border: 1px solid var(--border-primary);
             color: var(--text-primary);
             font-family: 'JetBrains Mono', monospace;
             width: 100%;
-            padding: 14px 16px;
-            margin-bottom: 16px;
+            padding: 13px 16px;
+            margin-bottom: 14px;
             outline: none;
-            transition: all 0.3s ease;
-            border-radius: 10px;
+            transition: all 0.25s ease;
+            border-radius: var(--radius-md);
             font-size: 14px;
+            line-height: 1.4;
         }
-        .input-field:focus { border-color: var(--accent-orange); background: rgba(12, 12, 20, 0.8); box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.08), var(--shadow-glow-orange); }
-        .input-field::placeholder { color: var(--text-muted); }
+        .input-field:focus { border-color: var(--accent-orange); background: rgba(10, 10, 22, 0.9); box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1), var(--shadow-glow-orange); }
+        .input-field::placeholder { color: var(--text-muted); font-size: 13px; }
 
         input[type="file"]::file-selector-button {
             background: var(--accent-orange);
@@ -249,21 +259,21 @@
             border-radius: 6px;
         }
 
-        /* Primary Action Button - v26.0: Enhanced with glow */
+        /* Primary Action Button - v27.0 */
         .btn-action {
-            background: linear-gradient(135deg, #f59e0b 0%, #d97706 50%, #b45309 100%);
-            border: none;
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 45%, #b45309 100%);
+            border: 1px solid rgba(245, 158, 11, 0.3);
             color: #000;
-            font-weight: 700;
+            font-weight: 800;
             font-family: 'Inter', sans-serif;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 1.5px;
             width: 100%;
-            padding: 16px 24px;
-            font-size: 15px;
+            padding: 15px 24px;
+            font-size: 14px;
             cursor: pointer;
-            transition: all 0.3s ease;
-            border-radius: 12px;
+            transition: all 0.25s ease;
+            border-radius: var(--radius-md);
             position: relative;
             overflow: hidden;
         }
@@ -274,13 +284,13 @@
             left: -100%;
             width: 100%;
             height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
-            transition: left 0.5s ease;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            transition: left 0.45s ease;
         }
         .btn-action:hover::before { left: 100%; }
-        .btn-action:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(245, 158, 11, 0.35), 0 0 40px rgba(245, 158, 11, 0.15); }
-        .btn-action:active { transform: translateY(0); box-shadow: 0 2px 8px rgba(245, 158, 11, 0.2); }
-        .btn-action:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+        .btn-action:hover { transform: translateY(-2px); box-shadow: 0 8px 28px rgba(245, 158, 11, 0.4), 0 0 48px rgba(245, 158, 11, 0.18); }
+        .btn-action:active { transform: translateY(0); box-shadow: 0 2px 8px rgba(245, 158, 11, 0.25); }
+        .btn-action:disabled { opacity: 0.35; cursor: not-allowed; transform: none; box-shadow: none; }
 
         /* Status Messages - v26.0 */
         .status-box {
@@ -363,18 +373,18 @@
         .mayhem-label { transition: color 0.3s; color: var(--text-secondary); }
         .mayhem-label.active { color: var(--accent-red); text-shadow: 0 0 8px rgba(239, 68, 68, 0.3); }
 
-        /* Logo - v26.0 */
+        /* Logo - v27.0 */
         #logo-wrapper {
-            width: 56px;
-            height: 56px;
-            border-radius: 14px;
+            width: 52px;
+            height: 52px;
+            border-radius: 13px;
             overflow: hidden;
-            min-width: 56px;
-            border: 2px solid rgba(245, 158, 11, 0.2);
-            box-shadow: 0 0 16px rgba(245, 158, 11, 0.1);
-            transition: all 0.3s ease;
+            min-width: 52px;
+            border: 1.5px solid rgba(245, 158, 11, 0.25);
+            box-shadow: 0 0 18px rgba(245, 158, 11, 0.12), 0 2px 8px rgba(0,0,0,0.4);
+            transition: all 0.25s ease;
         }
-        #logo-wrapper:hover { border-color: rgba(245, 158, 11, 0.4); box-shadow: 0 0 24px rgba(245, 158, 11, 0.2); transform: scale(1.05); }
+        #logo-wrapper:hover { border-color: rgba(245, 158, 11, 0.5); box-shadow: 0 0 28px rgba(245, 158, 11, 0.25), 0 4px 12px rgba(0,0,0,0.4); transform: scale(1.06) rotate(-1deg); }
         #header-image { width: 100%; height: 100%; object-fit: cover; }
 
         /* Modals - v26.0: Enhanced backdrop and glass effect */
@@ -393,47 +403,42 @@
         .close-btn { color: var(--text-muted); float: right; font-size: 24px; font-weight: bold; line-height: 1; transition: color 0.2s, transform 0.2s; }
         .close-btn:hover { color: var(--text-primary); cursor: pointer; transform: scale(1.1); }
 
-        /* Leaderboard Table - v26.0: Modern with subtle row styling */
+        /* Leaderboard Table - v27.0 */
         .leader-table {
             width: 100%;
             border-collapse: separate;
-            border-spacing: 0 2px;
+            border-spacing: 0 1px;
             font-family: 'JetBrains Mono', monospace;
             font-size: 12px;
         }
         .leader-table th {
             text-align: left;
-            padding: 10px 12px;
-            border-bottom: 2px solid rgba(245, 158, 11, 0.3);
-            color: var(--accent-orange);
+            padding: 9px 12px;
+            border-bottom: 1px solid rgba(245, 158, 11, 0.25);
+            color: rgba(245, 158, 11, 0.7);
             text-transform: uppercase;
             font-size: 10px;
-            font-weight: 700;
+            font-weight: 600;
             letter-spacing: 0.8px;
             white-space: nowrap;
+            background: rgba(245, 158, 11, 0.03);
         }
         .leader-table td {
             padding: 10px 12px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            border-bottom: 1px solid var(--border-subtle);
             vertical-align: middle;
             white-space: nowrap;
             color: var(--text-primary);
         }
-        .leader-table tbody tr {
-            transition: all 0.2s ease;
-            border-radius: 8px;
-        }
-        .leader-table tbody tr:hover {
-            background: rgba(245, 158, 11, 0.06);
-            box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.1);
-        }
+        .leader-table tbody tr { transition: background 0.15s ease; }
+        .leader-table tbody tr:hover { background: rgba(245, 158, 11, 0.05); }
         .leader-table tr:last-child td { border-bottom: none; }
-        /* Token name can wrap */
         .leader-table .token-name {
             white-space: normal;
             max-width: 120px;
             line-height: 1.3;
             font-size: 10px;
+            color: var(--text-secondary);
         }
 
         /* Volume multiplier badge - v26.0 */
@@ -476,50 +481,54 @@
         }
         .token-img-sm:hover { transform: scale(1.15); }
 
-        /* Metric Cards - v26.0: Glassmorphism with glow accents */
+        /* Metric Cards - v27.0 */
         .metric-card {
-            background: rgba(6, 6, 11, 0.5);
+            background: rgba(5, 5, 14, 0.6);
             border: 1px solid var(--border-primary);
-            padding: 16px 12px;
-            border-radius: 12px;
+            padding: 14px 10px;
+            border-radius: var(--radius-md);
             text-align: center;
-            transition: all 0.3s ease;
+            transition: all 0.2s ease;
             display: flex;
             flex-direction: column;
             justify-content: center;
             align-items: center;
-            min-height: 80px;
+            min-height: 72px;
             overflow: hidden;
             position: relative;
         }
-        .metric-card::before {
+        .metric-card::after {
             content: '';
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
+            top: 0; left: 0; right: 0;
             height: 1px;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
         }
-        .metric-card:hover { border-color: rgba(255, 255, 255, 0.1); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+        .metric-card:hover {
+            border-color: rgba(255, 255, 255, 0.13);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        }
         .metric-value {
-            font-size: 20px;
+            font-size: 18px;
             font-weight: 700;
             color: var(--text-primary);
             font-family: 'JetBrains Mono', monospace;
-            margin-top: 4px;
+            margin-top: 3px;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
             max-width: 100%;
+            line-height: 1.2;
         }
         .metric-label {
-            font-size: 10px;
+            font-size: 9px;
             color: var(--text-muted);
             text-transform: uppercase;
-            letter-spacing: 0.8px;
+            letter-spacing: 0.9px;
             font-weight: 600;
             white-space: nowrap;
+            font-family: 'Inter', sans-serif;
         }
 
         /* Badges */
@@ -646,75 +655,71 @@
         .text-green { color: var(--accent-green); }
         .text-red { color: var(--accent-red); }
 
-        /* Countdown Timer Banner - v26.0: Premium glass countdown */
+        /* Countdown Timer Banner - v27.0 */
         .countdown-banner {
-            background: linear-gradient(90deg, rgba(168, 85, 247, 0.08) 0%, rgba(139, 92, 246, 0.12) 50%, rgba(168, 85, 247, 0.08) 100%);
-            border-bottom: 1px solid rgba(168, 85, 247, 0.15);
-            padding: 12px 16px;
+            background: linear-gradient(90deg, transparent 0%, rgba(139, 92, 246, 0.07) 50%, transparent 100%);
+            border-bottom: 1px solid rgba(139, 92, 246, 0.12);
+            padding: 10px 20px;
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 16px;
+            gap: 14px;
             flex-wrap: wrap;
             position: relative;
-            overflow: hidden;
         }
-        .countdown-banner::after {
+        .countdown-banner::before {
             content: '';
             position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, rgba(168, 85, 247, 0.4), transparent);
+            inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.04), transparent);
+            pointer-events: none;
         }
         .countdown-label {
-            font-size: 11px;
-            color: #a78bfa;
+            font-size: 10px;
+            color: rgba(167, 139, 250, 0.8);
             text-transform: uppercase;
-            letter-spacing: 1.5px;
+            letter-spacing: 2px;
             font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
         }
-        .countdown-timer {
-            display: flex;
-            gap: 6px;
-            align-items: center;
-        }
+        .countdown-timer { display: flex; gap: 4px; align-items: center; }
         .countdown-segment {
             display: flex;
             flex-direction: column;
             align-items: center;
-            min-width: 44px;
-            background: rgba(139, 92, 246, 0.1);
-            border: 1px solid rgba(139, 92, 246, 0.15);
-            border-radius: 8px;
+            min-width: 40px;
+            background: rgba(109, 40, 217, 0.12);
+            border: 1px solid rgba(139, 92, 246, 0.18);
+            border-radius: 7px;
             padding: 4px 6px;
         }
         .countdown-value {
-            font-size: 22px;
+            font-size: 19px;
             font-weight: 700;
-            color: #e9d5ff;
+            color: #ddd6fe;
             font-family: 'JetBrains Mono', monospace;
             line-height: 1;
-            text-shadow: 0 0 12px rgba(168, 85, 247, 0.4);
+            text-shadow: 0 0 10px rgba(139, 92, 246, 0.4);
         }
         .countdown-unit {
             font-size: 8px;
-            color: #a78bfa;
+            color: rgba(167, 139, 250, 0.7);
             text-transform: uppercase;
             letter-spacing: 0.5px;
             margin-top: 2px;
+            font-family: 'Inter', sans-serif;
         }
         .countdown-separator {
-            font-size: 18px;
-            color: #7c3aed;
+            font-size: 15px;
+            color: rgba(109, 40, 217, 0.7);
             font-weight: 700;
-            opacity: 0.6;
+            margin-bottom: 8px;
         }
         @media (max-width: 640px) {
-            .countdown-banner { padding: 8px 12px; gap: 8px; }
-            .countdown-value { font-size: 16px; }
-            .countdown-segment { min-width: 34px; padding: 3px 4px; }
+            .countdown-banner { padding: 7px 12px; gap: 8px; }
+            .countdown-value { font-size: 15px; }
+            .countdown-segment { min-width: 32px; padding: 3px 4px; }
+            .countdown-label { font-size: 9px; letter-spacing: 1px; }
         }
 
         /* Wallet Modal Buttons - v26.0 */
@@ -787,42 +792,43 @@
         }
         .conservation-active { display: block; }
 
-        /* Tab Navigation - v26.0: Sleek pill tabs with glow */
+        /* Tab Navigation - v27.0 */
         .tab-container {
             display: flex;
-            gap: 4px;
-            background: rgba(6, 6, 11, 0.6);
-            padding: 5px;
-            border-radius: 14px;
-            margin-bottom: 24px;
+            gap: 3px;
+            background: rgba(5, 5, 14, 0.7);
+            padding: 4px;
+            border-radius: var(--radius-md);
+            margin-bottom: 20px;
             border: 1px solid var(--border-primary);
-            backdrop-filter: blur(8px);
+            backdrop-filter: blur(12px);
         }
+        @media (min-width: 768px) { .tab-container { margin-bottom: 24px; } }
         .tab-btn {
-            padding: 12px 24px;
+            padding: 10px 20px;
             background: transparent;
             border: none;
             color: var(--text-muted);
             font-family: 'Inter', sans-serif;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 500;
             cursor: pointer;
-            transition: all 0.3s ease;
-            border-radius: 10px;
+            transition: all 0.25s ease;
+            border-radius: 9px;
             flex: 1;
             text-align: center;
-            position: relative;
+            white-space: nowrap;
         }
-        .tab-btn:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.04); }
+        .tab-btn:hover { color: var(--text-secondary); background: rgba(255, 255, 255, 0.05); }
         .tab-btn.active {
             background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
             color: #000;
             font-weight: 700;
-            box-shadow: 0 2px 12px rgba(245, 158, 11, 0.3);
+            box-shadow: 0 2px 14px rgba(245, 158, 11, 0.35), 0 1px 0 rgba(255,255,255,0.2) inset;
         }
-        .tab-content { display: none; animation: fadeIn 0.35s ease; }
+        .tab-content { display: none; animation: fadeIn 0.3s ease; }
         .tab-content.active { display: block; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
         /* Announcement animations */
         @keyframes slideInRight { from { opacity: 0; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
@@ -932,19 +938,11 @@
 
         /* ========== MOBILE RESPONSIVE STYLES v26.0 ========== */
 
-        /* Tablet adjustments (768px) */
+        /* Tablet (≤768px) */
         @media (max-width: 768px) {
-            body {
-                padding: 6px;
-            }
-
-            #app-container {
-                border-radius: 14px;
-            }
-
-            .p-10, .p-4.md\\:p-10 {
-                padding: 14px !important;
-            }
+            body { padding: 8px; }
+            #app-container { border-radius: 16px; }
+            .p-4.md\\:p-8.lg\\:p-10 { padding: 14px !important; }
 
             /* Header mobile layout */
             .flex.justify-between.items-start.mb-6 {
@@ -1244,19 +1242,11 @@
             }
         }
 
-        /* Small mobile (< 480px) */
+        /* Small mobile (≤480px) */
         @media (max-width: 480px) {
-            body {
-                padding: 3px;
-            }
-
-            #app-container {
-                border-radius: 10px;
-            }
-
-            .p-10, .p-4.md\\:p-10 {
-                padding: 10px !important;
-            }
+            body { padding: 4px; }
+            #app-container { border-radius: 12px; }
+            .p-4.md\\:p-8.lg\\:p-10 { padding: 10px !important; }
 
             h1.text-4xl, h1.text-5xl {
                 font-size: 1.35rem !important;
@@ -1676,49 +1666,45 @@
         <span class="text-purple-300 text-xs font-mono" id="countdown-pool">Pool: <span id="countdown-pool-amount">0.00</span> SOL</span>
     </div>
 
-    <div class="p-4 md:p-10">
-        <!-- Header - Mobile Responsive -->
-        <div class="flex flex-col md:flex-row justify-between items-center mb-6 pb-6 md:pb-8 gap-4" style="border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
-            <div class="flex items-center gap-3 md:gap-6">
+    <div class="p-4 md:p-8 lg:p-10">
+        <!-- Header -->
+        <div class="flex flex-col sm:flex-row justify-between items-center mb-5 md:mb-7 pb-5 md:pb-7 gap-4" style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+            <!-- Brand -->
+            <div class="flex items-center gap-3 md:gap-5 flex-shrink-0">
                 <div id="logo-wrapper">
-                    <img id="header-image" src="https://placehold.co/60x60/d97706/ffffff?text=LOGO" alt="Project Logo">
+                    <img id="header-image" src="https://placehold.co/52x52/d97706/ffffff?text=R" alt="Project Logo">
                 </div>
-                <div class="text-center md:text-left flex-1 min-w-0">
-                    <div class="flex items-center gap-2 justify-center md:justify-start">
-                        <h1 class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white tracking-wide leading-tight truncate">ROBINHOOD</h1>
-                        <button onclick="toggleMainAboutModal()" class="p-1.5 md:p-2 rounded-full transition-all duration-300 text-orange-400 hover:text-white" style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.15);" onmouseover="this.style.background='rgba(245, 158, 11, 0.15)'; this.style.borderColor='rgba(245, 158, 11, 0.3)'" onmouseout="this.style.background='rgba(245, 158, 11, 0.08)'; this.style.borderColor='rgba(245, 158, 11, 0.15)'" title="About Robinhood">
-                            <i data-lucide="help-circle" class="w-4 h-4 md:w-5 md:h-5"></i>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-2xl sm:text-3xl md:text-4xl font-bold text-white tracking-tight leading-none">ROBINHOOD</h1>
+                        <button onclick="toggleMainAboutModal()" class="p-1.5 rounded-lg transition-all duration-200 text-orange-500/70 hover:text-orange-300 flex-shrink-0" style="background: rgba(245,158,11,0.07); border: 1px solid rgba(245,158,11,0.12);" title="About">
+                            <i data-lucide="info" class="w-3.5 h-3.5"></i>
                         </button>
                     </div>
-                    <p class="text-orange-400 text-xs md:text-sm font-mono uppercase tracking-widest mt-1 md:mt-2">Pumpfun Airdrop Platform</p>
+                    <p class="text-orange-500/60 text-[10px] sm:text-xs font-mono uppercase tracking-widest mt-1">Pumpfun Airdrop Platform</p>
                 </div>
             </div>
-            <!-- Homepage Ecosystem Links -->
-            <div class="flex flex-wrap justify-center gap-2 md:gap-3">
-                <a href="https://alonisthe.dev/holdex" target="_blank" class="ecosystem-link text-orange-300 hover:text-white px-3 py-1.5 rounded-lg font-mono text-xs" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.12);">
-                    <i data-lucide="bar-chart-2" class="inline-block w-3 h-3 mr-1"></i>HolDEX
+            <!-- Links -->
+            <div class="flex items-center gap-2 flex-wrap justify-center">
+                <a href="https://alonisthe.dev/burns" target="_blank" class="ecosystem-link inline-flex items-center gap-1.5 text-orange-400/80 hover:text-orange-200 px-3 py-1.5 rounded-lg font-mono text-[11px] transition-all" style="background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.1);">
+                    <i data-lucide="flame" class="w-3 h-3"></i>Burn Tracker
                 </a>
-                <a href="https://alonisthe.dev/asdforecast" target="_blank" class="ecosystem-link text-orange-300 hover:text-white px-3 py-1.5 rounded-lg font-mono text-xs" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.12);">
-                    <i data-lucide="trending-up" class="inline-block w-3 h-3 mr-1"></i>ASDForecast
-                </a>
-                <a href="https://alonisthe.dev/burns" target="_blank" class="ecosystem-link text-orange-300 hover:text-white px-3 py-1.5 rounded-lg font-mono text-xs" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.12);">
-                    <i data-lucide="flame" class="inline-block w-3 h-3 mr-1"></i>Burn Tracker
-                </a>
-                <a href="https://alonisthe.dev" target="_blank" class="ecosystem-link text-orange-300 hover:text-white px-3 py-1.5 rounded-lg font-mono text-xs" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.12);">
-                    <i data-lucide="globe" class="inline-block w-3 h-3 mr-1"></i>Ecosystem
+                <a href="https://cultscreener.com" target="_blank" class="ecosystem-link inline-flex items-center gap-1.5 text-orange-400/80 hover:text-orange-200 px-3 py-1.5 rounded-lg font-mono text-[11px] transition-all" style="background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.1);">
+                    <i data-lucide="search" class="w-3 h-3"></i>CultScreener
                 </a>
             </div>
-            <div class="flex flex-col items-center md:items-end gap-3 w-full md:w-auto">
-                <div id="wallet-ui" class="hidden items-center gap-2 md:gap-3 p-2 md:p-3 rounded-xl shadow-xl flex-wrap justify-center" style="background: rgba(18, 18, 28, 0.8); border: 1px solid rgba(245, 158, 11, 0.12); backdrop-filter: blur(8px);">
-                    <span class="w-2 h-2 md:w-3 md:h-3 rounded-full bg-green-500 animate-pulse"></span>
-                    <span id="wallet-addr" class="font-mono text-xs md:text-sm text-orange-200 truncate max-w-[80px] md:max-w-[120px]"></span>
-                    <span id="wallet-bal" class="font-mono text-xs md:text-sm text-white font-bold bg-orange-900/50 px-2 md:px-3 py-1 rounded sol-amount">0.00&nbsp;SOL</span>
-                    <div class="flex gap-1">
-                        <button id="refresh-btn" class="text-orange-400 hover:text-white transition p-1.5 hover:bg-orange-800 rounded" aria-label="Refresh"><i data-lucide="refresh-cw" width="16"></i></button>
-                        <button id="disconnect-btn" class="text-red-400 hover:text-red-200 transition p-1.5 hover:bg-red-900/30 rounded" aria-label="Disconnect"><i data-lucide="log-out" width="16"></i></button>
+            <!-- Wallet -->
+            <div class="flex flex-col items-center sm:items-end gap-2 w-full sm:w-auto flex-shrink-0">
+                <div id="wallet-ui" class="hidden items-center gap-2 px-3 py-2 rounded-xl flex-wrap justify-center" style="background: rgba(14,14,26,0.9); border: 1px solid rgba(245,158,11,0.14); backdrop-filter: blur(12px);">
+                    <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0"></span>
+                    <span id="wallet-addr" class="font-mono text-xs text-orange-200/90 truncate max-w-[90px] sm:max-w-[120px]"></span>
+                    <span id="wallet-bal" class="font-mono text-xs text-white font-bold px-2 py-0.5 rounded sol-amount" style="background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.15);">0.00&nbsp;SOL</span>
+                    <div class="flex gap-0.5">
+                        <button id="refresh-btn" class="text-orange-400/70 hover:text-orange-300 transition p-1.5 hover:bg-orange-900/30 rounded-lg" aria-label="Refresh"><i data-lucide="refresh-cw" width="14"></i></button>
+                        <button id="disconnect-btn" class="text-red-400/70 hover:text-red-300 transition p-1.5 hover:bg-red-900/20 rounded-lg" aria-label="Disconnect"><i data-lucide="log-out" width="14"></i></button>
                     </div>
                 </div>
-                <button id="connect-btn" onclick="openWalletModal()" class="w-full md:w-auto px-6 md:px-8 py-3 rounded-xl font-mono text-sm uppercase tracking-wider font-bold transition-all duration-300" style="background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(217, 119, 6, 0.1) 100%); border: 1px solid rgba(245, 158, 11, 0.3); color: #f59e0b; box-shadow: 0 0 20px rgba(245, 158, 11, 0.08);" onmouseover="this.style.boxShadow='0 0 30px rgba(245, 158, 11, 0.2)'; this.style.borderColor='rgba(245, 158, 11, 0.5)'; this.style.transform='translateY(-1px)'" onmouseout="this.style.boxShadow='0 0 20px rgba(245, 158, 11, 0.08)'; this.style.borderColor='rgba(245, 158, 11, 0.3)'; this.style.transform='translateY(0)'">Connect Wallet</button>
+                <button id="connect-btn" onclick="openWalletModal()" class="w-full sm:w-auto px-5 py-2.5 rounded-xl font-mono text-xs uppercase tracking-widest font-bold transition-all duration-200" style="background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.28); color: #f59e0b;" onmouseover="this.style.background='rgba(245,158,11,0.18)';this.style.boxShadow='0 0 24px rgba(245,158,11,0.2)';this.style.transform='translateY(-1px)'" onmouseout="this.style.background='rgba(245,158,11,0.1)';this.style.boxShadow='';this.style.transform=''">Connect Wallet</button>
             </div>
         </div>
 
@@ -1739,59 +1725,68 @@
         <!-- TAB: DASHBOARD (Airdrop & Leaderboard) -->
         <div id="tab-dashboard" class="tab-content active">
 
-        <!-- Airdrop Panel - NOW PROMINENT AT TOP -->
-        <div class="panel mb-6 md:mb-8" style="background: linear-gradient(135deg, rgba(168, 85, 247, 0.06) 0%, rgba(18, 18, 28, 0.8) 100%); border-color: rgba(168, 85, 247, 0.12);">
-            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-purple-800/50 pb-3 mb-4 gap-2">
-                <h3 class="text-purple-400 font-mono text-xs sm:text-sm uppercase tracking-widest">🪂 AIRDROP STATUS & POINTS</h3>
-                <div class="flex items-center gap-1 sm:gap-3 flex-wrap justify-center sm:justify-end">
-                    <button onclick="toggleUserHoldingsModal()" class="text-yellow-400 hover:text-white transition font-mono text-[9px] sm:text-xs underline px-1.5 py-1" title="View your token holdings and points breakdown">MY HOLDINGS</button>
-                    <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400 hover:text-white transition font-mono text-[9px] sm:text-xs underline px-1.5 py-1">ELIGIBLE</button>
-                    <button onclick="toggleAirdropLogModal()" class="text-purple-400 hover:text-white transition font-mono text-[9px] sm:text-xs underline px-1.5 py-1">HISTORY</button>
-                    <button onclick="openAirdropStatsModal()" class="text-green-400 hover:text-white transition font-mono text-[9px] sm:text-xs underline px-1.5 py-1" title="View and share your lifetime airdrop stats">STATS</button>
+        <!-- Airdrop Panel -->
+        <div class="panel mb-5 md:mb-6" style="background: linear-gradient(135deg, rgba(139,92,246,0.07) 0%, rgba(14,14,26,0.9) 100%); border-color: rgba(139,92,246,0.14);">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 pb-3 gap-2" style="border-bottom: 1px solid rgba(139,92,246,0.12);">
+                <h3 class="text-purple-400 font-mono text-[11px] sm:text-xs uppercase tracking-widest flex items-center gap-2">
+                    <i data-lucide="parachute" class="w-3.5 h-3.5 opacity-80"></i>AIRDROP STATUS &amp; POINTS
+                </h3>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <button onclick="toggleUserHoldingsModal()" class="text-yellow-400/80 hover:text-yellow-200 transition font-mono text-[10px] flex items-center gap-1" title="View your token holdings">
+                        <i data-lucide="wallet" class="w-3 h-3"></i>Holdings
+                    </button>
+                    <button onclick="toggleAllEligibleUsersModal()" class="text-purple-400/80 hover:text-purple-200 transition font-mono text-[10px] flex items-center gap-1">
+                        <i data-lucide="users" class="w-3 h-3"></i>Eligible
+                    </button>
+                    <button onclick="toggleAirdropLogModal()" class="text-purple-400/80 hover:text-purple-200 transition font-mono text-[10px] flex items-center gap-1">
+                        <i data-lucide="history" class="w-3 h-3"></i>History
+                    </button>
+                    <button onclick="openAirdropStatsModal()" class="text-green-400/80 hover:text-green-200 transition font-mono text-[10px] flex items-center gap-1" title="Your lifetime stats">
+                        <i data-lucide="bar-chart-2" class="w-3 h-3"></i>Stats
+                    </button>
                 </div>
             </div>
-            <!-- v25.2: Mobile: 2x2 grid, Desktop: 4 columns - allow text wrapping -->
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 px-0 md:px-4">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
                 <!-- SOL Airdrop Pool -->
-                <div class="text-center p-3 md:p-4 rounded-xl md:border-r md:border-purple-800/20 md:rounded-none" style="background: rgba(168, 85, 247, 0.04);">
-                    <div class="text-[10px] md:text-xs text-purple-300 uppercase mb-1 md:mb-2 tracking-widest font-semibold">SOL Airdrop Pool</div>
-                    <div class="text-xl sm:text-2xl md:text-3xl lg:text-4xl text-purple-200 font-bold font-mono sol-amount" id="airdrop-balance" style="text-shadow: 0 0 16px rgba(168,85,247,0.4);">0.00 <span class="text-xs md:text-lg align-top text-purple-400">SOL</span></div>
-                    <div class="text-[10px] text-gray-500 mt-1">Wallet: <span id="wallet-balance" class="text-gray-400">0.00</span> SOL</div>
+                <div class="rounded-xl p-3 md:p-4 text-center" style="background: rgba(109,40,217,0.07); border: 1px solid rgba(139,92,246,0.1);">
+                    <div class="text-[9px] text-purple-400/70 uppercase tracking-widest font-semibold mb-1.5">Airdrop Pool</div>
+                    <div class="text-2xl sm:text-3xl md:text-4xl text-purple-200 font-bold font-mono sol-amount leading-none" id="airdrop-balance" style="text-shadow: 0 0 16px rgba(139,92,246,0.4);">0.00<span class="text-sm md:text-base text-purple-400/70 ml-1">SOL</span></div>
+                    <div class="text-[9px] text-gray-600 mt-1.5">Wallet: <span id="wallet-balance" class="text-gray-500">0.00</span> SOL</div>
                 </div>
 
                 <!-- Points Breakdown -->
-                <div class="text-center p-3 md:p-4 rounded-xl md:border-r md:border-purple-800/20 md:rounded-none flex flex-col justify-center gap-2" style="background: rgba(168, 85, 247, 0.04);">
-                    <div class="flex justify-between items-center px-1 md:px-4">
-                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest">Holder</span>
-                        <span class="text-sm md:text-lg text-yellow-400 font-bold font-mono num-value" id="user-top-positions">0.00</span>
+                <div class="rounded-xl p-3 md:p-4 flex flex-col justify-center gap-2" style="background: rgba(109,40,217,0.07); border: 1px solid rgba(139,92,246,0.1);">
+                    <div class="flex justify-between items-center">
+                        <span class="text-[9px] text-purple-400/60 uppercase tracking-wider">Holder</span>
+                        <span class="text-sm text-yellow-400 font-bold font-mono" id="user-top-positions">0.00</span>
                     </div>
-                    <div class="flex justify-between items-center px-1 md:px-4">
-                        <span class="text-[9px] md:text-[10px] text-green-300 uppercase tracking-widest">Robinhood</span>
-                        <span class="text-sm md:text-lg text-green-400 font-bold font-mono num-value" id="user-robinhood-points">0.00</span>
+                    <div class="flex justify-between items-center">
+                        <span class="text-[9px] text-green-400/60 uppercase tracking-wider">Robinhood</span>
+                        <span class="text-sm text-green-400 font-bold font-mono" id="user-robinhood-points">0.00</span>
                     </div>
-                    <div class="flex justify-between items-center px-1 md:px-4">
-                        <span class="text-[9px] md:text-[10px] text-purple-300 uppercase tracking-widest">ASDF 100</span>
-                        <span id="asdf-status" class="text-[10px] md:text-sm font-bold font-mono text-gray-500 no-break">CHECKING...</span>
+                    <div class="flex justify-between items-center">
+                        <span class="text-[9px] text-purple-400/60 uppercase tracking-wider">ASDF 100</span>
+                        <span id="asdf-status" class="text-[10px] font-bold font-mono text-gray-600">—</span>
                     </div>
                 </div>
 
                 <!-- Total Points -->
-                <div class="text-center p-3 md:p-4 rounded-xl md:border-r md:border-purple-800/20 md:rounded-none flex flex-col justify-center items-center" style="background: rgba(168, 85, 247, 0.04);">
-                    <div class="flex justify-center items-center gap-1 md:gap-2 mb-1">
-                        <div class="text-[10px] md:text-xs text-purple-300 uppercase tracking-widest font-semibold">Total Points</div>
-                        <button onclick="toggleAirdropInfoModal()" class="p-0 text-purple-400 hover:text-white transition" title="View Update Information">
-                            <i data-lucide="info" width="12" height="12"></i>
+                <div class="rounded-xl p-3 md:p-4 text-center flex flex-col justify-center items-center" style="background: rgba(109,40,217,0.07); border: 1px solid rgba(139,92,246,0.1);">
+                    <div class="flex items-center gap-1 mb-1">
+                        <span class="text-[9px] text-purple-400/70 uppercase tracking-widest font-semibold">Total Points</span>
+                        <button onclick="toggleAirdropInfoModal()" class="text-purple-500/60 hover:text-purple-300 transition">
+                            <i data-lucide="info" width="10" height="10"></i>
                         </button>
                     </div>
-                    <div class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl text-white font-bold font-mono num-value" id="user-total-points" style="text-shadow: 0 0 20px rgba(234,179,8,0.4);">0</div>
-                    <div id="points-multiplier-badge" class="hidden mt-1 px-2 py-0.5 bg-green-500/20 border border-green-500 rounded text-[8px] md:text-[10px] text-green-400 font-bold tracking-wider no-break">2X MULTIPLIER</div>
+                    <div class="text-3xl sm:text-4xl md:text-5xl text-white font-bold font-mono leading-none" id="user-total-points" style="text-shadow: 0 0 20px rgba(234,179,8,0.35);">0</div>
+                    <div id="points-multiplier-badge" class="hidden mt-1.5 px-2 py-0.5 rounded text-[9px] text-green-400 font-bold tracking-wider" style="background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.3);">2× ASDF BOOST</div>
                 </div>
 
                 <!-- Expected Airdrop -->
-                <div class="text-center p-3 md:p-4 rounded-xl flex flex-col justify-center items-center" style="background: rgba(168, 85, 247, 0.06);">
-                    <div class="text-[9px] md:text-[10px] text-purple-300 uppercase mb-1 tracking-widest">Expected Airdrop</div>
-                    <div class="text-lg sm:text-xl md:text-2xl text-green-400 font-bold font-mono num-value" id="expected-airdrop">0.0000</div>
-                    <div class="text-[9px] md:text-[10px] text-purple-400 font-mono mt-1">SOL (Est)</div>
+                <div class="rounded-xl p-3 md:p-4 text-center flex flex-col justify-center items-center" style="background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.1);">
+                    <div class="text-[9px] text-green-400/60 uppercase tracking-widest font-semibold mb-1.5">Expected</div>
+                    <div class="text-2xl sm:text-3xl text-green-400 font-bold font-mono leading-none" id="expected-airdrop">0.0000</div>
+                    <div class="text-[9px] text-green-500/50 font-mono mt-1.5">SOL (Est.)</div>
                 </div>
             </div>
         </div>
@@ -1846,129 +1841,140 @@
             </div>
         </div>
 
-        <!-- LEADERBOARD - v18.0: Now shows all tokens, eligibility based on $100 volume -->
-        <div class="panel mb-6 md:mb-8" style="background: rgba(12, 12, 20, 0.6); border-color: rgba(245, 158, 11, 0.1);">
-            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-orange-900/50 pb-2 mb-4 gap-2">
-                <div class="flex flex-col sm:flex-row items-start sm:items-center gap-1 sm:gap-4">
-                    <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest">🔥 TOP TOKENS (24H VOL)</h3>
-                    <span id="leaderboard-last-updated" class="text-orange-600 text-[10px] sm:text-xs font-mono">Syncing...</span>
+        <!-- LEADERBOARD -->
+        <div class="panel mb-5 md:mb-6" style="background: rgba(10,10,20,0.7); border-color: rgba(245,158,11,0.1);">
+            <div class="flex justify-between items-center pb-3 mb-3 gap-2" style="border-bottom: 1px solid rgba(245,158,11,0.1);">
+                <div class="flex items-center gap-3">
+                    <h3 class="text-orange-500 font-mono text-[11px] sm:text-xs uppercase tracking-widest flex items-center gap-2">
+                        <i data-lucide="flame" class="w-3.5 h-3.5"></i>Top Tokens
+                    </h3>
+                    <span id="leaderboard-last-updated" class="text-orange-600/60 text-[10px] font-mono hidden sm:block">Syncing...</span>
                 </div>
-                <div class="flex items-center gap-2">
-                    <button onclick="toggleAllLaunchesModal()" class="text-orange-400 hover:text-white transition p-1.5 rounded hover:bg-orange-800" title="Expand to All Launches" aria-label="View all launches">
-                        <i data-lucide="maximize-2" width="16"></i>
+                <div class="flex items-center gap-1">
+                    <button onclick="toggleAllLaunchesModal()" class="text-orange-400/70 hover:text-orange-200 transition p-1.5 rounded-lg hover:bg-orange-900/30" title="View all" aria-label="View all launches">
+                        <i data-lucide="maximize-2" width="14"></i>
                     </button>
-                    <button onclick="updateLeaderboard()" class="text-orange-400 hover:text-white transition p-1.5 rounded hover:bg-orange-800" title="Refresh Leaderboard" aria-label="Refresh">
-                        <i data-lucide="refresh-cw" width="16"></i>
+                    <button onclick="updateLeaderboard()" class="text-orange-400/70 hover:text-orange-200 transition p-1.5 rounded-lg hover:bg-orange-900/30" title="Refresh" aria-label="Refresh">
+                        <i data-lucide="refresh-cw" width="14"></i>
                     </button>
                 </div>
             </div>
-            <div class="overflow-x-auto">
+            <div class="overflow-x-auto -mx-1">
                 <table class="leader-table w-full">
                     <thead>
                         <tr>
-                            <th style="width:40px" class="text-center">#</th>
+                            <th style="width:36px" class="text-center">#</th>
                             <th>Token</th>
-                            <th style="width:90px" class="text-right">MCap</th>
-                            <th style="width:110px" class="text-right">Vol 24H</th>
-                            <th style="width:70px"></th>
+                            <th style="width:85px" class="text-right">MCap</th>
+                            <th style="width:100px" class="text-right">Vol 24H</th>
+                            <th style="width:60px"></th>
                         </tr>
                     </thead>
-                    <tbody id="leaderboard-body"><tr><td colspan="5" class="text-center text-orange-400 py-4">Scanning Chain Data...</td></tr></tbody>
+                    <tbody id="leaderboard-body"><tr><td colspan="5" class="text-center text-orange-400/50 py-6 font-mono text-xs">Scanning chain data...</td></tr></tbody>
                 </table>
             </div>
         </div>
 
-        <!-- v25.4: Rewards Claim Tracker (formerly Buyback & Fee Tracker) -->
-        <div class="panel mb-6 md:mb-8" style="background: linear-gradient(135deg, rgba(245, 158, 11, 0.04) 0%, rgba(18, 18, 28, 0.8) 100%); border-color: rgba(245, 158, 11, 0.1);">
-            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-orange-900/50 pb-2 mb-4 gap-2">
-                <h3 class="text-orange-500 font-mono text-xs sm:text-sm uppercase tracking-widest">REWARDS CLAIM TRACKER</h3>
-                <button onclick="toggleLogModal()" class="text-orange-400 hover:text-white transition font-mono text-[10px] sm:text-xs underline p-1">VIEW LOGS</button>
+        <!-- Rewards Claim Tracker -->
+        <div class="panel mb-5 md:mb-6" style="background: linear-gradient(135deg, rgba(245,158,11,0.04) 0%, rgba(14,14,26,0.9) 100%); border-color: rgba(245,158,11,0.1);">
+            <div class="flex justify-between items-center pb-3 mb-3 gap-2" style="border-bottom: 1px solid rgba(245,158,11,0.1);">
+                <h3 class="text-orange-500 font-mono text-[11px] sm:text-xs uppercase tracking-widest flex items-center gap-2">
+                    <i data-lucide="coins" class="w-3.5 h-3.5"></i>Rewards Tracker
+                </h3>
+                <button onclick="toggleLogModal()" class="text-orange-400/70 hover:text-orange-200 transition font-mono text-[10px] flex items-center gap-1">
+                    <i data-lucide="scroll-text" class="w-3 h-3"></i>Logs
+                </button>
             </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 text-center">
-                <div class="p-3 md:p-4 rounded-xl" style="background: rgba(6, 6, 11, 0.4); border: 1px solid rgba(255, 255, 255, 0.04);">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Total Pending</div>
-                    <div class="text-base md:text-xl text-white font-bold font-mono mt-1 sol-amount"><span id="track-balance">0.0000</span> SOL</div>
-                    <div class="text-[9px] md:text-[10px] text-gray-500 mt-1">
-                        <span class="text-orange-400">Platform:</span> <span id="track-platform-fees">0.0000</span>
-                    </div>
-                    <div class="text-[9px] md:text-[10px] text-gray-500">
-                        <span class="text-green-400">Robinhood:</span> <span id="track-robinhood-fees">0.0000</span>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 text-center">
+                <div class="p-3 rounded-xl" style="background: rgba(5,5,14,0.5); border: 1px solid var(--border-subtle);">
+                    <div class="text-[9px] text-orange-400/60 uppercase tracking-wider mb-1">Pending</div>
+                    <div class="text-base md:text-lg text-white font-bold font-mono sol-amount"><span id="track-balance">0.0000</span><span class="text-xs text-orange-400/50 ml-1">SOL</span></div>
+                    <div class="text-[9px] text-gray-600 mt-1 space-y-0.5">
+                        <div><span class="text-orange-400/50">Plat:</span> <span id="track-platform-fees">0.0000</span></div>
+                        <div><span class="text-green-400/50">RH:</span> <span id="track-robinhood-fees">0.0000</span></div>
                     </div>
                 </div>
-                <div class="p-3 md:p-4 rounded-xl" style="background: rgba(6, 6, 11, 0.4); border: 1px solid rgba(255, 255, 255, 0.04);">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Last Claimed</div>
-                    <div class="text-base md:text-xl text-green-400 font-bold font-mono mt-1 sol-amount"><span id="track-last-amt">0.0000</span> SOL</div>
+                <div class="p-3 rounded-xl" style="background: rgba(5,5,14,0.5); border: 1px solid var(--border-subtle);">
+                    <div class="text-[9px] text-orange-400/60 uppercase tracking-wider mb-1">Last Claimed</div>
+                    <div class="text-base md:text-lg text-green-400 font-bold font-mono sol-amount"><span id="track-last-amt">0.0000</span><span class="text-xs text-green-400/50 ml-1">SOL</span></div>
                 </div>
-                <div class="p-3 md:p-4 rounded-xl" style="background: rgba(6, 6, 11, 0.4); border: 1px solid rgba(255, 255, 255, 0.04);">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Claim Time</div>
-                    <div class="text-xs md:text-sm text-white font-mono mt-2" id="track-last-time">Never</div>
+                <div class="p-3 rounded-xl" style="background: rgba(5,5,14,0.5); border: 1px solid var(--border-subtle);">
+                    <div class="text-[9px] text-orange-400/60 uppercase tracking-wider mb-1">Claim Time</div>
+                    <div class="text-xs text-white font-mono mt-1.5 leading-snug" id="track-last-time">Never</div>
                 </div>
-                <div class="p-3 md:p-4 rounded-xl" style="background: rgba(6, 6, 11, 0.4); border: 1px solid rgba(255, 255, 255, 0.04);">
-                    <div class="text-[10px] md:text-xs text-orange-400 uppercase">Next Claim</div>
-                    <div class="text-base md:text-xl text-yellow-400 font-bold font-mono mt-1" id="track-next-check">--:--</div>
-                    <div class="text-[9px] md:text-[10px] text-gray-500 mt-1">auto every 2.5 min</div>
+                <div class="p-3 rounded-xl" style="background: rgba(5,5,14,0.5); border: 1px solid var(--border-subtle);">
+                    <div class="text-[9px] text-orange-400/60 uppercase tracking-wider mb-1">Next Claim</div>
+                    <div class="text-base md:text-lg text-yellow-400 font-bold font-mono" id="track-next-check">--:--</div>
+                    <div class="text-[9px] text-gray-600 mt-1">every 2.5 min</div>
                 </div>
 
-                <!-- Dynamic Conservation Notice -->
+                <!-- Conservation Notice -->
                 <div id="conservation-notice" class="conservation-notice col-span-2 md:col-span-4">
-                    <div class="flex items-center justify-center gap-2 mb-1">
-                        <i data-lucide="shield-alert" class="text-blue-400" width="14"></i>
-                        <span class="text-blue-300 uppercase text-[10px] md:text-xs">Conserving SOL for Airdrop</span>
+                    <div class="flex items-center justify-center gap-1.5 mb-1">
+                        <i data-lucide="shield-alert" class="text-blue-400" width="13"></i>
+                        <span class="text-blue-300 uppercase text-[9px] tracking-wider font-semibold">Conserving SOL for Airdrop</span>
                     </div>
-                    <div class="text-blue-200 text-[10px] md:text-xs text-center">
-                        Targeting <span id="cons-users" class="font-bold text-white num-value">0</span> users.
-                        Need <span id="cons-need" class="font-bold text-white num-value">0.0000</span> SOL (Have <span id="cons-have" class="text-gray-400 num-value">0.0000</span>).
+                    <div class="text-blue-200/70 text-[9px] md:text-[10px] text-center">
+                        Targeting <span id="cons-users" class="font-bold text-white">0</span> users.
+                        Need <span id="cons-need" class="font-bold text-white">0.0000</span> SOL (Have <span id="cons-have" class="text-gray-400">0.0000</span>).
                         <span id="cons-missing" class="text-yellow-400 ml-1"></span>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Platform Metrics - Combined -->
-        <div class="panel" id="robinhood-section" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.04) 0%, rgba(18, 18, 28, 0.8) 100%); border-color: rgba(16, 185, 129, 0.1);">
-            <h3 class="text-green-400 font-mono text-xs sm:text-sm uppercase tracking-widest border-b border-green-900/50 pb-2 mb-4 md:mb-6 flex items-center gap-2">
-                <svg class="w-3 h-3 md:w-4 md:h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
-                <span>PLATFORM METRICS</span>
-                <span class="ml-auto text-[10px] text-green-500/70 font-normal" id="robinhood-status-indicator">ACTIVE</span>
-            </h3>
-            <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 md:gap-3">
-                <div class="metric-card" style="border-color: #f97316;">
-                    <div class="metric-label" style="color: #fdba74;">Airdropped</div>
-                    <div id="metric-pump" class="metric-value" style="color: #fb923c;">0.00</div>
+        <!-- Platform Metrics -->
+        <div class="panel" id="robinhood-section" style="background: linear-gradient(135deg, rgba(16,185,129,0.04) 0%, rgba(14,14,26,0.9) 100%); border-color: rgba(16,185,129,0.1);">
+            <div class="flex items-center justify-between pb-3 mb-4" style="border-bottom: 1px solid rgba(16,185,129,0.1);">
+                <h3 class="text-green-400 font-mono text-[11px] sm:text-xs uppercase tracking-widest flex items-center gap-2">
+                    <i data-lucide="activity" class="w-3.5 h-3.5"></i>Platform Metrics
+                </h3>
+                <span class="text-[9px] text-green-500/60 font-mono uppercase tracking-wider" id="robinhood-status-indicator">● Active</span>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+                <div class="metric-card" style="border-color: rgba(249,115,22,0.3);">
+                    <div class="metric-label" style="color: rgba(253,186,116,0.7);">Airdropped</div>
+                    <div id="metric-pump" class="metric-value" style="color: #fb923c; font-size:16px;">0.00</div>
                 </div>
-                <div class="metric-card" style="border-color: #f97316;">
-                    <div class="metric-label" style="color: #fdba74;">Daily Vol</div>
-                    <div id="metric-fees" class="metric-value" style="color: #fb923c;">$0.00</div>
+                <div class="metric-card" style="border-color: rgba(249,115,22,0.3);">
+                    <div class="metric-label" style="color: rgba(253,186,116,0.7);">Daily Vol</div>
+                    <div id="metric-fees" class="metric-value" style="color: #fb923c; font-size:16px;">$0</div>
                 </div>
-                <div class="metric-card" style="border-color: #22c55e;">
-                    <div class="metric-label" style="color: #86efac;">Partners</div>
+                <div class="metric-card" style="border-color: rgba(34,197,94,0.25);">
+                    <div class="metric-label" style="color: rgba(134,239,172,0.7);">Partners</div>
                     <div id="robinhood-token-count" class="metric-value" style="color: #4ade80;">0</div>
                 </div>
-                <div class="metric-card" style="border-color: #22c55e;">
-                    <div class="metric-label" style="color: #86efac;">Pending Fees</div>
-                    <div id="robinhood-pending-fees" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00 SOL</div>
+                <div class="metric-card" style="border-color: rgba(34,197,94,0.25);">
+                    <div class="metric-label" style="color: rgba(134,239,172,0.7);">Pending</div>
+                    <div id="robinhood-pending-fees" class="metric-value" style="color: #4ade80; font-size:13px;">0.00 SOL</div>
                 </div>
-                <div class="metric-card" style="border-color: #22c55e;">
-                    <div class="metric-label" style="color: #86efac;">Lifetime</div>
-                    <div id="robinhood-fees" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00 SOL</div>
+                <div class="metric-card" style="border-color: rgba(34,197,94,0.25);">
+                    <div class="metric-label" style="color: rgba(134,239,172,0.7);">Lifetime</div>
+                    <div id="robinhood-fees" class="metric-value" style="color: #4ade80; font-size:13px;">0.00 SOL</div>
                 </div>
-                <div class="metric-card" style="border-color: #22c55e;">
-                    <div class="metric-label" style="color: #86efac;">Your Holds</div>
-                    <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80; font-size: 16px;">-</div>
+                <div class="metric-card" style="border-color: rgba(34,197,94,0.25);">
+                    <div class="metric-label" style="color: rgba(134,239,172,0.7);">Your Holds</div>
+                    <div id="robinhood-user-positions" class="metric-value" style="color: #4ade80;">—</div>
                 </div>
-                <div class="metric-card" style="border-color: #22c55e;">
-                    <div class="metric-label" style="color: #86efac;">Your Points</div>
-                    <div id="robinhood-user-points-display" class="metric-value" style="color: #4ade80; font-size: 14px;">0.00</div>
+                <div class="metric-card" style="border-color: rgba(34,197,94,0.25);">
+                    <div class="metric-label" style="color: rgba(134,239,172,0.7);">Your Pts</div>
+                    <div id="robinhood-user-points-display" class="metric-value" style="color: #4ade80; font-size:13px;">0.00</div>
                 </div>
-                <div class="metric-card" style="border-color: #22c55e;">
-                    <div class="metric-label" style="color: #86efac;">Top Earner</div>
-                    <div id="robinhood-top-earner" class="metric-value" style="color: #4ade80; font-size: 12px;">-</div>
+                <div class="metric-card" style="border-color: rgba(34,197,94,0.25);">
+                    <div class="metric-label" style="color: rgba(134,239,172,0.7);">Top Earner</div>
+                    <div id="robinhood-top-earner" class="metric-value" style="color: #4ade80; font-size:11px;">—</div>
                 </div>
             </div>
-            <div class="text-center mt-4 flex justify-center gap-2 flex-wrap">
-                <button onclick="toggleAboutModal()" class="text-orange-400 hover:text-white font-mono text-[10px] md:text-xs px-2 md:px-3 py-2 rounded-lg transition-all duration-300" style="border: 1px solid rgba(245, 158, 11, 0.2); background: rgba(245, 158, 11, 0.04);" onmouseover="this.style.background='rgba(245, 158, 11, 0.12)'; this.style.borderColor='rgba(245, 158, 11, 0.4)'" onmouseout="this.style.background='rgba(245, 158, 11, 0.04)'; this.style.borderColor='rgba(245, 158, 11, 0.2)'">FEE MECHANICS</button>
-                <button onclick="toggleRobinhoodModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs px-2 md:px-3 py-2 rounded-lg transition-all duration-300" style="border: 1px solid rgba(16, 185, 129, 0.2); background: rgba(16, 185, 129, 0.04);" onmouseover="this.style.background='rgba(16, 185, 129, 0.12)'; this.style.borderColor='rgba(16, 185, 129, 0.4)'" onmouseout="this.style.background='rgba(16, 185, 129, 0.04)'; this.style.borderColor='rgba(16, 185, 129, 0.2)'">VIEW PARTNERS</button>
-                <button onclick="toggleRobinhoodInfoModal()" class="text-green-400 hover:text-white font-mono text-[10px] md:text-xs px-2 md:px-3 py-2 rounded-lg transition-all duration-300" style="border: 1px solid rgba(16, 185, 129, 0.2); background: rgba(16, 185, 129, 0.04);" onmouseover="this.style.background='rgba(16, 185, 129, 0.12)'; this.style.borderColor='rgba(16, 185, 129, 0.4)'" onmouseout="this.style.background='rgba(16, 185, 129, 0.04)'; this.style.borderColor='rgba(16, 185, 129, 0.2)'">HOW IT WORKS</button>
+            <div class="flex justify-center gap-2 flex-wrap mt-4 pt-3" style="border-top: 1px solid rgba(255,255,255,0.04);">
+                <button onclick="toggleAboutModal()" class="inline-flex items-center gap-1.5 text-orange-400/70 hover:text-orange-200 font-mono text-[10px] px-3 py-1.5 rounded-lg transition-all" style="border: 1px solid rgba(245,158,11,0.15); background: rgba(245,158,11,0.04);">
+                    <i data-lucide="zap" class="w-3 h-3"></i>Fee Mechanics
+                </button>
+                <button onclick="toggleRobinhoodModal()" class="inline-flex items-center gap-1.5 text-green-400/70 hover:text-green-200 font-mono text-[10px] px-3 py-1.5 rounded-lg transition-all" style="border: 1px solid rgba(16,185,129,0.15); background: rgba(16,185,129,0.04);">
+                    <i data-lucide="users" class="w-3 h-3"></i>View Partners
+                </button>
+                <button onclick="toggleRobinhoodInfoModal()" class="inline-flex items-center gap-1.5 text-green-400/70 hover:text-green-200 font-mono text-[10px] px-3 py-1.5 rounded-lg transition-all" style="border: 1px solid rgba(16,185,129,0.15); background: rgba(16,185,129,0.04);">
+                    <i data-lucide="book-open" class="w-3 h-3"></i>How It Works
+                </button>
             </div>
         </div>
 
@@ -1977,112 +1983,98 @@
         <!-- TAB: REGISTER TOKEN -->
         <div id="tab-register" class="tab-content">
 
-        <!-- Check Token Status Section -->
-        <div class="panel mb-6" style="background: linear-gradient(135deg, rgba(6, 182, 212, 0.04) 0%, rgba(18, 18, 28, 0.8) 100%); border-color: rgba(6, 182, 212, 0.1);">
-            <h3 class="text-cyan-400 font-mono text-sm mb-4 uppercase tracking-widest border-b-2 border-cyan-900/50 pb-3 flex items-center gap-2">
-                <i data-lucide="search-check" class="w-4 h-4"></i>
-                Check Token Status
+        <!-- Check Token Status -->
+        <div class="panel mb-5" style="background: linear-gradient(135deg, rgba(6,182,212,0.05) 0%, rgba(14,14,26,0.9) 100%); border-color: rgba(6,182,212,0.12);">
+            <h3 class="text-cyan-400 font-mono text-[11px] sm:text-xs mb-3 pb-3 uppercase tracking-widest flex items-center gap-2" style="border-bottom: 1px solid rgba(6,182,212,0.12);">
+                <i data-lucide="search-check" class="w-3.5 h-3.5"></i>Check Token Status
             </h3>
-            <p class="text-cyan-200/70 text-sm mb-4">Verify if a token is registered with Robinhood and view its fee share details.</p>
-
-            <div class="flex flex-col sm:flex-row gap-3">
-                <input type="text" id="check-token-mint" class="flex-1 px-4 py-3 text-white font-mono text-sm focus:outline-none rounded-xl transition-all duration-300" style="background: rgba(6, 6, 11, 0.6); border: 1px solid rgba(6, 182, 212, 0.2); color: white;" onfocus="this.style.borderColor='rgba(6, 182, 212, 0.5)'; this.style.boxShadow='0 0 16px rgba(6, 182, 212, 0.1)'" onblur="this.style.borderColor='rgba(6, 182, 212, 0.2)'; this.style.boxShadow='none'" placeholder="Enter token mint address...">
-                <button onclick="checkTokenRegistration()" id="check-token-btn" class="text-white font-mono text-sm px-6 py-3 rounded-xl transition-all duration-300 flex items-center justify-center gap-2 whitespace-nowrap" style="background: linear-gradient(135deg, #0891b2 0%, #0e7490 100%);" onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 16px rgba(6, 182, 212, 0.3)'" onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
-                    <i data-lucide="search" class="w-4 h-4"></i>
-                    CHECK STATUS
+            <p class="text-cyan-200/50 text-xs mb-3">Verify if a token is registered and view its fee share details.</p>
+            <div class="flex flex-col sm:flex-row gap-2">
+                <input type="text" id="check-token-mint" class="flex-1 px-3 py-2.5 text-white font-mono text-sm rounded-xl transition-all" style="background: rgba(5,5,14,0.7); border: 1px solid rgba(6,182,212,0.18); outline: none;" onfocus="this.style.borderColor='rgba(6,182,212,0.45)'; this.style.boxShadow='0 0 0 3px rgba(6,182,212,0.08)'" onblur="this.style.borderColor='rgba(6,182,212,0.18)'; this.style.boxShadow='none'" placeholder="Token mint address...">
+                <button onclick="checkTokenRegistration()" id="check-token-btn" class="text-white font-mono text-xs px-5 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 whitespace-nowrap font-semibold" style="background: linear-gradient(135deg, rgba(8,145,178,0.9) 0%, rgba(14,116,144,0.9) 100%); border: 1px solid rgba(6,182,212,0.3);" onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 16px rgba(6,182,212,0.25)'" onmouseout="this.style.transform=''; this.style.boxShadow=''">
+                    <i data-lucide="search" class="w-3.5 h-3.5"></i>Check
                 </button>
             </div>
-
-            <div id="check-token-result" class="mt-4 hidden">
-                <!-- Results will be populated by JS -->
-            </div>
+            <div id="check-token-result" class="mt-3 hidden"></div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 lg:gap-6">
             <!-- Registration Form -->
             <div class="panel register-panel">
-                <h3 class="text-green-400 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-green-900/50 pb-3">Register a Token</h3>
+                <h3 class="text-green-400 font-mono text-[11px] sm:text-xs mb-4 pb-3 uppercase tracking-widest" style="border-bottom: 1px solid rgba(16,185,129,0.15);">
+                    <i data-lucide="file-plus" class="inline-block w-3.5 h-3.5 mr-1.5"></i>Register a Token
+                </h3>
 
-                <div class="mb-6">
-                    <p class="text-green-200/80 text-sm mb-4">
-                        Register any Pump.fun token that shares fees with Robinhood. Once registered, the token appears on the leaderboard and holders can earn airdrop points.
-                    </p>
-                    <div class="bg-green-900/30 p-3 rounded border border-green-700/50 text-xs text-green-300">
-                        <strong>Requirement:</strong> The token creator must have added our platform wallet as a fee recipient on Pump.fun.
-                    </div>
+                <div class="mb-4 p-3 rounded-xl text-xs text-green-300/70" style="background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.12);">
+                    Register any Pump.fun token that shares fees with Robinhood. Holders earn airdrop points.
+                    <span class="block mt-1 text-green-400/60"><strong>Req:</strong> Token creator must add our wallet as fee recipient on Pump.fun.</span>
                 </div>
 
                 <div class="mb-4">
-                    <label class="block text-sm text-green-300 font-mono mb-2">TOKEN MINT ADDRESS <span class="text-red-500">*</span></label>
-                    <input type="text" id="register-mint" class="register-input" placeholder="Enter token mint address (e.g., 9zB5wR...)" maxlength="50">
+                    <label class="block text-xs text-green-400/60 font-mono mb-1.5 uppercase tracking-wider">Mint Address <span class="text-red-400">*</span></label>
+                    <input type="text" id="register-mint" class="register-input" placeholder="Token mint address (e.g., 9zB5wR...)" maxlength="50">
                 </div>
 
-                <div id="register-verification-status" class="mb-4 hidden">
-                    <!-- Will be populated by JS -->
-                </div>
+                <div id="register-verification-status" class="mb-3 hidden"></div>
 
-                <div id="register-token-preview" class="mb-6 hidden">
-                    <div class="bg-black/30 p-4 rounded border border-green-700/50">
-                        <div class="flex items-center gap-4">
-                            <img id="register-preview-img" src="" class="w-16 h-16 rounded border border-green-600 object-cover">
-                            <div>
-                                <div id="register-preview-ticker" class="text-xl font-bold text-white font-mono">$TOKEN</div>
-                                <div id="register-preview-name" class="text-sm text-green-400">Token Name</div>
-                                <div id="register-preview-mcap" class="text-xs text-gray-400 mt-1">MCAP: $0</div>
-                            </div>
+                <div id="register-token-preview" class="mb-4 hidden">
+                    <div class="p-3 rounded-xl flex items-center gap-4" style="background: rgba(5,5,14,0.6); border: 1px solid rgba(16,185,129,0.15);">
+                        <img id="register-preview-img" src="" class="w-14 h-14 rounded-xl border border-green-700/50 object-cover flex-shrink-0">
+                        <div class="min-w-0">
+                            <div id="register-preview-ticker" class="text-xl font-bold text-white font-mono leading-none">$TOKEN</div>
+                            <div id="register-preview-name" class="text-xs text-green-400/80 mt-0.5 truncate">Token Name</div>
+                            <div id="register-preview-mcap" class="text-[10px] text-gray-500 mt-1">MCap: $0</div>
                         </div>
                     </div>
                 </div>
 
-                <button id="verify-token-btn" onclick="verifyTokenForRegistration()" class="btn-register mb-3">
-                    <i data-lucide="search" class="inline-block w-4 h-4 mr-2"></i>VERIFY FEE SHARING
+                <button id="verify-token-btn" onclick="verifyTokenForRegistration()" class="btn-register mb-2">
+                    <i data-lucide="search" class="inline-block w-4 h-4 mr-2"></i>Verify Fee Sharing
                 </button>
-
                 <button id="register-token-btn" onclick="registerToken()" class="btn-register hidden" disabled>
-                    <i data-lucide="check-circle" class="inline-block w-4 h-4 mr-2"></i>REGISTER TOKEN
+                    <i data-lucide="check-circle" class="inline-block w-4 h-4 mr-2"></i>Register Token
                 </button>
-
-                <div id="register-status-msg" class="status-box mt-4"></div>
+                <div id="register-status-msg" class="status-box mt-3"></div>
             </div>
 
-            <!-- Registration Info -->
-            <div class="panel bg-black/30 border border-green-900/50">
-                <h3 class="text-green-400 font-mono text-sm mb-6 uppercase tracking-widest border-b-2 border-green-900/50 pb-3">How It Works</h3>
+            <!-- How It Works -->
+            <div class="panel" style="background: rgba(5,5,14,0.5); border-color: rgba(16,185,129,0.1);">
+                <h3 class="text-green-400 font-mono text-[11px] sm:text-xs mb-4 pb-3 uppercase tracking-widest" style="border-bottom: 1px solid rgba(16,185,129,0.12);">
+                    <i data-lucide="book-open" class="inline-block w-3.5 h-3.5 mr-1.5"></i>How It Works
+                </h3>
 
-                <div class="space-y-6">
-                    <div class="flex gap-4">
-                        <div class="w-10 h-10 bg-green-900/50 rounded-full flex items-center justify-center text-green-400 font-bold flex-shrink-0">1</div>
+                <div class="space-y-4">
+                    <div class="flex gap-3">
+                        <div class="w-8 h-8 rounded-lg flex items-center justify-center text-green-400 font-bold text-sm flex-shrink-0 font-mono" style="background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2);">1</div>
                         <div>
-                            <h4 class="text-white font-bold mb-1">Creator Shares Fees</h4>
-                            <p class="text-green-200/70 text-sm">The token creator must add Robinhood's wallet as a fee recipient on Pump.fun. This shares a portion of trading fees with us.</p>
+                            <h4 class="text-white font-semibold text-sm mb-0.5">Creator Shares Fees</h4>
+                            <p class="text-green-200/50 text-xs leading-relaxed">Add Robinhood's wallet as a fee recipient on Pump.fun to share a portion of trading fees.</p>
                         </div>
                     </div>
-
-                    <div class="flex gap-4">
-                        <div class="w-10 h-10 bg-green-900/50 rounded-full flex items-center justify-center text-green-400 font-bold flex-shrink-0">2</div>
+                    <div class="flex gap-3">
+                        <div class="w-8 h-8 rounded-lg flex items-center justify-center text-green-400 font-bold text-sm flex-shrink-0 font-mono" style="background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2);">2</div>
                         <div>
-                            <h4 class="text-white font-bold mb-1">Enter Token Mint</h4>
-                            <p class="text-green-200/70 text-sm">Paste the token's mint address. We verify on-chain that our platform is listed as a fee recipient.</p>
+                            <h4 class="text-white font-semibold text-sm mb-0.5">Enter Token Mint</h4>
+                            <p class="text-green-200/50 text-xs leading-relaxed">Paste the token's mint address. We verify on-chain that our platform is listed as a fee recipient.</p>
                         </div>
                     </div>
-
-                    <div class="flex gap-4">
-                        <div class="w-10 h-10 bg-green-900/50 rounded-full flex items-center justify-center text-green-400 font-bold flex-shrink-0">3</div>
+                    <div class="flex gap-3">
+                        <div class="w-8 h-8 rounded-lg flex items-center justify-center text-green-400 font-bold text-sm flex-shrink-0 font-mono" style="background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2);">3</div>
                         <div>
-                            <h4 class="text-white font-bold mb-1">Join the Ecosystem</h4>
-                            <p class="text-green-200/70 text-sm">Once verified and registered, the token appears on the leaderboard and holders start earning airdrop points!</p>
+                            <h4 class="text-white font-semibold text-sm mb-0.5">Go Live</h4>
+                            <p class="text-green-200/50 text-xs leading-relaxed">Token appears on the leaderboard and holders start earning airdrop points immediately!</p>
                         </div>
                     </div>
                 </div>
 
-                <div class="mt-8 p-4 bg-purple-900/30 rounded border border-purple-700/50">
-                    <h4 class="text-purple-400 font-bold text-sm mb-2">Benefits of Registration</h4>
-                    <ul class="text-purple-200/80 text-xs space-y-1">
-                        <li>- Token appears on Robinhood leaderboard</li>
-                        <li>- Top 250 holders earn airdrop points (based on % of total supply)</li>
-                        <li>- Market data tracked (MCAP, Volume)</li>
-                        <li>- Eligible for King of the Pill bonus</li>
-                        <li>- Shared fees fund the airdrop pool</li>
+                <div class="mt-5 p-3 rounded-xl" style="background: rgba(168,85,247,0.06); border: 1px solid rgba(168,85,247,0.15);">
+                    <h4 class="text-purple-400 font-semibold text-xs mb-2 flex items-center gap-1.5"><i data-lucide="star" class="w-3 h-3"></i>Benefits</h4>
+                    <ul class="text-purple-200/60 text-[11px] space-y-1 leading-relaxed">
+                        <li>• Leaderboard visibility</li>
+                        <li>• Top 250 holders earn airdrop points</li>
+                        <li>• Market data tracking (MCap, Volume)</li>
+                        <li>• Eligible for King of the Pill bonus</li>
+                        <li>• Shared fees fund the airdrop pool</li>
                     </ul>
                 </div>
 
@@ -2404,9 +2396,12 @@
 
         </div><!-- END TAB: PAGS -->
 
-        <div class="flex flex-col sm:flex-row justify-between items-center mt-6 md:mt-10 text-[10px] md:text-xs font-mono pt-4 md:pt-6 opacity-60 gap-2" style="border-top: 1px solid rgba(255, 255, 255, 0.04);">
-            <div><span class="text-orange-600">RPC: MAINNET PUBLIC</span></div>
-            <div class="flex gap-2 md:gap-4 flex-wrap justify-center"><span>STATUS: <span id="sys-status" class="sys-status" onclick="toggleStatusModal()">OFFLINE</span></span><span id="version-display" class="text-orange-500 font-bold">v...</span></div>
+        <div class="flex flex-col sm:flex-row justify-between items-center mt-6 text-[10px] font-mono pt-4 gap-2" style="border-top: 1px solid rgba(255,255,255,0.04);">
+            <span class="text-orange-600/50 tracking-wider">RPC: MAINNET</span>
+            <div class="flex items-center gap-3 flex-wrap justify-center">
+                <span class="text-gray-600">STATUS: <span id="sys-status" class="sys-status cursor-pointer hover:opacity-100 transition-opacity" onclick="toggleStatusModal()">OFFLINE</span></span>
+                <span id="version-display" class="text-orange-500/70 font-bold tracking-wider">v...</span>
+            </div>
         </div>
     </div>
 </div>
