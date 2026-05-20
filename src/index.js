@@ -269,13 +269,24 @@ async function main() {
         }
     };
 
-    // PAGS wallet initialization disabled
+    // Initialize PAGS keypair from environment variable
+    let pagsKeypair = null;
+    if (config.PAGS_WALLET_PRIVATE_KEY) {
+        try {
+            pagsKeypair = Keypair.fromSecretKey(bs58.decode(config.PAGS_WALLET_PRIVATE_KEY));
+            logger.info(`[PAGS] Keypair loaded: ${pagsKeypair.publicKey.toString()}`);
+        } catch (e) {
+            logger.error(`[PAGS] Failed to load keypair from PAGS_WALLET_PRIVATE_KEY: ${e.message}`);
+        }
+    } else {
+        logger.warn('[PAGS] No PAGS_WALLET_PRIVATE_KEY set — falling back to devKeypair');
+    }
 
     // Dependencies object for modules
     const deps = {
         connection,
         devKeypair,
-        pagsKeypair: null, // PAGS disabled
+        pagsKeypair,
         wallet,
         db,
         redis,
