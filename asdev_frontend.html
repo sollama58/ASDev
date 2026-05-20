@@ -1667,8 +1667,7 @@
             <button id="tab-btn-register" type="button" class="tab-btn" data-tab="register">
                 <i data-lucide="file-plus" class="inline-block w-4 h-4 mr-2"></i>Robinhood
             </button>
-            <!-- PAGS tab disabled -->
-            <button id="tab-btn-pags" type="button" class="tab-btn hidden" data-tab="pags" style="display: none;">
+            <button id="tab-btn-pags" type="button" class="tab-btn" data-tab="pags">
                 <i data-lucide="twitter" class="inline-block w-4 h-4 mr-2"></i>PAGS
             </button>
         </div>
@@ -1683,7 +1682,7 @@
                     <div class="flex items-center gap-2 mb-2">
                         <span class="text-orange-500 font-mono text-[10px] uppercase tracking-widest px-2 py-0.5 rounded" style="background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.2);">Pumpfun Airdrop Platform</span>
                     </div>
-                    <h2 class="text-white text-2xl sm:text-3xl font-bold tracking-tight mb-2">Earn SOL by holding<br class="hidden sm:block"> tokens you already own.</h2>
+                    <h2 class="text-white text-2xl sm:text-3xl font-normal tracking-tight mb-2">Earn SOL by holding<br class="hidden sm:block"> tokens you already own.</h2>
                     <p class="text-gray-400 text-xs sm:text-sm leading-relaxed max-w-xl">
                         ROBINHOOD collects trading fees from partner tokens on Pumpfun and redistributes them as automated SOL airdrops every 15 minutes. The more tokens you hold, the larger your share of each airdrop pool.
                     </p>
@@ -4097,12 +4096,16 @@
                 // v25.3: Also update countdown banner pool amount
                 if (data.airdropPoolSol !== undefined) {
                     const airdropPoolSol = parseFloat(data.airdropPoolSol);
-                    ui.airdropBalance.innerHTML = `${airdropPoolSol.toFixed(2)}&nbsp;<span class="text-lg align-top text-purple-400">SOL</span>`;
+                    const poolHTML = `${airdropPoolSol.toFixed(2)}&nbsp;<span class="text-lg align-top text-purple-400">SOL</span>`;
+                    if (ui.airdropBalance) ui.airdropBalance.innerHTML = poolHTML;
+                    if (ui.homeAirdropBalance) ui.homeAirdropBalance.innerHTML = poolHTML;
                     updateCountdownPool(airdropPoolSol.toFixed(2));
                 } else if (data.pumpHoldings !== undefined) {
                     // Fallback for backwards compatibility
                     currentPumpHoldings = parseFloat(data.pumpHoldings);
-                    ui.airdropBalance.innerHTML = `${currentPumpHoldings.toLocaleString('en-US', {maximumFractionDigits: 0})}&nbsp;<span class="text-lg align-top text-purple-400">$PUMP</span>`;
+                    const pumpHTML = `${currentPumpHoldings.toLocaleString('en-US', {maximumFractionDigits: 0})}&nbsp;<span class="text-lg align-top text-purple-400">$PUMP</span>`;
+                    if (ui.airdropBalance) ui.airdropBalance.innerHTML = pumpHTML;
+                    if (ui.homeAirdropBalance) ui.homeAirdropBalance.innerHTML = pumpHTML;
                 }
                 // v14.0: Update actual wallet balance display
                 const walletBalanceEl = document.getElementById('wallet-balance');
@@ -5785,6 +5788,8 @@
             }
             // Clear the URL parameters (security: don't leave token in URL)
             window.history.replaceState({}, document.title, window.location.pathname);
+            // Navigate to PAGS tab so user sees their dashboard
+            if (typeof switchTab === 'function') switchTab('pags');
         }
 
         // Check for auth error
@@ -7049,17 +7054,28 @@
             registerBtn.textContent = 'CONNECTING...';
 
             try {
-                // Try to connect wallet
-                if (window.solana && window.solana.isPhantom) {
+                // Try to connect wallet using available providers
+                if (window.solana?.isPhantom) {
                     const resp = await window.solana.connect();
+                    activeWalletProvider = window.solana;
+                    connectedWalletType = 'phantom';
                     userPubkey = resp.publicKey.toString();
                     updatePagsRegisterWalletDisplay();
-                } else if (window.solflare && window.solflare.isSolflare) {
+                } else if (window.solflare?.isSolflare) {
                     await window.solflare.connect();
+                    activeWalletProvider = window.solflare;
+                    connectedWalletType = 'solflare';
                     userPubkey = window.solflare.publicKey.toString();
                     updatePagsRegisterWalletDisplay();
+                } else if (window.backpack || window.xnft?.solana) {
+                    const provider = window.backpack || window.xnft.solana;
+                    const resp = await provider.connect();
+                    activeWalletProvider = provider;
+                    connectedWalletType = 'backpack';
+                    userPubkey = resp.publicKey.toString();
+                    updatePagsRegisterWalletDisplay();
                 } else {
-                    resultEl.innerHTML = '<span class="text-red-400">No Solana wallet detected. Please install Phantom or Solflare.</span>';
+                    resultEl.innerHTML = '<span class="text-red-400">No Solana wallet detected. Please install Phantom, Solflare, or Backpack.</span>';
                     resultEl.classList.remove('border-purple-700', 'border-yellow-700', 'border-green-700');
                     resultEl.classList.add('border-red-700');
                     registerBtn.disabled = false;
@@ -7093,16 +7109,17 @@
             let signature;
             const messageBytes = new TextEncoder().encode(signedMessage);
 
-            if (window.solana && window.solana.isPhantom) {
-                const signedData = await window.solana.signMessage(messageBytes, 'utf8');
-                // Convert Uint8Array to base58
-                signature = bs58.encode(signedData.signature);
-            } else if (window.solflare && window.solflare.isSolflare) {
-                const signedData = await window.solflare.signMessage(messageBytes, 'utf8');
-                signature = bs58.encode(signedData.signature);
-            } else {
-                throw new Error('No compatible wallet found');
+            // Use the already-connected provider; fall back to detected providers
+            const walletProvider = activeWalletProvider ||
+                (window.solana?.isPhantom ? window.solana : null) ||
+                (window.solflare?.isSolflare ? window.solflare : null) ||
+                (window.backpack || window.xnft?.solana || null);
+            if (!walletProvider) {
+                throw new Error('No compatible wallet found. Please connect your wallet first.');
             }
+            const signedData = await walletProvider.signMessage(messageBytes, 'utf8');
+            const signatureBytes = new Uint8Array(signedData.signature || signedData);
+            signature = bs58.encode(signatureBytes);
 
             // Update status
             resultEl.innerHTML = '<span class="text-purple-400">Verifying creator ownership and on-chain fee configuration...</span>';

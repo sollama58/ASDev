@@ -31,7 +31,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(xargs grep:*)",
       "Bash(grep -l \"ASDF\\\\|isAsdfTop100\\\\|multiplier\" src/**/*.js)",
-      "Bash(grep -n \"robinhood_tokens\\\\|robinhood_token_holders\" src/tasks/*.js)"
+      "Bash(grep -n \"robinhood_tokens\\\\|robinhood_token_holders\" src/tasks/*.js)",
+      "Bash(find /c/VS/IGNITION/ASDev -type f \\\\\\(-name *.sql -o -name *postgres* -o -name *schema* -o -name *init* \\\\\\))"
     ]
   }
 }
