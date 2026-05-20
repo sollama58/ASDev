@@ -2173,7 +2173,7 @@
                             </h4>
                             <div id="pags-wallet-not-linked" class="text-center py-4">
                                 <p class="text-purple-200/70 text-sm mb-4">Link your Solana wallet to receive rewards</p>
-                                <button onclick="pagsLinkWallet()" class="bg-orange-600 hover:bg-orange-500 text-white px-6 py-2 rounded font-bold text-sm transition">
+                                <button id="pags-link-wallet-btn" onclick="pagsLinkWallet()" class="bg-orange-600 hover:bg-orange-500 text-white px-6 py-2 rounded font-bold text-sm transition">
                                     Link Wallet
                                 </button>
                             </div>
@@ -2182,8 +2182,9 @@
                                     <div class="text-purple-300 text-xs mb-1">Linked Wallet</div>
                                     <div id="pags-linked-wallet" class="text-orange-400 font-mono text-sm break-all">Not linked</div>
                                 </div>
-                                <button onclick="pagsLinkWallet()" class="text-purple-400 hover:text-white text-xs underline">Change Wallet</button>
+                                <button id="pags-change-wallet-btn" onclick="pagsLinkWallet()" class="text-purple-400 hover:text-white text-xs underline">Change Wallet</button>
                             </div>
+                            <div id="pags-wallet-status" class="mt-2 text-xs text-center hidden"></div>
                         </div>
                     </div>
 
@@ -4211,29 +4212,29 @@
         }
     }, 1000));
 
-    const refreshWalletBalance = async () => { 
-        if (!userPubkey) { 
+    const refreshWalletBalance = async () => {
+        if (!userPubkey) {
             systemStatus.solana_rpc = 'N/A';
-            return; 
+            return;
         }
         try {
             const res = await fetchWithRetry(`${BACKEND_URL}/api/balance?pubkey=${userPubkey}`);
             if (!res.ok) throw new Error("Balance fetch failed");
             const data = await res.json();
             const solBalance = data.balance / solanaWeb3.LAMPORTS_PER_SOL;
-            ui.walletBal.innerText = solBalance.toFixed(3) + "\u00A0SOL"; 
-            systemStatus.solana_rpc = 'ONLINE'; 
-            if (!isDeploying) {
+            ui.walletBal.innerText = solBalance.toFixed(3) + "\u00A0SOL";
+            systemStatus.solana_rpc = 'ONLINE';
+            if (!isDeploying && ui.deployBtn) {
                 if (solBalance < DEPLOYMENT_FEE) {
                     ui.deployBtn.disabled = true; ui.deployBtn.innerText = `INSUFFICIENT BALANCE (< ${DEPLOYMENT_FEE} SOL)`; ui.deployBtn.classList.add("opacity-50", "cursor-not-allowed");
                 } else {
                     ui.deployBtn.disabled = false; ui.deployBtn.innerText = "INITIATE LAUNCH SEQUENCE"; ui.deployBtn.classList.remove("opacity-50", "cursor-not-allowed");
                 }
             }
-        } catch (e) { 
-            console.error("Balance check error:", e); 
+        } catch (e) {
+            console.error("Balance check error:", e);
             systemStatus.solana_rpc = 'OFFLINE';
-        } 
+        }
     };
 
     // Helper to stagger API calls and reduce burst load on backend
@@ -4899,7 +4900,7 @@
         }
     };
 
-    const showStatus = (msg, type) => { ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; };
+    const showStatus = (msg, type) => { if (!ui.statusBox) return; ui.statusBox.innerText = msg; ui.statusBox.style.display = 'block'; if (type === 'error') ui.statusBox.className = 'status-box status-error'; else if (type === 'success') ui.statusBox.className = 'status-box status-success'; else ui.statusBox.className = 'status-box'; };
     const toBase64 = file => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result); reader.onerror = error => reject(error); });
 
     const updateWalletUI = async (pubkey) => {
@@ -5988,15 +5989,34 @@
 
     // Link wallet to PAGS account
     const pagsLinkWallet = async () => {
+        const walletStatusEl = document.getElementById('pags-wallet-status');
+        const linkBtn = document.getElementById('pags-link-wallet-btn');
+        const changeBtn = document.getElementById('pags-change-wallet-btn');
+
+        const showWalletStatus = (msg, type) => {
+            if (!walletStatusEl) return;
+            walletStatusEl.textContent = msg;
+            walletStatusEl.className = 'mt-2 text-xs text-center ' + (type === 'error' ? 'text-red-400' : type === 'success' ? 'text-green-400' : 'text-purple-300');
+            walletStatusEl.classList.remove('hidden');
+        };
+
+        const setLoading = (loading) => {
+            if (linkBtn) { linkBtn.disabled = loading; linkBtn.textContent = loading ? 'Linking...' : 'Link Wallet'; }
+            if (changeBtn) { changeBtn.disabled = loading; changeBtn.textContent = loading ? 'Updating...' : 'Change Wallet'; }
+        };
+
         if (!userPubkey || !activeWalletProvider) {
-            showStatus('Please connect your Solana wallet first', 'error');
+            showWalletStatus('Connect your Solana wallet first (use the Connect Wallet button above)', 'error');
             return;
         }
 
         if (!pagsUser) {
-            showStatus('Please login with Twitter first', 'error');
+            showWalletStatus('Please login with Twitter first', 'error');
             return;
         }
+
+        setLoading(true);
+        showWalletStatus('Sign the message in your wallet...', '');
 
         try {
             // Create message in expected format: action:timestamp:nonce
@@ -6008,18 +6028,16 @@
             // Sign message
             const signedMessage = await activeWalletProvider.signMessage(encodedMessage, 'utf8');
             const signatureBytes = new Uint8Array(signedMessage.signature || signedMessage);
-            // Convert signature to base58 (backend expects base58, not base64)
             const signature = bs58.encode(signatureBytes);
 
+            showWalletStatus('Linking wallet...', '');
+
             // Send to backend (include Authorization header for cross-origin support)
+            // Prefer in-memory pagsSession (set at login) over localStorage re-read
             const headers = { 'Content-Type': 'application/json' };
-            const storedToken = localStorage.getItem('pags_token');
-            console.log('PAGS link-wallet: Token check', {
-                hasToken: !!storedToken,
-                tokenLength: storedToken ? storedToken.length : 0
-            });
-            if (storedToken) {
-                headers['Authorization'] = `Bearer ${storedToken}`;
+            const token = pagsSession || getPagsToken();
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
             }
 
             const res = await fetch(`${BACKEND_URL}/api/pags/link-wallet`, {
@@ -6035,15 +6053,17 @@
 
             const data = await res.json();
             if (data.success) {
-                showStatus('Wallet linked successfully!', 'success');
+                showWalletStatus('Wallet linked successfully!', 'success');
                 pagsUser.linkedWallet = userPubkey;
                 pagsUpdateUI();
             } else {
-                showStatus('Failed to link wallet: ' + data.error, 'error');
+                showWalletStatus('Failed: ' + (data.error || 'Unknown error'), 'error');
             }
         } catch (e) {
             console.error('Link wallet error:', e);
-            showStatus('Failed to link wallet: ' + e.message, 'error');
+            showWalletStatus('Failed: ' + e.message, 'error');
+        } finally {
+            setLoading(false);
         }
     };
     window.pagsLinkWallet = pagsLinkWallet;

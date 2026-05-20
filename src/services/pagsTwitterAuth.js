@@ -744,10 +744,13 @@ async function requireSession(req, res, next) {
  * Set session cookie on response
  */
 function setSessionCookie(res, sessionToken) {
+    const isProduction = process.env.NODE_ENV === 'production';
     res.cookie('pags_session', sessionToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: isProduction,
+        // SameSite=None required for cross-origin POST requests (frontend on different domain)
+        // SameSite=None requires Secure=true (only valid in production)
+        sameSite: isProduction ? 'none' : 'lax',
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
         path: '/'
     });
