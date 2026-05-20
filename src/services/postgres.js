@@ -24,18 +24,26 @@ const MAX_CACHE_SIZE = 1000;
 const cache = new Map();
 
 /**
- * v25.47: Evict oldest entries when cache exceeds max size
+ * v26.1: Evict oldest entries when cache is at capacity.
+ * O(n) two-pass scan — no full sort needed.
  */
 function evictOldestCacheEntries() {
-    if (cache.size <= MAX_CACHE_SIZE) return;
+    const EVICT_COUNT = Math.max(100, cache.size - MAX_CACHE_SIZE + 100);
+    // First pass: find the timestamp threshold for the EVICT_COUNT oldest entries
+    let oldest = Infinity;
+    const timestamps = [];
+    for (const entry of cache.values()) timestamps.push(entry.timestamp);
+    timestamps.sort((a, b) => a - b); // Only sort the timestamps, not the entries
+    const threshold = timestamps[EVICT_COUNT - 1] ?? Infinity;
 
-    // Sort by timestamp and remove oldest entries
-    const entries = Array.from(cache.entries())
-        .sort((a, b) => a[1].timestamp - b[1].timestamp);
-
-    const toRemove = entries.slice(0, cache.size - MAX_CACHE_SIZE + 100); // Remove extra 100 for buffer
-    for (const [key] of toRemove) {
-        cache.delete(key);
+    // Second pass: delete entries at or below the threshold
+    let deleted = 0;
+    for (const [key, entry] of cache.entries()) {
+        if (deleted >= EVICT_COUNT) break;
+        if (entry.timestamp <= threshold) {
+            cache.delete(key);
+            deleted++;
+        }
     }
 }
 
@@ -50,11 +58,11 @@ async function smartCache(key, ttlSeconds, fetchFunction) {
     try {
         const value = await fetchFunction();
         if (value !== undefined && value !== null) {
-            cache.set(key, { value, timestamp: now });
-            // v25.47: Evict old entries if cache is too large
-            if (cache.size > MAX_CACHE_SIZE) {
+            // v26.1: Evict BEFORE inserting a new key to avoid exceeding limit
+            if (cache.size >= MAX_CACHE_SIZE && !cache.has(key)) {
                 evictOldestCacheEntries();
             }
+            cache.set(key, { value, timestamp: now });
         }
         return value;
     } catch (e) {
@@ -535,6 +543,17 @@ async function createSchema() {
     // Indexes for fast lookups and sorting
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_points_total ON user_points(total_points DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_points_updated ON user_points(updated_at DESC)`);
+    // v26.1: ASDF holder filter index for fast airdrop queries
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_points_asdf ON user_points(is_asdf_holder) WHERE is_asdf_holder = TRUE`);
+
+    // v26.1: Missing performance indexes
+    // Composite (mint, timestamp) for per-token airdrop history queries
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_airdrop_logs_mint_ts ON airdrop_logs(mint, timestamp DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_airdrop_history_mint_ts ON user_airdrop_history(mint, timestamp DESC)`);
+    // Robinhood holder pubkey for /user-holdings JOIN lookups
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_holders_pubkey ON robinhood_token_holders("holderPubkey")`);
+    // Token mint lookup (userPubkey already indexed; add mint→timestamp for recent launches)
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_mint ON tokens(mint)`);
 
     // ===========================================
     // PAGS (Pay-to-Twitter/X) Tables

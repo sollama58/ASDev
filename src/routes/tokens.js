@@ -26,30 +26,9 @@ const router = express.Router();
 // v18.0: Minimum 24hr volume for airdrop eligibility
 const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
 
-// v25.25: Volume weight range for point calculation (must match holderScanner.js)
-const VOLUME_WEIGHT_MIN = 0.1;  // Lowest volume token gets 0.1x base points
-const VOLUME_WEIGHT_MAX = 5.0;  // Highest volume token gets 5.0x base points
-
 // v25.36: Pump.fun standard total supply (1 billion tokens with 6 decimals)
 // All pump.fun tokens have fixed 1B supply - use this for accurate % of supply calculation
 const PUMP_FUN_TOTAL_SUPPLY = BigInt('1000000000000000'); // 1B tokens * 10^6 decimals
-
-/**
- * v25.25: Calculate dynamic volume weight for a token
- * Uses logarithmic scaling relative to the volume range of all eligible tokens
- * This MUST match the calculation in holderScanner.js for consistent point display
- */
-function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
-    if (maxVolume <= minVolume || minVolume <= 0) {
-        return 1.0;
-    }
-    const logMin = Math.log10(minVolume);
-    const logMax = Math.log10(maxVolume);
-    const logVolume = Math.log10(Math.max(tokenVolume, minVolume));
-    const normalized = (logVolume - logMin) / (logMax - logMin);
-    const weight = VOLUME_WEIGHT_MIN + (normalized * (VOLUME_WEIGHT_MAX - VOLUME_WEIGHT_MIN));
-    return Math.max(VOLUME_WEIGHT_MIN, Math.min(VOLUME_WEIGHT_MAX, weight));
-}
 
 // Admin auth middleware for sensitive endpoints
 const adminAuth = (req, res, next) => {
@@ -586,32 +565,24 @@ function init(deps) {
         }
 
         try {
-            // v25.33: Get authoritative totals from user_points table
+            // v25.33: Get authoritative totals from user_points table (includes ASDF status)
             const userPointsData = await db.get(`
-                SELECT base_points, robinhood_points, multiplier, total_points
+                SELECT base_points, robinhood_points, multiplier, total_points, is_asdf_holder
                 FROM user_points WHERE pubkey = $1
             `, [userPubkey]);
 
+            // ASDF Top 100 holders receive 2× weight in airdrop distribution
+            const isAsdfHolder = !!(userPointsData?.is_asdf_holder);
+            const airdropWeight = isAsdfHolder ? BigInt(2) : BigInt(1);
+
             // v25.28: Reduced TTL from 30s to 15s to save Redis memory
-            const cacheKey = `user_holdings_detail_v3_${userPubkey}`;
+            // Cache key includes ASDF status so ASDF holders see accurate expected values
+            const cacheKey = `user_holdings_detail_v3_${isAsdfHolder ? 'asdf_' : ''}${userPubkey}`;
             const holdingsData = await redis.smartCache(cacheKey, 15, async () => {
                 const POINTS_PER_TOKEN = 1000;
                 const holdings = [];
 
-                // v25.25: Get COMBINED volume range across all sources for weighting
-                // Must match frontend leaderboard which uses a single combined range for all tokens
-                const combinedVolumeRange = await db.get(`
-                    SELECT MIN(vol) as min_vol, MAX(vol) as max_vol FROM (
-                        SELECT volume24h as vol FROM tokens WHERE volume24h >= $1
-                        UNION ALL
-                        SELECT volume24h as vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1
-                    ) combined
-                `, [MIN_VOLUME_USD]);
-                const globalMinVol = parseFloat(combinedVolumeRange?.min_vol) || MIN_VOLUME_USD;
-                const globalMaxVol = parseFloat(combinedVolumeRange?.max_vol) || MIN_VOLUME_USD;
-
                 // v24.0: Single optimized query with JOINs for launched tokens
-                // v25.36: Removed total_balance subquery - no longer needed (using fixed 1B supply)
                 const launchedHoldings = await db.all(`
                     SELECT
                         t.mint,
@@ -621,6 +592,7 @@ function init(deps) {
                         t."userPubkey" as creator,
                         t.volume24h,
                         t."marketCap",
+                        COALESCE(t.pending_airdrop_lamports, 0) as pending_airdrop_lamports,
                         th.balance,
                         th.rank
                     FROM token_holders th
@@ -633,13 +605,15 @@ function init(deps) {
                     const userBalance = safeBalance(row.balance);
                     if (userBalance === 0n) continue;
 
-                    const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
-                    const volumeWeight = calculateVolumeWeight(tokenVolume, globalMinVol, globalMaxVol);
-                    const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
-                    // v25.36: Calculate points based on % of TOTAL SUPPLY (1B tokens), not tracked holders
-                    const proportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
+                    // v26.2: Points = pure supply % × POINTS_PER_TOKEN (no volume weight)
+                    const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
 
+                    const pendingLamports = BigInt(row.pending_airdrop_lamports || 0);
+                    // Apply ASDF 2× weight to expected share (approximate — uses total supply as denominator)
+                    const expectedLamports = pendingLamports > 0n
+                        ? Number(pendingLamports * BigInt(99) / BigInt(100) * userBalance * airdropWeight / PUMP_FUN_TOTAL_SUPPLY)
+                        : 0;
                     holdings.push({
                         mint: row.mint,
                         ticker: row.ticker,
@@ -649,17 +623,15 @@ function init(deps) {
                         marketCap: row.marketCap || 0,
                         rank: row.rank,
                         isEligible,
-                        volumeWeight: Math.round(volumeWeight * 100) / 100,
                         basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
                         totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
+                        pendingAirdropSol: (Number(pendingLamports) / 1e9).toFixed(6),
+                        expectedAirdropSol: (expectedLamports / 1e9).toFixed(6),
                         source: 'launched'
                     });
                 }
 
-                // Robinhood tokens use the same combined volume range (computed above)
-
                 // v24.0: Single optimized query with JOINs for Robinhood tokens
-                // v25.36: Removed total_balance subquery - no longer needed (using fixed 1B supply)
                 const robinhoodHoldings = await db.all(`
                     SELECT
                         rt.mint,
@@ -669,6 +641,7 @@ function init(deps) {
                         rt."feeShareBps",
                         rt.volume24h,
                         rt."marketCap",
+                        COALESCE(rt.pending_airdrop_lamports, 0) as pending_airdrop_lamports,
                         rth.balance,
                         rth.rank
                     FROM robinhood_token_holders rth
@@ -681,16 +654,16 @@ function init(deps) {
                     const userBalance = safeBalance(row.balance);
                     if (userBalance === 0n) continue;
 
-                    const tokenVolume = parseFloat(row.volume24h) || MIN_VOLUME_USD;
-                    const volumeWeight = calculateVolumeWeight(tokenVolume, globalMinVol, globalMaxVol);
-                    const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
-                    // v25.36: Calculate points based on % of TOTAL SUPPLY (1B tokens), not tracked holders
-                    const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
+                    // v26.2: Points = pure supply % × POINTS_PER_TOKEN (no volume weight, no feeShareBps)
+                    const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
                     const feeShareBps = row.feeShareBps ?? 10000;
-                    const feeShareMultiplier = feeShareBps / 10000;
-                    const scaledPts = baseProportionalPts * feeShareMultiplier;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
 
+                    const pendingLamports = BigInt(row.pending_airdrop_lamports || 0);
+                    // Apply ASDF 2× weight to expected share (approximate — uses total supply as denominator)
+                    const expectedLamports = pendingLamports > 0n
+                        ? Number(pendingLamports * BigInt(99) / BigInt(100) * userBalance * airdropWeight / PUMP_FUN_TOTAL_SUPPLY)
+                        : 0;
                     holdings.push({
                         mint: row.mint,
                         ticker: row.ticker,
@@ -701,9 +674,10 @@ function init(deps) {
                         rank: row.rank,
                         isEligible,
                         feeSharePercent: (feeShareBps / 100),
-                        volumeWeight: Math.round(volumeWeight * 100) / 100,
-                        basePoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
-                        totalPoints: isEligible ? Math.round(scaledPts * 100) / 100 : 0,
+                        basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
+                        totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
+                        pendingAirdropSol: (Number(pendingLamports) / 1e9).toFixed(6),
+                        expectedAirdropSol: (expectedLamports / 1e9).toFixed(6),
                         source: 'robinhood'
                     });
                 }

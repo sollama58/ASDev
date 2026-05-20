@@ -331,9 +331,6 @@ function chunkArray(array, size) {
     return result;
 }
 
-// v25.27: Volume weight range (matches holderScanner.js)
-const VOLUME_WEIGHT_MIN = 0.1;  // Lowest volume token gets 0.1x base points
-const VOLUME_WEIGHT_MAX = 5.0;  // Highest volume token gets 5.0x base points
 const MIN_VOLUME_USD = 100;     // Minimum 24hr volume for eligibility
 const BASE_POINTS_PER_TOKEN = 1000; // Base points distributed per token
 const TOP_HOLDERS_LIMIT = 250;  // Track top 250 holders per token
@@ -341,19 +338,6 @@ const TOP_HOLDERS_LIMIT = 250;  // Track top 250 holders per token
 // v25.36: Pump.fun standard total supply (1 billion tokens with 6 decimals)
 // All pump.fun tokens have fixed 1B supply - use this for accurate % of supply calculation
 const PUMP_FUN_TOTAL_SUPPLY = BigInt('1000000000000000'); // 1B tokens * 10^6 decimals
-
-/**
- * v25.27: Calculate dynamic volume weight for a token
- * Uses logarithmic scaling relative to the volume range of all eligible tokens
- */
-function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
-    if (maxVolume <= minVolume || minVolume <= 0) return 1.0;
-    const logMin = Math.log10(minVolume);
-    const logMax = Math.log10(maxVolume);
-    const logVolume = Math.log10(Math.max(tokenVolume, minVolume));
-    const normalized = (logVolume - logMin) / (logMax - logMin);
-    return Math.max(VOLUME_WEIGHT_MIN, Math.min(VOLUME_WEIGHT_MAX, VOLUME_WEIGHT_MIN + (normalized * (VOLUME_WEIGHT_MAX - VOLUME_WEIGHT_MIN))));
-}
 
 /**
  * Initialize Holder Scanner Worker
@@ -376,18 +360,7 @@ function initHolderScannerWorker(deps) {
             );
             const eligibleMints = eligibleTokens.map(t => t.mint);
 
-            // Calculate COMBINED volume range across all sources for dynamic weighting
-            // Must match frontend leaderboard which uses a single combined range for all tokens
-            const combinedVolumeRange = await db.get(`
-                SELECT MIN(vol) as min_vol, MAX(vol) as max_vol FROM (
-                    SELECT volume24h as vol FROM tokens WHERE volume24h >= $1
-                    UNION ALL
-                    SELECT volume24h as vol FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1
-                ) combined`, [MIN_VOLUME_USD]
-            );
-            const globalMinVolume = parseFloat(combinedVolumeRange?.min_vol) || MIN_VOLUME_USD;
-            const globalMaxVolume = parseFloat(combinedVolumeRange?.max_vol) || MIN_VOLUME_USD;
-            logger.info(`[Worker] Found ${eligibleTokens.length} eligible tokens (combined vol range: $${globalMinVolume.toFixed(0)} - $${globalMaxVolume.toFixed(0)})`);
+            logger.info(`[Worker] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume`);
 
             // 2. Cache dev wallet PUMP holdings (legacy)
             let devPumpHoldings = 0;
@@ -566,33 +539,34 @@ function initHolderScannerWorker(deps) {
             let rawPointsMap = new Map(); // pubkey -> { basePoints, robinhoodPoints }
             let tempTotalPoints = 0;
 
-            // Platform tokens: proportional points with volume weighting
-            // v25.36: Points now based on % of TOTAL SUPPLY, not % of tracked holders
-            for (const token of eligibleTokens) {
-                if (!token.mint) continue;
-
-                const tokenVolume = parseFloat(token.volume24h) || MIN_VOLUME_USD;
-                const volumeWeight = calculateVolumeWeight(tokenVolume, globalMinVolume, globalMaxVolume);
-                const weightedPointsForToken = BASE_POINTS_PER_TOKEN * volumeWeight;
-
-                const holders = await db.all(
-                    'SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC',
-                    [token.mint]
+            // v26.2: Points = pure supply ownership — no volume weight, no feeShareBps
+            // BATCH: single query for all eligible token holders
+            if (eligibleMints.length > 0) {
+                const allPlatformHolderRowsW = await db.all(
+                    `SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1) ORDER BY mint, rank ASC`,
+                    [eligibleMints]
                 );
-                if (holders.length === 0) continue;
+                const platformHoldersByMintW = new Map();
+                for (const row of allPlatformHolderRowsW) {
+                    if (!platformHoldersByMintW.has(row.mint)) platformHoldersByMintW.set(row.mint, []);
+                    platformHoldersByMintW.get(row.mint).push(row);
+                }
 
-                for (const holder of holders) {
-                    const holderBalance = BigInt(holder.balance || '0');
-                    if (holderBalance === BigInt(0)) continue;
+                for (const token of eligibleTokens) {
+                    if (!token.mint) continue;
+                    const holders = platformHoldersByMintW.get(token.mint) || [];
+                    if (holders.length === 0) continue;
 
-                    // v25.36: Calculate points based on % of total supply (1B tokens)
-                    // If user holds 1% of total supply, they get 1% of the token's weighted points
-                    const proportionalPoints = Number((holderBalance * BigInt(Math.round(weightedPointsForToken * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
-                    // v25.33: Track positions count for user_points table
-                    const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0, positionsCount: 0 };
-                    entry.basePoints += proportionalPoints;
-                    entry.positionsCount++;
-                    rawPointsMap.set(holder.holderPubkey, entry);
+                    for (const holder of holders) {
+                        const holderBalance = BigInt(holder.balance || '0');
+                        if (holderBalance === BigInt(0)) continue;
+
+                        const proportionalPoints = Number((holderBalance * BigInt(BASE_POINTS_PER_TOKEN * 1000)) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
+                        const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0, positionsCount: 0 };
+                        entry.basePoints += proportionalPoints;
+                        entry.positionsCount++;
+                        rawPointsMap.set(holder.holderPubkey, entry);
+                    }
                 }
             }
 
@@ -601,35 +575,32 @@ function initHolderScannerWorker(deps) {
             let robinhoodPointsTotal = 0;
             let robinhoodHoldersWithPoints = 0;
             try {
-                // v25.64: First check total active Robinhood tokens (before volume filter)
-                const totalRobinhoodTokens = await db.get(
-                    'SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL'
-                );
-
                 const robinhoodTokens = await db.all(
-                    'SELECT mint, "feeShareBps", ticker, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
+                    'SELECT mint, ticker, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
                     [MIN_VOLUME_USD]
                 );
-
-                // v25.64: Enhanced logging to debug Robinhood token eligibility issues
-                // Volume range uses combined global range (computed above) to match frontend leaderboard
-                logger.info(`[Worker] Robinhood: ${totalRobinhoodTokens?.count || 0} total active, ${robinhoodTokens.length} with volume >= $${MIN_VOLUME_USD} (using combined range: $${globalMinVolume.toFixed(0)} - $${globalMaxVolume.toFixed(0)})`);
+                logger.info(`[Worker] Robinhood: ${robinhoodTokens.length} tokens with volume >= $${MIN_VOLUME_USD}`);
 
                 // v25.36: Points now based on % of TOTAL SUPPLY for Robinhood tokens too
+                // v26.1: BATCH - single query for all robinhood token holders
+                const robinhoodMintsList = robinhoodTokens.map(t => t.mint).filter(Boolean);
+                const allRhHolderRowsW = robinhoodMintsList.length > 0
+                    ? await db.all(
+                        `SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1) ORDER BY mint, rank ASC`,
+                        [robinhoodMintsList]
+                      )
+                    : [];
+                const rhHoldersByMintW = new Map();
+                for (const row of allRhHolderRowsW) {
+                    if (!rhHoldersByMintW.has(row.mint)) rhHoldersByMintW.set(row.mint, []);
+                    rhHoldersByMintW.get(row.mint).push(row);
+                }
+
+                // v26.2: Points = pure supply ownership, no volume/feeShare scaling
                 for (const rhToken of robinhoodTokens) {
                     if (!rhToken.mint) continue;
 
-                    const tokenVolume = parseFloat(rhToken.volume24h) || MIN_VOLUME_USD;
-                    const volumeWeight = calculateVolumeWeight(tokenVolume, globalMinVolume, globalMaxVolume);
-                    const weightedBasePoints = BASE_POINTS_PER_TOKEN * volumeWeight;
-                    const feeShareMultiplier = (rhToken.feeShareBps ?? 10000) / 10000;
-
-                    const holders = await db.all(
-                        'SELECT "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC',
-                        [rhToken.mint]
-                    );
-
-                    // v25.64: Log when a token has no holders in the tracking table
+                    const holders = rhHoldersByMintW.get(rhToken.mint) || [];
                     if (holders.length === 0) {
                         logger.debug(`[Worker] Robinhood token ${rhToken.ticker || rhToken.mint.slice(0, 8)} has 0 holders in tracking table`);
                         continue;
@@ -640,17 +611,14 @@ function initHolderScannerWorker(deps) {
                         const holderBalance = BigInt(holder.balance || '0');
                         if (holderBalance === BigInt(0)) continue;
 
-                        // v25.36: Calculate points based on % of total supply (1B tokens)
-                        const baseProportionalPoints = Number((holderBalance * BigInt(Math.round(weightedBasePoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
-                        const scaledPoints = baseProportionalPoints * feeShareMultiplier;
+                        const proportionalPoints = Number((holderBalance * BigInt(BASE_POINTS_PER_TOKEN * 1000)) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
 
-                        // v25.33: Track positions count for user_points table
                         const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0, positionsCount: 0 };
-                        entry.robinhoodPoints += scaledPoints;
+                        entry.robinhoodPoints += proportionalPoints;
                         entry.positionsCount++;
                         rawPointsMap.set(holder.holderPubkey, entry);
 
-                        tokenPointsDistributed += scaledPoints;
+                        tokenPointsDistributed += proportionalPoints;
                         robinhoodHoldersWithPoints++;
                     }
                     robinhoodPointsTotal += tokenPointsDistributed;
@@ -676,8 +644,7 @@ function initHolderScannerWorker(deps) {
             await redis.setTotalPoints(tempTotalPoints);
             logger.info(`[Worker] Global Points: ${tempTotalPoints.toFixed(2)}`);
 
-            // 10. v26.0: Build per-user expected airdrop from per-token pending pools
-            // Each user's expected = sum of (token.pending_airdrop_lamports * holderBalance / 1B_supply)
+            // 10. v26.1: Build per-user expected airdrop (ASDF-weighted) using batch queries
             const PUMP_FUN_TOTAL_SUPPLY_W = BigInt('1000000000000000'); // 1B * 10^6
             const userExpectedAirdropMapW = new Map();
             let totalPendingAirdropLamportsW = 0;
@@ -687,19 +654,38 @@ function initHolderScannerWorker(deps) {
                     UNION ALL
                     SELECT mint, pending_airdrop_lamports, 'robinhood' as source FROM robinhood_tokens WHERE pending_airdrop_lamports > 0 AND "isActive" = 1
                 `);
+
+                // Separate mints by source for batch queries
+                const platformPendingMints = pendingRows.filter(r => r.source === 'platform').map(r => r.mint);
+                const robinhoodPendingMints = pendingRows.filter(r => r.source === 'robinhood').map(r => r.mint);
+                const pendingByMint = new Map(pendingRows.map(r => [r.mint, r]));
+
+                // Batch-fetch all holders for pending tokens
+                const [platformHoldersW, rhHoldersW] = await Promise.all([
+                    platformPendingMints.length > 0
+                        ? db.all(`SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)`, [platformPendingMints])
+                        : [],
+                    robinhoodPendingMints.length > 0
+                        ? db.all(`SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1)`, [robinhoodPendingMints])
+                        : []
+                ]);
+
+                // Sum total pending lamports
                 for (const row of pendingRows) {
+                    totalPendingAirdropLamportsW += Number(row.pending_airdrop_lamports || 0);
+                }
+
+                // Build per-user expected airdrop from batch holder data
+                for (const h of [...platformHoldersW, ...rhHoldersW]) {
+                    const row = pendingByMint.get(h.mint);
+                    if (!row) continue;
                     const pendingLamports = BigInt(row.pending_airdrop_lamports || 0);
                     if (pendingLamports === BigInt(0)) continue;
-                    totalPendingAirdropLamportsW += Number(pendingLamports);
-                    const holdersTable = row.source === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
-                    const holders = await db.all(`SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1`, [row.mint]);
-                    for (const h of holders) {
-                        const bal = BigInt(h.balance || '0');
-                        if (bal === BigInt(0)) continue;
-                        const expectedLamports = Number(pendingLamports * bal / PUMP_FUN_TOTAL_SUPPLY_W);
-                        const prev = userExpectedAirdropMapW.get(h.holderPubkey) || 0;
-                        userExpectedAirdropMapW.set(h.holderPubkey, prev + expectedLamports / 1e9);
-                    }
+                    const bal = BigInt(h.balance || '0');
+                    if (bal === BigInt(0)) continue;
+                    const expectedLamports = Number(pendingLamports * bal / PUMP_FUN_TOTAL_SUPPLY_W);
+                    const prev = userExpectedAirdropMapW.get(h.holderPubkey) || 0;
+                    userExpectedAirdropMapW.set(h.holderPubkey, prev + expectedLamports / 1e9);
                 }
                 logger.info(`[Worker] Per-token expected airdrops: ${userExpectedAirdropMapW.size} users, total pending: ${(totalPendingAirdropLamportsW / 1e9).toFixed(4)} SOL`);
             } catch (e) {
@@ -854,17 +840,29 @@ function initMetadataUpdaterWorker(deps) {
         logger.info('[Worker] Starting metadata updater job...');
 
         try {
-            // SCALABILITY FIX: Add pagination to avoid loading all tokens into memory
+            // v26.1: Keyset pagination (cursor-based) — avoids O(n) OFFSET scan
+            // Uses lastUpdated as cursor; NULLS FIRST ensures unscanned tokens are processed first
             const TOKENS_PER_PAGE = 100;
-            let offset = 0;
+            let cursor = null; // null means "before the beginning" — fetch NULLS FIRST
             let totalScanned = 0;
 
             while (true) {
-                const tokens = await db.all('SELECT mint, image FROM tokens ORDER BY "lastUpdated" ASC NULLS FIRST LIMIT $1 OFFSET $2', [TOKENS_PER_PAGE, offset]);
+                const tokens = cursor === null
+                    ? await db.all(
+                        'SELECT mint, image, "lastUpdated" FROM tokens ORDER BY "lastUpdated" ASC NULLS FIRST LIMIT $1',
+                        [TOKENS_PER_PAGE]
+                      )
+                    : await db.all(
+                        'SELECT mint, image, "lastUpdated" FROM tokens WHERE "lastUpdated" > $1 OR "lastUpdated" IS NULL ORDER BY "lastUpdated" ASC NULLS FIRST LIMIT $2',
+                        [cursor, TOKENS_PER_PAGE]
+                      );
                 if (tokens.length === 0) break;
 
+                // Advance cursor to the largest lastUpdated seen in this page
+                const maxUpdated = tokens.reduce((m, t) => t.lastUpdated != null && t.lastUpdated > m ? t.lastUpdated : m, cursor ?? 0);
+                cursor = maxUpdated;
+
                 totalScanned += tokens.length;
-                offset += TOKENS_PER_PAGE;
 
                 const chunks = chunkArray(tokens, 30);
 

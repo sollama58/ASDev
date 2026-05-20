@@ -348,7 +348,7 @@ async function checkPendingFeesForBeneficiary(beneficiary, options = {}) {
         const isDirectCreator = pagsWalletStr && creatorPubkey.toString() === pagsWalletStr;
 
         // v25.45: Re-verify fee share on-chain (can change at any time on Pump.fun)
-        const storedFeeShareBps = beneficiary.feeShareBps || 10000;
+        const storedFeeShareBps = beneficiary.feeShareBps ?? 10000;
         let currentFeeShareBps = storedFeeShareBps;
         let allShareholders = null;
 
@@ -1113,11 +1113,11 @@ async function detectAndRecordExternalClaims() {
                     const totalDecrease = externalCheck.bcClaimedExternally + externalCheck.ammClaimedExternally;
 
                     const verification = await verifyCurrentFeeShare(
-                        b.mint, b.creatorPubkey, b.feeShareBps || 10000
+                        b.mint, b.creatorPubkey, b.feeShareBps ?? 10000
                     );
                     const feeShareBps = verification.verified
                         ? verification.currentFeeShareBps
-                        : (b.feeShareBps || 10000);
+                        : (b.feeShareBps ?? 10000);
 
                     if (verification.removed) {
                         logger.info('[PAGS Fee Scanner] Skipping external claim - fee share removed', { mint: b.mint });

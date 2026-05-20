@@ -140,19 +140,20 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
             const [
                 stats,
                 leaderboard,
-                kothToken,
                 recentLaunches,
                 robinhoodStats
-            // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
             ] = await Promise.all([
                 db.get('SELECT COUNT(*) as total FROM tokens'),
+                // v26.1: Leaderboard shows only active Robinhood partner tokens with pool data
                 db.all(`
-                    SELECT mint, name, ticker, image, "metadataUri", volume24h, "marketCap", "priceUsd", complete
-                    FROM tokens
+                    SELECT mint, name, ticker, image, "creatorPubkey" as creator,
+                           volume24h, "marketCap", "isGraduated" as complete,
+                           COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports
+                    FROM robinhood_tokens
+                    WHERE "isActive" = 1
                     ORDER BY volume24h DESC
                     LIMIT 20
                 `),
-                db.get('SELECT mint, name, ticker, image, "metadataUri", "marketCap" FROM tokens ORDER BY "marketCap" DESC LIMIT 1'),
                 db.all(`
                     SELECT mint, name, ticker, image, "metadataUri", "userPubkey", timestamp
                     FROM tokens
@@ -169,65 +170,63 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
                 `)
             ]);
 
-            // v25.6: Apply metadataUri fallback for tokens with missing images
+            // Resolve metadataUri fallback images for recent launches only
             const resolveImages = async (tokens) => {
                 if (!tokens || !Array.isArray(tokens)) return tokens;
                 return Promise.all(tokens.map(async (token) => {
-                    // If image is missing/null, try metadataUri fallback
                     if (!token.image || token.image === '' || token.image === 'null') {
                         if (token.metadataUri) {
                             try {
                                 const metadataImage = await imageUtils.fetchImageFromMetadataUri(token.metadataUri, 3000);
                                 if (metadataImage) {
                                     token.image = metadataImage;
-                                    // Update database so we don't fetch again
                                     db.run('UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
                                         [metadataImage, token.mint]).catch(() => {});
                                 }
-                            } catch (e) {
-                                // Silently fail - fallback mechanism
-                            }
+                            } catch (e) { /* silently fail */ }
                         }
                     }
-                    // Remove metadataUri from response (not needed by frontend)
                     const { metadataUri, ...rest } = token;
                     return rest;
                 }));
             };
 
-            // Resolve images for all token lists
-            const [resolvedLeaderboard, resolvedKoth, resolvedRecentLaunches] = await Promise.all([
-                resolveImages(leaderboard || []),
-                kothToken ? resolveImages([kothToken]).then(arr => arr[0]) : null,
-                resolveImages(recentLaunches || [])
-            ]);
+            // Add computed fields for leaderboard tokens
+            const resolvedLeaderboard = (leaderboard || []).map(t => ({
+                ...t,
+                isRobinhood: true,
+                isEligible: (t.volume24h || 0) >= 100,
+                pendingAirdropSol: ((t.pending_airdrop_lamports || 0) / 1e9).toFixed(6),
+                marketCap: t.marketCap || 0,
+                volume: t.volume24h
+            }));
 
-            // Get airdrop pool balance
+            const resolvedRecentLaunches = await resolveImages(recentLaunches || []);
+
+            // Get total pending airdrop pool (sum of all token pools)
             let airdropPoolSol = 0;
-            let solBalance = 0;
             try {
-                const balance = await connection.getBalance(devKeypair.publicKey);
-                solBalance = balance / 1e9;
-                airdropPoolSol = Math.max(0, solBalance - 0.1); // v25.78: Reserve 0.1 SOL
-            } catch (e) {
-                // Use cached value if RPC fails
-            }
+                const poolSum = await db.get(`
+                    SELECT COALESCE(SUM(p), 0) as total FROM (
+                        SELECT pending_airdrop_lamports as p FROM tokens WHERE pending_airdrop_lamports > 0
+                        UNION ALL
+                        SELECT pending_airdrop_lamports as p FROM robinhood_tokens WHERE pending_airdrop_lamports > 0
+                    ) combined
+                `);
+                airdropPoolSol = parseInt(poolSum?.total || 0) / 1e9;
+            } catch (e) { /* use 0 */ }
 
             const payload = {
                 // Stats
                 totalTokens: stats?.total || 0,
                 airdropPoolSol,
-                solBalance,
                 totalPoints: globalState.totalPoints || 0,
 
-                // Leaderboard (with resolved images)
-                leaderboard: resolvedLeaderboard || [],
-
-                // KOTH (with resolved image)
-                koth: resolvedKoth || null,
+                // Leaderboard — robinhood partner tokens only
+                leaderboard: resolvedLeaderboard,
 
                 // Recent launches (with resolved images)
-                recentLaunches: resolvedRecentLaunches || [],
+                recentLaunches: resolvedRecentLaunches,
 
                 // Robinhood
                 robinhood: {

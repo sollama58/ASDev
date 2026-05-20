@@ -250,7 +250,7 @@ function init(deps) {
                     name: t.name || null,
                     image: t.image || null,
                     twitterUsername: t.twitterUsername,
-                    feeShareBps: t.feeShareBps || 10000,
+                    feeShareBps: t.feeShareBps ?? 10000,
                     totalFeesAccumulated: t.totalFeesAccumulated || 0,
                     totalFeesClaimed: t.totalFeesClaimed || 0,
                     claimable,
@@ -424,7 +424,7 @@ function init(deps) {
                     ticker: t.ticker || null,
                     name: t.name || null,
                     image: t.image || null,
-                    feeShareBps: t.feeShareBps || 10000,
+                    feeShareBps: t.feeShareBps ?? 10000,
                     totalFeesAccumulated: t.totalFeesAccumulated || 0,
                     totalFeesClaimed: t.totalFeesClaimed || 0,
                     // v25.59: Enhanced pending info
@@ -631,7 +631,7 @@ function init(deps) {
             }
 
             // Use the on-chain detected fee share percentage
-            const detectedFeeShareBps = feeRecipientResult.feeShareBps || 10000;
+            const detectedFeeShareBps = feeRecipientResult.feeShareBps ?? 10000;
 
             logger.info('[PAGS API] Fee share auto-detected from on-chain', {
                 mint: sanitizedMint,
@@ -764,7 +764,7 @@ function init(deps) {
             }
 
             // Determine if this beneficiary has multiple fee recipients
-            const feeShareBps = beneficiary.feeShareBps || 10000;
+            const feeShareBps = beneficiary.feeShareBps ?? 10000;
             const hasMultipleOnChainRecipients = feeShareBps < 10000;
             // v25.48: Check for multiple beneficiary shares
             const isMultiBeneficiary = beneficiary.isMultiBeneficiary || false;
@@ -1313,7 +1313,7 @@ function init(deps) {
 
                 enhancedBeneficiaries.push({
                     ...b,
-                    feeSharePercent: (b.feeShareBps || 10000) / 100,
+                    feeSharePercent: (b.feeShareBps ?? 10000) / 100,
                     hasMultipleRecipients: b.feeShareBps && b.feeShareBps < 10000,
                     pendingFees: (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0),
                     // v25.68: Include all beneficiary shares
@@ -1956,7 +1956,7 @@ function init(deps) {
                     twitterUsername: beneficiary.twitterUsername,
                     creatorPubkey: beneficiary.creatorPubkey,
                     feeShareBps: beneficiary.feeShareBps,
-                    feeSharePercent: (beneficiary.feeShareBps || 10000) / 100,
+                    feeSharePercent: (beneficiary.feeShareBps ?? 10000) / 100,
                     totalFeesAccumulated: beneficiary.totalFeesAccumulated || 0,
                     totalFeesClaimed: beneficiary.totalFeesClaimed || 0,
                     dbPending: (beneficiary.totalFeesAccumulated || 0) - (beneficiary.totalFeesClaimed || 0),
@@ -2029,7 +2029,7 @@ function init(deps) {
                 const bcClaimable = debug.onChainBalances.bcVault.claimableBalance || 0;
                 const ammClaimable = debug.onChainBalances.ammVault.balance || 0;
                 const totalOnChainLamports = bcClaimable + ammClaimable;
-                const feeShareBps = beneficiary.feeShareBps || 10000;
+                const feeShareBps = beneficiary.feeShareBps ?? 10000;
                 const ourShareLamports = Math.floor(totalOnChainLamports * (feeShareBps / 10000));
 
                 debug.summary = {

@@ -540,6 +540,9 @@ async function processTokenAirdrops(deps) {
 
         logger.info(`[TokenAirdrop] Processing ${allToDistribute.length} token pools (${platformTokensToAirdrop.length} platform, ${robinhoodTokensToAirdrop.length} robinhood)`);
 
+        // Fetch ASDF Top 100 holders once — they receive 2× weight in airdrop distribution
+        const asdfTop100 = await redis.getAsdfTop100Holders().catch(() => new Set());
+
         for (const token of allToDistribute) {
             if (availableBalance < TOKEN_AIRDROP_THRESHOLD_LAMPORTS) {
                 logger.warn('[TokenAirdrop] Wallet balance too low to continue — stopping');
@@ -566,17 +569,32 @@ async function processTokenAirdrops(deps) {
                     continue;
                 }
 
-                // Build recipient list proportional to each holder's % of total supply
+                // Build weighted holder list — ASDF Top 100 get 2× effective balance
+                const weightedHolders = holders.map(h => {
+                    const bal = BigInt(h.balance || '0');
+                    const weight = asdfTop100.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
+                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * weight };
+                });
+
+                const totalEffectiveBal = weightedHolders.reduce((sum, h) => sum + h.effectiveBal, BigInt(0));
+                if (totalEffectiveBal === BigInt(0)) {
+                    logger.debug(`[TokenAirdrop] ${token.ticker}: No effective holder balance, skipping`);
+                    continue;
+                }
+
+                const asdfCount = weightedHolders.filter(h => h.effectiveBal > h.balance).length;
+                if (asdfCount > 0) {
+                    logger.debug(`[TokenAirdrop] ${token.ticker}: ${asdfCount} ASDF Top 100 holders with 2× weight`);
+                }
+
+                // Share proportional to weighted effective balance
                 const recipients = [];
-                const trackedBalance = holders.reduce((sum, h) => sum + BigInt(h.balance || '0'), BigInt(0));
 
-                for (const holder of holders) {
+                for (const holder of weightedHolders) {
                     try {
-                        const holderBalance = BigInt(holder.balance || '0');
-                        if (holderBalance <= BigInt(0)) continue;
+                        if (holder.balance <= BigInt(0)) continue;
 
-                        // Share proportional to % of total 1B supply
-                        const share = Number((BigInt(distributable) * holderBalance) / PUMP_FUN_TOTAL_SUPPLY_BIG);
+                        const share = Number((BigInt(distributable) * holder.effectiveBal) / totalEffectiveBal);
                         if (share >= MIN_RECIPIENT_LAMPORTS) { // minimum 0.01 SOL per recipient
                             recipients.push({ user: new PublicKey(holder.holderPubkey), amount: share });
                         }
