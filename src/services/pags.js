@@ -19,8 +19,8 @@ let connection = null;
 let pagsKeypair = null;
 let redis = null;
 
-// Claim lock timeout (30 seconds)
-const CLAIM_LOCK_TIMEOUT_MS = 30000;
+// Claim lock timeout (120 seconds — covers vault claim + transfer + DB writes under slow RPC)
+const CLAIM_LOCK_TIMEOUT_MS = 120000;
 
 // Retry configuration for blockchain operations
 const MAX_RETRIES = 3;
@@ -355,21 +355,27 @@ async function getPendingRewardsByUsername(twitterUsername) {
 
     // v25.48: Query from shares table to support multi-beneficiary tokens
     // Join with beneficiaries to get token metadata and on-chain fee share
-    const shares = await db.all(`
-        SELECT s.*, b.mint, b."creatorPubkey", b."feeShareBps" as "onChainFeeShareBps",
-               b.ticker, b.name, b.image, b."isActive"
-        FROM pags_beneficiary_shares s
-        INNER JOIN pags_beneficiaries b ON s."beneficiaryId" = b.id
-        WHERE LOWER(s."twitterUsername") = LOWER($1) AND b."isActive" = 1
-    `, [normalizedUsername]);
+    let shares, legacyBeneficiaries;
+    try {
+        shares = await db.all(`
+            SELECT s.*, b.mint, b."creatorPubkey", b."feeShareBps" as "onChainFeeShareBps",
+                   b.ticker, b.name, b.image, b."isActive"
+            FROM pags_beneficiary_shares s
+            INNER JOIN pags_beneficiaries b ON s."beneficiaryId" = b.id
+            WHERE LOWER(s."twitterUsername") = LOWER($1) AND b."isActive" = 1
+        `, [normalizedUsername]);
 
-    // Also check legacy registrations (beneficiaries without shares entries)
-    const legacyBeneficiaries = await db.all(`
-        SELECT b.*, b."feeShareBps" as "onChainFeeShareBps"
-        FROM pags_beneficiaries b
-        LEFT JOIN pags_beneficiary_shares s ON s."beneficiaryId" = b.id
-        WHERE LOWER(b."twitterUsername") = LOWER($1) AND b."isActive" = 1 AND s.id IS NULL
-    `, [normalizedUsername]);
+        // Also check legacy registrations (beneficiaries without shares entries)
+        legacyBeneficiaries = await db.all(`
+            SELECT b.*, b."feeShareBps" as "onChainFeeShareBps"
+            FROM pags_beneficiaries b
+            LEFT JOIN pags_beneficiary_shares s ON s."beneficiaryId" = b.id
+            WHERE LOWER(b."twitterUsername") = LOWER($1) AND b."isActive" = 1 AND s.id IS NULL
+        `, [normalizedUsername]);
+    } catch (e) {
+        logger.error('[PAGS] Database error in getPendingRewardsByUsername', { error: e.message, username: normalizedUsername });
+        return { twitterUsername: normalizedUsername, totalPending: 0, totalClaimed: 0, breakdown: [], beneficiaryCount: 0 };
+    }
 
     // Combine and dedupe by mint
     const beneficiaryMap = new Map();
@@ -1112,40 +1118,50 @@ async function recordFeeCollection(mint, amount, source = 'manual', txSignature 
     const shares = beneficiary.shares || [{ twitterUsername: beneficiary.twitterUsername, shareBps: 10000 }];
     const distributions = [];
 
-    for (const share of shares) {
-        const userAmount = pagsAmount * (share.shareBps / 10000);
+    try {
+        for (const share of shares) {
+            const userAmount = pagsAmount * (share.shareBps / 10000);
 
-        // Update the share's accumulated fees
-        if (share.id) {
-            // Real share record exists
-            await db.run(`
-                UPDATE pags_beneficiary_shares
-                SET "totalFeesAccumulated" = "totalFeesAccumulated" + $1
-                WHERE id = $2
-            `, [userAmount, share.id]);
+            // Update the share's accumulated fees
+            if (share.id) {
+                // Real share record exists
+                await db.run(`
+                    UPDATE pags_beneficiary_shares
+                    SET "totalFeesAccumulated" = "totalFeesAccumulated" + $1
+                    WHERE id = $2
+                `, [userAmount, share.id]);
+            }
+
+            distributions.push({
+                twitterUsername: share.twitterUsername,
+                shareBps: share.shareBps,
+                sharePercent: share.shareBps / 100,
+                amount: userAmount
+            });
+
+            logger.debug('[PAGS] Fee distributed to share', {
+                mint,
+                twitterUsername: share.twitterUsername,
+                shareBps: share.shareBps,
+                amount: userAmount
+            });
         }
 
-        distributions.push({
-            twitterUsername: share.twitterUsername,
-            shareBps: share.shareBps,
-            sharePercent: share.shareBps / 100,
-            amount: userAmount
-        });
-
-        logger.debug('[PAGS] Fee distributed to share', {
+        // Update the main beneficiary total (for backwards compatibility)
+        await db.run(`
+            UPDATE pags_beneficiaries
+            SET "totalFeesAccumulated" = "totalFeesAccumulated" + $1, "lastFeeUpdate" = $2
+            WHERE id = $3
+        `, [pagsAmount, Date.now(), beneficiary.id]);
+    } catch (e) {
+        logger.error('[PAGS] Fee distribution DB error — partial update may have occurred', {
             mint,
-            twitterUsername: share.twitterUsername,
-            shareBps: share.shareBps,
-            amount: userAmount
+            beneficiaryId: beneficiary.id,
+            pagsAmount,
+            error: e.message
         });
+        throw e;
     }
-
-    // Update the main beneficiary total (for backwards compatibility)
-    await db.run(`
-        UPDATE pags_beneficiaries
-        SET "totalFeesAccumulated" = "totalFeesAccumulated" + $1, "lastFeeUpdate" = $2
-        WHERE id = $3
-    `, [pagsAmount, Date.now(), beneficiary.id]);
 
     // Log the fee collection
     await db.run(`

@@ -1291,7 +1291,15 @@ async function collectAllFees() {
                 continue;
             }
 
-            const result = await claimFeesForBeneficiary(beneficiary);
+            let result = null;
+            try {
+                result = await claimFeesForBeneficiary(beneficiary);
+            } catch (e) {
+                logger.warn('[PAGS Fee Scanner] claimFeesForBeneficiary threw, skipping beneficiary', {
+                    mint: beneficiary.mint,
+                    error: e.message
+                });
+            }
 
             if (result) {
                 claims.push(result);

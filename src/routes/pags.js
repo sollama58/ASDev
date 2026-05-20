@@ -546,7 +546,7 @@ function init(deps) {
                 );
             }
 
-            const sigResult = signatureVerifier.verifySignature({
+            const sigResult = await signatureVerifier.verifySignature({
                 message: signedMessage,
                 signature,
                 publicKey: signerPubkey,
@@ -848,7 +848,7 @@ function init(deps) {
                     return errorResponse(res, 403, 'Only the creator can deactivate PAGS');
                 }
 
-                const sigResult = signatureVerifier.verifySignature({
+                const sigResult = await signatureVerifier.verifySignature({
                     message: signedMessage,
                     signature,
                     publicKey: sanitizedSignerPubkey,
@@ -993,6 +993,9 @@ function init(deps) {
 
             res.json({
                 success: true,
+                // Return the session token so the frontend can cache it for cross-origin POST requests
+                // (when auth came via cookie the client may not have the token in localStorage)
+                sessionToken: req.pagsSession.token,
                 user: {
                     ...user,
                     pendingRewards: rewards.totalPending,
@@ -1031,7 +1034,7 @@ function init(deps) {
                     signatureLength: signature ? signature.length : 0
                 });
 
-                const sigResult = signatureVerifier.verifySignature({
+                const sigResult = await signatureVerifier.verifySignature({
                     message: signedMessage,
                     signature,
                     publicKey: sanitizedWalletPubkey,
@@ -1100,7 +1103,7 @@ function init(deps) {
 
             // Verify claim signature
             if (config.NODE_ENV === 'production' || process.env.SKIP_SIGNATURE_VERIFICATION !== 'true') {
-                const sigResult = signatureVerifier.verifySignature({
+                const sigResult = await signatureVerifier.verifySignature({
                     message: signedMessage,
                     signature,
                     publicKey: user.linkedWallet,

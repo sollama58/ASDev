@@ -5818,7 +5818,13 @@
                 const data = await res.json();
                 if (data.success && data.user) {
                     pagsUser = data.user;
-                    pagsSession = storedToken; // Keep track of session
+                    // Use token returned by server (covers cookie-auth case where localStorage is empty)
+                    const activeToken = data.sessionToken || storedToken;
+                    pagsSession = activeToken;
+                    if (activeToken && !storedToken) {
+                        // Token came via cookie — persist it to localStorage for POST requests
+                        setPagsToken(activeToken);
+                    }
                     pagsUpdateUI();
                 }
             } else if (res.status === 401) {
@@ -5869,16 +5875,16 @@
             const breakdownEl = document.getElementById('pags-rewards-breakdown');
             if (pagsUser.rewardBreakdown && pagsUser.rewardBreakdown.length > 0) {
                 breakdownEl.innerHTML = pagsUser.rewardBreakdown.map(b => {
-                    const displayTicker = b.ticker ? `$${b.ticker}` : 'Unknown';
-                    const feePercent = b.feeShareBps ? (b.feeShareBps / 100).toFixed(1) : '100.0';
+                    const displayTicker = b.ticker ? `$${DOMPurify.sanitize(b.ticker)}` : 'Unknown';
+                    const feePercent = b.feeShareBps ? (parseFloat(b.feeShareBps) / 100).toFixed(1) : '100.0';
                     const isShared = b.hasMultipleRecipients || (b.feeShareBps && b.feeShareBps < 10000);
                     const tokenImage = b.image || 'https://placehold.co/40x40/1a1a2e/purple?text=%24';
                     // Check for on-chain pending fees (from vault)
-                    const onChainPending = b.onChainPending || 0;
-                    const dbPending = b.dbPending || 0;
+                    const onChainPending = parseFloat(b.onChainPending || 0);
+                    const dbPending = parseFloat(b.dbPending || 0);
                     const hasVaultFees = onChainPending > 0;
-                    const pendingAmount = b.pendingAmount || b.pending || 0;
-                    const totalAccumulated = b.totalFeesAccumulated || 0;
+                    const pendingAmount = parseFloat(b.pendingAmount || b.pending || 0);
+                    const totalAccumulated = parseFloat(b.totalFeesAccumulated || 0);
                     const mintAddress = b.mint || 'Unknown';
 
                     return `
@@ -5966,9 +5972,9 @@
         try {
             // Include Authorization header for cross-origin support
             const headers = {};
-            const storedToken = localStorage.getItem('pags_token');
-            if (storedToken) {
-                headers['Authorization'] = `Bearer ${storedToken}`;
+            const token = pagsSession || getPagsToken();
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
             }
 
             await fetch(`${BACKEND_URL}/api/auth/twitter/logout`, {
@@ -6080,6 +6086,12 @@
             return;
         }
 
+        // Verify connected wallet matches the linked wallet (prevents signing with wrong wallet)
+        if (userPubkey !== pagsUser.linkedWallet) {
+            showStatus(`Wrong wallet connected. Please connect ${pagsUser.linkedWallet.slice(0, 6)}...${pagsUser.linkedWallet.slice(-4)}`, 'error');
+            return;
+        }
+
         try {
             const claimBtn = document.getElementById('pags-claim-btn');
             claimBtn.disabled = true;
@@ -6096,9 +6108,9 @@
 
             // Send claim request (include Authorization header for cross-origin support)
             const headers = { 'Content-Type': 'application/json' };
-            const storedToken = localStorage.getItem('pags_token');
-            if (storedToken) {
-                headers['Authorization'] = `Bearer ${storedToken}`;
+            const token = pagsSession || getPagsToken();
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
             }
 
             const res = await fetch(`${BACKEND_URL}/api/pags/claim`, {
@@ -6141,9 +6153,9 @@
         try {
             // Include Authorization header for cross-origin support
             const headers = {};
-            const storedToken = localStorage.getItem('pags_token');
-            if (storedToken) {
-                headers['Authorization'] = `Bearer ${storedToken}`;
+            const token = pagsSession || getPagsToken();
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
             }
 
             const res = await fetch(`${BACKEND_URL}/api/pags/me`, {
@@ -6154,6 +6166,10 @@
                 const data = await res.json();
                 if (data.success && data.user) {
                     pagsUser = data.user;
+                    if (data.sessionToken) {
+                        pagsSession = data.sessionToken;
+                        if (!getPagsToken()) setPagsToken(data.sessionToken);
+                    }
                     pagsUpdateUI();
                 }
             }
@@ -6178,7 +6194,14 @@
         resultEl.classList.remove('hidden');
 
         try {
-            const res = await fetch(`${BACKEND_URL}/api/pags/lookup/${encodeURIComponent(username)}`);
+            const controller = new AbortController();
+            const lookupTimeout = setTimeout(() => controller.abort(), 15000);
+            let res;
+            try {
+                res = await fetch(`${BACKEND_URL}/api/pags/lookup/${encodeURIComponent(username)}`, { signal: controller.signal });
+            } finally {
+                clearTimeout(lookupTimeout);
+            }
             const data = await res.json();
 
             if (data.success) {
@@ -6196,11 +6219,14 @@
                     html += '<div class="space-y-2">';
                     for (const b of data.breakdown.slice(0, 5)) {
                         const shortMint = b.mint ? (b.mint.slice(0, 6) + '...') : '?';
-                        const displayTicker = b.ticker ? `$${b.ticker}` : shortMint;
-                        const feePercent = b.feeShareBps ? (b.feeShareBps / 100).toFixed(1) : '100.0';
+                        const displayTicker = b.ticker ? `$${DOMPurify.sanitize(b.ticker)}` : shortMint;
+                        const feePercent = b.feeShareBps ? (parseFloat(b.feeShareBps) / 100).toFixed(1) : '100.0';
                         const isShared = b.feeShareBps && b.feeShareBps < 10000;
                         const tokenImage = b.image || 'https://placehold.co/24x24/1a1a2e/purple?text=%24';
                         const hasVaultFees = (b.onChainPending || 0) > 0;
+                        const pendingVal = parseFloat(b.pending || 0);
+                        const onChainPendingVal = parseFloat(b.onChainPending || 0);
+                        const claimableVal = parseFloat(b.claimable || 0);
 
                         // v25.68: Show multiple beneficiaries if present
                         let beneficiaryHtml = '';
@@ -6219,8 +6245,8 @@
                                     ${beneficiaryHtml}
                                 </div>
                                 <div class="text-right">
-                                    <span class="text-green-400 font-mono">${(b.pending || 0).toFixed(6)} SOL</span>
-                                    ${hasVaultFees ? `<div class="text-[9px]"><span class="text-orange-400">${(b.onChainPending).toFixed(4)}</span>+<span class="text-cyan-400">${(b.claimable || 0).toFixed(4)}</span></div>` : ''}
+                                    <span class="text-green-400 font-mono">${pendingVal.toFixed(6)} SOL</span>
+                                    ${hasVaultFees ? `<div class="text-[9px]"><span class="text-orange-400">${onChainPendingVal.toFixed(4)}</span>+<span class="text-cyan-400">${claimableVal.toFixed(4)}</span></div>` : ''}
                                 </div>
                             </div>`;
                     }
