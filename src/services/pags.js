@@ -248,6 +248,10 @@ async function registerBeneficiary({ mint, creatorPubkey, twitterUsername, feeSh
             `, [mint, creatorValue, primaryUsername, feeShareBps, timestamp]);
 
             beneficiaryId = result.rows && result.rows[0] ? result.rows[0].id : result.lastID;
+
+            if (!beneficiaryId) {
+                throw new Error('Insert failed: could not retrieve beneficiary ID after INSERT');
+            }
         }
 
         // v25.48: Insert beneficiary shares
@@ -392,6 +396,7 @@ async function getPendingRewardsByUsername(twitterUsername) {
 
     // Calculate total pending (DB + on-chain vaults)
     let totalPending = 0;
+    let totalClaimed = 0;
     const breakdown = [];
 
     for (const b of beneficiaries) {
@@ -457,6 +462,7 @@ async function getPendingRewardsByUsername(twitterUsername) {
         }
 
         const combinedPending = dbPending + onChainPending;
+        totalClaimed += b.totalFeesClaimed || 0;
 
         if (combinedPending > 0) {
             totalPending += combinedPending;
@@ -488,6 +494,7 @@ async function getPendingRewardsByUsername(twitterUsername) {
     return {
         twitterUsername: normalizedUsername,
         totalPending,
+        totalClaimed,
         breakdown,
         beneficiaryCount: beneficiaries.length
     };

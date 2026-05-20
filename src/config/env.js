@@ -21,7 +21,7 @@ const config = {
     // Example: https://your-app.onrender.com (without trailing slash)
     BASE_URL: process.env.BASE_URL || 'http://localhost:3000',
     // v25.49: Full URL where the FRONTEND is hosted (for redirects after OAuth)
-    // Can be a full URL (https://alonisthe.dev/ignition) or a relative path (/ignition)
+    // Can be a full URL (https://alonisthe.dev/robinhood) or a relative path (/robinhood)
     // If on a different domain than BASE_URL, use full URL
     FRONTEND_URL: process.env.FRONTEND_URL || process.env.FRONTEND_PATH || '/',
     // Legacy alias for backwards compatibility

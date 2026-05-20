@@ -240,7 +240,7 @@ function validateRedirectUrl(url, baseUrl) {
             // For cross-origin setups with FRONTEND_URL configured as full URL,
             // just use FRONTEND_URL directly (it already contains the path)
             if (config.FRONTEND_URL && config.FRONTEND_URL.startsWith('http')) {
-                // FRONTEND_URL is already the complete frontend URL (e.g., https://alonisthe.dev/ignition)
+                // FRONTEND_URL is already the complete frontend URL (e.g., https://alonisthe.dev/robinhood)
                 // Don't append the relative path again
                 return config.FRONTEND_URL;
             }
@@ -709,16 +709,24 @@ async function requireSession(req, res, next) {
     }
 
     // v25.69 SECURITY: Check if token has been revoked
-    if (decoded.jti && await isTokenRevoked(decoded.jti)) {
-        logger.warn('[PAGS Session] Revoked token rejected', {
-            path: req.path,
-            jti: decoded.jti.slice(0, 8) + '...'
-        });
-        return res.status(401).json({
-            success: false,
-            error: 'Session has been revoked',
-            code: 'SESSION_REVOKED'
-        });
+    if (decoded.jti) {
+        let tokenRevoked = false;
+        try {
+            tokenRevoked = await isTokenRevoked(decoded.jti);
+        } catch (e) {
+            logger.warn('[PAGS Session] Error checking token revocation, allowing request', { error: e.message });
+        }
+        if (tokenRevoked) {
+            logger.warn('[PAGS Session] Revoked token rejected', {
+                path: req.path,
+                jti: decoded.jti.slice(0, 8) + '...'
+            });
+            return res.status(401).json({
+                success: false,
+                error: 'Session has been revoked',
+                code: 'SESSION_REVOKED'
+            });
+        }
     }
 
     // Attach session info to request

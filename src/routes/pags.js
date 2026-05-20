@@ -996,7 +996,9 @@ function init(deps) {
                 user: {
                     ...user,
                     pendingRewards: rewards.totalPending,
-                    rewardBreakdown: rewards.breakdown
+                    totalClaimed: rewards.totalClaimed || 0,
+                    rewardBreakdown: rewards.breakdown,
+                    minClaimAmount: config.PAGS_MIN_CLAIM_SOL
                 }
             });
         } catch (e) {

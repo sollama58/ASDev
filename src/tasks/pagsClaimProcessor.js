@@ -91,19 +91,16 @@ function stop() {
  */
 async function acquireDistributedLock() {
     if (!redis) {
-        // No Redis, use local flag only (not safe for multi-instance)
-        if (isRunning) return false;
-        isRunning = true;
-        return true;
+        // Redis required for distributed lock — skip processing to prevent double-spend on multi-instance
+        logger.warn('[PAGS Claim Processor] Redis unavailable — skipping claim cycle to prevent double-spend');
+        return false;
     }
 
     try {
         const client = redis.getConnection();
         if (!client) {
-            // Redis not connected, fall back to local flag
-            if (isRunning) return false;
-            isRunning = true;
-            return true;
+            logger.warn('[PAGS Claim Processor] Redis not connected — skipping claim cycle to prevent double-spend');
+            return false;
         }
 
         // SET NX with TTL - atomic operation
@@ -119,10 +116,8 @@ async function acquireDistributedLock() {
         }
         return false;
     } catch (e) {
-        logger.debug('[PAGS Claim Processor] Lock acquisition error, using local flag', { error: e.message });
-        if (isRunning) return false;
-        isRunning = true;
-        return true;
+        logger.warn('[PAGS Claim Processor] Lock acquisition error — skipping claim cycle to prevent double-spend', { error: e.message });
+        return false;
     }
 }
 

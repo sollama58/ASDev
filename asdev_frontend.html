@@ -5935,12 +5935,13 @@
             }
 
             // Update claim button state
-            const canClaim = pending >= 0.01 && pagsUser.linkedWallet;
+            const minClaim = pagsUser.minClaimAmount || 0.01;
+            const canClaim = pending >= minClaim && pagsUser.linkedWallet;
             claimBtn.disabled = !canClaim;
             if (!pagsUser.linkedWallet) {
                 claimStatus.textContent = 'Link your wallet to claim rewards';
-            } else if (pending < 0.01) {
-                claimStatus.textContent = 'Minimum 0.01 SOL required to claim';
+            } else if (pending < minClaim) {
+                claimStatus.textContent = `Minimum ${minClaim} SOL required to claim`;
             } else {
                 claimStatus.textContent = `Ready to claim ${pending.toFixed(4)} SOL!`;
             }
@@ -7340,7 +7341,7 @@
 
             if (data.success) {
                 // v25.68: Support multiple beneficiaries in status display
-                const hasBeneficiaries = data.isRegistered && (data.beneficiaries || data.beneficiary);
+                const hasBeneficiaries = data.isRegistered && (data.beneficiaries?.length > 0 || data.beneficiary);
                 if (hasBeneficiaries) {
                     // Handle both array and single beneficiary format
                     const beneficiaries = data.beneficiaries || [data.beneficiary];
