@@ -240,7 +240,7 @@ async function selectKoth(candidates) {
     const tokenList = formatTokensForPrompt(candidates);
 
     // Concise system prompt - explicitly forbid markdown
-    const systemPrompt = `You select the KOTH (King of the Pill) token from candidates. KOTH holders get 10% airdrop bonus.
+    const systemPrompt = `You select the KOTH (King of the Pill) token from candidates. KOTH is an AI-spotlighted community champion — informational prestige, no fee allocation.
 Prioritize: 1) 24hr Volume 2) Market Cap 3) Holder count 4) Token age
 CRITICAL: Output ONLY raw JSON. No markdown, no code blocks, no backticks. Just the JSON object.`;
 

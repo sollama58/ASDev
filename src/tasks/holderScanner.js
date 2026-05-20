@@ -188,7 +188,7 @@ function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
  * - Track top 250 holders of each eligible token
  * - Each token contributes 1000 base points distributed proportionally among holders
  * - ASDF multiplier: 2x total points if top 100 ASDF holder
- * - KOTH: 10% of airdrop reserved for king token holders (unchanged)
+ * - KOTH: informational AI spotlight only (v26.0: no fee allocation)
  *
  * v18.0 - Eligibility now based on volume threshold:
  * - All tokens with >$100 24hr volume are eligible (no limit)
@@ -200,6 +200,11 @@ function calculateVolumeWeight(tokenVolume, minVolume, maxVolume) {
  * - Previously: points = (balance / tracked holders balance) * token points
  * - Now: points = (balance / 1B total supply) * token points
  * - This ensures fair distribution based on actual ownership percentage
+ *
+ * v26.0 - Per-token airdrop pool system (replaces global pooling):
+ * - expectedAirdrop = SUM over held tokens of (token.pending_airdrop_lamports * holderBalance / 1B)
+ * - Points are informational only; airdrop share determined by token supply ownership
+ * - KOTH is now an AI spotlight (no fee allocation)
  */
 async function updateGlobalState(deps) {
     const { connection, devKeypair, db, globalState } = deps;
@@ -237,29 +242,13 @@ async function updateGlobalState(deps) {
 
         logger.info(`[HolderScanner] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume (combined range: $${globalMinVolume.toFixed(0)} - $${globalMaxVolume.toFixed(0)})`);
 
-        // v17.0: Get actual SOL balance for expected airdrop calculation (not PUMP holdings)
-        let availableSolForAirdrop = 0;
+        // v17.0: Get actual SOL balance (for wallet monitoring)
         try {
             const solBalance = await connection.getBalance(devKeypair.publicKey);
-            // Available for airdrop = SOL balance minus safety reserve
-            const safetyReserveLamports = SAFETY_RESERVE_SOL * LAMPORTS_PER_SOL;
-            availableSolForAirdrop = Math.max(0, (solBalance - safetyReserveLamports) / LAMPORTS_PER_SOL);
             globalState.devSolBalance = solBalance / LAMPORTS_PER_SOL;
         } catch (e) {
-            availableSolForAirdrop = 0;
             globalState.devSolBalance = 0;
         }
-
-        // --- CALCULATION LOGIC ---
-
-        // 1. Determine Pots (based on actual SOL available for airdrop)
-        const totalDistributable = availableSolForAirdrop * 0.99; // 99% distributed, 1% dust buffer
-
-        // KOTH gets 10% of the distributable amount
-        const kothPot = totalDistributable * 0.10;
-
-        // Community gets the remaining 90%
-        const communityPot = totalDistributable * 0.90;
 
         // 2. Identify KOTH Token (for expected airdrop calculation)
         // v25.112: Read AI-selected KOTH from Redis (set by flywheel) to match actual distribution
@@ -659,40 +648,44 @@ async function updateGlobalState(deps) {
         }
 
         globalState.totalPoints = tempTotalPoints;
-        globalState.availableSolForAirdrop = availableSolForAirdrop; // v17.0: Track available SOL
-        globalState.communityPot = communityPot; // v19.0: Track community pot for debugging
-        globalState.kothPot = kothPot; // v19.0: Track KOTH pot for debugging
-        logger.info(`[HolderScanner] Global Points: ${globalState.totalPoints.toFixed(2)} | Available SOL: ${availableSolForAirdrop.toFixed(4)} | Community Pot: ${communityPot.toFixed(4)} SOL | KOTH Pot: ${kothPot.toFixed(4)} SOL`);
+        globalState.communityPot = 0; // v26.0: Deprecated - per-token pools replace global pooling
+        globalState.kothPot = 0; // v26.0: KOTH is now informational only
+        logger.info(`[HolderScanner] Global Points: ${globalState.totalPoints.toFixed(2)}`);
+
+        // v26.0: Build per-user expected airdrop from each token's pending_airdrop_lamports
+        // Each user's expected = sum of (token.pending_airdrop_lamports * holder_balance / PUMP_FUN_TOTAL_SUPPLY)
+        const userExpectedAirdropMap = new Map();
+        let totalPendingAirdropLamports = 0;
+        try {
+            const pendingRows = await db.all(`
+                SELECT mint, pending_airdrop_lamports, 'platform' as source FROM tokens WHERE pending_airdrop_lamports > 0
+                UNION ALL
+                SELECT mint, pending_airdrop_lamports, 'robinhood' as source FROM robinhood_tokens WHERE pending_airdrop_lamports > 0 AND "isActive" = 1
+            `);
+            for (const row of pendingRows) {
+                const pendingLamports = BigInt(row.pending_airdrop_lamports || 0);
+                if (pendingLamports === BigInt(0)) continue;
+                totalPendingAirdropLamports += Number(pendingLamports);
+                const holdersTable = row.source === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
+                const holders = await db.all(`SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1`, [row.mint]);
+                for (const h of holders) {
+                    const bal = BigInt(h.balance || '0');
+                    if (bal === BigInt(0)) continue;
+                    const expectedLamports = Number(pendingLamports * bal / PUMP_FUN_TOTAL_SUPPLY);
+                    const prev = userExpectedAirdropMap.get(h.holderPubkey) || 0;
+                    userExpectedAirdropMap.set(h.holderPubkey, prev + expectedLamports / LAMPORTS_PER_SOL);
+                }
+            }
+            globalState.availableSolForAirdrop = totalPendingAirdropLamports / LAMPORTS_PER_SOL;
+            logger.info(`[HolderScanner] Per-token expected airdrops: ${userExpectedAirdropMap.size} users, total pending: ${globalState.availableSolForAirdrop.toFixed(4)} SOL`);
+        } catch (e) {
+            logger.error('[HolderScanner] Failed to compute per-token expected airdrops', { error: e.message });
+            globalState.availableSolForAirdrop = 0;
+        }
 
         // Update expected airdrops and points map
         globalState.userExpectedAirdrops.clear();
         globalState.userPointsMap.clear();
-
-        // Get KOTH holders for expected airdrop calculation
-        // v25.113: Query correct holder table based on token source
-        let kothHoldersMap = new Map(); // pubkey -> proportional share of KOTH pot
-        if (kothToken && kothToken.mint) {
-            const holdersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
-            const kothHolders = await db.all(
-                `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1`,
-                [kothToken.mint]
-            );
-
-            let kothTotalBalance = BigInt(0);
-            for (const h of kothHolders) {
-                kothTotalBalance += BigInt(h.balance || '0');
-            }
-
-            if (kothTotalBalance > BigInt(0)) {
-                for (const holder of kothHolders) {
-                    const holderBalance = BigInt(holder.balance || '0');
-                    if (holderBalance === BigInt(0)) continue;
-
-                    const share = Number(holderBalance * BigInt(10000) / kothTotalBalance) / 10000;
-                    kothHoldersMap.set(holder.holderPubkey, share * kothPot);
-                }
-            }
-        }
 
         const userPointsData = [];
         for (const [pubkey, data] of rawPointsMap.entries()) {
@@ -706,17 +699,8 @@ async function updateGlobalState(deps) {
             if (points > 0) {
                 globalState.userPointsMap.set(pubkey, points);
 
-                let expected = 0;
-
-                // Community share based on points
-                if (communityPot > 0 && globalState.totalPoints > 0) {
-                    const share = points / globalState.totalPoints;
-                    expected = share * communityPot;
-                }
-
-                // Add KOTH bonus if applicable
-                const kothBonus = kothHoldersMap.get(pubkey) || 0;
-                expected += kothBonus;
+                // v26.0: Expected airdrop is the sum of per-token shares from pending pools
+                const expected = userExpectedAirdropMap.get(pubkey) || 0;
 
                 globalState.userExpectedAirdrops.set(pubkey, expected);
 
@@ -733,18 +717,18 @@ async function updateGlobalState(deps) {
             }
         }
 
-        // Edge Case: KOTH holders with 0 community points still get their KOTH share
-        for (const [pubkey, kothShare] of kothHoldersMap.entries()) {
+        // v26.0: Include users with expected airdrops but zero points (e.g. token holders of pending tokens with no eligible volume)
+        for (const [pubkey, expected] of userExpectedAirdropMap.entries()) {
             if (pubkey === devKeypair.publicKey.toString()) continue;
-            if (!globalState.userExpectedAirdrops.has(pubkey) && kothShare > 0) {
-                globalState.userExpectedAirdrops.set(pubkey, kothShare);
+            if (!globalState.userExpectedAirdrops.has(pubkey) && expected > 0) {
+                globalState.userExpectedAirdrops.set(pubkey, expected);
                 userPointsData.push({
                     pubkey,
                     basePoints: 0,
                     robinhoodPoints: 0,
                     multiplier: 1,
                     totalPoints: 0,
-                    expectedAirdropSol: kothShare,
+                    expectedAirdropSol: expected,
                     positionsCount: 0,
                     isAsdfHolder: false
                 });

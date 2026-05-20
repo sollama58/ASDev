@@ -413,10 +413,8 @@ function initHolderScannerWorker(deps) {
                 logger.error('[Worker] Failed to fetch SOL balance', { error: e.message });
             }
 
-            const availableForAirdrop = Math.max(0, solBalance - SAFETY_RESERVE);
-            const totalDistributable = availableForAirdrop * 0.99;
-            const kothPot = totalDistributable * 0.10;
-            const communityPot = totalDistributable * 0.90;
+            // v26.0: Per-token pool system — no global communityPot/kothPot
+            // Expected airdrops are computed from each token's pending_airdrop_lamports below
 
             // 4. Identify KOTH Token and holders (not just creator)
             // v25.112: Read AI-selected KOTH from Redis (set by flywheel) to match actual distribution
@@ -624,7 +622,7 @@ function initHolderScannerWorker(deps) {
                     const tokenVolume = parseFloat(rhToken.volume24h) || MIN_VOLUME_USD;
                     const volumeWeight = calculateVolumeWeight(tokenVolume, globalMinVolume, globalMaxVolume);
                     const weightedBasePoints = BASE_POINTS_PER_TOKEN * volumeWeight;
-                    const feeShareMultiplier = (rhToken.feeShareBps || 10000) / 10000;
+                    const feeShareMultiplier = (rhToken.feeShareBps ?? 10000) / 10000;
 
                     const holders = await db.all(
                         'SELECT "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC',
@@ -676,33 +674,41 @@ function initHolderScannerWorker(deps) {
             }
 
             await redis.setTotalPoints(tempTotalPoints);
-            logger.info(`[Worker] Global Points: ${tempTotalPoints.toFixed(2)} | Community Pot: ${communityPot.toFixed(4)} SOL | KOTH Pot: ${kothPot.toFixed(4)} SOL`);
+            logger.info(`[Worker] Global Points: ${tempTotalPoints.toFixed(2)}`);
 
-            // 10. Update expected airdrops in Redis
-            await redis.clearUserExpectedAirdrops();
-            await redis.clearUserPoints();
-
-            // Calculate KOTH holders' share (proportional, not just creator)
-            // v25.113: Query correct holder table based on token source
-            let kothHoldersMap = new Map();
-            if (kothToken && kothToken.mint) {
-                const holdersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
-                const kothHolders = await db.all(
-                    `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1`,
-                    [kothToken.mint]
-                );
-                let kothTotalBalance = BigInt(0);
-                for (const h of kothHolders) kothTotalBalance += BigInt(h.balance || '0');
-
-                if (kothTotalBalance > BigInt(0)) {
-                    for (const holder of kothHolders) {
-                        const holderBalance = BigInt(holder.balance || '0');
-                        if (holderBalance === BigInt(0)) continue;
-                        const share = Number(holderBalance * BigInt(10000) / kothTotalBalance) / 10000;
-                        kothHoldersMap.set(holder.holderPubkey, share * kothPot);
+            // 10. v26.0: Build per-user expected airdrop from per-token pending pools
+            // Each user's expected = sum of (token.pending_airdrop_lamports * holderBalance / 1B_supply)
+            const PUMP_FUN_TOTAL_SUPPLY_W = BigInt('1000000000000000'); // 1B * 10^6
+            const userExpectedAirdropMapW = new Map();
+            let totalPendingAirdropLamportsW = 0;
+            try {
+                const pendingRows = await db.all(`
+                    SELECT mint, pending_airdrop_lamports, 'platform' as source FROM tokens WHERE pending_airdrop_lamports > 0
+                    UNION ALL
+                    SELECT mint, pending_airdrop_lamports, 'robinhood' as source FROM robinhood_tokens WHERE pending_airdrop_lamports > 0 AND "isActive" = 1
+                `);
+                for (const row of pendingRows) {
+                    const pendingLamports = BigInt(row.pending_airdrop_lamports || 0);
+                    if (pendingLamports === BigInt(0)) continue;
+                    totalPendingAirdropLamportsW += Number(pendingLamports);
+                    const holdersTable = row.source === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
+                    const holders = await db.all(`SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1`, [row.mint]);
+                    for (const h of holders) {
+                        const bal = BigInt(h.balance || '0');
+                        if (bal === BigInt(0)) continue;
+                        const expectedLamports = Number(pendingLamports * bal / PUMP_FUN_TOTAL_SUPPLY_W);
+                        const prev = userExpectedAirdropMapW.get(h.holderPubkey) || 0;
+                        userExpectedAirdropMapW.set(h.holderPubkey, prev + expectedLamports / 1e9);
                     }
                 }
+                logger.info(`[Worker] Per-token expected airdrops: ${userExpectedAirdropMapW.size} users, total pending: ${(totalPendingAirdropLamportsW / 1e9).toFixed(4)} SOL`);
+            } catch (e) {
+                logger.error('[Worker] Failed to compute per-token expected airdrops', { error: e.message });
             }
+
+            // 11. Update expected airdrops in Redis
+            await redis.clearUserExpectedAirdrops();
+            await redis.clearUserPoints();
 
             const userExpectedAirdrops = new Map();
             const userPointsMap = new Map();
@@ -718,12 +724,8 @@ function initHolderScannerWorker(deps) {
                 if (points > 0) {
                     userPointsMap.set(pubkey, points);
 
-                    let expected = 0;
-                    if (communityPot > 0 && tempTotalPoints > 0) {
-                        expected = (points / tempTotalPoints) * communityPot;
-                    }
-                    // Add KOTH bonus if applicable
-                    expected += kothHoldersMap.get(pubkey) || 0;
+                    // v26.0: Expected airdrop from per-token pools
+                    const expected = userExpectedAirdropMapW.get(pubkey) || 0;
                     userExpectedAirdrops.set(pubkey, expected);
 
                     // v25.33: Collect data for database upsert
@@ -740,19 +742,18 @@ function initHolderScannerWorker(deps) {
                 }
             }
 
-            // KOTH edge case: holders with 0 community points still get KOTH share
-            for (const [pubkey, kothShare] of kothHoldersMap.entries()) {
+            // v26.0: Include users with expected airdrops but zero leaderboard points
+            for (const [pubkey, expected] of userExpectedAirdropMapW.entries()) {
                 if (pubkey === devPubkeyStr) continue;
-                if (!userExpectedAirdrops.has(pubkey) && kothShare > 0) {
-                    userExpectedAirdrops.set(pubkey, kothShare);
-                    // v25.33: Add KOTH-only holders to database
+                if (!userExpectedAirdrops.has(pubkey) && expected > 0) {
+                    userExpectedAirdrops.set(pubkey, expected);
                     userPointsData.push({
                         pubkey,
                         basePoints: 0,
                         robinhoodPoints: 0,
                         multiplier: 1,
                         totalPoints: 0,
-                        expectedAirdropSol: kothShare,
+                        expectedAirdropSol: expected,
                         positionsCount: 0,
                         isAsdfHolder: false
                     });

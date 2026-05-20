@@ -312,12 +312,28 @@ function init(deps) {
                     logger.debug('[Health] Robinhood pending fees error', { error: e.message });
                 }
 
+                // v26.0: Sum of all per-token pending airdrop lamports (replaces balance-based pool calc)
+                let totalPendingAirdropLamports = 0;
+                try {
+                    const pendingSum = await db.get(`
+                        SELECT COALESCE(SUM(p), 0) as total FROM (
+                            SELECT pending_airdrop_lamports as p FROM tokens WHERE pending_airdrop_lamports > 0
+                            UNION ALL
+                            SELECT pending_airdrop_lamports as p FROM robinhood_tokens WHERE pending_airdrop_lamports > 0
+                        ) combined
+                    `);
+                    totalPendingAirdropLamports = parseInt(pendingSum?.total || 0);
+                } catch (e) {
+                    // Ignore - column may not exist until migration runs
+                }
+
                 return {
                     stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped, totalSolAirdropped,
                     robinhoodTokenCount: robinhoodTokenCount?.count || 0,
                     robinhoodTotalFees: robinhoodTotalFees?.total || 0,
                     robinhoodPendingFees,
-                    robinhoodPendingDetails
+                    robinhoodPendingDetails,
+                    totalPendingAirdropLamports
                 };
             });
 
@@ -362,8 +378,8 @@ function init(deps) {
                 // v14.0: Raw SOL balance (actual wallet balance)
                 solBalance: (cachedHealth.currentBalance / LAMPORTS_PER_SOL).toFixed(4),
                 solBalanceLamports: cachedHealth.currentBalance,
-                // v25.78: Current airdrop pool available (SOL balance minus 0.1 SOL reserve)
-                airdropPoolSol: Math.max(0, (cachedHealth.currentBalance / LAMPORTS_PER_SOL) - 0.1).toFixed(4),
+                // v26.0: Total pending airdrop pool across all tokens (per-token pooling system)
+                airdropPoolSol: ((cachedHealth.totalPendingAirdropLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
                 // M-8 FIX: Expose deployment fee so frontend stays in sync with backend config
                 deploymentFee: config.DEPLOYMENT_FEE_SOL,
@@ -2080,9 +2096,8 @@ function init(deps) {
 
             // Get globalState values
             const globalTotalPoints = globalState?.totalPoints || 0;
-            const availableSol = globalState?.availableSolForAirdrop || 0;
-            const communityPot = globalState?.communityPot || 0;
-            const kothPot = globalState?.kothPot || 0;
+            // v26.0: availableSolForAirdrop now = sum of all per-token pending_airdrop_lamports
+            const totalPendingSol = globalState?.availableSolForAirdrop || 0;
 
             res.json({
                 success: true,
@@ -2095,9 +2110,9 @@ function init(deps) {
                     },
                     globalState: {
                         totalPoints: Math.round(globalTotalPoints * 100) / 100,
-                        availableSolForAirdrop: Math.round(availableSol * 10000) / 10000,
-                        communityPot: Math.round(communityPot * 10000) / 10000,
-                        kothPot: Math.round(kothPot * 10000) / 10000
+                        // v26.0: per-token pool system — no single global pot
+                        totalPendingAirdropSol: Math.round(totalPendingSol * 10000) / 10000,
+                        note: 'v26.0: Per-token pool system. Each token has its own pending_airdrop_lamports.'
                     },
                     tokens: {
                         eligiblePlatformTokens: parseInt(platformTokenCount?.count) || 0,
@@ -2212,7 +2227,7 @@ function init(deps) {
             const robinhoodResults = robinhoodTokens.map(token => {
                 const vol = parseFloat(token.volume24h) || MIN_VOL;
                 const weight = calcWeight(vol, gMinVol, gMaxVol);
-                const feeShareBps = token.feeShareBps || 10000;
+                const feeShareBps = token.feeShareBps ?? 10000;
                 const feeShareMul = feeShareBps / 10000;
                 // Match holderScanner.js: weightedBasePoints uses only volume weight,
                 // feeShare is applied AFTER BigInt division to match rounding behavior
@@ -2327,7 +2342,7 @@ function init(deps) {
                 return res.status(404).json({ success: false, error: 'Token not found' });
             }
 
-            const feeShareMul = (rhToken.feeShareBps || 10000) / 10000;
+            const feeShareMul = (rhToken.feeShareBps ?? 10000) / 10000;
             const holders = await db.all(
                 'SELECT rank, "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC',
                 [mint]
@@ -2951,7 +2966,7 @@ function init(deps) {
                         } catch (e) { /* silent */ }
                     }
 
-                    const feeShareBps = token.feeShareBps || 10000;
+                    const feeShareBps = token.feeShareBps ?? 10000;
                     const bcClaimable = Math.max(0, bcBalance - 5000);
                     const ourBcShare = Math.floor(bcClaimable * (feeShareBps / 10000));
                     const ourAmmShare = Math.floor(ammBalance * (feeShareBps / 10000));
@@ -3320,173 +3335,95 @@ function init(deps) {
             const holderScanner = require('../tasks/holderScanner');
             const flywheel = require('../tasks/flywheel');
 
-            // Get current SOL balance
-            const solBalance = await connection.getBalance(devKeypair.publicKey);
-            const SAFETY_RESERVE = 0.1 * LAMPORTS_PER_SOL;
-            const MIN_AIRDROP_POOL = (config.AIRDROP_THRESHOLD_SOL || 1.0) * LAMPORTS_PER_SOL;
-            const availableForAirdrop = solBalance - SAFETY_RESERVE;
+            // v26.0: Per-token simulation — each token has its own pending_airdrop_lamports pool
+            const TOKEN_THRESHOLD_LAMPORTS = Math.floor((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 0.05) * LAMPORTS_PER_SOL);
+            const PUMP_FUN_TOTAL_SUPPLY_SIM = BigInt('1000000000000000'); // 1B * 10^6
 
-            // Check if airdrop would be triggered
-            const wouldTrigger = availableForAirdrop >= MIN_AIRDROP_POOL;
-
-            // Calculate distribution pools (99% distributed, 1% dust buffer)
-            const totalDistributable = Math.floor(availableForAirdrop * 0.99);
-            let kothAmount = 0;
-            let communityAmount = totalDistributable;
-            let kothToken = null;
-            let kothHolderDistribution = [];
-
-            // Get KOTH token info
-            const KOTH_MIN_HOLDERS = 10;
-            const KOTH_MAX_PERCENT = 0.10; // 10% cap
-
+            // Get KOTH info (informational only in v26.0 — no fee allocation)
             const kothResult = await flywheel.getAiSelectedKoth(db);
-            if (kothResult?.token?.mint) {
-                // v25.113: Check both platform and robinhood token tables
-                kothToken = await db.get(
-                    'SELECT "userPubkey", ticker, mint, "marketCap" FROM tokens WHERE mint = $1',
-                    [kothResult.token.mint]
+
+            // Query all tokens with pending airdrop pools
+            const pendingRows = await db.all(`
+                SELECT mint, ticker, name, pending_airdrop_lamports, 'platform' as source FROM tokens WHERE pending_airdrop_lamports > 0
+                UNION ALL
+                SELECT mint, ticker, name, pending_airdrop_lamports, 'robinhood' as source FROM robinhood_tokens WHERE pending_airdrop_lamports > 0 AND "isActive" = 1
+                ORDER BY pending_airdrop_lamports DESC
+            `);
+
+            let totalPendingLamports = 0;
+            let tokensAboveThreshold = 0;
+            const maxDetailedRecipients = parseInt(req.query.limit) || 50;
+            const tokenSimulations = [];
+
+            for (const row of pendingRows) {
+                const pendingLamports = parseInt(row.pending_airdrop_lamports || 0);
+                totalPendingLamports += pendingLamports;
+                const wouldTrigger = pendingLamports >= TOKEN_THRESHOLD_LAMPORTS;
+                if (wouldTrigger) tokensAboveThreshold++;
+
+                const holdersTable = row.source === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
+                const holders = await db.all(
+                    `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1 ORDER BY rank ASC`,
+                    [row.mint]
                 );
-                let kothSource = 'platform';
-                if (!kothToken) {
-                    const rhToken = await db.get(
-                        'SELECT "creatorPubkey" as "userPubkey", ticker, mint, "marketCap" FROM robinhood_tokens WHERE mint = $1',
-                        [kothResult.token.mint]
-                    );
-                    if (rhToken) {
-                        kothToken = rhToken;
-                        kothSource = 'robinhood';
-                    }
-                }
 
-                if (kothToken) {
-                    // v25.113: Query correct holder table based on token source
-                    const holdersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
-                    const kothHolders = await db.all(
-                        `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1 ORDER BY rank ASC`,
-                        [kothToken.mint]
-                    );
-
-                    if (kothHolders && kothHolders.length >= KOTH_MIN_HOLDERS) {
-                        kothAmount = Math.floor(totalDistributable * KOTH_MAX_PERCENT);
-                        communityAmount = totalDistributable - kothAmount;
-
-                        // Calculate KOTH holder distribution
-                        const totalBalance = kothHolders.reduce((sum, h) => sum + BigInt(h.balance || '0'), BigInt(0));
-
-                        for (const holder of kothHolders) {
-                            const holderBalance = BigInt(holder.balance || '0');
-                            if (holderBalance <= BigInt(0)) continue;
-
-                            const share = totalBalance > BigInt(0)
-                                ? Number((BigInt(kothAmount) * holderBalance) / totalBalance)
-                                : 0;
-
-                            if (share > 0) {
-                                kothHolderDistribution.push({
-                                    wallet: holder.holderPubkey,
-                                    walletShort: holder.holderPubkey.slice(0, 8) + '...',
-                                    amountLamports: share,
-                                    amountSOL: (share / LAMPORTS_PER_SOL).toFixed(6),
-                                    sharePercent: ((holderBalance * BigInt(10000) / totalBalance) / BigInt(100)).toString() + '%'
-                                });
-                            }
-                        }
-
-                        kothHolderDistribution.sort((a, b) => b.amountLamports - a.amountLamports);
-                    }
-                }
-            }
-
-            // Get user points for community distribution
-            const userPointsMap = await redis.getAllUserPoints();
-            const totalPoints = await redis.getTotalPoints();
-
-            const communityDistribution = [];
-            let plannedCommunityAmount = 0;
-
-            if (totalPoints > 0) {
-                for (const [pubkey, points] of userPointsMap.entries()) {
-                    if (points <= 0) continue;
-
-                    const share = Math.floor((communityAmount * points) / totalPoints);
+                const pendingBig = BigInt(pendingLamports);
+                const distribution = [];
+                for (const h of holders) {
+                    const bal = BigInt(h.balance || '0');
+                    if (bal === BigInt(0)) continue;
+                    const share = Number(pendingBig * bal / PUMP_FUN_TOTAL_SUPPLY_SIM);
                     if (share > 0) {
-                        plannedCommunityAmount += share;
-                        communityDistribution.push({
-                            wallet: pubkey,
-                            walletShort: pubkey.slice(0, 8) + '...',
-                            points: points,
+                        distribution.push({
+                            wallet: h.holderPubkey,
+                            walletShort: h.holderPubkey.slice(0, 8) + '...',
                             amountLamports: share,
                             amountSOL: (share / LAMPORTS_PER_SOL).toFixed(6),
-                            sharePercent: ((points / totalPoints) * 100).toFixed(4) + '%'
+                            supplyPercent: (Number(bal * BigInt(10000) / PUMP_FUN_TOTAL_SUPPLY_SIM) / 100).toFixed(4) + '%'
                         });
                     }
                 }
+                distribution.sort((a, b) => b.amountLamports - a.amountLamports);
 
-                communityDistribution.sort((a, b) => b.amountLamports - a.amountLamports);
+                tokenSimulations.push({
+                    mint: row.mint,
+                    ticker: row.ticker,
+                    name: row.name,
+                    source: row.source,
+                    pendingSOL: (pendingLamports / LAMPORTS_PER_SOL).toFixed(6),
+                    pendingLamports,
+                    wouldTrigger,
+                    thresholdSOL: (TOKEN_THRESHOLD_LAMPORTS / LAMPORTS_PER_SOL).toFixed(3),
+                    holderCount: holders.length,
+                    recipientCount: distribution.length,
+                    topRecipients: distribution.slice(0, maxDetailedRecipients),
+                    hasMore: distribution.length > maxDetailedRecipients
+                });
             }
 
-            // Calculate total planned distribution
-            const kothTotalLamports = kothHolderDistribution.reduce((sum, h) => sum + h.amountLamports, 0);
-            const totalPlannedLamports = plannedCommunityAmount + kothTotalLamports;
-
-            // Summary statistics
             const summary = {
-                wouldTrigger,
-                thresholdMet: wouldTrigger,
-                currentBalanceSOL: (solBalance / LAMPORTS_PER_SOL).toFixed(4),
-                safetyReserveSOL: (SAFETY_RESERVE / LAMPORTS_PER_SOL).toFixed(4),
-                availableForAirdropSOL: (availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4),
-                minimumRequiredSOL: (MIN_AIRDROP_POOL / LAMPORTS_PER_SOL).toFixed(4),
-                totalDistributableSOL: (totalDistributable / LAMPORTS_PER_SOL).toFixed(4),
-                totalPlannedSOL: (totalPlannedLamports / LAMPORTS_PER_SOL).toFixed(4),
-                dustRemainingSOL: ((totalDistributable - totalPlannedLamports) / LAMPORTS_PER_SOL).toFixed(6)
+                model: 'v26.0 per-token',
+                totalTokensWithPendingPools: pendingRows.length,
+                tokensAboveThreshold,
+                thresholdSOL: (TOKEN_THRESHOLD_LAMPORTS / LAMPORTS_PER_SOL).toFixed(3),
+                totalPendingSOL: (totalPendingLamports / LAMPORTS_PER_SOL).toFixed(4),
+                koth: kothResult?.token ? {
+                    ticker: kothResult.token.ticker,
+                    mint: kothResult.token.mint,
+                    note: 'KOTH is informational only — no fee allocation in v26.0'
+                } : null
             };
-
-            const communityPotInfo = {
-                amountSOL: (communityAmount / LAMPORTS_PER_SOL).toFixed(4),
-                percentOfTotal: '90%',
-                totalPoints: totalPoints.toFixed(2),
-                recipientCount: communityDistribution.length,
-                plannedDistributionSOL: (plannedCommunityAmount / LAMPORTS_PER_SOL).toFixed(4)
-            };
-
-            const kothPotInfo = {
-                amountSOL: (kothAmount / LAMPORTS_PER_SOL).toFixed(4),
-                percentOfTotal: '10%',
-                token: kothToken ? {
-                    ticker: kothToken.ticker,
-                    mint: kothToken.mint,
-                    marketCap: kothToken.marketCap
-                } : null,
-                holderCount: kothHolderDistribution.length,
-                reasoning: kothResult?.reasoning || null,
-                minimumHoldersRequired: KOTH_MIN_HOLDERS,
-                meetsHolderRequirement: kothHolderDistribution.length >= KOTH_MIN_HOLDERS
-            };
-
-            // Limit detailed distribution to prevent huge response
-            const maxDetailedRecipients = parseInt(req.query.limit) || 100;
 
             res.json({
                 success: true,
                 simulation: true,
                 timestamp: new Date().toISOString(),
                 summary,
-                communityPot: {
-                    ...communityPotInfo,
-                    topRecipients: communityDistribution.slice(0, maxDetailedRecipients),
-                    hasMore: communityDistribution.length > maxDetailedRecipients
-                },
-                kothPot: {
-                    ...kothPotInfo,
-                    distribution: kothHolderDistribution.slice(0, maxDetailedRecipients),
-                    hasMore: kothHolderDistribution.length > maxDetailedRecipients
-                },
-                warnings: !wouldTrigger ? [
-                    `Airdrop would NOT trigger: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available, need ${(MIN_AIRDROP_POOL / LAMPORTS_PER_SOL).toFixed(4)} SOL`
+                tokens: tokenSimulations,
+                warnings: tokensAboveThreshold === 0 ? [
+                    `No tokens have pending pools >= ${(TOKEN_THRESHOLD_LAMPORTS / LAMPORTS_PER_SOL).toFixed(3)} SOL threshold`
                 ] : [],
-                note: 'This is a SIMULATION only. No transactions have been executed.'
+                note: 'SIMULATION only. No transactions executed. v26.0: per-token independent pools.'
             });
         } catch (e) {
             logger.error('[Admin] Simulate airdrop error', { error: e.message, stack: e.stack });

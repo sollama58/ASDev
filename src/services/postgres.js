@@ -382,6 +382,72 @@ async function createSchema() {
         END $$;
     `);
 
+    // v26.0: Migration - Per-token airdrop pools
+    // pending_airdrop_lamports: fees credited to this token, pending distribution to holders
+    // lifetime_airdrop_lamports: cumulative lamports ever airdropped from this token's pool
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tokens' AND column_name = 'pending_airdrop_lamports') THEN
+                ALTER TABLE tokens ADD COLUMN pending_airdrop_lamports BIGINT DEFAULT 0;
+            END IF;
+        END $$;
+    `);
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tokens' AND column_name = 'lifetime_airdrop_lamports') THEN
+                ALTER TABLE tokens ADD COLUMN lifetime_airdrop_lamports BIGINT DEFAULT 0;
+            END IF;
+        END $$;
+    `);
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'robinhood_tokens' AND column_name = 'pending_airdrop_lamports') THEN
+                ALTER TABLE robinhood_tokens ADD COLUMN pending_airdrop_lamports BIGINT DEFAULT 0;
+            END IF;
+        END $$;
+    `);
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'robinhood_tokens' AND column_name = 'lifetime_airdrop_lamports') THEN
+                ALTER TABLE robinhood_tokens ADD COLUMN lifetime_airdrop_lamports BIGINT DEFAULT 0;
+            END IF;
+        END $$;
+    `);
+    // v26.0: Migration - Track mint in airdrop_logs and user_airdrop_history for per-token accountability
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'airdrop_logs' AND column_name = 'mint') THEN
+                ALTER TABLE airdrop_logs ADD COLUMN mint TEXT;
+            END IF;
+        END $$;
+    `);
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'airdrop_logs' AND column_name = 'token_source') THEN
+                ALTER TABLE airdrop_logs ADD COLUMN token_source TEXT DEFAULT 'platform';
+            END IF;
+        END $$;
+    `);
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_airdrop_history' AND column_name = 'mint') THEN
+                ALTER TABLE user_airdrop_history ADD COLUMN mint TEXT;
+            END IF;
+        END $$;
+    `);
+    // Indexes for per-token pool queries
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_pending_airdrop ON tokens(pending_airdrop_lamports DESC) WHERE pending_airdrop_lamports > 0`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_pending_airdrop ON robinhood_tokens(pending_airdrop_lamports DESC) WHERE pending_airdrop_lamports > 0`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_airdrop_logs_mint ON airdrop_logs(mint)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_airdrop_history_mint ON user_airdrop_history(mint)`);
+
     // v25.24: Migration - Fix null balance values that cause BigInt conversion errors
     // Set default for balance column and fix any existing null values
     await pool.query(`

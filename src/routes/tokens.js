@@ -96,7 +96,7 @@ function init(deps) {
             const rawLimit = parseInt(req.query.limit) || 50;
             const rawOffset = parseInt(req.query.offset) || 0;
             const limit = Math.min(Math.max(1, rawLimit), 100); // Min 1, Max 100
-            const offset = Math.max(0, rawOffset); // Min 0 (no negative offsets)
+            const offset = Math.min(Math.max(0, rawOffset), 50000); // Min 0, Max 50000
 
             // Cache per page (limit + offset combo)
             const cacheKey = `all_launches_v25_${limit}_${offset}`;
@@ -292,18 +292,12 @@ function init(deps) {
         try {
             // Cache the base leaderboard data (15 seconds)
             // v24.0: Added LIMIT 500 to prevent unbounded result sets on large datasets
-            const rows = await redis.smartCache('leaderboard_data', 15, async () => {
-                // Combine launched tokens and active robinhood tokens
-                // Use UNION ALL to merge both sources, preserving creator info
-                // v18.0: Removed LIMIT 10 to show all tokens, eligibility determined by volume threshold
-                // v24.0: Added LIMIT 500 for scalability (prevents unbounded queries)
-                // v25.63: Tokens can be registered for both platform AND PAGS (fee splitting)
-                // Only tokens in tokens/robinhood_tokens tables appear here - PAGS-only tokens won't
+            const rows = await redis.smartCache('leaderboard_robinhood_data', 15, async () => {
+                // v26.1: Leaderboard shows only active Robinhood partner tokens
                 return await db.all(`
-                    SELECT mint, "userPubkey" as creator, name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'launched' as source
-                    FROM tokens
-                    UNION ALL
-                    SELECT mint, "creatorPubkey" as creator, name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source
+                    SELECT mint, "creatorPubkey" as creator, name, ticker, image,
+                           "marketCap", volume24h, "isGraduated" as complete,
+                           COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports
                     FROM robinhood_tokens
                     WHERE "isActive" = 1
                     ORDER BY volume24h DESC
@@ -316,67 +310,39 @@ function init(deps) {
             // v25.28: Reduced TTL from 30s to 15s to save Redis memory
             let userHoldings = new Set();
             if (userPubkey && rows.length > 0) {
-                const userCacheKey = `user_holdings_${userPubkey}`;
+                const userCacheKey = `user_rh_holdings_${userPubkey}`;
                 const cachedHoldings = await redis.smartCache(userCacheKey, 15, async () => {
                     const mints = rows.map(r => r.mint);
                     const placeholders = mints.map((_, i) => `$${i + 2}`).join(',');
 
-                    // Check token_holders (launched tokens)
-                    const launchedHoldings = await db.all(
-                        `SELECT mint FROM token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`,
-                        [userPubkey, ...mints]
-                    );
-
-                    // Check robinhood_token_holders (robinhood tokens)
-                    const robinhoodHoldings = await db.all(
+                    const holdings = await db.all(
                         `SELECT mint FROM robinhood_token_holders WHERE "holderPubkey" = $1 AND mint IN (${placeholders})`,
                         [userPubkey, ...mints]
                     );
-
-                    return [
-                        ...launchedHoldings.map(h => h.mint),
-                        ...robinhoodHoldings.map(h => h.mint)
-                    ];
+                    return holdings.map(h => h.mint);
                 });
 
                 userHoldings = new Set(cachedHoldings);
             }
 
-            // v25.4: Process tokens and fetch fallback images for those missing images
-            const leaderboard = await Promise.all(rows.map(async (r) => {
-                // Check if image is missing/null and try to fetch from metadataUri
-                let image = r.image;
-                if ((!image || image === '' || image === 'null') && r.metadataUri) {
-                    try {
-                        const fallbackImage = await imageUtils.fetchImageFromMetadataUri(r.metadataUri, 2000);
-                        if (fallbackImage) {
-                            image = fallbackImage;
-                            // Update the database with the fetched image (async, don't wait)
-                            db.run('UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = \'\' OR image = \'null\')',
-                                [fallbackImage, r.mint]).catch(() => {});
-                        }
-                    } catch (e) {
-                        // Silently fail - use whatever we have
-                    }
-                }
-
+            const leaderboard = rows.map(r => {
+                const image = r.image || null;
                 return {
                     mint: r.mint,
                     creator: r.creator,
                     name: r.name,
                     ticker: r.ticker,
                     image: image,
-                    metadataUri: r.metadataUri,
                     price: ((r.marketCap || 0) / 1000000000).toFixed(6),
                     marketCap: r.marketCap || 0,
                     volume: r.volume24h,
                     isUserTopHolder: userHoldings.has(r.mint),
                     complete: !!r.complete,
-                    isRobinhood: r.source === 'robinhood',
-                    // v18.0: Eligibility based on volume threshold ($100 minimum)
-                    isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD
+                    isRobinhood: true,
+                    isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD,
+                    pendingAirdropSol: ((r.pending_airdrop_lamports || 0) / 1e9).toFixed(6)
                 };
-            }));
+            });
 
             res.json({
                 tokens: leaderboard,
@@ -584,6 +550,8 @@ function init(deps) {
             }
 
             // Return data from user_points table
+            const expectedAirdrop = userPoints.expected_airdrop_sol || 0;
+            const MIN_AIRDROP_SOL = 0.01;
             res.json({
                 isHolder: true,
                 isAsdfTop50: userPoints.is_asdf_holder || false,
@@ -592,8 +560,11 @@ function init(deps) {
                 heldPositionsCount: userPoints.positions_count || 0,
                 basePoints: Math.round((userPoints.base_points || 0) * 100) / 100,
                 robinhoodPoints: Math.round((userPoints.robinhood_points || 0) * 100) / 100,
-                expectedAirdrop: userPoints.expected_airdrop_sol || 0,
-                expectedAirdropCurrency: 'SOL'
+                expectedAirdrop,
+                expectedAirdropCurrency: 'SOL',
+                // v26.0: Minimum per-recipient threshold — warn user if below
+                minimumAirdropSol: MIN_AIRDROP_SOL,
+                belowMinimum: expectedAirdrop > 0 && expectedAirdrop < MIN_AIRDROP_SOL
             });
         } catch (e) {
             logger.error('[check-holder] Error', { error: e.message, userPubkey });
@@ -715,7 +686,7 @@ function init(deps) {
                     const weightedPoints = POINTS_PER_TOKEN * volumeWeight;
                     // v25.36: Calculate points based on % of TOTAL SUPPLY (1B tokens), not tracked holders
                     const baseProportionalPts = Number((userBalance * BigInt(Math.round(weightedPoints * 1000))) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
-                    const feeShareBps = row.feeShareBps || 10000;
+                    const feeShareBps = row.feeShareBps ?? 10000;
                     const feeShareMultiplier = feeShareBps / 10000;
                     const scaledPts = baseProportionalPts * feeShareMultiplier;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
@@ -772,7 +743,7 @@ function init(deps) {
             const devPubkey = devKeypair.publicKey.toString();
             // M-3 FIX: Add pagination to prevent full table dump on every request
             const limit = Math.min(parseInt(req.query.limit) || 500, 1000);
-            const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+            const offset = Math.min(Math.max(parseInt(req.query.offset) || 0, 0), 100000);
 
             // v25.33: Simple query from user_points table
             const users = await db.all(`
@@ -939,15 +910,59 @@ function init(deps) {
         }
     });
 
-    // Get holders for a specific Robinhood token
+    // Get holders for a specific Robinhood token with points and expected airdrop
     router.get('/robinhood/holders/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
-            const holders = await db.all(
-                'SELECT rank, "holderPubkey" FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 50',
+            if (!isValidPubkey(mint)) return res.status(400).json({ error: 'Invalid mint' });
+
+            const TOTAL_SUPPLY = BigInt('1000000000000000');
+            const LAMPORTS_PER_SOL = 1e9;
+            const MIN_RECIPIENT_LAMPORTS = Math.floor(0.01 * 1e9);
+
+            // Get token's pending pool
+            const token = await db.get(
+                'SELECT pending_airdrop_lamports FROM robinhood_tokens WHERE mint = $1 AND "isActive" = 1',
                 [mint]
             );
-            res.json(holders);
+            const pendingLamports = BigInt(token?.pending_airdrop_lamports || 0);
+
+            const rows = await db.all(`
+                SELECT rth.rank, rth."holderPubkey", rth.balance,
+                       COALESCE(up.total_points, 0) as total_points,
+                       COALESCE(up.robinhood_points, 0) as robinhood_points
+                FROM robinhood_token_holders rth
+                LEFT JOIN user_points up ON up.pubkey = rth."holderPubkey"
+                WHERE rth.mint = $1
+                ORDER BY rth.rank ASC
+                LIMIT 50
+            `, [mint]);
+
+            const holders = rows.map(h => {
+                const balance = BigInt(h.balance || '0');
+                const expectedLamports = pendingLamports > 0n
+                    ? Number(pendingLamports * balance / TOTAL_SUPPLY)
+                    : 0;
+                const supplyPct = balance > 0n
+                    ? (Number(balance) / Number(TOTAL_SUPPLY) * 100).toFixed(4)
+                    : '0.0000';
+                return {
+                    rank: h.rank,
+                    holderPubkey: h.holderPubkey,
+                    balance: h.balance,
+                    supplyPct,
+                    totalPoints: Math.round((h.total_points || 0) * 100) / 100,
+                    robinhoodPoints: Math.round((h.robinhood_points || 0) * 100) / 100,
+                    expectedAirdropSol: (expectedLamports / LAMPORTS_PER_SOL).toFixed(6),
+                    belowMinimum: expectedLamports > 0 && expectedLamports < MIN_RECIPIENT_LAMPORTS
+                };
+            });
+
+            res.json({
+                holders,
+                pendingAirdropSol: (Number(pendingLamports) / LAMPORTS_PER_SOL).toFixed(6),
+                mint
+            });
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
         }
@@ -2002,7 +2017,7 @@ function init(deps) {
 
                 // For robinhood tokens, get the fee share percent from stored feeShareBps
                 // For internal tokens, they have 100% fee share (we are the creator)
-                const feeShareBps = isRobinhoodToken ? (existingRobinhoodToken.feeShareBps || 10000) : 10000;
+                const feeShareBps = isRobinhoodToken ? (existingRobinhoodToken.feeShareBps ?? 10000) : 10000;
                 const feeSharePercent = feeShareBps / 100;
 
                 // Determine source - robinhood tokens could be from various sources
@@ -2083,11 +2098,9 @@ function init(deps) {
         const { userPubkey } = req.query;
 
         try {
-            // Get global state values
+            // v26.0: Per-token pool system
             const totalPoints = await redis.getTotalPoints();
-            const availableSol = globalState.availableSolForAirdrop || 0;
-            const communityPot = globalState.communityPot || 0;
-            const kothPot = globalState.kothPot || 0;
+            const totalPendingSol = globalState.availableSolForAirdrop || 0; // sum of all token pending pools
 
             // Get top 10 expected airdrops for verification
             const allAirdrops = await redis.getAllUserExpectedAirdrops();
@@ -2110,25 +2123,21 @@ function init(deps) {
                     pubkey: userPubkey,
                     points: userPoints,
                     expectedAirdropSOL: expectedAirdrop,
-                    formattedSOL: expectedAirdrop.toFixed(6),
-                    shareOfPool: totalPoints > 0 ? ((userPoints / totalPoints) * 100).toFixed(4) + '%' : '0%'
+                    formattedSOL: expectedAirdrop.toFixed(6)
                 };
             }
 
             res.json({
                 globalState: {
                     totalPoints,
-                    availableSolForAirdrop: availableSol,
-                    communityPotSOL: communityPot,
-                    kothPotSOL: kothPot,
-                    formattedAvailable: availableSol.toFixed(4) + ' SOL',
-                    formattedCommunityPot: communityPot.toFixed(4) + ' SOL',
-                    formattedKothPot: kothPot.toFixed(4) + ' SOL'
+                    // v26.0: total pending across all per-token pools
+                    totalPendingAirdropSOL: Math.round(totalPendingSol * 10000) / 10000,
+                    formattedPending: totalPendingSol.toFixed(4) + ' SOL'
                 },
                 topExpectedAirdrops: topAirdrops,
                 totalUsersWithAirdrop: allAirdrops.size,
                 userInfo,
-                calculationFormula: 'expectedAirdrop = (userPoints / totalPoints) * communityPot + kothBonus',
+                calculationFormula: 'v26.0: expectedAirdrop = SUM over held tokens of (token.pending_airdrop_lamports * holderBalance / 1B_total_supply)',
                 currency: 'SOL',
                 serverTime: new Date().toISOString()
             });

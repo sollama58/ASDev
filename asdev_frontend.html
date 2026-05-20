@@ -1710,7 +1710,10 @@
 
         <!-- TAB NAVIGATION -->
         <div class="tab-container">
-            <button id="tab-btn-dashboard" type="button" class="tab-btn active" data-tab="dashboard">
+            <button id="tab-btn-home" type="button" class="tab-btn active" data-tab="home">
+                <i data-lucide="home" class="inline-block w-4 h-4 mr-2"></i>Home
+            </button>
+            <button id="tab-btn-dashboard" type="button" class="tab-btn" data-tab="dashboard">
                 <i data-lucide="layout-dashboard" class="inline-block w-4 h-4 mr-2"></i>Dashboard
             </button>
             <button id="tab-btn-register" type="button" class="tab-btn" data-tab="register">
@@ -1722,8 +1725,128 @@
             </button>
         </div>
 
+        <!-- TAB: HOME -->
+        <div id="tab-home" class="tab-content active">
+
+        <!-- Hero Panel -->
+        <div class="panel mb-5 md:mb-6" style="background: linear-gradient(135deg, rgba(245,158,11,0.06) 0%, rgba(14,14,26,0.95) 60%, rgba(139,92,246,0.05) 100%); border-color: rgba(245,158,11,0.14);">
+            <div class="flex flex-col md:flex-row items-start md:items-center gap-5 md:gap-8">
+                <div class="flex-1">
+                    <div class="flex items-center gap-2 mb-2">
+                        <span class="text-orange-500 font-mono text-[10px] uppercase tracking-widest px-2 py-0.5 rounded" style="background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.2);">Pumpfun Airdrop Platform</span>
+                    </div>
+                    <h2 class="text-white text-2xl sm:text-3xl font-bold tracking-tight mb-2">Earn SOL by holding<br class="hidden sm:block"> tokens you already own.</h2>
+                    <p class="text-gray-400 text-xs sm:text-sm leading-relaxed max-w-xl">
+                        ROBINHOOD collects trading fees from partner tokens on Pumpfun and redistributes them as automated SOL airdrops every 15 minutes. The more tokens you hold, the more points you earn — and the larger your share of each airdrop.
+                    </p>
+                </div>
+                <div class="flex flex-col items-center justify-center rounded-2xl px-6 py-5 text-center flex-shrink-0 min-w-[140px]" style="background: rgba(109,40,217,0.1); border: 1px solid rgba(139,92,246,0.2);">
+                    <div class="text-[9px] text-purple-400/70 uppercase tracking-widest font-semibold mb-1">Current Pool</div>
+                    <div class="text-3xl sm:text-4xl text-purple-200 font-bold font-mono leading-none" id="home-airdrop-balance" style="text-shadow: 0 0 20px rgba(139,92,246,0.5);">—</div>
+                    <div class="text-[9px] text-purple-400/50 mt-1.5 font-mono">SOL</div>
+                    <div class="text-[9px] text-gray-600 mt-2">Distributes every 15 min</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Stats Row -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3 mb-5 md:mb-6">
+            <div class="rounded-xl p-3 md:p-4 text-center" style="background: rgba(14,14,26,0.8); border: 1px solid rgba(245,158,11,0.1);">
+                <div class="text-[9px] text-orange-400/60 uppercase tracking-widest font-semibold mb-1.5">Total Airdropped</div>
+                <div class="text-lg sm:text-xl text-orange-300 font-bold font-mono" id="home-metric-pump">—</div>
+            </div>
+            <div class="rounded-xl p-3 md:p-4 text-center" style="background: rgba(14,14,26,0.8); border: 1px solid rgba(245,158,11,0.1);">
+                <div class="text-[9px] text-orange-400/60 uppercase tracking-widest font-semibold mb-1.5">Daily Volume</div>
+                <div class="text-lg sm:text-xl text-orange-300 font-bold font-mono" id="home-metric-fees">—</div>
+            </div>
+            <div class="rounded-xl p-3 md:p-4 text-center" style="background: rgba(14,14,26,0.8); border: 1px solid rgba(16,185,129,0.1);">
+                <div class="text-[9px] text-green-400/60 uppercase tracking-widest font-semibold mb-1.5">Partner Tokens</div>
+                <div class="text-lg sm:text-xl text-green-400 font-bold font-mono" id="home-robinhood-count">—</div>
+            </div>
+            <div class="rounded-xl p-3 md:p-4 text-center" style="background: rgba(14,14,26,0.8); border: 1px solid rgba(16,185,129,0.1);">
+                <div class="text-[9px] text-green-400/60 uppercase tracking-widest font-semibold mb-1.5">Airdrop Interval</div>
+                <div class="text-lg sm:text-xl text-green-400 font-bold font-mono">15 min</div>
+            </div>
+        </div>
+
+        <!-- How It Works -->
+        <div class="panel mb-5 md:mb-6" style="background: rgba(10,10,20,0.7); border-color: rgba(255,255,255,0.06);">
+            <h3 class="text-white font-mono text-[11px] sm:text-xs uppercase tracking-widest mb-4 pb-3 flex items-center gap-2" style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+                <i data-lucide="zap" class="w-3.5 h-3.5 text-orange-400"></i>How It Works
+            </h3>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div class="flex flex-col gap-2">
+                    <div class="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-black font-mono flex-shrink-0" style="background: linear-gradient(135deg, #f59e0b, #d97706);">1</div>
+                    <div>
+                        <div class="text-white font-semibold text-xs mb-1">Hold Partner Tokens</div>
+                        <div class="text-gray-500 text-[11px] leading-relaxed">Buy and hold any token registered on the ROBINHOOD platform. Each token you hold earns you points proportional to its trading volume weight.</div>
+                    </div>
+                </div>
+                <div class="flex flex-col gap-2">
+                    <div class="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-black font-mono flex-shrink-0" style="background: linear-gradient(135deg, #a855f7, #7c3aed);">2</div>
+                    <div>
+                        <div class="text-white font-semibold text-xs mb-1">Hold Tokens</div>
+                        <div class="text-gray-500 text-[11px] leading-relaxed">Your share of each token's airdrop is determined by your % of that token's total supply (1B tokens). Holding Robinhood partner tokens, or being in the top 100 ASDF holders, doubles your leaderboard points.</div>
+                    </div>
+                </div>
+                <div class="flex flex-col gap-2">
+                    <div class="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-black font-mono flex-shrink-0" style="background: linear-gradient(135deg, #10b981, #059669);">3</div>
+                    <div>
+                        <div class="text-white font-semibold text-xs mb-1">Receive SOL Airdrops</div>
+                        <div class="text-gray-500 text-[11px] leading-relaxed">Every 15 minutes, each token's individual pool is distributed proportionally to its holders (minimum 0.01 SOL per recipient). No claiming required — SOL is sent directly to your wallet.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Points Breakdown -->
+        <div class="panel mb-5 md:mb-6" style="background: linear-gradient(135deg, rgba(139,92,246,0.05) 0%, rgba(14,14,26,0.9) 100%); border-color: rgba(139,92,246,0.12);">
+            <h3 class="text-purple-400 font-mono text-[11px] sm:text-xs uppercase tracking-widest mb-4 pb-3 flex items-center gap-2" style="border-bottom: 1px solid rgba(139,92,246,0.1);">
+                <i data-lucide="star" class="w-3.5 h-3.5"></i>Points System
+            </h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
+                <div class="rounded-xl p-3" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(245,158,11,0.1);">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="coins" class="w-3.5 h-3.5 text-yellow-400"></i>
+                        <span class="text-yellow-400 font-mono text-[10px] uppercase tracking-wider font-semibold">Holder Points</span>
+                    </div>
+                    <p class="text-gray-500 text-[11px] leading-relaxed">Earned by holding platform tokens. Each token contributes points weighted by its 24H trading volume relative to all other tokens. Higher volume = more points per token held.</p>
+                </div>
+                <div class="rounded-xl p-3" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(16,185,129,0.1);">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="shield-check" class="w-3.5 h-3.5 text-green-400"></i>
+                        <span class="text-green-400 font-mono text-[10px] uppercase tracking-wider font-semibold">Robinhood Points</span>
+                    </div>
+                    <p class="text-gray-500 text-[11px] leading-relaxed">Earned by holding Robinhood partner tokens — tokens whose creators have registered and share trading fees into that token's own airdrop pool. These tokens boost your leaderboard points further.</p>
+                </div>
+                <div class="rounded-xl p-3 sm:col-span-2" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(139,92,246,0.12);">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-purple-400"></i>
+                        <span class="text-purple-400 font-mono text-[10px] uppercase tracking-wider font-semibold">Multipliers &amp; Bonuses</span>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-gray-500">
+                        <div><span class="text-green-400 font-semibold">2× ASDF Boost</span> — Top 100 ASDF token holders receive double points on every airdrop.</div>
+                        <div><span class="text-fuchsia-400 font-semibold">Per-Token Pools</span> — Each token accumulates its own independent SOL pool from creator fees, distributed only to that token's holders (min 0.01 SOL per recipient).</div>
+                        <div><span class="text-orange-400 font-semibold">Automatic Distribution</span> — No manual claiming. Airdrops are sent to your wallet directly every cycle.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CTA Row -->
+        <div class="flex flex-col sm:flex-row gap-3 justify-center">
+            <button onclick="switchTab('dashboard')" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-mono text-sm font-bold transition-all duration-200 text-black" style="background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 4px 20px rgba(245,158,11,0.25);" onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 6px 28px rgba(245,158,11,0.35)'" onmouseout="this.style.transform='';this.style.boxShadow='0 4px 20px rgba(245,158,11,0.25)'">
+                <i data-lucide="layout-dashboard" class="w-4 h-4"></i>View Dashboard
+            </button>
+            <button onclick="switchTab('register')" class="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-mono text-sm font-bold transition-all duration-200 text-green-300" style="background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25);" onmouseover="this.style.transform='translateY(-1px)';this.style.background='rgba(16,185,129,0.14)'" onmouseout="this.style.transform='';this.style.background='rgba(16,185,129,0.08)'">
+                <i data-lucide="file-plus" class="w-4 h-4"></i>Register a Token
+            </button>
+        </div>
+
+        </div><!-- END TAB: HOME -->
+
         <!-- TAB: DASHBOARD (Airdrop & Leaderboard) -->
-        <div id="tab-dashboard" class="tab-content active">
+        <div id="tab-dashboard" class="tab-content">
 
         <!-- Airdrop Panel -->
         <div class="panel mb-5 md:mb-6" style="background: linear-gradient(135deg, rgba(139,92,246,0.07) 0%, rgba(14,14,26,0.9) 100%); border-color: rgba(139,92,246,0.14);">
@@ -1786,7 +1909,8 @@
                 <div class="rounded-xl p-3 md:p-4 text-center flex flex-col justify-center items-center" style="background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.1);">
                     <div class="text-[9px] text-green-400/60 uppercase tracking-widest font-semibold mb-1.5">Expected</div>
                     <div class="text-2xl sm:text-3xl text-green-400 font-bold font-mono leading-none" id="expected-airdrop">0.0000</div>
-                    <div class="text-[9px] text-green-500/50 font-mono mt-1.5">SOL (Est.)</div>
+                    <div class="text-[9px] text-green-500/50 font-mono mt-1.5" id="expected-airdrop-label">SOL (Est.)</div>
+                    <div class="hidden text-[9px] text-yellow-400/80 font-mono mt-0.5" id="expected-airdrop-min-warn">Below 0.01 SOL min</div>
                 </div>
             </div>
         </div>
@@ -1814,7 +1938,7 @@
                     <div class="text-center">
                         <div id="koth-ticker" class="text-xl md:text-2xl font-bold text-white font-mono ticker-symbol">$????</div>
                         <div id="koth-name" class="text-[10px] md:text-xs text-fuchsia-500 font-mono uppercase token-name">LOADING...</div>
-                        <div id="koth-holders" class="text-[9px] md:text-[10px] text-green-400 font-mono mt-1">Holders get 10% bonus!</div>
+                        <div id="koth-holders" class="text-[9px] md:text-[10px] text-fuchsia-400 font-mono mt-1">AI Community Spotlight</div>
                     </div>
                 </div>
 
@@ -1834,8 +1958,8 @@
                         </button>
                     </div>
                     <div class="text-center md:text-right">
-                        <div class="text-[9px] md:text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">Holder Bonus</div>
-                        <div class="text-lg md:text-xl font-bold text-green-400 font-mono">10%</div>
+                        <div class="text-[9px] md:text-[10px] text-fuchsia-200/60 uppercase font-mono mb-1">Status</div>
+                        <div class="text-sm md:text-base font-bold text-fuchsia-400 font-mono">SPOTLIGHT</div>
                     </div>
                 </div>
             </div>
@@ -1846,7 +1970,7 @@
             <div class="flex justify-between items-center pb-3 mb-3 gap-2" style="border-bottom: 1px solid rgba(245,158,11,0.1);">
                 <div class="flex items-center gap-3">
                     <h3 class="text-orange-500 font-mono text-[11px] sm:text-xs uppercase tracking-widest flex items-center gap-2">
-                        <i data-lucide="flame" class="w-3.5 h-3.5"></i>Top Tokens
+                        <i data-lucide="flame" class="w-3.5 h-3.5"></i>Partner Tokens
                     </h3>
                     <span id="leaderboard-last-updated" class="text-orange-600/60 text-[10px] font-mono hidden sm:block">Syncing...</span>
                 </div>
@@ -1867,10 +1991,11 @@
                             <th>Token</th>
                             <th style="width:85px" class="text-right">MCap</th>
                             <th style="width:100px" class="text-right">Vol 24H</th>
+                            <th style="width:80px" class="text-right" title="Pending airdrop pool for this token's holders">Pool</th>
                             <th style="width:60px"></th>
                         </tr>
                     </thead>
-                    <tbody id="leaderboard-body"><tr><td colspan="5" class="text-center text-orange-400/50 py-6 font-mono text-xs">Scanning chain data...</td></tr></tbody>
+                    <tbody id="leaderboard-body"><tr><td colspan="6" class="text-center text-orange-400/50 py-6 font-mono text-xs">Scanning chain data...</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -2073,8 +2198,8 @@
                         <li>• Leaderboard visibility</li>
                         <li>• Top 250 holders earn airdrop points</li>
                         <li>• Market data tracking (MCap, Volume)</li>
-                        <li>• Eligible for King of the Pill bonus</li>
-                        <li>• Shared fees fund the airdrop pool</li>
+                        <li>• Eligible for King of the Pill AI spotlight</li>
+                        <li>• Creator fees build this token's own airdrop pool</li>
                     </ul>
                 </div>
 
@@ -2438,9 +2563,10 @@
 </div>
 
 <div id="holders-modal" class="modal">
-    <div class="modal-content border-orange-600" style="max-width: 400px;">
+    <div class="modal-content border-orange-600" style="max-width: 640px;">
         <span class="close-btn" onclick="closeHoldersModal()">&times;</span>
-        <h3 id="holders-modal-title" class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Top Holders</h3>
+        <h3 id="holders-modal-title" class="text-orange-500 font-mono text-lg mb-1 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">Top Holders</h3>
+        <div id="holders-pool-banner" class="hidden text-purple-300 font-mono text-[11px] mb-3 mt-1"></div>
         <div id="holders-list" class="max-h-[60vh] overflow-y-auto pr-2 font-mono text-xs"></div>
     </div>
 </div>
@@ -2481,11 +2607,11 @@
         <div class="font-sans text-sm text-purple-200 space-y-3">
             <div class="bg-green-900/30 p-3 rounded border border-green-700/50 mb-4">
                 <p class="text-green-400 text-xs uppercase mb-1">Volume-Weighted Airdrops</p>
-                <p class="text-xs text-gray-300">Airdrops are distributed in SOL proportionally to your holdings. Higher-volume tokens reward their holders more since they contribute more fees to the pool.</p>
+                <p class="text-xs text-gray-300">Each token has its own independent SOL airdrop pool funded by its creator fees. Airdrops are distributed proportionally to holders of that specific token only — no cross-token sharing. Minimum <span class="text-yellow-300">0.01 SOL</span> per recipient per cycle.</p>
             </div>
             <div class="bg-orange-900/30 p-3 rounded border border-orange-700/50 mb-4">
                 <p class="text-orange-400 text-xs uppercase mb-1">Timing</p>
-                <p class="text-xs text-gray-300">Fees collected every <span class="text-yellow-400">2.5 minutes</span> (>0.05 SOL). Airdrops distributed every <span class="text-yellow-400">15 minutes</span> (>1.0 SOL pool).</p>
+                <p class="text-xs text-gray-300">Fees collected every <span class="text-yellow-400">2.5 minutes</span> (>0.05 SOL). Airdrops distributed every <span class="text-yellow-400">15 minutes</span> — each token's pool fires independently when it exceeds 0.05 SOL. Minimum <span class="text-yellow-400">0.01 SOL per recipient</span>.</p>
             </div>
             <p>Points are calculated based on your <span class="text-yellow-400">% of total token supply</span> in eligible tokens:</p>
             <ul class="list-disc list-inside ml-4 space-y-2 text-purple-300">
@@ -2507,9 +2633,9 @@
             </div>
             <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
                 <p class="text-fuchsia-400 text-xs uppercase mb-1 flex items-center gap-2">King of the Pill (KOTH) - AI Selection <span class="text-[9px] bg-cyan-700/50 text-cyan-300 px-1.5 py-0.5 rounded">CLAUDE</span></p>
-                <p class="text-xs text-gray-300"><span class="text-white">10%</span> of every airdrop goes to holders of the AI-selected champion token.</p>
+                <p class="text-xs text-gray-300">Claude AI selects the top-performing token based on volume, market cap, holder growth, and age — used to highlight the community champion.</p>
                 <p class="text-xs text-gray-400 mt-1">Claude AI evaluates the <span class="text-cyan-400">top 10 leaderboard tokens every 30 minutes</span> based on volume, market cap, holder growth, and token age.</p>
-                <p class="text-xs text-gray-400 mt-1">The AI avoids pump-and-dump patterns and rewards genuine community engagement.</p>
+                <p class="text-xs text-gray-400 mt-1">The AI avoids pump-and-dump patterns and rewards genuine community engagement. Holders earn airdrop rewards directly from their token's individual pool.</p>
             </div>
         </div>
     </div>
@@ -2531,7 +2657,7 @@
                 <h4 class="text-orange-400 mb-3 border-b border-orange-800 pb-1 font-normal">2. The Flywheel (Fee Collection)</h4>
                 <p class="text-orange-200 mb-2">Every <span class="text-yellow-400">2.5 minutes</span>, if pending fees > 0.05 SOL:</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <li><span class="text-green-400">95.0%</span>: Added to SOL Airdrop Pool (for direct distribution).</li>
+                    <li><span class="text-green-400">95.0%</span>: Added to this token's SOL airdrop pool (distributed to its holders).</li>
                     <li><span class="text-red-400">4.5%</span>: Sent to $ASDF Burns Wallet.</li>
                     <li><span class="text-red-400">0.5%</span>: Sent to Upkeep and Reserves Wallet.</li>
                 </ul>
@@ -2550,7 +2676,7 @@
                 </ul>
                 <div class="bg-fuchsia-900/30 p-3 rounded border border-fuchsia-700/50 mt-4">
                     <p class="text-[10px] text-fuchsia-400 uppercase tracking-widest mb-1 flex items-center gap-2">King of the Pill <span class="text-[8px] bg-cyan-700/50 text-cyan-300 px-1 py-0.5 rounded">AI POWERED</span></p>
-                    <p class="text-xs text-gray-300"><span class="text-white">10% of the entire airdrop pool</span> is distributed to holders of the AI-selected champion token.</p>
+                    <p class="text-xs text-gray-300">Claude AI highlights the top-performing token every 30 minutes. Each token distributes its own independent airdrop pool directly to its holders.</p>
                     <p class="text-[10px] text-gray-400 mt-1">Claude AI evaluates the top 10 leaderboard tokens every 30 minutes using volume, market cap, holder growth, and token age.</p>
                 </div>
             </div>
@@ -2560,9 +2686,10 @@
             <h4 class="text-green-400 mb-3 border-b border-green-800 pb-1 font-normal">4. Automated Airdrop Engine</h4>
             <p class="text-gray-300 mb-2">Runs every <span class="text-yellow-400">15 minutes</span> automatically.</p>
             <ul class="list-disc list-inside text-gray-400 space-y-1">
-                <li><span class="text-white">Trigger:</span> When SOL Airdrop Pool > <span class="text-yellow-400">1.0 SOL</span> (after 0.5 SOL reserve).</li>
-                <li><span class="text-white">Action:</span> Distributes 99% of the SOL pool directly to all qualified users.</li>
-                <li><span class="text-white">Distribution:</span> Proportional based on your share of the Total Global Points (minus 10% KOTH allocation).</li>
+                <li><span class="text-white">Trigger:</span> Each token's pool is distributed when it exceeds <span class="text-yellow-400">0.05 SOL</span>.</li>
+                <li><span class="text-white">Action:</span> Sends SOL directly to that token's holders proportional to their % of 1B total supply.</li>
+                <li><span class="text-white">Minimum:</span> Recipients must be owed at least <span class="text-yellow-400">0.01 SOL</span> — smaller shares are skipped until a future cycle.</li>
+                <li><span class="text-white">Distribution:</span> Each token's pool is independent — no cross-token sharing.</li>
             </ul>
         </div>
     </div>
@@ -2777,7 +2904,7 @@
                     <li class="flex items-start gap-2"><span class="text-yellow-400">•</span><span><span class="text-white font-medium">Hold tokens</span> - Be in top 250 holders of tokens with >$100 daily volume</span></li>
                     <li class="flex items-start gap-2"><span class="text-green-400">•</span><span><span class="text-white font-medium">Robinhood partners</span> - Hold external tokens that share fees with us</span></li>
                     <li class="flex items-start gap-2"><span class="text-purple-400">•</span><span><span class="text-white font-medium">ASDF multiplier</span> - Top 100 $ASDF holders get 2x total points</span></li>
-                    <li class="flex items-start gap-2"><span class="text-fuchsia-400">•</span><span><span class="text-white font-medium">King of the Pill</span> - 10% bonus pool for AI-selected champion token holders <span class="text-[9px] bg-cyan-700/40 text-cyan-400 px-1 rounded">CLAUDE</span></span></li>
+                    <li class="flex items-start gap-2"><span class="text-fuchsia-400">•</span><span><span class="text-white font-medium">King of the Pill</span> - AI spotlight on the champion token — its holders benefit from that token's own pool <span class="text-[9px] bg-cyan-700/40 text-cyan-400 px-1 rounded">CLAUDE</span></span></li>
                 </ul>
             </div>
 
@@ -2845,7 +2972,7 @@
             <!-- What is KOTH -->
             <div class="bg-fuchsia-900/30 p-4 rounded border border-fuchsia-700/50">
                 <p class="text-fuchsia-400 text-xs uppercase mb-2 font-bold">What is King of the Pill?</p>
-                <p class="text-gray-300 text-sm">The King of the Pill (KOTH) is our champion token - selected every 30 minutes by Claude AI from the top 10 leaderboard tokens. <span class="text-green-400 font-bold">10% of every airdrop</span> is distributed exclusively to holders of the KOTH token, proportional to their holdings.</p>
+                <p class="text-gray-300 text-sm">The King of the Pill (KOTH) is our AI-spotlighted community champion — selected every 30 minutes by Claude AI from the top 10 leaderboard tokens. Being KOTH means <span class="text-fuchsia-400 font-bold">prestige and visibility</span>: the token's own independent airdrop pool distributes to qualifying holders (min 0.01 SOL) based on their % of total supply.</p>
             </div>
 
             <!-- AI Selection Process -->
@@ -2895,9 +3022,9 @@
                     <p class="text-[10px] text-gray-500">AI re-evaluates top 10</p>
                 </div>
                 <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
-                    <p class="text-gray-400 text-[10px] uppercase mb-1">Holder Bonus</p>
-                    <p class="text-green-400 font-mono text-lg">10% of Pool</p>
-                    <p class="text-[10px] text-gray-500">Distributed proportionally</p>
+                    <p class="text-gray-400 text-[10px] uppercase mb-1">Airdrop Model</p>
+                    <p class="text-fuchsia-400 font-mono text-lg">Per-Token Pool</p>
+                    <p class="text-[10px] text-gray-500">Independent of other tokens</p>
                 </div>
             </div>
 
@@ -3603,9 +3730,12 @@
                 ? `<span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" title="Bonded"></span>`
                 : `<span class="inline-block w-2 h-2 rounded-full bg-yellow-500 mr-1" title="Pre-bond"></span>`;
 
-            const holderMark = t.isUserTopHolder ? `<span class="text-amber-400 text-[10px] ml-1" title="Top Holder">👑</span>` : '';
+            const holderMark = t.isUserTopHolder ? `<span class="text-amber-400 text-[10px] ml-1" title="You hold this token">👑</span>` : '';
             const creatorMark = (userPubkey && t.creator && userPubkey === t.creator) ? `<span class="text-purple-400 text-[10px] ml-1" title="Creator">🛠️</span>` : '';
-            const robinhoodMark = t.isRobinhood ? `<span class="text-green-400 text-[10px] ml-1" title="Robinhood Partner">🏹</span>` : '';
+            const pool = parseFloat(t.pendingAirdropSol || 0);
+            const poolCell = pool > 0
+                ? `<span class="text-purple-400 font-mono text-[10px]">${pool.toFixed(3)} SOL</span>`
+                : `<span class="text-gray-600 text-[10px]">-</span>`;
 
             html += `
             <tr>
@@ -3619,7 +3749,7 @@
                             <div class="flex items-center gap-1">
                                 ${statusDot}
                                 <span class="text-white font-bold">${escapeHtml(t.ticker || '?')}</span>
-                                ${robinhoodMark}${creatorMark}${holderMark}
+                                ${holderMark}${creatorMark}
                             </div>
                             <span class="text-[10px] text-gray-500 truncate max-w-[120px]">${escapeHtml(t.name || '')}</span>
                         </div>
@@ -3634,9 +3764,10 @@
                         ${volMultiplier}
                     </div>
                 </td>
+                <td class="text-right">${poolCell}</td>
                 <td class="text-right">
                     <div class="flex gap-1 justify-end items-center">
-                        <button onclick="event.stopPropagation(); viewTokenHolders('${escapeHtml(t.mint)}', '${escapeHtml(t.ticker || '?')}', ${!!t.isRobinhood})" class="text-xs bg-gray-800 border border-gray-700 text-gray-300 w-8 h-8 rounded hover:bg-gray-700 hover:text-white transition flex items-center justify-center" title="View Holders">
+                        <button onclick="event.stopPropagation(); viewTokenHolders('${escapeHtml(t.mint)}', '${escapeHtml(t.ticker || '?')}')" class="text-xs bg-gray-800 border border-gray-700 text-gray-300 w-8 h-8 rounded hover:bg-gray-700 hover:text-white transition flex items-center justify-center" title="View holders & airdrops">
                             👥
                         </button>
                         <a href="${PUMPFUN_URL_BASE}${escapeHtml(t.mint)}" target="_blank" class="text-xs bg-orange-600 text-white px-3 h-8 rounded hover:bg-orange-500 transition flex items-center justify-center font-bold">↗</a>
@@ -3649,7 +3780,7 @@
         if (hasMore) {
             html += `
             <tr class="bg-orange-900/20 hover:bg-orange-900/40 cursor-pointer" onclick="toggleAllLaunchesModal()">
-                <td colspan="5" class="text-center text-orange-400 py-3 font-mono">
+                <td colspan="6" class="text-center text-orange-400 py-3 font-mono">
                     <span class="text-orange-300">+ ${tokens.length - TOP_N} more tokens</span>
                     <span class="ml-2 text-xs text-orange-500 underline">Click to view all</span>
                 </td>
@@ -3743,11 +3874,16 @@
         trackBalance: document.getElementById('track-balance'), trackLastAmt: document.getElementById('track-last-amt'), trackLastTime: document.getElementById('track-last-time'), trackNextCheck: document.getElementById('track-next-check'),
         leaderboardLastUpdated: document.getElementById('leaderboard-last-updated'),
         airdropBalance: document.getElementById('airdrop-balance'),
+        homeAirdropBalance: document.getElementById('home-airdrop-balance'),
+        homeMetricPump: document.getElementById('home-metric-pump'),
+        homeMetricFees: document.getElementById('home-metric-fees'),
+        homeRobinhoodCount: document.getElementById('home-robinhood-count'),
         userTopPositions: document.getElementById('user-top-positions'),
         userRobinhoodPoints: document.getElementById('user-robinhood-points'),
         asdfStatus: document.getElementById('asdf-status'),
         userTotalPoints: document.getElementById('user-total-points'), pointsMultiplierBadge: document.getElementById('points-multiplier-badge'),
         expectedAirdrop: document.getElementById('expected-airdrop'),
+        expectedAirdropMinWarn: document.getElementById('expected-airdrop-min-warn'),
         airdropLogModal: document.getElementById('airdrop-log-modal'), modalAirdropLogContent: document.getElementById('modal-airdrop-log-content'),
         allLaunchesModal: document.getElementById('all-launches-modal'),
         modalAllLaunchesContent: document.getElementById('modal-all-launches-content'),
@@ -3935,27 +4071,25 @@
                  ui.leaderboardLastUpdated.innerText = `Synced: ${new Date().toLocaleTimeString()}`;
             }
 
-            if (!allTokens || allTokens.length === 0) { ui.leaderboardBody.innerHTML = '<tr><td colspan="5" class="text-center text-orange-400 py-4">No active tokens found.</td></tr>'; return; }
+            if (!allTokens || allTokens.length === 0) { ui.leaderboardBody.innerHTML = '<tr><td colspan="6" class="text-center text-orange-400 py-4">No active tokens found.</td></tr>'; return; }
 
-            // Only display top 10 tokens in main leaderboard view
+            // Display top 10 Robinhood partner tokens
             const TOP_N = 10;
             const tokens = allTokens.slice(0, TOP_N);
             const hasMore = allTokens.length > TOP_N;
 
-            // v25.4: Calculate volume range for multiplier display (only eligible tokens)
+            // Calculate volume range for multiplier display
             const eligibleTokens = allTokens.filter(t => t.isEligible && parseFloat(t.volume) >= 100);
             const volumes = eligibleTokens.map(t => parseFloat(t.volume) || 100);
             const minVol = volumes.length > 0 ? Math.min(...volumes) : 100;
             const maxVol = volumes.length > 0 ? Math.max(...volumes) : 100;
 
             const rows = tokens.map((item, index) => {
-                let displayMcap = item.marketCap;
-                let displayVol = parseFloat(item.volume);
-                let tradeLink = `${PUMPFUN_URL_BASE}${item.mint}`;
+                const displayMcap = item.marketCap;
+                const displayVol = parseFloat(item.volume);
+                const tradeLink = `${PUMPFUN_URL_BASE}${item.mint}`;
+                const imgSrc = resolveTokenImage(item.image);
 
-                let imgSrc = resolveTokenImage(item.image);
-
-                // v25.4: Calculate and display volume multiplier for eligible tokens
                 let volMultiplier = '';
                 if (item.isEligible && displayVol >= 100) {
                     const mult = calculateVolumeMultiplier(displayVol, minVol, maxVol);
@@ -3963,23 +4097,22 @@
                     volMultiplier = `<span class="vol-multiplier ${multClass}" title="Points multiplier based on volume">${mult.toFixed(2)}x</span>`;
                 }
 
-                // Simplified status indicator
                 const statusDot = item.complete
-                    ? `<span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" title="Bonded"></span>`
-                    : `<span class="inline-block w-2 h-2 rounded-full bg-yellow-500 mr-1" title="Pre-bond"></span>`;
+                    ? `<span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" title="Graduated"></span>`
+                    : `<span class="inline-block w-2 h-2 rounded-full bg-yellow-500 mr-1" title="Pre-graduation"></span>`;
 
                 const holderMark = item.isUserTopHolder
-                    ? `<span class="text-amber-400 text-[10px] ml-1" title="You are a Top Holder">👑</span>`
+                    ? `<span class="text-amber-400 text-[10px] ml-1" title="You hold this token">👑</span>`
                     : '';
 
                 const creatorMark = (userPubkey && item.creator && userPubkey === item.creator)
                     ? `<span class="text-purple-400 text-[10px] ml-1" title="You created this token">🛠️</span>`
                     : '';
 
-                // v13.0: Robinhood badge for fee-sharing external tokens
-                const robinhoodMark = item.isRobinhood
-                    ? `<span class="text-green-400 text-[10px] ml-1" title="Robinhood Partner">🏹</span>`
-                    : '';
+                const pool = parseFloat(item.pendingAirdropSol || 0);
+                const poolCell = pool > 0
+                    ? `<span class="text-purple-400 font-mono text-[10px]">${pool.toFixed(3)} SOL</span>`
+                    : `<span class="text-gray-600 text-[10px]">-</span>`;
 
                 return `
                 <tr>
@@ -3989,7 +4122,7 @@
                             <img src="${imgSrc}" loading="lazy" class="token-img-sm" alt="" onerror="this.src='https://placehold.co/28x28/333/fff?text=?'">
                             <div>
                                 <div class="flex items-center gap-1">
-                                    ${statusDot}<span class="text-white">${escapeHtml(item.ticker)}</span>${robinhoodMark}${holderMark}
+                                    ${statusDot}<span class="text-white">${escapeHtml(item.ticker)}</span>${holderMark}${creatorMark}
                                 </div>
                                 <div class="token-name text-[10px] text-gray-400">${escapeHtml(item.name)}</div>
                             </div>
@@ -3997,9 +4130,10 @@
                     </td>
                     <td class="text-right text-green-400">${formatMcap(displayMcap)}</td>
                     <td class="text-right"><span class="text-yellow-400">$${displayVol.toLocaleString()}</span>${volMultiplier}</td>
+                    <td class="text-right">${poolCell}</td>
                     <td class="text-right">
                         <div class="flex gap-1 justify-end">
-                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}', ${!!item.isRobinhood})" class="text-[10px] text-gray-400 hover:text-white px-2 py-1" title="Holders">👥</button>
+                            <button onclick="viewTokenHolders('${escapeHtml(item.mint)}', '${escapeHtml(item.ticker)}')" class="text-[10px] text-gray-400 hover:text-white px-2 py-1" title="View holders & airdrops">👥</button>
                             <a href="${escapeHtml(tradeLink)}" target="_blank" class="text-[10px] bg-orange-600 text-white px-2 py-1 rounded hover:bg-orange-500">↗</a>
                         </div>
                     </td>
@@ -4010,7 +4144,7 @@
             if (hasMore) {
                 rows.push(`
                 <tr class="cursor-pointer hover:bg-orange-900/20" onclick="toggleAllLaunchesModal()">
-                    <td colspan="5" class="text-center text-orange-400 py-2 text-xs">
+                    <td colspan="6" class="text-center text-orange-400 py-2 text-xs">
                         + ${allTokens.length - TOP_N} more · <span class="underline">view all</span>
                     </td>
                 </tr>`);
@@ -4025,33 +4159,61 @@
     };
     window.updateLeaderboard = updateLeaderboard;
 
-    const viewTokenHolders = async (mint, ticker, isRobinhood = false) => {
+    const viewTokenHolders = async (mint, ticker) => {
         const modal = document.getElementById('holders-modal');
         const list = document.getElementById('holders-list');
         const title = document.getElementById('holders-modal-title');
+        const poolBanner = document.getElementById('holders-pool-banner');
         modal.style.display = 'block';
-        title.innerText = `TOP 50: $${ticker}${isRobinhood ? ' (Robinhood)' : ''}`;
+        title.innerText = `TOP 50 HOLDERS: $${escapeHtml(ticker)}`;
+        poolBanner.classList.add('hidden');
         list.innerHTML = '<div class="text-center text-orange-400 p-4">Loading holder data...</div>';
         try {
-            // Use different endpoint for Robinhood tokens
-            const endpoint = isRobinhood
-                ? `${BACKEND_URL}/api/robinhood/holders/${escapeHtml(mint)}`
-                : `${BACKEND_URL}/api/token-holders/${escapeHtml(mint)}`;
-            const res = await fetch(endpoint);
+            const res = await fetch(`${BACKEND_URL}/api/robinhood/holders/${escapeHtml(mint)}`);
             if (!res.ok) throw new Error("Failed to fetch");
-            const holders = await res.json();
+            const data = await res.json();
+            const holders = data.holders || [];
+            const pendingPool = parseFloat(data.pendingAirdropSol || 0);
+
+            if (pendingPool > 0) {
+                poolBanner.textContent = `Pool: ${pendingPool.toFixed(4)} SOL pending for this token's holders`;
+                poolBanner.classList.remove('hidden');
+            }
+
             if (holders.length === 0) {
                 list.innerHTML = '<div class="text-center text-gray-500 p-4">No holder data available yet.</div>';
                 return;
             }
-            let html = '<table class="w-full text-left text-orange-200 leader-table">';
-            html += '<thead><tr class="text-orange-500 border-b border-orange-800/50"><th class="py-2" style="width: 50px;">#</th><th class="py-2">Wallet</th></tr></thead><tbody>';
+
+            let html = '<table class="w-full text-left leader-table" style="font-size:11px">';
+            html += `<thead><tr class="text-orange-500 border-b border-orange-800/50">
+                <th class="py-1.5 pr-2" style="width:32px">#</th>
+                <th class="py-1.5 pr-2">Wallet</th>
+                <th class="py-1.5 pr-2 text-right" style="width:72px">Supply%</th>
+                <th class="py-1.5 pr-2 text-right" style="width:72px">Points</th>
+                <th class="py-1.5 text-right" style="width:100px">Expected</th>
+            </tr></thead><tbody>`;
+
             holders.forEach(h => {
-                const shortWallet = escapeHtml(h.holderPubkey?.slice(0, 5) || '?????');
+                const shortWallet = escapeHtml(h.holderPubkey?.slice(0, 6) || '??????');
+                const pts = (h.totalPoints || 0).toFixed(1);
+                const pct = h.supplyPct || '0.0000';
+                const airdrop = parseFloat(h.expectedAirdropSol || 0);
+                let airdropCell;
+                if (airdrop <= 0) {
+                    airdropCell = `<span class="text-gray-600">-</span>`;
+                } else if (h.belowMinimum) {
+                    airdropCell = `<span class="text-yellow-500/70" title="Below 0.01 SOL minimum">${airdrop.toFixed(5)} ⚠</span>`;
+                } else {
+                    airdropCell = `<span class="text-purple-400">${airdrop.toFixed(5)}</span>`;
+                }
                 html += `<tr class="border-b border-orange-900/20 hover:bg-orange-900/10">
-                            <td class="py-1 text-orange-400 font-bold">${parseInt(h.rank) || 0}</td>
-                            <td class="py-1 font-mono">${shortWallet}...</td>
-                         </tr>`;
+                    <td class="py-1 pr-2 text-orange-400 font-bold">${parseInt(h.rank) || 0}</td>
+                    <td class="py-1 pr-2 text-gray-300">${shortWallet}…</td>
+                    <td class="py-1 pr-2 text-right text-gray-400">${pct}%</td>
+                    <td class="py-1 pr-2 text-right text-yellow-400">${pts}</td>
+                    <td class="py-1 text-right">${airdropCell} <span class="text-gray-600">SOL</span></td>
+                </tr>`;
             });
             html += '</tbody></table>';
             list.innerHTML = html;
@@ -4066,22 +4228,30 @@
 
     // v11.0: Updated for SOL display with appropriate decimal places
     // v19.0: Improved formatting for different value ranges
-    const updateExpectedAirdropDisplay = (expectedAmount) => {
+    const MIN_AIRDROP_SOL = 0.01; // Must match backend MIN_AIRDROP_SOL
+    const updateExpectedAirdropDisplay = (expectedAmount, belowMinimum) => {
         const amount = parseFloat(expectedAmount) || 0;
+        const warn = ui.expectedAirdropMinWarn;
+
         if (amount <= 0) {
             ui.expectedAirdrop.innerText = '0.0000';
-        } else if (amount < 0.0001) {
-            // Very small amounts - show in scientific notation
-            ui.expectedAirdrop.innerText = amount.toExponential(2);
-        } else if (amount < 1) {
-            // Small amounts (less than 1 SOL) - show 4 decimal places
+            ui.expectedAirdrop.className = ui.expectedAirdrop.className.replace('text-yellow-400', 'text-green-400');
+            if (warn) warn.classList.add('hidden');
+        } else if (belowMinimum || amount < MIN_AIRDROP_SOL) {
+            // Below 0.01 SOL minimum — show dimmed amount with warning
             ui.expectedAirdrop.innerText = amount.toFixed(4);
-        } else if (amount < 10) {
-            // Medium amounts - show 3 decimal places
-            ui.expectedAirdrop.innerText = amount.toFixed(3);
+            ui.expectedAirdrop.className = ui.expectedAirdrop.className.replace('text-green-400', 'text-yellow-400');
+            if (warn) warn.classList.remove('hidden');
         } else {
-            // Large amounts - show 2 decimal places
-            ui.expectedAirdrop.innerText = amount.toFixed(2);
+            if (warn) warn.classList.add('hidden');
+            ui.expectedAirdrop.className = ui.expectedAirdrop.className.replace('text-yellow-400', 'text-green-400');
+            if (amount < 1) {
+                ui.expectedAirdrop.innerText = amount.toFixed(4);
+            } else if (amount < 10) {
+                ui.expectedAirdrop.innerText = amount.toFixed(3);
+            } else {
+                ui.expectedAirdrop.innerText = amount.toFixed(2);
+            }
         }
     };
     
@@ -4131,7 +4301,7 @@
 
             currentUserPoints = data.points || 0;
             ui.userTotalPoints.innerText = currentUserPoints.toFixed(2);
-            updateExpectedAirdropDisplay(data.expectedAirdrop);
+            updateExpectedAirdropDisplay(data.expectedAirdrop, data.belowMinimum);
 
         } catch (e) {
             console.error("ASDF/Points Check Error", e);
@@ -4198,8 +4368,8 @@
                     ui.kothName.innerText = escapeHtml(data.token.name);
                     ui.kothMcap.innerText = formatMcap(data.token.marketCap);
 
-                    // v13.0: KOTH bonus now goes to all holders, not just creator
-                    ui.kothHolders.innerText = 'HOLDERS GET 10% BONUS!';
+                    // v26.0: KOTH is AI spotlight - no fee allocation; token distributes from its own pool
+                    ui.kothHolders.innerText = 'AI COMMUNITY SPOTLIGHT';
 
                     if (data.token.image) {
                         ui.kothImg.src = resolveTokenImage(data.token.image);
@@ -4372,7 +4542,10 @@
                         topEarnerEl.textContent = '-';
                     }
                 }
-            } else { 
+
+                // Sync home tab stats from updated dashboard elements
+                syncHomeStats();
+            } else {
                 status = 'OFFLINE';
                 error = `Backend responded with status code: ${res.status}`;
             } 
@@ -5520,6 +5693,24 @@
             }, 500);
         }
     });
+
+    // ========== HOME TAB STATS SYNC ==========
+    const syncHomeStats = () => {
+        if (ui.homeAirdropBalance && ui.airdropBalance) {
+            ui.homeAirdropBalance.innerHTML = ui.airdropBalance.innerHTML;
+        }
+        if (ui.homeMetricPump && ui.metricPump) {
+            ui.homeMetricPump.innerText = ui.metricPump.innerText;
+        }
+        if (ui.homeMetricFees && ui.metricFees) {
+            ui.homeMetricFees.innerText = ui.metricFees.innerText;
+        }
+        if (ui.homeRobinhoodCount) {
+            const src = document.getElementById('robinhood-token-count');
+            if (src) ui.homeRobinhoodCount.textContent = src.textContent;
+        }
+    };
+    window.syncHomeStats = syncHomeStats;
 
     // ========== TAB NAVIGATION (v24.0) ==========
     const switchTab = (tabName) => {

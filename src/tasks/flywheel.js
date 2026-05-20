@@ -354,11 +354,12 @@ async function evaluateKothCandidates(db) {
         const now6 = Date.now();
         const eligibleCandidates = scoredCandidates.filter(c => {
             const cooldownExpiry = kothCooldowns.get(c.mint);
-            if (cooldownExpiry && now6 < cooldownExpiry) {
-                logger.debug(`[KOTH] ${c.ticker} skipped — in cooldown for ${Math.ceil((cooldownExpiry - now6) / 60000)} more min`);
-                return false;
+            if (!cooldownExpiry || now6 >= cooldownExpiry) {
+                if (cooldownExpiry) kothCooldowns.delete(c.mint); // prune expired entry
+                return true;
             }
-            return true;
+            logger.debug(`[KOTH] ${c.ticker} skipped — in cooldown for ${Math.ceil((cooldownExpiry - now6) / 60000)} more min`);
+            return false;
         });
 
         if (eligibleCandidates.length === 0) {
@@ -451,6 +452,230 @@ function generateKothReasoning(winner, runnerUp, stats) {
     }
 
     return reasoning;
+}
+
+// v26.0: Per-token airdrop threshold (minimum pool before distributing to holders)
+const TOKEN_AIRDROP_THRESHOLD_LAMPORTS = Math.floor((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 0.05) * 1e9);
+
+// v26.0: Fixed 1B token supply for all pump.fun tokens (1B * 10^6 decimals)
+const PUMP_FUN_TOTAL_SUPPLY_BIG = BigInt('1000000000000000');
+
+// v26.0: Minimum per-recipient airdrop (0.01 SOL). Recipients below this are skipped.
+const MIN_RECIPIENT_LAMPORTS = Math.floor(0.01 * 1e9); // 10_000_000 lamports
+
+/**
+ * v26.0: Per-token airdrop distribution
+ *
+ * Replaces the global pool system. Each token (platform + robinhood) has its own
+ * pending_airdrop_lamports balance credited from that token's creator fees.
+ * When a token's pool exceeds TOKEN_AIRDROP_THRESHOLD_LAMPORTS, its holders receive
+ * a proportional airdrop based on their share of the 1B total supply.
+ *
+ * Distribution is per-token and independent — no cross-token pooling.
+ * KOTH bonus is removed; each token's holders are rewarded by their own token's fees.
+ */
+async function processTokenAirdrops(deps) {
+    const { connection, devKeypair, db } = deps;
+
+    const release = await airdropMutex.tryAcquire();
+    if (!release) {
+        logger.info('[TokenAirdrop] Skipping - already in progress');
+        return;
+    }
+
+    // v25.43: Always evaluate KOTH (informational only - no longer drives distribution)
+    try {
+        await getAiSelectedKoth(db);
+    } catch (kothErr) {
+        logger.warn('[TokenAirdrop] KOTH evaluation failed (non-critical)', { error: kothErr.message });
+    }
+
+    try {
+        const SAFETY_RESERVE = 0.1 * LAMPORTS_PER_SOL;
+        const walletBalance = await connection.getBalance(devKeypair.publicKey);
+        let availableBalance = walletBalance - SAFETY_RESERVE;
+
+        if (availableBalance <= 0) {
+            logger.info('[TokenAirdrop] No balance available (below safety reserve)');
+            return;
+        }
+
+        // Update next airdrop timestamp for countdown UI
+        const airdropInterval = config.AIRDROP_INTERVAL || 900000;
+        await db.run('UPDATE stats SET value = $1 WHERE key = $2', [Date.now() + airdropInterval, 'nextAirdropTimestamp']).catch(() => {});
+
+        // Refresh holder data before distribution
+        try {
+            const refreshResult = await holderScanner.updateGlobalState(deps);
+            if (refreshResult?.scanCompleted) {
+                logger.info('[TokenAirdrop] Holder data refreshed successfully');
+            } else if (refreshResult?.skipped) {
+                logger.warn('[TokenAirdrop] Holder scan skipped (in progress) — using cached data');
+            }
+        } catch (holderErr) {
+            logger.warn('[TokenAirdrop] Holder refresh failed, using cached data', { error: holderErr.message });
+        }
+
+        // Collect all tokens with pools above threshold
+        const VALID_TABLES = { platform: { tokens: 'tokens', holders: 'token_holders' }, robinhood: { tokens: 'robinhood_tokens', holders: 'robinhood_token_holders' } };
+
+        const platformTokensToAirdrop = await db.all(
+            'SELECT mint, ticker, pending_airdrop_lamports FROM tokens WHERE pending_airdrop_lamports >= $1',
+            [TOKEN_AIRDROP_THRESHOLD_LAMPORTS]
+        );
+        const robinhoodTokensToAirdrop = await db.all(
+            'SELECT mint, ticker, pending_airdrop_lamports FROM robinhood_tokens WHERE "isActive" = 1 AND pending_airdrop_lamports >= $1',
+            [TOKEN_AIRDROP_THRESHOLD_LAMPORTS]
+        );
+
+        const allToDistribute = [
+            ...platformTokensToAirdrop.map(t => ({ ...t, source: 'platform' })),
+            ...robinhoodTokensToAirdrop.map(t => ({ ...t, source: 'robinhood' }))
+        ];
+
+        if (allToDistribute.length === 0) {
+            logger.info(`[TokenAirdrop] No tokens above ${(TOKEN_AIRDROP_THRESHOLD_LAMPORTS / LAMPORTS_PER_SOL).toFixed(3)} SOL threshold`);
+            return;
+        }
+
+        logger.info(`[TokenAirdrop] Processing ${allToDistribute.length} token pools (${platformTokensToAirdrop.length} platform, ${robinhoodTokensToAirdrop.length} robinhood)`);
+
+        for (const token of allToDistribute) {
+            if (availableBalance < TOKEN_AIRDROP_THRESHOLD_LAMPORTS) {
+                logger.warn('[TokenAirdrop] Wallet balance too low to continue — stopping');
+                break;
+            }
+
+            try {
+                const tables = VALID_TABLES[token.source];
+                if (!tables) continue;
+
+                const poolAmount = Math.min(Number(token.pending_airdrop_lamports), availableBalance);
+                if (poolAmount < TOKEN_AIRDROP_THRESHOLD_LAMPORTS) continue;
+
+                // 99% distributed, 1% dust buffer
+                const distributable = Math.floor(poolAmount * 0.99);
+
+                const holders = await db.all(
+                    `SELECT "holderPubkey", balance FROM ${tables.holders} WHERE mint = $1 ORDER BY rank ASC`,
+                    [token.mint]
+                );
+
+                if (!holders || holders.length === 0) {
+                    logger.debug(`[TokenAirdrop] ${token.ticker}: No holders tracked, skipping`);
+                    continue;
+                }
+
+                // Build recipient list proportional to each holder's % of total supply
+                const recipients = [];
+                const trackedBalance = holders.reduce((sum, h) => sum + BigInt(h.balance || '0'), BigInt(0));
+
+                for (const holder of holders) {
+                    try {
+                        const holderBalance = BigInt(holder.balance || '0');
+                        if (holderBalance <= BigInt(0)) continue;
+
+                        // Share proportional to % of total 1B supply
+                        const share = Number((BigInt(distributable) * holderBalance) / PUMP_FUN_TOTAL_SUPPLY_BIG);
+                        if (share >= MIN_RECIPIENT_LAMPORTS) { // minimum 0.01 SOL per recipient
+                            recipients.push({ user: new PublicKey(holder.holderPubkey), amount: share });
+                        }
+                    } catch (e) {
+                        logger.debug(`[TokenAirdrop] Skipping invalid holder ${holder.holderPubkey}: ${e.message}`);
+                    }
+                }
+
+                if (recipients.length === 0) {
+                    logger.debug(`[TokenAirdrop] ${token.ticker}: All holder shares below 0.01 SOL minimum threshold`);
+                    continue;
+                }
+
+                const totalPlanned = recipients.reduce((sum, r) => sum + r.amount, 0);
+                if (totalPlanned > availableBalance) {
+                    logger.warn(`[TokenAirdrop] ${token.ticker}: Planned ${(totalPlanned / LAMPORTS_PER_SOL).toFixed(4)} SOL exceeds available ${(availableBalance / LAMPORTS_PER_SOL).toFixed(4)} SOL, skipping`);
+                    continue;
+                }
+
+                logger.info(`[TokenAirdrop] ${token.ticker} (${token.source}): Distributing ${(distributable / LAMPORTS_PER_SOL).toFixed(4)} SOL pool to ${recipients.length} holders`);
+
+                const airdropId = `token_${token.mint.slice(0, 8)}_${Date.now()}`;
+                const allSignatures = [];
+                let actualSentLamports = 0;
+
+                for (let i = 0; i < recipients.length; i += AIRDROP_BATCH_SIZE) {
+                    const batch = recipients.slice(i, i + AIRDROP_BATCH_SIZE);
+                    const result = await sendSolAirdropBatch(batch, deps);
+                    if (result?.signature) {
+                        allSignatures.push(result.signature);
+                        actualSentLamports += result.actualLamports;
+                    }
+                    if (i + AIRDROP_BATCH_SIZE < recipients.length) {
+                        await new Promise(r => setTimeout(r, 300));
+                    }
+                }
+
+                if (actualSentLamports > 0) {
+                    availableBalance -= actualSentLamports;
+
+                    // Decrement pending pool, accumulate lifetime
+                    await db.run(
+                        `UPDATE ${tables.tokens} SET pending_airdrop_lamports = GREATEST(0, pending_airdrop_lamports - $1), lifetime_airdrop_lamports = lifetime_airdrop_lamports + $1 WHERE mint = $2`,
+                        [actualSentLamports, token.mint]
+                    );
+
+                    const actualSolSent = actualSentLamports / LAMPORTS_PER_SOL;
+
+                    // Log airdrop event
+                    await db.run(
+                        'INSERT INTO airdrop_logs (amount, recipients, "totalPoints", signatures, details, timestamp, mint, token_source) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+                        [
+                            actualSolSent,
+                            recipients.length,
+                            0,
+                            allSignatures.join(','),
+                            JSON.stringify({ ticker: token.ticker, source: token.source, airdropId, txCount: allSignatures.length }),
+                            new Date().toISOString(),
+                            token.mint,
+                            token.source
+                        ]
+                    );
+
+                    // Log per-user distribution history
+                    const airdropTimestamp = Date.now();
+                    try {
+                        const values = recipients.map((_, i) => {
+                            const b = i * 6;
+                            return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6})`;
+                        }).join(', ');
+                        const params = recipients.flatMap(r => [
+                            r.user.toString(), airdropId,
+                            r.amount / LAMPORTS_PER_SOL, 0,
+                            airdropTimestamp, token.mint
+                        ]);
+                        await db.run(
+                            `INSERT INTO user_airdrop_history ("userPubkey", "airdropId", amount, points, timestamp, mint) VALUES ${values}`,
+                            params
+                        );
+                    } catch (histErr) {
+                        logger.warn('[TokenAirdrop] Failed to log user history', { error: histErr.message });
+                    }
+
+                    logger.info(`✅ [TokenAirdrop] ${token.ticker}: ${actualSolSent.toFixed(4)} SOL sent to ${recipients.length} holders in ${allSignatures.length} txs`);
+                } else {
+                    logger.warn(`[TokenAirdrop] ${token.ticker}: All batches failed — pool balance preserved`);
+                }
+            } catch (tokenErr) {
+                logger.error(`[TokenAirdrop] Error processing ${token.ticker || token.mint?.slice(0, 8)}`, { error: tokenErr.message });
+            }
+
+            await new Promise(r => setTimeout(r, 500)); // Rate-limit between tokens
+        }
+
+    } catch (e) {
+        logger.error('[TokenAirdrop] Critical error', { error: e.message });
+    } finally {
+        await release();
+    }
 }
 
 /**
@@ -818,7 +1043,7 @@ async function claimRobinhoodFees(deps) {
                             tx.feePayer = devKeypair.publicKey;
                             await solana.sendTxWithRetry(tx, [devKeypair]);
 
-                            const ourShare = Math.floor(bcPendingLamports * (token.feeShareBps / 10000));
+                            const ourShare = Math.floor(bcPendingLamports * ((token.feeShareBps ?? 10000) / 10000));
                             tokenClaimed += ourShare;
                             totalClaimed += ourShare;
                             claimedTokens.push({
@@ -827,12 +1052,15 @@ async function claimRobinhoodFees(deps) {
                                 source: 'BC'
                             });
 
+                            // v26.0: Credit 95% of our share to this token's per-token airdrop pool
+                            // (5% is deducted later as platform fee — 95% is what will reach holders)
+                            const bcAirdropCredit = Math.floor(ourShare * 0.95);
                             await db.run(
-                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
-                                [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
+                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
+                                [Date.now(), ourShare / LAMPORTS_PER_SOL, bcAirdropCredit, token.id]
                             );
 
-                            logger.info(`[Robinhood] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+                            logger.info(`[Robinhood] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${(token.feeShareBps ?? 10000)/100}%, credited ${(bcAirdropCredit / LAMPORTS_PER_SOL).toFixed(6)} SOL to token pool)`);
 
                             // v25.113: Cross-record to PAGS if this token is also a PAGS beneficiary
                             // v25.114: Use on-chain shareholder BPS for PAGS wallet, not DB value
@@ -891,9 +1119,9 @@ async function claimRobinhoodFees(deps) {
                     const AMM_CLAIM_THRESHOLD = 50000000; // 0.05 SOL
                     if (ammFeeLamports > AMM_CLAIM_THRESHOLD) {
                         const ammFeeSol = ammFeeLamports / LAMPORTS_PER_SOL;
-                        const ourShare = ammFeeSol * (token.feeShareBps / 10000);
+                        const ourShare = ammFeeSol * ((token.feeShareBps ?? 10000) / 10000);
 
-                        logger.info(`[Robinhood/AMM] ${token.ticker}: Found ${ammFeeSol.toFixed(6)} SOL in AMM vault (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+                        logger.info(`[Robinhood/AMM] ${token.ticker}: Found ${ammFeeSol.toFixed(6)} SOL in AMM vault (our share: ${ourShare.toFixed(6)} SOL @ ${(token.feeShareBps ?? 10000)/100}%)`);
 
                         try {
                             const ammTx = new Transaction();
@@ -987,7 +1215,7 @@ async function claimRobinhoodFees(deps) {
                             await solana.sendTxWithRetry(ammTx, [devKeypair]);
 
                             // Distribution succeeded!
-                            const ourShareLamports = Math.floor(ammFeeLamports * (token.feeShareBps / 10000));
+                            const ourShareLamports = Math.floor(ammFeeLamports * ((token.feeShareBps ?? 10000) / 10000));
                             totalClaimed += ourShareLamports;
                             claimedTokens.push({
                                 ticker: token.ticker || token.creatorPubkey.slice(0, 8),
@@ -996,12 +1224,14 @@ async function claimRobinhoodFees(deps) {
                             });
 
                             // Update database — M-7 FIX: also clear pendingAmmFees so dashboard shows correct state
+                            // v26.0: Credit 95% of our AMM share to this token's per-token airdrop pool
+                            const ammAirdropCredit = Math.floor(ourShareLamports * 0.95);
                             await db.run(
-                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingAmmFees" = 0 WHERE id = $3',
-                                [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, token.id]
+                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingAmmFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
+                                [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, ammAirdropCredit, token.id]
                             );
 
-                            logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL via TransferCreatorFeesToPump (our share: ${ourShare.toFixed(6)} SOL @ ${token.feeShareBps/100}%)`);
+                            logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL via TransferCreatorFeesToPump (our share: ${ourShare.toFixed(6)} SOL @ ${(token.feeShareBps ?? 10000)/100}%, credited ${(ammAirdropCredit / LAMPORTS_PER_SOL).toFixed(6)} SOL to token pool)`);
 
                             // v25.113: Cross-record to PAGS if this token is also a PAGS beneficiary
                             // v25.114: Use on-chain shareholder BPS for PAGS wallet, not DB value
@@ -1913,6 +2143,41 @@ async function runPurchaseAndFees(deps) {
             if (claimedAmount > 0) {
                 await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [claimedAmount, 'lifetimeCreatorFeesLamports']);
                 await recordClaim(claimedAmount);
+
+                // v26.0: Attribute 95% of platform fees across eligible platform tokens proportionally by volume
+                // Platform tokens share one vault, so we distribute credit by each token's share of total volume
+                try {
+                    const platformFeeCredit = Math.floor(claimedAmount * 0.95);
+                    const eligiblePlatformTokens = await db.all(
+                        'SELECT mint, volume24h FROM tokens WHERE volume24h >= $1',
+                        [100]
+                    );
+                    const totalPlatformVol = eligiblePlatformTokens.reduce((s, t) => s + (parseFloat(t.volume24h) || 0), 0);
+                    if (totalPlatformVol > 0 && eligiblePlatformTokens.length > 0) {
+                        let totalAttributed = 0;
+                        const shares = eligiblePlatformTokens.map(tok => {
+                            const share = Math.floor(platformFeeCredit * ((parseFloat(tok.volume24h) || 0) / totalPlatformVol));
+                            totalAttributed += share;
+                            return { tok, share };
+                        });
+                        // H-2: Add rounding remainder to the highest-volume token
+                        const remainder = platformFeeCredit - totalAttributed;
+                        if (remainder > 0 && shares.length > 0) {
+                            shares[0].share += remainder;
+                        }
+                        for (const { tok, share } of shares) {
+                            if (share > 0) {
+                                await db.run(
+                                    'UPDATE tokens SET pending_airdrop_lamports = pending_airdrop_lamports + $1 WHERE mint = $2',
+                                    [share, tok.mint]
+                                );
+                            }
+                        }
+                        logger.info(`[FeeCollection] Attributed ${(platformFeeCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees across ${eligiblePlatformTokens.length} tokens by volume`);
+                    }
+                } catch (attrErr) {
+                    logger.warn('[FeeCollection] Platform fee attribution failed', { error: attrErr.message });
+                }
             }
             await new Promise(r => setTimeout(r, 2000));
         } else {
@@ -1986,8 +2251,8 @@ async function runPurchaseAndFees(deps) {
             }
         }
 
-        // Try SOL airdrop (internally checks balance & threshold)
-        await processAirdrop(deps);
+        // v26.0: Per-token airdrop distribution (replaces global processAirdrop)
+        await processTokenAirdrops(deps);
         await logPurchase('FLYWHEEL_CYCLE', logData);
 
     } catch (e) {
@@ -2079,7 +2344,7 @@ async function runFeeCollection(deps) {
                     const bcInfo = await connection.getAccountInfo(bcVaultAddr);
                     if (bcInfo && bcInfo.lamports > rentMin) {
                         const pendingLamports = bcInfo.lamports - rentMin;
-                        tokenBcFees = Math.floor(pendingLamports * (token.feeShareBps / 10000));
+                        tokenBcFees = Math.floor(pendingLamports * ((token.feeShareBps ?? 10000) / 10000));
                     }
 
                     // Check AMM vault (for graduated tokens)
@@ -2088,7 +2353,7 @@ async function runFeeCollection(deps) {
                         const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
                         const ammBalance = parseInt(bal.value.amount) || 0;
                         if (ammBalance > 0) {
-                            tokenAmmFees = Math.floor(ammBalance * (token.feeShareBps / 10000));
+                            tokenAmmFees = Math.floor(ammBalance * ((token.feeShareBps ?? 10000) / 10000));
                         }
                     } catch (e) {
                         // AMM vault may not exist for non-graduated tokens
@@ -2097,7 +2362,7 @@ async function runFeeCollection(deps) {
                     const tokenTotalFees = tokenBcFees + tokenAmmFees;
                     if (tokenTotalFees > 0) {
                         robinhoodPendingFees = robinhoodPendingFees.add(new BN(tokenTotalFees));
-                        logger.info(`[FeeCollection] ${token.ticker}: ${(tokenTotalFees / LAMPORTS_PER_SOL).toFixed(4)} SOL pending (BC: ${(tokenBcFees / LAMPORTS_PER_SOL).toFixed(4)}, AMM: ${(tokenAmmFees / LAMPORTS_PER_SOL).toFixed(4)}) @ ${token.feeShareBps / 100}%`);
+                        logger.info(`[FeeCollection] ${token.ticker}: ${(tokenTotalFees / LAMPORTS_PER_SOL).toFixed(4)} SOL pending (BC: ${(tokenBcFees / LAMPORTS_PER_SOL).toFixed(4)}, AMM: ${(tokenAmmFees / LAMPORTS_PER_SOL).toFixed(4)}) @ ${(token.feeShareBps ?? 10000) / 100}%`);
                     }
                 } catch (e) {
                     logger.debug(`[FeeCollection] ${token.ticker}: Error checking pending fees - ${e.message}`);
@@ -2125,6 +2390,40 @@ async function runFeeCollection(deps) {
             if (claimedAmount > 0) {
                 await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [claimedAmount, 'lifetimeCreatorFeesLamports']);
                 logger.info(`[FeeCollection] Claimed ${(claimedAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL from creator fees`);
+
+                // v26.0: Attribute 95% of platform fees across eligible platform tokens proportionally by volume
+                try {
+                    const platformFeeCredit = Math.floor(claimedAmount * 0.95);
+                    const eligiblePlatformTokens = await db.all(
+                        'SELECT mint, volume24h FROM tokens WHERE volume24h >= $1',
+                        [100]
+                    );
+                    const totalPlatformVol = eligiblePlatformTokens.reduce((s, t) => s + (parseFloat(t.volume24h) || 0), 0);
+                    if (totalPlatformVol > 0 && eligiblePlatformTokens.length > 0) {
+                        let totalAttributed = 0;
+                        const shares = eligiblePlatformTokens.map(tok => {
+                            const share = Math.floor(platformFeeCredit * ((parseFloat(tok.volume24h) || 0) / totalPlatformVol));
+                            totalAttributed += share;
+                            return { tok, share };
+                        });
+                        // H-2: Add rounding remainder to the highest-volume token
+                        const remainder = platformFeeCredit - totalAttributed;
+                        if (remainder > 0 && shares.length > 0) {
+                            shares[0].share += remainder;
+                        }
+                        for (const { tok, share } of shares) {
+                            if (share > 0) {
+                                await db.run(
+                                    'UPDATE tokens SET pending_airdrop_lamports = pending_airdrop_lamports + $1 WHERE mint = $2',
+                                    [share, tok.mint]
+                                );
+                            }
+                        }
+                        logger.info(`[FeeCollection] Attributed ${(platformFeeCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees across ${eligiblePlatformTokens.length} tokens by volume`);
+                    }
+                } catch (attrErr) {
+                    logger.warn('[FeeCollection] Platform fee attribution failed', { error: attrErr.message });
+                }
             }
             await new Promise(r => setTimeout(r, 1000));
 
@@ -2266,13 +2565,13 @@ async function start(deps) {
     setInterval(() => runFeeCollection(deps), feeInterval);
     logger.info(`Fee collection started (${feeInterval / 1000}s interval, >${config.FEE_THRESHOLD_SOL || 0.05} SOL threshold)`);
 
-    // Airdrop processing every 15 minutes
-    setInterval(() => processAirdrop(deps), airdropInterval);
-    logger.info(`Airdrop distribution started (${airdropInterval / 60000}min interval, >${config.AIRDROP_THRESHOLD_SOL || 1.0} SOL threshold)`);
+    // v26.0: Per-token airdrop processing every 15 minutes
+    setInterval(() => processTokenAirdrops(deps), airdropInterval);
+    logger.info(`Per-token airdrop distribution started (${airdropInterval / 60000}min interval, >${process.env.TOKEN_AIRDROP_THRESHOLD_SOL || 0.05} SOL threshold per token)`);
 
     // v25.64: Staggered initial runs to avoid RPC spike at startup
     setTimeout(() => runFeeCollection(deps), 30000); // Fee collection at 30s (was 5s)
-    setTimeout(() => processAirdrop(deps), 120000); // Airdrop at 2min (was 10s)
+    setTimeout(() => processTokenAirdrops(deps), 120000); // Airdrop at 2min (was 10s)
 }
 
-module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, refreshAllFeeShares, start, getAiSelectedKoth, resetKothCache };
+module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, processTokenAirdrops, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, refreshAllFeeShares, start, getAiSelectedKoth, resetKothCache };
