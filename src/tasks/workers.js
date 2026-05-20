@@ -331,13 +331,8 @@ function chunkArray(array, size) {
     return result;
 }
 
-const MIN_VOLUME_USD = 100;     // Minimum 24hr volume for eligibility
-const BASE_POINTS_PER_TOKEN = 1000; // Base points distributed per token
+const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // Minimum 24hr volume for eligibility
 const TOP_HOLDERS_LIMIT = 250;  // Track top 250 holders per token
-
-// v25.36: Pump.fun standard total supply (1 billion tokens with 6 decimals)
-// All pump.fun tokens have fixed 1B supply - use this for accurate % of supply calculation
-const PUMP_FUN_TOTAL_SUPPLY = BigInt('1000000000000000'); // 1B tokens * 10^6 decimals
 
 /**
  * Initialize Holder Scanner Worker
@@ -535,117 +530,45 @@ function initHolderScannerWorker(deps) {
             // 6. Fetch ASDF Top 100 holders from Redis
             const asdfTop100Holders = await redis.getAsdfTop100Holders();
 
-            // 7. Calculate VOLUME-WEIGHTED PROPORTIONAL points (matching holderScanner.js)
-            let rawPointsMap = new Map(); // pubkey -> { basePoints, robinhoodPoints }
-            let tempTotalPoints = 0;
+            // 7. Compute positionsCount per user (number of eligible tokens held, for "Active Positions" display)
+            const positionsCountMap = new Map(); // pubkey -> positionsCount
 
-            // v26.2: Points = pure supply ownership — no volume weight, no feeShareBps
-            // BATCH: single query for all eligible token holders
             if (eligibleMints.length > 0) {
-                const allPlatformHolderRowsW = await db.all(
-                    `SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1) ORDER BY mint, rank ASC`,
+                const allPlatformHolderRows = await db.all(
+                    `SELECT "holderPubkey", balance FROM token_holders WHERE mint = ANY($1)`,
                     [eligibleMints]
                 );
-                const platformHoldersByMintW = new Map();
-                for (const row of allPlatformHolderRowsW) {
-                    if (!platformHoldersByMintW.has(row.mint)) platformHoldersByMintW.set(row.mint, []);
-                    platformHoldersByMintW.get(row.mint).push(row);
-                }
-
-                for (const token of eligibleTokens) {
-                    if (!token.mint) continue;
-                    const holders = platformHoldersByMintW.get(token.mint) || [];
-                    if (holders.length === 0) continue;
-
-                    for (const holder of holders) {
-                        const holderBalance = BigInt(holder.balance || '0');
-                        if (holderBalance === BigInt(0)) continue;
-
-                        const proportionalPoints = Number((holderBalance * BigInt(BASE_POINTS_PER_TOKEN * 1000)) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
-                        const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0, positionsCount: 0 };
-                        entry.basePoints += proportionalPoints;
-                        entry.positionsCount++;
-                        rawPointsMap.set(holder.holderPubkey, entry);
-                    }
+                for (const row of allPlatformHolderRows) {
+                    if (BigInt(row.balance || '0') === 0n) continue;
+                    positionsCountMap.set(row.holderPubkey, (positionsCountMap.get(row.holderPubkey) || 0) + 1);
                 }
             }
 
-            // 8. Include Robinhood token holders (with volume weighting and fee share scaling)
-            // v25.64: Added detailed logging to debug Robinhood token issues
-            let robinhoodPointsTotal = 0;
-            let robinhoodHoldersWithPoints = 0;
+            // 8. Include Robinhood token holders for positionsCount
             try {
                 const robinhoodTokens = await db.all(
-                    'SELECT mint, ticker, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
+                    'SELECT mint, ticker FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
                     [MIN_VOLUME_USD]
                 );
                 logger.info(`[Worker] Robinhood: ${robinhoodTokens.length} tokens with volume >= $${MIN_VOLUME_USD}`);
 
-                // v25.36: Points now based on % of TOTAL SUPPLY for Robinhood tokens too
-                // v26.1: BATCH - single query for all robinhood token holders
                 const robinhoodMintsList = robinhoodTokens.map(t => t.mint).filter(Boolean);
-                const allRhHolderRowsW = robinhoodMintsList.length > 0
+                const allRhHolderRows = robinhoodMintsList.length > 0
                     ? await db.all(
-                        `SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1) ORDER BY mint, rank ASC`,
+                        `SELECT "holderPubkey", balance FROM robinhood_token_holders WHERE mint = ANY($1)`,
                         [robinhoodMintsList]
                       )
                     : [];
-                const rhHoldersByMintW = new Map();
-                for (const row of allRhHolderRowsW) {
-                    if (!rhHoldersByMintW.has(row.mint)) rhHoldersByMintW.set(row.mint, []);
-                    rhHoldersByMintW.get(row.mint).push(row);
-                }
-
-                // v26.2: Points = pure supply ownership, no volume/feeShare scaling
-                for (const rhToken of robinhoodTokens) {
-                    if (!rhToken.mint) continue;
-
-                    const holders = rhHoldersByMintW.get(rhToken.mint) || [];
-                    if (holders.length === 0) {
-                        logger.debug(`[Worker] Robinhood token ${rhToken.ticker || rhToken.mint.slice(0, 8)} has 0 holders in tracking table`);
-                        continue;
-                    }
-
-                    let tokenPointsDistributed = 0;
-                    for (const holder of holders) {
-                        const holderBalance = BigInt(holder.balance || '0');
-                        if (holderBalance === BigInt(0)) continue;
-
-                        const proportionalPoints = Number((holderBalance * BigInt(BASE_POINTS_PER_TOKEN * 1000)) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
-
-                        const entry = rawPointsMap.get(holder.holderPubkey) || { basePoints: 0, robinhoodPoints: 0, positionsCount: 0 };
-                        entry.robinhoodPoints += proportionalPoints;
-                        entry.positionsCount++;
-                        rawPointsMap.set(holder.holderPubkey, entry);
-
-                        tokenPointsDistributed += proportionalPoints;
-                        robinhoodHoldersWithPoints++;
-                    }
-                    robinhoodPointsTotal += tokenPointsDistributed;
-                }
-
-                if (robinhoodTokens.length > 0) {
-                    logger.info(`[Worker] Robinhood points: ${robinhoodPointsTotal.toFixed(2)} total across ${robinhoodHoldersWithPoints} holder positions`);
+                for (const row of allRhHolderRows) {
+                    if (BigInt(row.balance || '0') === 0n) continue;
+                    positionsCountMap.set(row.holderPubkey, (positionsCountMap.get(row.holderPubkey) || 0) + 1);
                 }
             } catch (e) {
-                logger.error('[Worker] Robinhood holder points calculation error', { error: e.message });
+                logger.error('[Worker] Robinhood holder positionsCount error', { error: e.message });
             }
 
-            // 9. Calculate final points with ASDF multiplier
-            const devPubkeyStr = devKeypair.publicKey.toString();
-            for (const [pubkey, data] of rawPointsMap.entries()) {
-                if (pubkey === devPubkeyStr) continue;
-                const isAsdfTop100 = asdfTop100Holders.has(pubkey);
-                const basePoints = data.basePoints + data.robinhoodPoints;
-                const totalPoints = basePoints * (isAsdfTop100 ? 2 : 1);
-                if (totalPoints > 0) tempTotalPoints += totalPoints;
-            }
-
-            await redis.setTotalPoints(tempTotalPoints);
-            logger.info(`[Worker] Global Points: ${tempTotalPoints.toFixed(2)}`);
-
-            // 10. v26.1: Build per-user expected airdrop (ASDF-weighted) using batch queries
-            const PUMP_FUN_TOTAL_SUPPLY_W = BigInt('1000000000000000'); // 1B * 10^6
+            // 10. Build per-user expected airdrop using tracked holder totals (not 1B supply)
+            // Consistent with flywheel.js and holderScanner.js: ASDF Top 100 get 2× effective balance
             const userExpectedAirdropMapW = new Map();
             let totalPendingAirdropLamportsW = 0;
             try {
@@ -655,10 +578,8 @@ function initHolderScannerWorker(deps) {
                     SELECT mint, pending_airdrop_lamports, 'robinhood' as source FROM robinhood_tokens WHERE pending_airdrop_lamports > 0 AND "isActive" = 1
                 `);
 
-                // Separate mints by source for batch queries
                 const platformPendingMints = pendingRows.filter(r => r.source === 'platform').map(r => r.mint);
                 const robinhoodPendingMints = pendingRows.filter(r => r.source === 'robinhood').map(r => r.mint);
-                const pendingByMint = new Map(pendingRows.map(r => [r.mint, r]));
 
                 // Batch-fetch all holders for pending tokens
                 const [platformHoldersW, rhHoldersW] = await Promise.all([
@@ -675,17 +596,37 @@ function initHolderScannerWorker(deps) {
                     totalPendingAirdropLamportsW += Number(row.pending_airdrop_lamports || 0);
                 }
 
-                // Build per-user expected airdrop from batch holder data
+                // Group holders by mint for per-token weighted distribution
+                const holdersByMintW = new Map();
                 for (const h of [...platformHoldersW, ...rhHoldersW]) {
-                    const row = pendingByMint.get(h.mint);
-                    if (!row) continue;
+                    if (!holdersByMintW.has(h.mint)) holdersByMintW.set(h.mint, []);
+                    holdersByMintW.get(h.mint).push(h);
+                }
+
+                // Per-token: compute ASDF-weighted share using tracked holder total as denominator
+                for (const row of pendingRows) {
                     const pendingLamports = BigInt(row.pending_airdrop_lamports || 0);
-                    if (pendingLamports === BigInt(0)) continue;
-                    const bal = BigInt(h.balance || '0');
-                    if (bal === BigInt(0)) continue;
-                    const expectedLamports = Number(pendingLamports * bal / PUMP_FUN_TOTAL_SUPPLY_W);
-                    const prev = userExpectedAirdropMapW.get(h.holderPubkey) || 0;
-                    userExpectedAirdropMapW.set(h.holderPubkey, prev + expectedLamports / 1e9);
+                    if (pendingLamports === 0n) continue;
+                    const distributable = pendingLamports * 99n / 100n;
+                    const holders = holdersByMintW.get(row.mint) || [];
+                    if (holders.length === 0) continue;
+
+                    let totalEffectiveW = 0n;
+                    const weightedW = holders.map(h => {
+                        const bal = BigInt(h.balance || '0');
+                        const weight = asdfTop100Holders.has(h.holderPubkey) ? 2n : 1n;
+                        const eff = bal * weight;
+                        totalEffectiveW += eff;
+                        return { holderPubkey: h.holderPubkey, effectiveBal: eff };
+                    });
+                    if (totalEffectiveW === 0n) continue;
+
+                    for (const wh of weightedW) {
+                        if (wh.effectiveBal === 0n) continue;
+                        const expectedLamports = Number(distributable * wh.effectiveBal / totalEffectiveW);
+                        const prev = userExpectedAirdropMapW.get(wh.holderPubkey) || 0;
+                        userExpectedAirdropMapW.set(wh.holderPubkey, prev + expectedLamports / 1e9);
+                    }
                 }
                 logger.info(`[Worker] Per-token expected airdrops: ${userExpectedAirdropMapW.size} users, total pending: ${(totalPendingAirdropLamportsW / 1e9).toFixed(4)} SOL`);
             } catch (e) {
@@ -693,55 +634,49 @@ function initHolderScannerWorker(deps) {
             }
 
             // 11. Update expected airdrops in Redis
+            // Note: userPoints (legacy points map) is managed solely by holderScanner.js — do not clear here
             await redis.clearUserExpectedAirdrops();
-            await redis.clearUserPoints();
 
             const userExpectedAirdrops = new Map();
-            const userPointsMap = new Map();
             const userPointsData = []; // v25.33: For database storage
+            const devPubkeyStr = devKeypair.publicKey.toString();
+            const seenPubkeys = new Set();
 
-            for (const [pubkey, data] of rawPointsMap.entries()) {
+            // Users who hold eligible tokens (have positionsCount)
+            for (const [pubkey, positionsCount] of positionsCountMap.entries()) {
                 if (pubkey === devPubkeyStr) continue;
-
                 const isAsdfTop100 = asdfTop100Holders.has(pubkey);
                 const multiplier = isAsdfTop100 ? 2 : 1;
-                const points = (data.basePoints + data.robinhoodPoints) * multiplier;
-
-                if (points > 0) {
-                    userPointsMap.set(pubkey, points);
-
-                    // v26.0: Expected airdrop from per-token pools
-                    const expected = userExpectedAirdropMapW.get(pubkey) || 0;
-                    userExpectedAirdrops.set(pubkey, expected);
-
-                    // v25.33: Collect data for database upsert
-                    userPointsData.push({
-                        pubkey,
-                        basePoints: data.basePoints,
-                        robinhoodPoints: data.robinhoodPoints,
-                        multiplier,
-                        totalPoints: points,
-                        expectedAirdropSol: expected,
-                        positionsCount: data.positionsCount || 0,
-                        isAsdfHolder: isAsdfTop100
-                    });
-                }
+                const expected = userExpectedAirdropMapW.get(pubkey) || 0;
+                userExpectedAirdrops.set(pubkey, expected);
+                seenPubkeys.add(pubkey);
+                userPointsData.push({
+                    pubkey,
+                    basePoints: 0,
+                    robinhoodPoints: 0,
+                    multiplier,
+                    totalPoints: 0,
+                    expectedAirdropSol: expected,
+                    positionsCount,
+                    isAsdfHolder: isAsdfTop100
+                });
             }
 
-            // v26.0: Include users with expected airdrops but zero leaderboard points
+            // v26.0: Include users with expected airdrops who don't hold eligible-volume tokens
             for (const [pubkey, expected] of userExpectedAirdropMapW.entries()) {
                 if (pubkey === devPubkeyStr) continue;
-                if (!userExpectedAirdrops.has(pubkey) && expected > 0) {
+                if (!seenPubkeys.has(pubkey) && expected > 0) {
                     userExpectedAirdrops.set(pubkey, expected);
+                    const isAsdfTop100 = asdfTop100Holders.has(pubkey);
                     userPointsData.push({
                         pubkey,
                         basePoints: 0,
                         robinhoodPoints: 0,
-                        multiplier: 1,
+                        multiplier: isAsdfTop100 ? 2 : 1,
                         totalPoints: 0,
                         expectedAirdropSol: expected,
                         positionsCount: 0,
-                        isAsdfHolder: false
+                        isAsdfHolder: isAsdfTop100
                     });
                 }
             }
@@ -793,13 +728,12 @@ function initHolderScannerWorker(deps) {
                 // Don't throw - Redis is still updated as fallback
             }
 
-            // Continue updating Redis for backwards compatibility (during migration)
+            // Update Redis
             await redis.setAllUserExpectedAirdrops(userExpectedAirdrops);
-            await redis.setAllUserPoints(userPointsMap);
             await redis.setLastBackendUpdate(Date.now());
 
-            logger.info(`[Worker] Holder scanner complete - ${userPointsMap.size} users with points`);
-            return { success: true, totalPoints: tempTotalPoints, usersWithPoints: userPointsMap.size };
+            logger.info(`[Worker] Holder scanner complete - ${userPointsData.length} users updated`);
+            return { success: true, usersUpdated: userPointsData.length };
 
         } catch (e) {
             logger.error('[Worker] Holder scanner error', { error: e.message, stack: e.stack });

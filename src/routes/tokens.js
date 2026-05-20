@@ -558,28 +558,26 @@ function init(deps) {
     router.get('/user-holdings', async (req, res) => {
         const { userPubkey } = req.query;
         if (!userPubkey) {
-            return res.json({ holdings: [], totalPoints: 0, eligibilityThreshold: MIN_VOLUME_USD });
+            return res.json({ holdings: [], eligibilityThreshold: MIN_VOLUME_USD });
         }
         if (!isValidPubkey(userPubkey)) {
             return res.status(400).json({ error: "Invalid Solana address" });
         }
 
         try {
-            // v25.33: Get authoritative totals from user_points table (includes ASDF status)
+            // Get ASDF status + multiplier from user_points (needed for airdrop weight in cache key)
             const userPointsData = await db.get(`
-                SELECT base_points, robinhood_points, multiplier, total_points, is_asdf_holder
+                SELECT multiplier, is_asdf_holder
                 FROM user_points WHERE pubkey = $1
             `, [userPubkey]);
 
-            // ASDF Top 100 holders receive 2× weight in airdrop distribution
             const isAsdfHolder = !!(userPointsData?.is_asdf_holder);
-            const airdropWeight = isAsdfHolder ? BigInt(2) : BigInt(1);
 
-            // v25.28: Reduced TTL from 30s to 15s to save Redis memory
-            // Cache key includes ASDF status so ASDF holders see accurate expected values
-            const cacheKey = `user_holdings_detail_v3_${isAsdfHolder ? 'asdf_' : ''}${userPubkey}`;
+            // Per-token expected airdrop uses simple balance/totalTracked (unweighted).
+            // We can't compute a correct ASDF-weighted denominator here without fetching all
+            // holders per token. The accurate ASDF-adjusted aggregate is in user_points.
+            const cacheKey = `user_holdings_detail_v4_${userPubkey}`;
             const holdingsData = await redis.smartCache(cacheKey, 15, async () => {
-                const POINTS_PER_TOKEN = 1000;
                 const holdings = [];
 
                 // v24.0: Single optimized query with JOINs for launched tokens
@@ -601,19 +599,33 @@ function init(deps) {
                     ORDER BY t.volume24h DESC
                 `, [userPubkey]);
 
+                // Batch-query total tracked balances for platform tokens (excludes LP/burnt supply)
+                const launchedMints = launchedHoldings.map(r => r.mint);
+                const platformTotalBalMap = new Map();
+                if (launchedMints.length > 0) {
+                    const totals = await db.all(
+                        `SELECT mint, SUM(CAST(COALESCE(NULLIF(balance, ''), '0') AS BIGINT)) as total_bal FROM token_holders WHERE mint = ANY($1) GROUP BY mint`,
+                        [launchedMints]
+                    );
+                    for (const r of totals) platformTotalBalMap.set(r.mint, BigInt(r.total_bal || '0'));
+                }
+
                 for (const row of launchedHoldings) {
                     const userBalance = safeBalance(row.balance);
                     if (userBalance === 0n) continue;
 
-                    // v26.2: Points = pure supply % × POINTS_PER_TOKEN (no volume weight)
-                    const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
-
                     const pendingLamports = BigInt(row.pending_airdrop_lamports || 0);
-                    // Apply ASDF 2× weight to expected share (approximate — uses total supply as denominator)
-                    const expectedLamports = pendingLamports > 0n
-                        ? Number(pendingLamports * BigInt(99) / BigInt(100) * userBalance * airdropWeight / PUMP_FUN_TOTAL_SUPPLY)
+                    const totalTracked = platformTotalBalMap.get(row.mint) || 0n;
+
+                    // Use tracked holder total as denominator — excludes LP and burnt tokens
+                    const ownershipPct = totalTracked > 0n
+                        ? Math.round(Number(userBalance * 1000000n / totalTracked)) / 10000
                         : 0;
+                    const expectedLamports = (pendingLamports > 0n && totalTracked > 0n)
+                        ? Number(pendingLamports * 99n / 100n * userBalance / totalTracked)
+                        : 0;
+
                     holdings.push({
                         mint: row.mint,
                         ticker: row.ticker,
@@ -623,8 +635,7 @@ function init(deps) {
                         marketCap: row.marketCap || 0,
                         rank: row.rank,
                         isEligible,
-                        basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
-                        totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
+                        ownershipPct,
                         pendingAirdropSol: (Number(pendingLamports) / 1e9).toFixed(6),
                         expectedAirdropSol: (expectedLamports / 1e9).toFixed(6),
                         source: 'launched'
@@ -650,20 +661,33 @@ function init(deps) {
                     ORDER BY rt.volume24h DESC
                 `, [userPubkey]);
 
+                // Batch-query total tracked balances for robinhood tokens
+                const robinhoodMints = robinhoodHoldings.map(r => r.mint);
+                const rhTotalBalMap = new Map();
+                if (robinhoodMints.length > 0) {
+                    const totals = await db.all(
+                        `SELECT mint, SUM(CAST(COALESCE(NULLIF(balance, ''), '0') AS BIGINT)) as total_bal FROM robinhood_token_holders WHERE mint = ANY($1) GROUP BY mint`,
+                        [robinhoodMints]
+                    );
+                    for (const r of totals) rhTotalBalMap.set(r.mint, BigInt(r.total_bal || '0'));
+                }
+
                 for (const row of robinhoodHoldings) {
                     const userBalance = safeBalance(row.balance);
                     if (userBalance === 0n) continue;
 
-                    // v26.2: Points = pure supply % × POINTS_PER_TOKEN (no volume weight, no feeShareBps)
-                    const proportionalPts = Number((userBalance * BigInt(POINTS_PER_TOKEN * 1000)) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
                     const feeShareBps = row.feeShareBps ?? 10000;
                     const isEligible = (row.volume24h || 0) >= MIN_VOLUME_USD;
-
                     const pendingLamports = BigInt(row.pending_airdrop_lamports || 0);
-                    // Apply ASDF 2× weight to expected share (approximate — uses total supply as denominator)
-                    const expectedLamports = pendingLamports > 0n
-                        ? Number(pendingLamports * BigInt(99) / BigInt(100) * userBalance * airdropWeight / PUMP_FUN_TOTAL_SUPPLY)
+                    const totalTracked = rhTotalBalMap.get(row.mint) || 0n;
+
+                    const ownershipPct = totalTracked > 0n
+                        ? Math.round(Number(userBalance * 1000000n / totalTracked)) / 10000
                         : 0;
+                    const expectedLamports = (pendingLamports > 0n && totalTracked > 0n)
+                        ? Number(pendingLamports * 99n / 100n * userBalance / totalTracked)
+                        : 0;
+
                     holdings.push({
                         mint: row.mint,
                         ticker: row.ticker,
@@ -674,30 +698,21 @@ function init(deps) {
                         rank: row.rank,
                         isEligible,
                         feeSharePercent: (feeShareBps / 100),
-                        basePoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
-                        totalPoints: isEligible ? Math.round(proportionalPts * 100) / 100 : 0,
+                        ownershipPct,
                         pendingAirdropSol: (Number(pendingLamports) / 1e9).toFixed(6),
                         expectedAirdropSol: (expectedLamports / 1e9).toFixed(6),
                         source: 'robinhood'
                     });
                 }
 
-                return holdings.sort((a, b) => b.totalPoints - a.totalPoints);
+                // Sort by expected airdrop SOL descending — most valuable position first
+                return holdings.sort((a, b) => parseFloat(b.expectedAirdropSol) - parseFloat(a.expectedAirdropSol));
             });
-
-            // v25.33: Use authoritative total from user_points table if available
-            // Per-token breakdown is for display only; worker calculates the real total
-            const totalPoints = userPointsData
-                ? Math.round((userPointsData.total_points || 0) * 100) / 100
-                : Math.round(holdingsData.reduce((sum, h) => sum + h.totalPoints, 0) * 100) / 100;
 
             res.json({
                 holdings: holdingsData,
-                totalPoints,
-                // v25.33: Include breakdown from user_points table for transparency
-                basePoints: userPointsData ? Math.round((userPointsData.base_points || 0) * 100) / 100 : undefined,
-                robinhoodPoints: userPointsData ? Math.round((userPointsData.robinhood_points || 0) * 100) / 100 : undefined,
                 multiplier: userPointsData?.multiplier || 1,
+                isAsdfHolder: !!(userPointsData?.is_asdf_holder),
                 eligibilityThreshold: MIN_VOLUME_USD
             });
         } catch (e) {
@@ -719,33 +734,28 @@ function init(deps) {
             const limit = Math.min(parseInt(req.query.limit) || 500, 1000);
             const offset = Math.min(Math.max(parseInt(req.query.offset) || 0, 0), 100000);
 
-            // v25.33: Simple query from user_points table
+            // Ordered by expected_airdrop_sol — the primary metric (Option A)
             const users = await db.all(`
                 SELECT
                     pubkey,
-                    base_points,
-                    robinhood_points,
                     multiplier,
-                    total_points,
                     expected_airdrop_sol,
                     positions_count,
                     is_asdf_holder
                 FROM user_points
-                WHERE total_points > 0 AND pubkey != $1
-                ORDER BY total_points DESC
+                WHERE expected_airdrop_sol > 0 AND pubkey != $1
+                ORDER BY expected_airdrop_sol DESC
                 LIMIT $2 OFFSET $3
             `, [devPubkey, limit, offset]);
 
-            // M-1 FIX: Fetch global total separately so paginated responses don't return a partial sum
             const globalTotalRow = await db.get(
-                'SELECT SUM(total_points) as total FROM user_points WHERE total_points > 0 AND pubkey != $1',
+                'SELECT COUNT(*) as count, SUM(expected_airdrop_sol) as total_sol FROM user_points WHERE expected_airdrop_sol > 0 AND pubkey != $1',
                 [devPubkey]
             );
-            const globalTotalPoints = Math.round((parseFloat(globalTotalRow?.total) || 0) * 100) / 100;
+            const globalTotalSol = Math.round((parseFloat(globalTotalRow?.total_sol) || 0) * 10000) / 10000;
 
             const eligibleUsers = users.map(user => ({
                 pubkey: user.pubkey,
-                points: Math.round((user.total_points || 0) * 100) / 100,
                 positions: user.positions_count || 0,
                 isAsdfTop50: user.is_asdf_holder || false,
                 expectedAirdrop: user.expected_airdrop_sol || 0,
@@ -754,7 +764,7 @@ function init(deps) {
 
             res.json({
                 users: eligibleUsers,
-                totalPoints: globalTotalPoints,  // global total, not just this page
+                totalPendingSol: globalTotalSol,
                 currency: 'SOL',
                 eligibilityThreshold: MIN_VOLUME_USD,
                 pagination: { limit, offset }
@@ -890,23 +900,21 @@ function init(deps) {
             const { mint } = req.params;
             if (!isValidPubkey(mint)) return res.status(400).json({ error: 'Invalid mint' });
 
-            const TOTAL_SUPPLY = BigInt('1000000000000000');
             const LAMPORTS_PER_SOL = 1e9;
             const MIN_RECIPIENT_LAMPORTS = Math.floor(0.01 * 1e9);
 
-            // Get token's pending pool
-            const token = await db.get(
-                'SELECT pending_airdrop_lamports FROM robinhood_tokens WHERE mint = $1 AND "isActive" = 1',
-                [mint]
-            );
+            // Get token's pending pool + total tracked balance in one query
+            const [token, totalBalRow] = await Promise.all([
+                db.get('SELECT pending_airdrop_lamports FROM robinhood_tokens WHERE mint = $1 AND "isActive" = 1', [mint]),
+                db.get(`SELECT SUM(CAST(COALESCE(NULLIF(balance, ''), '0') AS BIGINT)) as total_bal FROM robinhood_token_holders WHERE mint = $1`, [mint])
+            ]);
             const pendingLamports = BigInt(token?.pending_airdrop_lamports || 0);
+            const totalTracked = BigInt(totalBalRow?.total_bal || '0');
+            const distributable = pendingLamports * 99n / 100n;
 
             const rows = await db.all(`
-                SELECT rth.rank, rth."holderPubkey", rth.balance,
-                       COALESCE(up.total_points, 0) as total_points,
-                       COALESCE(up.robinhood_points, 0) as robinhood_points
+                SELECT rth.rank, rth."holderPubkey", rth.balance
                 FROM robinhood_token_holders rth
-                LEFT JOIN user_points up ON up.pubkey = rth."holderPubkey"
                 WHERE rth.mint = $1
                 ORDER BY rth.rank ASC
                 LIMIT 50
@@ -914,19 +922,18 @@ function init(deps) {
 
             const holders = rows.map(h => {
                 const balance = BigInt(h.balance || '0');
-                const expectedLamports = pendingLamports > 0n
-                    ? Number(pendingLamports * balance / TOTAL_SUPPLY)
-                    : 0;
-                const supplyPct = balance > 0n
-                    ? (Number(balance) / Number(TOTAL_SUPPLY) * 100).toFixed(4)
+                // Use tracked holder total as denominator — excludes LP and burnt supply
+                const supplyPct = totalTracked > 0n
+                    ? (Math.round(Number(balance * 1000000n / totalTracked)) / 10000).toFixed(4)
                     : '0.0000';
+                const expectedLamports = (distributable > 0n && totalTracked > 0n)
+                    ? Number(distributable * balance / totalTracked)
+                    : 0;
                 return {
                     rank: h.rank,
                     holderPubkey: h.holderPubkey,
                     balance: h.balance,
                     supplyPct,
-                    totalPoints: Math.round((h.total_points || 0) * 100) / 100,
-                    robinhoodPoints: Math.round((h.robinhood_points || 0) * 100) / 100,
                     expectedAirdropSol: (expectedLamports / LAMPORTS_PER_SOL).toFixed(6),
                     belowMinimum: expectedLamports > 0 && expectedLamports < MIN_RECIPIENT_LAMPORTS
                 };
@@ -2111,7 +2118,7 @@ function init(deps) {
                 topExpectedAirdrops: topAirdrops,
                 totalUsersWithAirdrop: allAirdrops.size,
                 userInfo,
-                calculationFormula: 'v26.0: expectedAirdrop = SUM over held tokens of (token.pending_airdrop_lamports * holderBalance / 1B_total_supply)',
+                calculationFormula: 'v26.3: expectedAirdrop = SUM over held tokens of (pending * 99% * holderBalance / totalTrackedHolderBalances). ASDF Top 100 get 2× weight.',
                 currency: 'SOL',
                 serverTime: new Date().toISOString()
             });

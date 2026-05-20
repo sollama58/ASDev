@@ -1685,7 +1685,7 @@
                     </div>
                     <h2 class="text-white text-2xl sm:text-3xl font-bold tracking-tight mb-2">Earn SOL by holding<br class="hidden sm:block"> tokens you already own.</h2>
                     <p class="text-gray-400 text-xs sm:text-sm leading-relaxed max-w-xl">
-                        ROBINHOOD collects trading fees from partner tokens on Pumpfun and redistributes them as automated SOL airdrops every 15 minutes. The more tokens you hold, the more points you earn — and the larger your share of each airdrop.
+                        ROBINHOOD collects trading fees from partner tokens on Pumpfun and redistributes them as automated SOL airdrops every 15 minutes. The more tokens you hold, the larger your share of each airdrop pool.
                     </p>
                 </div>
                 <div class="flex flex-col items-center justify-center rounded-2xl px-6 py-5 text-center flex-shrink-0 min-w-[140px]" style="background: rgba(109,40,217,0.1); border: 1px solid rgba(139,92,246,0.2);">
@@ -1727,14 +1727,14 @@
                     <div class="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-black font-mono flex-shrink-0" style="background: linear-gradient(135deg, #f59e0b, #d97706);">1</div>
                     <div>
                         <div class="text-white font-semibold text-xs mb-1">Hold Partner Tokens</div>
-                        <div class="text-gray-500 text-[11px] leading-relaxed">Buy and hold any token registered on the ROBINHOOD platform. Each token you hold earns you points proportional to your % of that token's total supply.</div>
+                        <div class="text-gray-500 text-[11px] leading-relaxed">Buy and hold any token registered on the ROBINHOOD platform. Each token you hold earns you a share of its SOL pool proportional to your % of tracked holder balances (LP and burnt tokens excluded).</div>
                     </div>
                 </div>
                 <div class="flex flex-col gap-2">
                     <div class="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-black font-mono flex-shrink-0" style="background: linear-gradient(135deg, #a855f7, #7c3aed);">2</div>
                     <div>
                         <div class="text-white font-semibold text-xs mb-1">Hold Tokens</div>
-                        <div class="text-gray-500 text-[11px] leading-relaxed">Your share of each token's airdrop is determined by your % of that token's total supply (1B tokens). Top 100 ASDF holders receive 2× weight in both leaderboard points and actual SOL airdrop distribution.</div>
+                        <div class="text-gray-500 text-[11px] leading-relaxed">Your share of each token's airdrop is determined by your % of tracked holder balances (LP and burnt tokens excluded). Top 100 ASDF holders receive 2× weight in SOL airdrop distribution.</div>
                     </div>
                 </div>
                 <div class="flex flex-col gap-2">
@@ -1747,35 +1747,35 @@
             </div>
         </div>
 
-        <!-- Points Breakdown -->
+        <!-- Distribution Mechanics -->
         <div class="panel mb-5 md:mb-6" style="background: linear-gradient(135deg, rgba(139,92,246,0.05) 0%, rgba(14,14,26,0.9) 100%); border-color: rgba(139,92,246,0.12);">
             <h3 class="text-purple-400 font-mono text-[11px] sm:text-xs uppercase tracking-widest mb-4 pb-3 flex items-center gap-2" style="border-bottom: 1px solid rgba(139,92,246,0.1);">
-                <i data-lucide="star" class="w-3.5 h-3.5"></i>Points System
+                <i data-lucide="zap" class="w-3.5 h-3.5"></i>Distribution Mechanics
             </h3>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
                 <div class="rounded-xl p-3" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(245,158,11,0.1);">
                     <div class="flex items-center gap-2 mb-2">
-                        <i data-lucide="coins" class="w-3.5 h-3.5 text-yellow-400"></i>
-                        <span class="text-yellow-400 font-mono text-[10px] uppercase tracking-wider font-semibold">Holder Points</span>
+                        <i data-lucide="percent" class="w-3.5 h-3.5 text-yellow-400"></i>
+                        <span class="text-yellow-400 font-mono text-[10px] uppercase tracking-wider font-semibold">Your Share Formula</span>
                     </div>
-                    <p class="text-gray-500 text-[11px] leading-relaxed">Earned by holding platform tokens. Each token contributes points weighted by its 24H trading volume relative to all other tokens. Higher volume = more points per token held.</p>
+                    <p class="text-gray-500 text-[11px] leading-relaxed">Your SOL = Pool × 99% × (Your Balance ÷ Total Tracked Holder Balances). LP wallets and burnt tokens are excluded from the denominator — only real holders count.</p>
                 </div>
                 <div class="rounded-xl p-3" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(16,185,129,0.1);">
                     <div class="flex items-center gap-2 mb-2">
-                        <i data-lucide="shield-check" class="w-3.5 h-3.5 text-green-400"></i>
-                        <span class="text-green-400 font-mono text-[10px] uppercase tracking-wider font-semibold">Robinhood Points</span>
+                        <i data-lucide="layers" class="w-3.5 h-3.5 text-green-400"></i>
+                        <span class="text-green-400 font-mono text-[10px] uppercase tracking-wider font-semibold">Independent Pools</span>
                     </div>
-                    <p class="text-gray-500 text-[11px] leading-relaxed">Earned by holding Robinhood partner tokens — tokens whose creators have registered and share trading fees into that token's own airdrop pool. These tokens boost your leaderboard points further.</p>
+                    <p class="text-gray-500 text-[11px] leading-relaxed">Each token has its own SOL pool funded by creator trading fees. Platform tokens and Robinhood partner tokens each have separate pools — hold both to earn from both simultaneously.</p>
                 </div>
                 <div class="rounded-xl p-3 sm:col-span-2" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(139,92,246,0.12);">
                     <div class="flex items-center gap-2 mb-2">
                         <i data-lucide="sparkles" class="w-3.5 h-3.5 text-purple-400"></i>
-                        <span class="text-purple-400 font-mono text-[10px] uppercase tracking-wider font-semibold">Multipliers &amp; Bonuses</span>
+                        <span class="text-purple-400 font-mono text-[10px] uppercase tracking-wider font-semibold">Bonuses</span>
                     </div>
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-gray-500">
-                        <div><span class="text-green-400 font-semibold">2× ASDF Boost</span> — Top 100 ASDF token holders receive 2× weight in SOL airdrop distribution and double leaderboard points.</div>
-                        <div><span class="text-fuchsia-400 font-semibold">Per-Token Pools</span> — Each token accumulates its own independent SOL pool from creator fees, distributed only to that token's holders (min 0.01 SOL per recipient).</div>
-                        <div><span class="text-orange-400 font-semibold">Automatic Distribution</span> — No manual claiming. Airdrops are sent to your wallet directly every cycle.</div>
+                        <div><span class="text-green-400 font-semibold">2× ASDF Boost</span> — Top 100 ASDF token holders receive 2× effective balance weight in every SOL distribution.</div>
+                        <div><span class="text-fuchsia-400 font-semibold">Per-Token Pools</span> — Each token's pool fires independently when it exceeds 0.05 SOL, so high-volume tokens pay out more frequently.</div>
+                        <div><span class="text-orange-400 font-semibold">Automatic</span> — No claiming required. SOL is sent directly to your wallet every cycle (min 0.01 SOL per recipient).</div>
                     </div>
                 </div>
             </div>
@@ -1818,7 +1818,7 @@
             <!-- Summary row: total points + expected airdrop -->
             <div class="grid grid-cols-2 gap-3 mb-4">
                 <div class="rounded-xl p-3 text-center" style="background: rgba(139,92,246,0.07); border: 1px solid rgba(139,92,246,0.14);">
-                    <div class="text-[9px] text-purple-400/60 uppercase tracking-widest font-semibold mb-1">Total Points</div>
+                    <div class="text-[9px] text-purple-400/60 uppercase tracking-widest font-semibold mb-1">Active Positions</div>
                     <div class="text-2xl sm:text-3xl text-white font-bold font-mono leading-none" id="user-total-points">0</div>
                     <div id="points-multiplier-badge" class="hidden mt-1.5 px-2 py-0.5 rounded text-[9px] text-green-300 font-bold tracking-wider inline-block" style="background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.25);">2× ASDF BOOST</div>
                 </div>
@@ -1843,14 +1843,13 @@
                         <thead>
                             <tr class="text-purple-400/60" style="border-bottom: 1px solid rgba(139,92,246,0.12);">
                                 <th class="py-1.5 pr-2 text-left font-normal">Token</th>
-                                <th class="py-1.5 pr-2 text-right font-normal" style="width:72px">Supply%</th>
-                                <th class="py-1.5 pr-2 text-right font-normal" style="width:72px">Points</th>
+                                <th class="py-1.5 pr-2 text-right font-normal" style="width:72px" title="Your share of tracked holders (excludes LP/burnt)">Your Share</th>
                                 <th class="py-1.5 pr-2 text-right font-normal" style="width:90px">Pool</th>
                                 <th class="py-1.5 text-right font-normal" style="width:96px">Expected</th>
                             </tr>
                         </thead>
                         <tbody id="user-holdings-airdrop">
-                            <tr><td colspan="5" class="text-center text-purple-400/30 py-5 font-mono text-[10px]">Connect wallet to see your holdings</td></tr>
+                            <tr><td colspan="4" class="text-center text-purple-400/30 py-5 font-mono text-[10px]">Connect wallet to see your holdings</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -2024,7 +2023,7 @@
                 </h3>
 
                 <div class="mb-4 p-3 rounded-xl text-xs text-green-300/70" style="background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.12);">
-                    Register any Pump.fun token that shares fees with Robinhood. Holders earn airdrop points.
+                    Register any Pump.fun token that shares fees with Robinhood. Holders earn SOL airdrops.
                     <span class="block mt-1 text-green-400/60"><strong>Req:</strong> Token creator must add our wallet as fee recipient on Pump.fun.</span>
                 </div>
 
@@ -2080,7 +2079,7 @@
                         <div class="w-8 h-8 rounded-lg flex items-center justify-center text-green-400 font-bold text-sm flex-shrink-0 font-mono" style="background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2);">3</div>
                         <div>
                             <h4 class="text-white font-semibold text-sm mb-0.5">Go Live</h4>
-                            <p class="text-green-200/50 text-xs leading-relaxed">Token appears on the leaderboard and holders start earning airdrop points immediately!</p>
+                            <p class="text-green-200/50 text-xs leading-relaxed">Token appears on the leaderboard and holders start earning SOL airdrops immediately!</p>
                         </div>
                     </div>
                 </div>
@@ -2089,7 +2088,7 @@
                     <h4 class="text-purple-400 font-semibold text-xs mb-2 flex items-center gap-1.5"><i data-lucide="star" class="w-3 h-3"></i>Benefits</h4>
                     <ul class="text-purple-200/60 text-[11px] space-y-1 leading-relaxed">
                         <li>• Leaderboard visibility</li>
-                        <li>• Top 250 holders earn airdrop points</li>
+                        <li>• Top 250 holders earn SOL airdrops</li>
                         <li>• Market data tracking (MCap, Volume)</li>
                         <li>• Creator fees build this token's own airdrop pool</li>
                     </ul>
@@ -2475,13 +2474,13 @@
 <!-- v25.0: Updated title to reflect all tokens (platform + robinhood) -->
 <div id="all-launches-modal" class="modal"><div class="modal-content"><span class="close-btn" onclick="closeAllLaunchesModal()">&times;</span><h3 class="text-orange-500 font-mono text-lg mb-4 uppercase tracking-widest border-b border-orange-900/50 pb-2 font-normal">All Tokens</h3><div id="modal-all-launches-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
-<div id="all-eligible-users-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAllEligibleUsersModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2 font-normal">Eligible Airdrop Users & Points</h3><div id="modal-all-eligible-users-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
+<div id="all-eligible-users-modal" class="modal"><div class="modal-content border-purple-600"><span class="close-btn" onclick="closeAllEligibleUsersModal()">&times;</span><h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2 font-normal">Eligible Airdrop Users</h3><div id="modal-all-eligible-users-content" class="max-h-[70vh] overflow-y-auto pr-2">Loading...</div></div></div>
 
 <!-- v18.0: User Holdings Breakdown Modal -->
 <div id="user-holdings-modal" class="modal">
     <div class="modal-content border-yellow-600" style="max-width: 700px;">
         <span class="close-btn" onclick="closeUserHoldingsModal()">&times;</span>
-        <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2 font-normal">Your Token Holdings & Points</h3>
+        <h3 class="text-yellow-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-yellow-800/50 pb-2 font-normal">Your Token Holdings & Expected SOL</h3>
         <div id="user-holdings-content" class="max-h-[65vh] overflow-y-auto pr-2">
             <div class="text-center text-yellow-400 p-4">Connect wallet to view holdings...</div>
         </div>
@@ -2505,22 +2504,22 @@
                 <p class="text-orange-400 text-xs uppercase mb-1">Timing</p>
                 <p class="text-xs text-gray-300">Fees collected every <span class="text-yellow-400">2.5 minutes</span> (>0.05 SOL). Airdrops distributed every <span class="text-yellow-400">15 minutes</span> — each token's pool fires independently when it exceeds 0.05 SOL. Minimum <span class="text-yellow-400">0.01 SOL per recipient</span>.</p>
             </div>
-            <p>Points are calculated based on your <span class="text-yellow-400">% of total token supply</span> in eligible tokens:</p>
+            <p>Your SOL share is calculated based on your <span class="text-yellow-400">% of tracked holder balances</span> in eligible tokens:</p>
             <ul class="list-disc list-inside ml-4 space-y-2 text-purple-300">
-                <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400">250 holders</span> of tokens with <span class="text-green-400">>$100 24hr volume</span> earn points.</li>
-                <li><span class="text-white">Supply-Based Points:</span> Points = <span class="text-cyan-400">(Your Balance / 1B Total Supply)</span> × 1000. All pump.fun tokens have 1 billion total supply.</li>
-                <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+Points</span> for holding partner tokens — same formula, stacks with platform holdings.</li>
+                <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400">250 holders</span> of tokens with <span class="text-green-400">>$100 24hr volume</span> receive airdrops.</li>
+                <li><span class="text-white">Your Share:</span> <span class="text-cyan-400">(Your Balance / Total Tracked Holder Balances)</span> — LP tokens and burnt supply are excluded from the denominator.</li>
+                <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+SOL</span> for holding partner tokens — same share formula, independent pool per token.</li>
                 <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400">2× SOL airdrop share</span> if you're a Top 100 $ASDF holder.</li>
             </ul>
             <div class="bg-cyan-900/30 p-3 rounded border border-cyan-700/50 mt-4">
-                <p class="text-cyan-400 text-xs uppercase mb-1">Point Formula (v26.2)</p>
-                <p class="text-xs text-gray-300">Points = (Your Balance / 1,000,000,000) × 1000</p>
-                <p class="text-xs text-gray-400 mt-1">Based on % of total supply. Fair and transparent — each token's SOL pool size reflects its trading activity.</p>
+                <p class="text-cyan-400 text-xs uppercase mb-1">Distribution Formula (v26.3)</p>
+                <p class="text-xs text-gray-300">Your SOL = Pool × 99% × <span class="text-cyan-400">(Your Balance / Sum of All Tracked Holder Balances)</span></p>
+                <p class="text-xs text-gray-400 mt-1">Denominator = only tracked holders — LP wallets and burnt tokens are excluded.</p>
             </div>
             <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mt-4">
                 <p class="text-yellow-400 text-xs uppercase mb-1">Example</p>
-                <p class="text-xs text-gray-300">If you hold 1% of total supply (10M tokens) = 10 points per token. Hold 3 eligible tokens = 30 points. ASDF Top 100 holders receive 2× the SOL per token.</p>
-                <p class="text-xs text-gray-400 mt-1">Higher-volume tokens generate larger SOL pools — more SOL per point, automatically.</p>
+                <p class="text-xs text-gray-300">Token pool = 1 SOL. Tracked holder total = 500M tokens. You hold 5M = 1% of tracked supply → you receive 0.0099 SOL. ASDF Top 100 holders receive 2× this amount.</p>
+                <p class="text-xs text-gray-400 mt-1">Higher-volume tokens accumulate larger pools — more SOL for the same ownership %.</p>
             </div>
         </div>
     </div>
@@ -2550,12 +2549,12 @@
 
             <!-- v25.36: Updated with supply-based points -->
             <div>
-                <h4 class="text-purple-400 mb-3 border-b border-purple-800 pb-1 font-normal">3. Supply-Based Points System</h4>
-                <p class="text-purple-200 mb-2">Points are based on your <span class="text-yellow-400">% of total token supply</span>. Each token's SOL pool grows with its trading fees — higher-volume tokens naturally reward more SOL.</p>
+                <h4 class="text-purple-400 mb-3 border-b border-purple-800 pb-1 font-normal">3. SOL Distribution System</h4>
+                <p class="text-purple-200 mb-2">Your SOL share is based on your <span class="text-yellow-400">% of tracked holders</span> — LP wallets and burnt supply are excluded, so your real ownership matters.</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
                     <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400">250 holders</span> of tokens with <span class="text-green-400">>$100 24hr volume</span>.</li>
-                    <li><span class="text-white">Supply-Based:</span> Points = <span class="text-cyan-400">(Your Balance / 1B Supply)</span> × 1000. All pump.fun tokens have 1B supply.</li>
-                    <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+Points</span> for holding partner tokens — same formula, stacks with platform holdings.</li>
+                    <li><span class="text-white">Your Share:</span> <span class="text-cyan-400">(Your Balance / Sum of All Tracked Holder Balances)</span> — not diluted by LP or burnt tokens.</li>
+                    <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+SOL</span> for holding partner tokens — same formula, each token's pool is independent.</li>
                     <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400">2× SOL airdrop share</span> for Top 100 $ASDF holders in every distribution.</li>
                 </ul>
                 <div class="bg-purple-900/20 p-3 rounded border border-purple-700/30 mt-4">
@@ -2583,7 +2582,7 @@
     <div class="modal-content border-green-600" style="max-width: 800px;">
         <span class="close-btn text-green-400" onclick="closeRobinhoodModal()">&times;</span>
         <h3 class="text-green-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-green-800/50 pb-2 font-normal">Robinhood Partner Tokens</h3>
-        <p class="text-xs text-green-300/70 mb-4 font-mono">External PumpFun tokens that share creator fees with us. Hold these to earn bonus airdrop points.</p>
+        <p class="text-xs text-green-300/70 mb-4 font-mono">External PumpFun tokens that share creator fees with us. Hold these to earn bonus SOL airdrops.</p>
         <div id="robinhood-tokens-list" class="max-h-[60vh] overflow-y-auto pr-2">
             <div class="text-center text-green-400/50 py-8 font-mono text-sm">Loading partner tokens...</div>
         </div>
@@ -2618,7 +2617,7 @@
                     <li><span class="text-white">Set up fee sharing on PumpFun:</span> Go to your Creator Dashboard and add Robinhood's wallet as a fee recipient</li>
                     <li><span class="text-white">Register your token:</span> Use the <span class="text-green-400">"Register Token"</span> button on our platform to submit your token's mint address</li>
                     <li><span class="text-white">Verification:</span> Our system verifies that fee sharing is properly configured</li>
-                    <li><span class="text-white">Activation:</span> Once verified, your token is added and holders start earning points</li>
+                    <li><span class="text-white">Activation:</span> Once verified, your token is added and holders start earning SOL airdrops</li>
                 </ol>
                 <p class="text-yellow-300/70 text-xs mt-3 italic">Note: Manual registration is required - tokens are not automatically detected.</p>
             </div>
@@ -2626,10 +2625,10 @@
             <div>
                 <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">Benefits for Holders</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
-                    <li><span class="text-white">Top 250 Holders</span> earn points based on % of total supply (1B tokens)</li>
-                    <li>Points = <span class="text-cyan-400">(Your Balance / 1B Supply)</span> × 1000 — same formula as platform tokens</li>
-                    <li>Points stack with platform token holdings for maximum earnings</li>
-                    <li>SOL airdrops distributed from each token's independent pool proportional to supply %</li>
+                    <li><span class="text-white">Top 250 Holders</span> receive SOL from each token's independent pool</li>
+                    <li>Your share = <span class="text-cyan-400">(Your Balance / Total Tracked Holder Balances)</span> — LP/burnt excluded</li>
+                    <li>Airdrops stack with platform token holdings — hold both to earn from both pools</li>
+                    <li>SOL is sent directly to your wallet; no claiming required</li>
                 </ul>
             </div>
 
@@ -2644,21 +2643,16 @@
             </div>
 
             <div class="bg-cyan-900/30 p-3 rounded border border-cyan-700/50 mt-4">
-                <p class="text-cyan-400 text-xs uppercase mb-1">Points Formula (v26.2)</p>
-                <p class="text-xs text-gray-300">Points = <span class="text-cyan-400">(Your Balance / 1B Total Supply)</span> × 1000</p>
+                <p class="text-cyan-400 text-xs uppercase mb-1">Distribution Formula (v26.3)</p>
+                <p class="text-xs text-gray-300">Your SOL = Pool × 99% × <span class="text-cyan-400">(Your Balance / Total Tracked Holder Balances)</span></p>
                 <p class="text-xs text-gray-400 mt-1">Identical formula for platform and partner (Robinhood) tokens</p>
-                <p class="text-xs text-gray-400 mt-1">All pump.fun tokens have a fixed 1 billion total supply</p>
+                <p class="text-xs text-gray-400 mt-1">LP wallets and burnt tokens are excluded from the denominator</p>
             </div>
 
             <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 mt-4">
-                <p class="text-purple-400 text-xs uppercase mb-1">Total Points (Combined)</p>
-                <p class="text-xs text-gray-300">(Platform Points + <span class="text-green-400">Robinhood Points</span>) × ASDF Multiplier</p>
-                <p class="text-xs text-gray-400 mt-1">ASDF Multiplier: 2× airdrop weight + 2× points for Top 100 $ASDF holders</p>
-            </div>
-
-            <div class="bg-orange-900/30 p-3 rounded border border-orange-700/50 mt-4">
-                <p class="text-orange-400 text-xs uppercase mb-1">Minimum Requirements</p>
-                <p class="text-xs text-gray-300">Token must have <span class="text-yellow-400">>$100 24hr volume</span> for holders to earn points</p>
+                <p class="text-purple-400 text-xs uppercase mb-1">ASDF Bonus</p>
+                <p class="text-xs text-gray-300">Top 100 <span class="text-purple-400">$ASDF</span> holders receive <span class="text-white font-semibold">2× weight</span> in SOL airdrop distribution</p>
+                <p class="text-xs text-gray-400 mt-1">Applies to both platform and partner (Robinhood) tokens</p>
             </div>
         </div>
     </div>
@@ -2779,20 +2773,20 @@
                 <p class="text-xs text-gray-300">Every token launched through our platform is protected by anti-bundling technology. Before your token goes live, the system deploys a random number of decoy tokens to obscure your real launch from snipers and bundlers, ensuring a fair start for your community.</p>
             </div>
 
-            <!-- Earning Points -->
+            <!-- Earning SOL Airdrops -->
             <div class="bg-yellow-900/30 p-4 rounded border border-yellow-700/50">
-                <p class="text-yellow-400 text-xs uppercase mb-2 font-bold">How to Earn Points</p>
+                <p class="text-yellow-400 text-xs uppercase mb-2 font-bold">How to Earn SOL Airdrops</p>
                 <ul class="text-xs text-gray-300 space-y-1.5">
-                    <li class="flex items-start gap-2"><span class="text-yellow-400">•</span><span><span class="text-white font-medium">Hold tokens</span> - Be in top 250 holders of tokens with >$100 daily volume</span></li>
+                    <li class="flex items-start gap-2"><span class="text-yellow-400">•</span><span><span class="text-white font-medium">Hold tokens</span> - Be in top 250 holders; your share = your balance ÷ total tracked balances</span></li>
                     <li class="flex items-start gap-2"><span class="text-green-400">•</span><span><span class="text-white font-medium">Robinhood partners</span> - Hold external tokens that share fees with us</span></li>
-                    <li class="flex items-start gap-2"><span class="text-purple-400">•</span><span><span class="text-white font-medium">ASDF multiplier</span> - Top 100 $ASDF holders get 2× SOL airdrop weight + 2× points</span></li>
+                    <li class="flex items-start gap-2"><span class="text-purple-400">•</span><span><span class="text-white font-medium">ASDF multiplier</span> - Top 100 $ASDF holders get 2× weight in SOL airdrop distribution</span></li>
                 </ul>
             </div>
 
             <!-- Token Registration -->
             <div class="bg-blue-900/30 p-4 rounded border border-blue-700/50">
                 <p class="text-blue-400 text-xs uppercase mb-2 font-bold">Robinhood Bot - Share Fees from Existing Tokens</p>
-                <p class="text-xs text-gray-300 mb-2">Have a Pump.fun token? Share creator fees with Robinhood and your holders earn airdrop points!</p>
+                <p class="text-xs text-gray-300 mb-2">Have a Pump.fun token? Share creator fees with Robinhood and your holders earn SOL airdrops!</p>
                 <ol class="text-xs text-gray-400 space-y-1 list-decimal list-inside">
                     <li>Go to Pump.fun Creator Dashboard</li>
                     <li>Add our wallet as a fee recipient</li>
@@ -2833,7 +2827,7 @@
             <!-- Quick Links -->
             <div class="flex flex-wrap gap-2 pt-2 border-t border-gray-800">
                 <button onclick="closeMainAboutModal(); toggleAboutModal();" class="text-xs text-orange-400 hover:text-white border border-orange-800 hover:bg-orange-900/50 px-3 py-1.5 rounded transition">Fee Mechanics</button>
-                <button onclick="closeMainAboutModal(); toggleAirdropInfoModal();" class="text-xs text-purple-400 hover:text-white border border-purple-800 hover:bg-purple-900/50 px-3 py-1.5 rounded transition">Points System</button>
+                <button onclick="closeMainAboutModal(); toggleAirdropInfoModal();" class="text-xs text-purple-400 hover:text-white border border-purple-800 hover:bg-purple-900/50 px-3 py-1.5 rounded transition">Distribution Info</button>
                 <button onclick="closeMainAboutModal(); toggleRobinhoodInfoModal();" class="text-xs text-green-400 hover:text-white border border-green-800 hover:bg-green-900/50 px-3 py-1.5 rounded transition">Robinhood Partners</button>
             </div>
         </div>
@@ -3829,14 +3823,12 @@
             html += `<thead><tr class="text-orange-500 border-b border-orange-800/50">
                 <th class="py-1.5 pr-2" style="width:32px">#</th>
                 <th class="py-1.5 pr-2">Wallet</th>
-                <th class="py-1.5 pr-2 text-right" style="width:72px">Supply%</th>
-                <th class="py-1.5 pr-2 text-right" style="width:72px">Points</th>
+                <th class="py-1.5 pr-2 text-right" style="width:72px" title="Share of tracked holders (LP/burnt excluded)">Share</th>
                 <th class="py-1.5 text-right" style="width:100px">Expected</th>
             </tr></thead><tbody>`;
 
             holders.forEach(h => {
                 const shortWallet = escapeHtml(h.holderPubkey?.slice(0, 6) || '??????');
-                const pts = (h.totalPoints || 0).toFixed(1);
                 const pct = h.supplyPct || '0.0000';
                 const airdrop = parseFloat(h.expectedAirdropSol || 0);
                 let airdropCell;
@@ -3850,8 +3842,7 @@
                 html += `<tr class="border-b border-orange-900/20 hover:bg-orange-900/10">
                     <td class="py-1 pr-2 text-orange-400 font-bold">${parseInt(h.rank) || 0}</td>
                     <td class="py-1 pr-2 text-gray-300">${shortWallet}…</td>
-                    <td class="py-1 pr-2 text-right text-gray-400">${pct}%</td>
-                    <td class="py-1 pr-2 text-right text-yellow-400">${pts}</td>
+                    <td class="py-1 pr-2 text-right text-cyan-400">${pct}%</td>
                     <td class="py-1 text-right">${airdropCell} <span class="text-gray-600">SOL</span></td>
                 </tr>`;
             });
@@ -3899,7 +3890,7 @@
     const checkAsdfStatus = async () => {
         const holdingsBody = document.getElementById('user-holdings-airdrop');
         if (!userPubkey) {
-            if (holdingsBody) holdingsBody.innerHTML = '<tr><td colspan="5" class="text-center text-purple-400/30 py-5 font-mono text-[10px]">Connect wallet to see your holdings</td></tr>';
+            if (holdingsBody) holdingsBody.innerHTML = '<tr><td colspan="4" class="text-center text-purple-400/30 py-5 font-mono text-[10px]">Connect wallet to see your holdings</td></tr>';
             ui.userTotalPoints.innerText = '0';
             ui.pointsMultiplierBadge.classList.add('hidden');
             currentUserPoints = 0;
@@ -3907,7 +3898,7 @@
             return;
         }
 
-        if (holdingsBody) holdingsBody.innerHTML = '<tr><td colspan="5" class="text-center text-purple-400/40 py-5 font-mono text-[10px]">Loading...</td></tr>';
+        if (holdingsBody) holdingsBody.innerHTML = '<tr><td colspan="4" class="text-center text-purple-400/40 py-5 font-mono text-[10px]">Loading...</td></tr>';
 
         try {
             // Fetch aggregate totals + per-token breakdown in parallel
@@ -3919,8 +3910,9 @@
             const data = await checkRes.json();
             const holdingsData = holdingsRes.ok ? await holdingsRes.json() : { holdings: [] };
 
-            currentUserPoints = data.points || 0;
-            ui.userTotalPoints.innerText = currentUserPoints.toFixed(2);
+            const positionsCount = data.heldPositionsCount || 0;
+            currentUserPoints = positionsCount;
+            ui.userTotalPoints.innerText = positionsCount;
             updateExpectedAirdropDisplay(data.expectedAirdrop, data.belowMinimum);
 
             if (data.isAsdfTop50) {
@@ -3934,19 +3926,15 @@
             if (!holdingsBody) return;
 
             if (holdings.length === 0) {
-                holdingsBody.innerHTML = '<tr><td colspan="5" class="text-center text-purple-400/30 py-5 font-mono text-[10px]">No eligible token holdings found</td></tr>';
+                holdingsBody.innerHTML = '<tr><td colspan="4" class="text-center text-purple-400/30 py-5 font-mono text-[10px]">No eligible token holdings found</td></tr>';
                 return;
             }
 
             const MIN_AIRDROP = 0.01;
-            const safeBalancePct = (bal) => {
-                try { return (Number(BigInt(String(bal || '0').replace(/\D/g, '') || '0')) / 1e15 * 100).toFixed(4); }
-                catch { return '0.0000'; }
-            };
             let rows = '';
             for (const h of holdings) {
                 const img = resolveTokenImage(h.image);
-                const pts = (h.totalPoints || 0).toFixed(2);
+                const sharePct = (h.ownershipPct != null ? h.ownershipPct : 0).toFixed(4);
                 const pool = parseFloat(h.pendingAirdropSol || 0);
                 const exp = parseFloat(h.expectedAirdropSol || 0);
                 const poolCell = pool > 0
@@ -3970,8 +3958,7 @@
                             </div>
                         </div>
                     </td>
-                    <td class="py-1.5 pr-2 text-right text-gray-300 font-mono">${safeBalancePct(h.balance)}%</td>
-                    <td class="py-1.5 pr-2 text-right text-yellow-400 font-mono font-bold">${pts}</td>
+                    <td class="py-1.5 pr-2 text-right text-cyan-400 font-mono">${sharePct}%</td>
                     <td class="py-1.5 pr-2 text-right font-mono">${poolCell} <span class="text-gray-500 text-[9px]">SOL</span></td>
                     <td class="py-1.5 text-right font-mono">${expCell} <span class="text-gray-500 text-[9px]">SOL</span></td>
                 </tr>`;
@@ -3980,7 +3967,7 @@
 
         } catch (e) {
             console.error("Status check error", e);
-            if (holdingsBody) holdingsBody.innerHTML = '<tr><td colspan="5" class="text-center text-red-400/60 py-5 font-mono text-[10px]">Failed to load holdings</td></tr>';
+            if (holdingsBody) holdingsBody.innerHTML = '<tr><td colspan="4" class="text-center text-red-400/60 py-5 font-mono text-[10px]">Failed to load holdings</td></tr>';
             updateExpectedAirdropDisplay(0);
         }
     };
@@ -4493,7 +4480,7 @@
                 const data = await res.json();
                 const users = data.users || [];
                 if (users.length === 0) {
-                    ui.modalAllEligibleUsersContent.innerHTML = '<div class="text-center text-gray-500 p-4">No users currently qualify for the airdrop (0 global points).</div>';
+                    ui.modalAllEligibleUsersContent.innerHTML = '<div class="text-center text-gray-500 p-4">No users currently have pending airdrop amounts.</div>';
                     return;
                 }
                 // v18.0: Show eligibility threshold info
@@ -4502,7 +4489,7 @@
                     : '';
                 const tableHTML = `
                     <div class="text-purple-300 text-xs mb-3">
-                        <span class="text-white">${data.totalPoints.toLocaleString(undefined, {maximumFractionDigits: 0})}</span> pts ·
+                        <span class="text-white">${(data.totalPendingSol || 0).toFixed(4)}</span> SOL pending ·
                         <span class="text-white">${users.length}</span> users
                     </div>
                     ${thresholdInfo}
@@ -4513,12 +4500,11 @@
                                 <th style="color:#a855f7">Wallet</th>
                                 <th style="width:50px;color:#a855f7" class="text-right">Tkns</th>
                                 <th style="width:45px;color:#a855f7" class="text-right">Mult</th>
-                                <th style="width:70px;color:#a855f7" class="text-right">Points</th>
-                                <th style="width:75px;color:#a855f7" class="text-right">Est SOL</th>
+                                <th style="width:85px;color:#a855f7" class="text-right">Est SOL</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${users.sort((a, b) => b.points - a.points).map((user, index) => {
+                            ${users.map((user, index) => {
                                 const mult = user.isAsdfTop50 ? '<span class="text-green-400">2x</span>' : '<span class="text-gray-500">1x</span>';
                                 return `
                                 <tr>
@@ -4526,7 +4512,6 @@
                                     <td class="text-white">${escapeHtml(user.pubkey?.slice(0, 6) || '?????')}...</td>
                                     <td class="text-right">${user.positions}</td>
                                     <td class="text-right">${mult}</td>
-                                    <td class="text-right text-yellow-400">${user.points.toFixed(1)}</td>
                                     <td class="text-right text-green-400">${parseFloat(user.expectedAirdrop).toFixed(4)}</td>
                                 </tr>
                                 `;
@@ -4577,7 +4562,7 @@
                 ui.userHoldingsContent.innerHTML = `
                     <div class="text-center text-gray-400 p-4">
                         <p class="mb-2">You don't hold any tokens on the leaderboard yet.</p>
-                        <p class="text-xs">Buy tokens from the leaderboard to start earning points!</p>
+                        <p class="text-xs">Buy tokens from the leaderboard to start earning SOL airdrops!</p>
                     </div>
                 `;
                 return;
@@ -4599,8 +4584,8 @@
                             <div class="text-[10px] text-green-400 uppercase no-break">Eligible</div>
                         </div>
                         <div>
-                            <div class="text-2xl font-bold text-yellow-400 num-value">${data.totalPoints.toFixed(2)}</div>
-                            <div class="text-[10px] text-yellow-400 uppercase no-break">Total&nbsp;Pts</div>
+                            <div class="text-2xl font-bold text-green-400 num-value">${holdings.reduce((s, h) => s + parseFloat(h.expectedAirdropSol || 0), 0).toFixed(4)}</div>
+                            <div class="text-[10px] text-green-400 uppercase no-break">Est&nbsp;SOL</div>
                         </div>
                     </div>
                     <p class="text-[10px] text-yellow-400/60 mt-2 text-center">Tokens need >${data.eligibilityThreshold}&nbsp;USD 24hr volume to be eligible</p>
@@ -4612,7 +4597,8 @@
                             <th style="color:#eab308">Token</th>
                             <th style="width:45px;color:#eab308" class="text-right">Rank</th>
                             <th style="width:85px;color:#eab308" class="text-right">Vol 24H</th>
-                            <th style="width:60px;color:#eab308" class="text-right">Pts</th>
+                            <th style="width:70px;color:#eab308" class="text-right">Your Share</th>
+                            <th style="width:80px;color:#eab308" class="text-right">Est SOL</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -4620,8 +4606,12 @@
 
             for (const h of holdings) {
                 const imgSrc = resolveTokenImage(h.image);
-                const pts = h.isEligible ? `<span class="text-yellow-400">${h.basePoints.toFixed(2)}</span>` : '<span class="text-gray-600">-</span>';
                 const rhBadge = h.source === 'robinhood' ? '<span class="text-[9px] text-green-400 ml-1 font-medium">RH</span>' : '';
+                const sharePct = h.isEligible ? `<span class="text-cyan-400">${(h.ownershipPct || 0).toFixed(4)}%</span>` : '<span class="text-gray-600">-</span>';
+                const exp = parseFloat(h.expectedAirdropSol || 0);
+                const expCell = exp > 0
+                    ? `<span class="text-green-400">${exp.toFixed(5)}</span>`
+                    : '<span class="text-gray-600">-</span>';
 
                 html += `
                     <tr>
@@ -4636,7 +4626,8 @@
                         </td>
                         <td class="text-right text-orange-400">#${h.rank}</td>
                         <td class="text-right">$${(h.volume24h || 0).toLocaleString()}</td>
-                        <td class="text-right">${pts}</td>
+                        <td class="text-right">${sharePct}</td>
+                        <td class="text-right">${expCell}</td>
                     </tr>
                 `;
             }
@@ -4646,8 +4637,8 @@
             html += `
                 <div class="mt-4 p-3 bg-purple-900/20 rounded border border-purple-700/30">
                     <p class="text-[10px] text-purple-300 uppercase mb-1">Note</p>
-                    <p class="text-xs text-gray-400 mb-1">Points = (Your Balance / 1B Total Supply) × 1000. Each token's SOL pool grows independently from its trading fees.</p>
-                    <p class="text-xs text-gray-400">If you're a Top 100 ASDF holder, you receive 2× weight in SOL airdrop distribution!</p>
+                    <p class="text-xs text-gray-400 mb-1">Your Share = your balance ÷ total tracked holder balances (LP and burnt tokens excluded).</p>
+                    <p class="text-xs text-gray-400">Top 100 ASDF holders receive 2× weight in SOL distribution.</p>
                 </div>
             `;
 
@@ -5311,7 +5302,7 @@
                     <i data-lucide="check-circle" width="16"></i>
                     ${isDirectCreator ? 'Direct Creator' : 'Fee Shareholder'} - ${feeSharePercent}% Fee Share
                 </div>
-                <p class="text-xs text-green-400 mt-2">Verified via ${sourceLabel}${!isDirectCreator ? ` | Points scaled to ${feeSharePercent}%` : ''}</p>
+                <p class="text-xs text-green-400 mt-2">Verified via ${sourceLabel}${!isDirectCreator ? ` | Fee share: ${feeSharePercent}%` : ''}</p>
             `;
             verificationStatus.classList.remove('hidden');
 
@@ -5441,7 +5432,7 @@
                                 <div class="text-white font-mono">${sourceLabel}</div>
                             </div>
                         </div>
-                        ${feeShare < 100 ? `<p class="text-xs text-yellow-400/80 mt-3"><i data-lucide="info" class="w-3 h-3 inline mr-1"></i>Points earned by holders are scaled to ${feeShare}% of full value.</p>` : ''}
+                        ${feeShare < 100 ? `<p class="text-xs text-yellow-400/80 mt-3"><i data-lucide="info" class="w-3 h-3 inline mr-1"></i>SOL airdrops for holders are scaled to ${feeShare}% of full value.</p>` : ''}
                     </div>
                 `;
             } else if (data.isEligible) {
@@ -5457,7 +5448,7 @@
                             <span class="text-yellow-400 font-bold font-mono uppercase text-sm">Eligible but Not Registered</span>
                         </div>
                         <p class="text-yellow-200/80 text-sm mb-3">This token shares ${feeShare}% fees with Robinhood (via ${sourceLabel}) but has not been registered yet.</p>
-                        <p class="text-xs text-gray-400">Use the registration form below to register this token and enable airdrop points for holders.</p>
+                        <p class="text-xs text-gray-400">Use the registration form below to register this token and enable SOL airdrops for holders.</p>
                     </div>
                 `;
             } else {
