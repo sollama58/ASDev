@@ -794,18 +794,18 @@ async function processCentralPoolAirdrop(deps) {
 
     // Build user score map: pubkey -> sum of (balance/TOTAL_SUPPLY) * (vol/totalVol)
     // This score represents volume-weighted ownership across all eligible tokens
+    const N = allEligible.length;
     const userScores = new Map();
     for (const h of [...platformHolders, ...robinhoodHolders]) {
         const vol = volByMint.get(h.mint) || 0;
-        if (vol === 0) continue;
         const balance = BigInt(h.balance || '0');
         if (balance === BigInt(0)) continue;
-        // Use integer arithmetic then divide to preserve precision
-        // score contribution = (balance / TOTAL_SUPPLY) * (vol / totalVol)
-        //                    = balance * vol / (TOTAL_SUPPLY * totalVol)
-        const volRatio = vol / totalVol; // floating point is fine at this scale
+        // ±50% volume scaling: equal-weight baseline with volume as a modifier.
+        // At avg vol (1/N share) → 1.0×; at 0 vol → 0.5×; at 2× avg → 1.5× (capped).
+        const volRatio = vol / totalVol;
+        const volMultiplier = Math.min(1.5, Math.max(0.5, 0.5 + volRatio * N * 0.5));
         const balanceRatio = Number(balance * BigInt(1e9) / PUMP_FUN_TOTAL_SUPPLY_BIG) / 1e9;
-        const contribution = balanceRatio * volRatio;
+        const contribution = balanceRatio * volMultiplier;
         if (contribution > 0) {
             userScores.set(h.holderPubkey, (userScores.get(h.holderPubkey) || 0) + contribution);
         }

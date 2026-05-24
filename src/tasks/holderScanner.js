@@ -667,15 +667,17 @@ async function updateGlobalState(deps) {
                     ]);
 
                     // Build volume-weighted score per user
+                    const cpN = cpAllEligible.length;
                     const cpUserScores = new Map();
                     for (const h of [...cpPlatformHolders, ...cpRobinhoodHolders]) {
                         const vol = cpVolByMint.get(h.mint) || 0;
-                        if (vol === 0) continue;
                         const balance = BigInt(h.balance || '0');
                         if (balance === BigInt(0)) continue;
                         const PUMP_SUPPLY = BigInt('1000000000000000');
+                        // ±50% volume scaling matching central pool distribution formula
+                        const volMultiplier = Math.min(1.5, Math.max(0.5, 0.5 + (vol / cpTotalVol) * cpN * 0.5));
                         const balanceRatio = Number(balance * BigInt(1e9) / PUMP_SUPPLY) / 1e9;
-                        const contribution = balanceRatio * (vol / cpTotalVol);
+                        const contribution = balanceRatio * volMultiplier;
                         if (contribution > 0) {
                             cpUserScores.set(h.holderPubkey, (cpUserScores.get(h.holderPubkey) || 0) + contribution);
                         }
