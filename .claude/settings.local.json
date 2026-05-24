@@ -32,7 +32,14 @@
       "Bash(xargs grep:*)",
       "Bash(grep -l \"ASDF\\\\|isAsdfTop100\\\\|multiplier\" src/**/*.js)",
       "Bash(grep -n \"robinhood_tokens\\\\|robinhood_token_holders\" src/tasks/*.js)",
-      "Bash(find /c/VS/IGNITION/ASDev -type f \\\\\\(-name *.sql -o -name *postgres* -o -name *schema* -o -name *init* \\\\\\))"
+      "Bash(find /c/VS/IGNITION/ASDev -type f \\\\\\(-name *.sql -o -name *postgres* -o -name *schema* -o -name *init* \\\\\\))",
+      "PowerShell(node --check src/tasks/flywheel.js 2>&1)",
+      "PowerShell(node --check src/tasks/holderScanner.js 2>&1)",
+      "PowerShell(node --check src/services/postgres.js 2>&1)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\VSCode\\\\ASDev\" -Recurse -Directory -ErrorAction SilentlyContinue | Select-Object -First 30 FullName | ForEach-Object { $_.FullName })",
+      "PowerShell(head -30)",
+      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\tasks\\\\flywheel.js\")",
+      "PowerShell(if \\($?\\) { \"OK\" } else { \"SYNTAX ERROR\" })"
     ]
   }
 }

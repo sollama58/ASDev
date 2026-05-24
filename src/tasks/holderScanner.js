@@ -633,6 +633,73 @@ async function updateGlobalState(deps) {
             globalState.availableSolForAirdrop = 0;
         }
 
+        // v27.0: Add each user's expected share from the central pool, tracked separately for UI breakdown
+        const centralPoolExpectedMap = new Map(); // pubkey -> central pool expected SOL
+        try {
+            const centralPoolRow = await db.get("SELECT value FROM stats WHERE key = 'centralPoolLamports'");
+            const centralPoolLamports = Number(centralPoolRow?.value || 0);
+
+            if (centralPoolLamports > 0) {
+                // Fetch all eligible tokens (platform + robinhood) with volume
+                const cpPlatform = await db.all(
+                    'SELECT mint, volume24h FROM tokens WHERE volume24h >= $1',
+                    [MIN_VOLUME_USD]
+                );
+                const cpRobinhood = await db.all(
+                    'SELECT mint, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
+                    [MIN_VOLUME_USD]
+                );
+                const cpAllEligible = [...cpPlatform, ...cpRobinhood];
+                const cpTotalVol = cpAllEligible.reduce((s, t) => s + (parseFloat(t.volume24h) || 0), 0);
+
+                if (cpTotalVol > 0 && cpAllEligible.length > 0) {
+                    const cpVolByMint = new Map(cpAllEligible.map(t => [t.mint, parseFloat(t.volume24h) || 0]));
+                    const cpPlatformMints = cpPlatform.map(t => t.mint).filter(Boolean);
+                    const cpRobinhoodMints = cpRobinhood.map(t => t.mint).filter(Boolean);
+
+                    const [cpPlatformHolders, cpRobinhoodHolders] = await Promise.all([
+                        cpPlatformMints.length > 0
+                            ? db.all('SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)', [cpPlatformMints])
+                            : [],
+                        cpRobinhoodMints.length > 0
+                            ? db.all('SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1)', [cpRobinhoodMints])
+                            : []
+                    ]);
+
+                    // Build volume-weighted score per user
+                    const cpUserScores = new Map();
+                    for (const h of [...cpPlatformHolders, ...cpRobinhoodHolders]) {
+                        const vol = cpVolByMint.get(h.mint) || 0;
+                        if (vol === 0) continue;
+                        const balance = BigInt(h.balance || '0');
+                        if (balance === BigInt(0)) continue;
+                        const PUMP_SUPPLY = BigInt('1000000000000000');
+                        const balanceRatio = Number(balance * BigInt(1e9) / PUMP_SUPPLY) / 1e9;
+                        const contribution = balanceRatio * (vol / cpTotalVol);
+                        if (contribution > 0) {
+                            cpUserScores.set(h.holderPubkey, (cpUserScores.get(h.holderPubkey) || 0) + contribution);
+                        }
+                    }
+
+                    const cpTotalScore = Array.from(cpUserScores.values()).reduce((s, v) => s + v, 0);
+                    if (cpTotalScore > 0) {
+                        const cpDistributable = centralPoolLamports * 0.99;
+                        for (const [pubkey, score] of cpUserScores.entries()) {
+                            if (pubkey === devKeypair.publicKey.toString()) continue;
+                            const expectedCentralSol = (cpDistributable * score / cpTotalScore) / LAMPORTS_PER_SOL;
+                            centralPoolExpectedMap.set(pubkey, expectedCentralSol);
+                            const prev = userExpectedAirdropMap.get(pubkey) || 0;
+                            userExpectedAirdropMap.set(pubkey, prev + expectedCentralSol);
+                        }
+                        globalState.availableSolForAirdrop += centralPoolLamports / LAMPORTS_PER_SOL;
+                        logger.info(`[HolderScanner] Central pool expected airdrops: ${cpUserScores.size} users, pending: ${(centralPoolLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+                    }
+                }
+            }
+        } catch (cpErr) {
+            logger.error('[HolderScanner] Failed to compute central pool expected airdrops', { error: cpErr.message });
+        }
+
         // Update expected airdrops and points map
         globalState.userExpectedAirdrops.clear();
         globalState.userPointsMap.clear();
@@ -661,6 +728,7 @@ async function updateGlobalState(deps) {
                     multiplier,
                     totalPoints: points,
                     expectedAirdropSol: expected,
+                    centralPoolExpectedSol: centralPoolExpectedMap.get(pubkey) || 0,
                     positionsCount: data.positionsCount || 0,
                     isAsdfHolder: isAsdfTop100
                 });
@@ -679,6 +747,7 @@ async function updateGlobalState(deps) {
                     multiplier: 1,
                     totalPoints: 0,
                     expectedAirdropSol: expected,
+                    centralPoolExpectedSol: centralPoolExpectedMap.get(pubkey) || 0,
                     positionsCount: 0,
                     isAsdfHolder: false
                 });
@@ -706,21 +775,23 @@ async function updateGlobalState(deps) {
             for (let i = 0; i < userPointsData.length; i += BATCH_SIZE) {
                 const batch = userPointsData.slice(i, i + BATCH_SIZE);
                 const values = batch.map((_, idx) => {
-                    const base = idx * 9;
-                    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`;
+                    const base = idx * 10;
+                    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
                 }).join(', ');
                 const params = batch.flatMap(u => [
                     u.pubkey, u.basePoints, u.robinhoodPoints, u.multiplier,
-                    u.totalPoints, u.expectedAirdropSol, u.positionsCount, u.isAsdfHolder, now
+                    u.totalPoints, u.expectedAirdropSol, u.positionsCount, u.isAsdfHolder, now,
+                    u.centralPoolExpectedSol || 0
                 ]);
                 await db.run(`
-                    INSERT INTO user_points (pubkey, base_points, robinhood_points, multiplier, total_points, expected_airdrop_sol, positions_count, is_asdf_holder, updated_at)
+                    INSERT INTO user_points (pubkey, base_points, robinhood_points, multiplier, total_points, expected_airdrop_sol, positions_count, is_asdf_holder, updated_at, central_pool_expected_sol)
                     VALUES ${values}
                     ON CONFLICT (pubkey) DO UPDATE SET
                         base_points = EXCLUDED.base_points, robinhood_points = EXCLUDED.robinhood_points,
                         multiplier = EXCLUDED.multiplier, total_points = EXCLUDED.total_points,
                         expected_airdrop_sol = EXCLUDED.expected_airdrop_sol, positions_count = EXCLUDED.positions_count,
-                        is_asdf_holder = EXCLUDED.is_asdf_holder, updated_at = EXCLUDED.updated_at
+                        is_asdf_holder = EXCLUDED.is_asdf_holder, updated_at = EXCLUDED.updated_at,
+                        central_pool_expected_sol = EXCLUDED.central_pool_expected_sol
                 `, params);
             }
             // Delete genuinely stale rows (holders who weren't updated in this scan) AFTER fresh data is written

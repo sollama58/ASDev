@@ -498,6 +498,7 @@ function init(deps) {
                     multiplier,
                     total_points,
                     expected_airdrop_sol,
+                    COALESCE(central_pool_expected_sol, 0) as central_pool_expected_sol,
                     positions_count,
                     is_asdf_holder
                 FROM user_points
@@ -530,6 +531,8 @@ function init(deps) {
 
             // Return data from user_points table
             const expectedAirdrop = userPoints.expected_airdrop_sol || 0;
+            const centralPoolExpected = userPoints.central_pool_expected_sol || 0;
+            const perTokenExpected = Math.max(0, expectedAirdrop - centralPoolExpected);
             const MIN_AIRDROP_SOL = 0.01;
             res.json({
                 isHolder: true,
@@ -540,8 +543,10 @@ function init(deps) {
                 basePoints: Math.round((userPoints.base_points || 0) * 100) / 100,
                 robinhoodPoints: Math.round((userPoints.robinhood_points || 0) * 100) / 100,
                 expectedAirdrop,
+                // v27.0: Breakdown of expected airdrop by pool type
+                perTokenExpectedAirdrop: perTokenExpected,
+                centralPoolExpectedAirdrop: centralPoolExpected,
                 expectedAirdropCurrency: 'SOL',
-                // v26.0: Minimum per-recipient threshold — warn user if below
                 minimumAirdropSol: MIN_AIRDROP_SOL,
                 belowMinimum: expectedAirdrop > 0 && expectedAirdrop < MIN_AIRDROP_SOL
             });
@@ -567,7 +572,7 @@ function init(deps) {
         try {
             // Get ASDF status + multiplier from user_points (needed for airdrop weight in cache key)
             const userPointsData = await db.get(`
-                SELECT multiplier, is_asdf_holder
+                SELECT multiplier, is_asdf_holder, COALESCE(central_pool_expected_sol, 0) as central_pool_expected_sol
                 FROM user_points WHERE pubkey = $1
             `, [userPubkey]);
 
@@ -709,11 +714,15 @@ function init(deps) {
                 return holdings.sort((a, b) => parseFloat(b.expectedAirdropSol) - parseFloat(a.expectedAirdropSol));
             });
 
+            // v27.0: Attach central pool expected from user_points for frontend breakdown
+            const centralPoolExpectedSol = parseFloat(userPointsData?.central_pool_expected_sol || 0);
+
             res.json({
                 holdings: holdingsData,
                 multiplier: userPointsData?.multiplier || 1,
                 isAsdfHolder: !!(userPointsData?.is_asdf_holder),
-                eligibilityThreshold: MIN_VOLUME_USD
+                eligibilityThreshold: MIN_VOLUME_USD,
+                centralPoolExpectedSol
             });
         } catch (e) {
             logger.error('User holdings error', { error: e.message });

@@ -454,14 +454,32 @@ function generateKothReasoning(winner, runnerUp, stats) {
     return reasoning;
 }
 
-// v26.0: Per-token airdrop threshold (minimum pool before distributing to holders)
-const TOKEN_AIRDROP_THRESHOLD_LAMPORTS = Math.floor((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 0.05) * 1e9);
+// v27.0: Per-token airdrop threshold raised to 1 SOL
+const TOKEN_AIRDROP_THRESHOLD_LAMPORTS = Math.floor((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0) * 1e9);
 
 // v26.0: Fixed 1B token supply for all pump.fun tokens (1B * 10^6 decimals)
 const PUMP_FUN_TOTAL_SUPPLY_BIG = BigInt('1000000000000000');
 
 // v26.0: Minimum per-recipient airdrop (0.01 SOL). Recipients below this are skipped.
 const MIN_RECIPIENT_LAMPORTS = Math.floor(0.01 * 1e9); // 10_000_000 lamports
+
+// v27.0: Pooling mechanic — 50% of token creator rewards go to per-token holders,
+// 50% go into the central pool distributed by volume-weighted cross-token holdings.
+const CREATOR_REWARD_HOLDER_SPLIT = 0.5;
+const CREATOR_REWARD_POOL_SPLIT = 0.5;
+// Minimum central pool balance before triggering a distribution
+const CENTRAL_POOL_THRESHOLD_LAMPORTS = Math.floor(2.5 * 1e9); // 2.5 SOL
+
+/**
+ * v27.0: Atomically add lamports to the central pool stat.
+ */
+async function addToCentralPool(db, lamports) {
+    if (lamports <= 0) return;
+    await db.run(
+        "UPDATE stats SET value = value + $1 WHERE key = 'centralPoolLamports'",
+        [lamports]
+    );
+}
 
 /**
  * v26.0: Per-token airdrop distribution
@@ -535,6 +553,12 @@ async function processTokenAirdrops(deps) {
 
         if (allToDistribute.length === 0) {
             logger.info(`[TokenAirdrop] No tokens above ${(TOKEN_AIRDROP_THRESHOLD_LAMPORTS / LAMPORTS_PER_SOL).toFixed(3)} SOL threshold`);
+            // Still attempt central pool distribution — it accumulates independently and should fire at 2.5 SOL
+            try {
+                await processCentralPoolAirdrop(deps);
+            } catch (centralErr) {
+                logger.error('[CentralPool] Distribution failed', { error: centralErr.message });
+            }
             return;
         }
 
@@ -689,10 +713,212 @@ async function processTokenAirdrops(deps) {
             await new Promise(r => setTimeout(r, 500)); // Rate-limit between tokens
         }
 
+        // v27.0: Distribute the central pool after all per-token distributions
+        try {
+            await processCentralPoolAirdrop(deps);
+        } catch (centralErr) {
+            logger.error('[CentralPool] Distribution failed', { error: centralErr.message });
+        }
+
     } catch (e) {
         logger.error('[TokenAirdrop] Critical error', { error: e.message });
     } finally {
         await release();
+    }
+}
+
+/**
+ * v27.0: Central pool airdrop distribution
+ *
+ * Distributes the central pool (accumulated from 50% of all token creator rewards) to
+ * token holders across all eligible tokens. Each user's share is proportional to their
+ * volume-weighted holdings: sum over each token they hold of
+ *   (holderBalance / TOTAL_SUPPLY) × (tokenVolume24h / totalVolume)
+ *
+ * This rewards users who hold tokens with high trading activity, scaled by how much
+ * of each token they own.
+ */
+async function processCentralPoolAirdrop(deps) {
+    const { connection, devKeypair, db } = deps;
+
+    const poolRow = await db.get("SELECT value FROM stats WHERE key = 'centralPoolLamports'");
+    const centralPoolLamports = Number(poolRow?.value || 0);
+
+    if (centralPoolLamports < CENTRAL_POOL_THRESHOLD_LAMPORTS) {
+        logger.debug(`[CentralPool] Below threshold (${(centralPoolLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL < ${(CENTRAL_POOL_THRESHOLD_LAMPORTS / LAMPORTS_PER_SOL).toFixed(3)} SOL), skipping`);
+        return;
+    }
+
+    const SAFETY_RESERVE = 0.1 * LAMPORTS_PER_SOL;
+    const walletBalance = await connection.getBalance(devKeypair.publicKey);
+    const availableBalance = walletBalance - SAFETY_RESERVE;
+
+    if (availableBalance < CENTRAL_POOL_THRESHOLD_LAMPORTS) {
+        logger.warn('[CentralPool] Wallet balance too low for central pool distribution');
+        return;
+    }
+
+    // Fetch all eligible tokens (platform + robinhood) with their volume
+    const eligiblePlatform = await db.all(
+        'SELECT mint, volume24h, \'platform\' as source FROM tokens WHERE volume24h >= $1',
+        [100]
+    );
+    const eligibleRobinhood = await db.all(
+        'SELECT mint, volume24h, \'robinhood\' as source FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
+        [100]
+    );
+    const allEligible = [...eligiblePlatform, ...eligibleRobinhood];
+
+    if (allEligible.length === 0) {
+        logger.info('[CentralPool] No eligible tokens for central pool distribution');
+        return;
+    }
+
+    const totalVol = allEligible.reduce((s, t) => s + (parseFloat(t.volume24h) || 0), 0);
+    if (totalVol === 0) return;
+
+    const volByMint = new Map(allEligible.map(t => [t.mint, parseFloat(t.volume24h) || 0]));
+
+    // Fetch all holders for eligible tokens in two batches
+    const platformMints = eligiblePlatform.map(t => t.mint).filter(Boolean);
+    const robinhoodMints = eligibleRobinhood.map(t => t.mint).filter(Boolean);
+
+    const [platformHolders, robinhoodHolders] = await Promise.all([
+        platformMints.length > 0
+            ? db.all('SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)', [platformMints])
+            : [],
+        robinhoodMints.length > 0
+            ? db.all('SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1)', [robinhoodMints])
+            : []
+    ]);
+
+    // Build user score map: pubkey -> sum of (balance/TOTAL_SUPPLY) * (vol/totalVol)
+    // This score represents volume-weighted ownership across all eligible tokens
+    const userScores = new Map();
+    for (const h of [...platformHolders, ...robinhoodHolders]) {
+        const vol = volByMint.get(h.mint) || 0;
+        if (vol === 0) continue;
+        const balance = BigInt(h.balance || '0');
+        if (balance === BigInt(0)) continue;
+        // Use integer arithmetic then divide to preserve precision
+        // score contribution = (balance / TOTAL_SUPPLY) * (vol / totalVol)
+        //                    = balance * vol / (TOTAL_SUPPLY * totalVol)
+        const volRatio = vol / totalVol; // floating point is fine at this scale
+        const balanceRatio = Number(balance * BigInt(1e9) / PUMP_FUN_TOTAL_SUPPLY_BIG) / 1e9;
+        const contribution = balanceRatio * volRatio;
+        if (contribution > 0) {
+            userScores.set(h.holderPubkey, (userScores.get(h.holderPubkey) || 0) + contribution);
+        }
+    }
+
+    if (userScores.size === 0) {
+        logger.info('[CentralPool] No holders found for eligible tokens');
+        return;
+    }
+
+    const totalScore = Array.from(userScores.values()).reduce((s, v) => s + v, 0);
+    if (totalScore === 0) return;
+
+    const poolToDistribute = Math.min(centralPoolLamports, availableBalance);
+    const distributable = Math.floor(poolToDistribute * 0.99); // 1% dust buffer
+
+    // Build recipient list
+    const recipients = [];
+    for (const [pubkey, score] of userScores.entries()) {
+        try {
+            const share = Math.floor(distributable * score / totalScore);
+            if (share >= MIN_RECIPIENT_LAMPORTS) {
+                recipients.push({ user: new PublicKey(pubkey), amount: share });
+            }
+        } catch (e) {
+            logger.debug(`[CentralPool] Skipping invalid holder ${pubkey}: ${e.message}`);
+        }
+    }
+
+    if (recipients.length === 0) {
+        logger.info('[CentralPool] All recipient shares below minimum threshold');
+        return;
+    }
+
+    const totalPlanned = recipients.reduce((s, r) => s + r.amount, 0);
+    if (totalPlanned > availableBalance) {
+        logger.warn(`[CentralPool] Planned ${(totalPlanned / LAMPORTS_PER_SOL).toFixed(4)} SOL exceeds available ${(availableBalance / LAMPORTS_PER_SOL).toFixed(4)} SOL, skipping`);
+        return;
+    }
+
+    logger.info(`[CentralPool] Distributing ${(distributable / LAMPORTS_PER_SOL).toFixed(4)} SOL central pool to ${recipients.length} holders across ${allEligible.length} tokens`);
+
+    const airdropId = `central_${Date.now()}`;
+    const allSignatures = [];
+    let actualSentLamports = 0;
+
+    for (let i = 0; i < recipients.length; i += AIRDROP_BATCH_SIZE) {
+        const batch = recipients.slice(i, i + AIRDROP_BATCH_SIZE);
+        const result = await sendSolAirdropBatch(batch, deps);
+        if (result?.signature) {
+            allSignatures.push(result.signature);
+            actualSentLamports += result.actualLamports;
+        }
+        if (i + AIRDROP_BATCH_SIZE < recipients.length) {
+            await new Promise(r => setTimeout(r, 300));
+        }
+    }
+
+    if (actualSentLamports > 0) {
+        // Decrement central pool and accumulate lifetime stat
+        await db.run(
+            "UPDATE stats SET value = GREATEST(0, value - $1) WHERE key = 'centralPoolLamports'",
+            [actualSentLamports]
+        );
+        await db.run(
+            "UPDATE stats SET value = value + $1 WHERE key = 'lifetimeCentralPoolLamports'",
+            [actualSentLamports]
+        );
+
+        const actualSolSent = actualSentLamports / LAMPORTS_PER_SOL;
+
+        // Log airdrop event
+        await db.run(
+            'INSERT INTO airdrop_logs (amount, recipients, "totalPoints", signatures, details, timestamp, mint, token_source) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+            [
+                actualSolSent,
+                recipients.length,
+                0,
+                allSignatures.join(','),
+                JSON.stringify({ source: 'central_pool', airdropId, txCount: allSignatures.length, tokenCount: allEligible.length }),
+                new Date().toISOString(),
+                null,
+                'central_pool'
+            ]
+        );
+
+        // Log per-user history
+        const airdropTimestamp = Date.now();
+        try {
+            const HISTORY_BATCH_SIZE = 100;
+            for (let i = 0; i < recipients.length; i += HISTORY_BATCH_SIZE) {
+                const batch = recipients.slice(i, i + HISTORY_BATCH_SIZE);
+                const values = batch.map((_, idx) => {
+                    const b = idx * 6;
+                    return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6})`;
+                }).join(', ');
+                const params = batch.flatMap(r => [
+                    r.user.toString(), airdropId,
+                    r.amount / LAMPORTS_PER_SOL, 0,
+                    airdropTimestamp, null
+                ]);
+                await db.run(
+                    `INSERT INTO user_airdrop_history ("userPubkey", "airdropId", amount, points, timestamp, mint) VALUES ${values}`,
+                    params
+                );
+            }
+        } catch (histErr) {
+            logger.warn('[CentralPool] Failed to log user history', { error: histErr.message });
+        }
+
+        logger.info(`✅ [CentralPool] ${actualSolSent.toFixed(4)} SOL distributed to ${recipients.length} holders in ${allSignatures.length} txs`);
+    } else {
+        logger.warn('[CentralPool] All batches failed — central pool balance preserved');
     }
 }
 
@@ -1070,15 +1296,19 @@ async function claimRobinhoodFees(deps) {
                                 source: 'BC'
                             });
 
-                            // v26.0: Credit 95% of our share to this token's per-token airdrop pool
-                            // (5% is deducted later as platform fee — 95% is what will reach holders)
-                            const bcAirdropCredit = Math.floor(ourShare * 0.95);
+                            // v27.0: Split 95% of our share: 50% to per-token holders, 50% to central pool
+                            const bcTotalReward = Math.floor(ourShare * 0.95);
+                            const bcAirdropCredit = Math.floor(bcTotalReward * CREATOR_REWARD_HOLDER_SPLIT);
+                            const bcCentralCredit = bcTotalReward - bcAirdropCredit;
                             await db.run(
                                 'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
                                 [Date.now(), ourShare / LAMPORTS_PER_SOL, bcAirdropCredit, token.id]
                             );
+                            if (bcCentralCredit > 0) {
+                                await addToCentralPool(db, bcCentralCredit);
+                            }
 
-                            logger.info(`[Robinhood] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL @ ${(token.feeShareBps ?? 10000)/100}%, credited ${(bcAirdropCredit / LAMPORTS_PER_SOL).toFixed(6)} SOL to token pool)`);
+                            logger.info(`[Robinhood] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL, ${(bcAirdropCredit / LAMPORTS_PER_SOL).toFixed(6)} to token pool, ${(bcCentralCredit / LAMPORTS_PER_SOL).toFixed(6)} to central pool)`);
 
                             // v25.113: Cross-record to PAGS if this token is also a PAGS beneficiary
                             // v25.114: Use on-chain shareholder BPS for PAGS wallet, not DB value
@@ -1241,15 +1471,19 @@ async function claimRobinhoodFees(deps) {
                                 source: 'AMM'
                             });
 
-                            // Update database — M-7 FIX: also clear pendingAmmFees so dashboard shows correct state
-                            // v26.0: Credit 95% of our AMM share to this token's per-token airdrop pool
-                            const ammAirdropCredit = Math.floor(ourShareLamports * 0.95);
+                            // v27.0: Split 95% of our AMM share: 50% to per-token holders, 50% to central pool
+                            const ammTotalReward = Math.floor(ourShareLamports * 0.95);
+                            const ammAirdropCredit = Math.floor(ammTotalReward * CREATOR_REWARD_HOLDER_SPLIT);
+                            const ammCentralCredit = ammTotalReward - ammAirdropCredit;
                             await db.run(
                                 'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingAmmFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
                                 [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, ammAirdropCredit, token.id]
                             );
+                            if (ammCentralCredit > 0) {
+                                await addToCentralPool(db, ammCentralCredit);
+                            }
 
-                            logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL via TransferCreatorFeesToPump (our share: ${ourShare.toFixed(6)} SOL @ ${(token.feeShareBps ?? 10000)/100}%, credited ${(ammAirdropCredit / LAMPORTS_PER_SOL).toFixed(6)} SOL to token pool)`);
+                            logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL (our share: ${ourShare.toFixed(6)} SOL, ${(ammAirdropCredit / LAMPORTS_PER_SOL).toFixed(6)} to token pool, ${(ammCentralCredit / LAMPORTS_PER_SOL).toFixed(6)} to central pool)`);
 
                             // v25.113: Cross-record to PAGS if this token is also a PAGS beneficiary
                             // v25.114: Use on-chain shareholder BPS for PAGS wallet, not DB value
@@ -2162,10 +2396,12 @@ async function runPurchaseAndFees(deps) {
                 await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [claimedAmount, 'lifetimeCreatorFeesLamports']);
                 await recordClaim(claimedAmount);
 
-                // v26.0: Attribute 95% of platform fees across eligible platform tokens proportionally by volume
-                // Platform tokens share one vault, so we distribute credit by each token's share of total volume
+                // v27.0: Attribute 95% of platform fees: 50% to per-token holder pools (by volume), 50% to central pool
                 try {
-                    const platformFeeCredit = Math.floor(claimedAmount * 0.95);
+                    const totalRewardCredit = Math.floor(claimedAmount * 0.95);
+                    const perTokenCredit = Math.floor(totalRewardCredit * CREATOR_REWARD_HOLDER_SPLIT);
+                    const centralCredit = totalRewardCredit - perTokenCredit;
+
                     const eligiblePlatformTokens = await db.all(
                         'SELECT mint, volume24h FROM tokens WHERE volume24h >= $1',
                         [100]
@@ -2174,12 +2410,12 @@ async function runPurchaseAndFees(deps) {
                     if (totalPlatformVol > 0 && eligiblePlatformTokens.length > 0) {
                         let totalAttributed = 0;
                         const shares = eligiblePlatformTokens.map(tok => {
-                            const share = Math.floor(platformFeeCredit * ((parseFloat(tok.volume24h) || 0) / totalPlatformVol));
+                            const share = Math.floor(perTokenCredit * ((parseFloat(tok.volume24h) || 0) / totalPlatformVol));
                             totalAttributed += share;
                             return { tok, share };
                         });
-                        // H-2: Add rounding remainder to the highest-volume token
-                        const remainder = platformFeeCredit - totalAttributed;
+                        // Add rounding remainder to the highest-volume token
+                        const remainder = perTokenCredit - totalAttributed;
                         if (remainder > 0 && shares.length > 0) {
                             shares[0].share += remainder;
                         }
@@ -2191,8 +2427,15 @@ async function runPurchaseAndFees(deps) {
                                 );
                             }
                         }
-                        logger.info(`[FeeCollection] Attributed ${(platformFeeCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees across ${eligiblePlatformTokens.length} tokens by volume`);
+                    } else if (perTokenCredit > 0) {
+                        // No eligible platform tokens to distribute to — redirect to central pool to avoid losing funds
+                        await addToCentralPool(db, perTokenCredit);
+                        logger.info(`[FeeCollection] No eligible platform tokens — redirected ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL per-token credit to central pool`);
                     }
+                    if (centralCredit > 0) {
+                        await addToCentralPool(db, centralCredit);
+                    }
+                    logger.info(`[FeeCollection] Attributed ${(totalRewardCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees: ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} to per-token pools, ${(centralCredit / LAMPORTS_PER_SOL).toFixed(4)} to central pool`);
                 } catch (attrErr) {
                     logger.warn('[FeeCollection] Platform fee attribution failed', { error: attrErr.message });
                 }
@@ -2409,9 +2652,12 @@ async function runFeeCollection(deps) {
                 await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [claimedAmount, 'lifetimeCreatorFeesLamports']);
                 logger.info(`[FeeCollection] Claimed ${(claimedAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL from creator fees`);
 
-                // v26.0: Attribute 95% of platform fees across eligible platform tokens proportionally by volume
+                // v27.0: Attribute 95% of platform fees: 50% to per-token holder pools (by volume), 50% to central pool
                 try {
-                    const platformFeeCredit = Math.floor(claimedAmount * 0.95);
+                    const totalRewardCredit = Math.floor(claimedAmount * 0.95);
+                    const perTokenCredit = Math.floor(totalRewardCredit * CREATOR_REWARD_HOLDER_SPLIT);
+                    const centralCredit = totalRewardCredit - perTokenCredit;
+
                     const eligiblePlatformTokens = await db.all(
                         'SELECT mint, volume24h FROM tokens WHERE volume24h >= $1',
                         [100]
@@ -2420,12 +2666,11 @@ async function runFeeCollection(deps) {
                     if (totalPlatformVol > 0 && eligiblePlatformTokens.length > 0) {
                         let totalAttributed = 0;
                         const shares = eligiblePlatformTokens.map(tok => {
-                            const share = Math.floor(platformFeeCredit * ((parseFloat(tok.volume24h) || 0) / totalPlatformVol));
+                            const share = Math.floor(perTokenCredit * ((parseFloat(tok.volume24h) || 0) / totalPlatformVol));
                             totalAttributed += share;
                             return { tok, share };
                         });
-                        // H-2: Add rounding remainder to the highest-volume token
-                        const remainder = platformFeeCredit - totalAttributed;
+                        const remainder = perTokenCredit - totalAttributed;
                         if (remainder > 0 && shares.length > 0) {
                             shares[0].share += remainder;
                         }
@@ -2437,8 +2682,15 @@ async function runFeeCollection(deps) {
                                 );
                             }
                         }
-                        logger.info(`[FeeCollection] Attributed ${(platformFeeCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees across ${eligiblePlatformTokens.length} tokens by volume`);
+                    } else if (perTokenCredit > 0) {
+                        // No eligible platform tokens to distribute to — redirect to central pool to avoid losing funds
+                        await addToCentralPool(db, perTokenCredit);
+                        logger.info(`[FeeCollection] No eligible platform tokens — redirected ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL per-token credit to central pool`);
                     }
+                    if (centralCredit > 0) {
+                        await addToCentralPool(db, centralCredit);
+                    }
+                    logger.info(`[FeeCollection] Attributed ${(totalRewardCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees: ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} to per-token pools, ${(centralCredit / LAMPORTS_PER_SOL).toFixed(4)} to central pool`);
                 } catch (attrErr) {
                     logger.warn('[FeeCollection] Platform fee attribution failed', { error: attrErr.message });
                 }

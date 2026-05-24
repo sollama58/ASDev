@@ -314,6 +314,7 @@ function init(deps) {
 
                 // v26.0: Sum of all per-token pending airdrop lamports (replaces balance-based pool calc)
                 let totalPendingAirdropLamports = 0;
+                let centralPoolLamports = 0;
                 try {
                     const pendingSum = await db.get(`
                         SELECT COALESCE(SUM(p), 0) as total FROM (
@@ -326,6 +327,10 @@ function init(deps) {
                 } catch (e) {
                     // Ignore - column may not exist until migration runs
                 }
+                try {
+                    const cpRow = await db.get("SELECT value FROM stats WHERE key = 'centralPoolLamports'");
+                    centralPoolLamports = parseInt(cpRow?.value || 0);
+                } catch (e) { /* ignore */ }
 
                 return {
                     stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped, totalSolAirdropped,
@@ -333,7 +338,8 @@ function init(deps) {
                     robinhoodTotalFees: robinhoodTotalFees?.total || 0,
                     robinhoodPendingFees,
                     robinhoodPendingDetails,
-                    totalPendingAirdropLamports
+                    totalPendingAirdropLamports,
+                    centralPoolLamports
                 };
             });
 
@@ -380,6 +386,9 @@ function init(deps) {
                 solBalanceLamports: cachedHealth.currentBalance,
                 // v26.0: Total pending airdrop pool across all tokens (per-token pooling system)
                 airdropPoolSol: ((cachedHealth.totalPendingAirdropLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
+                // v27.0: Per-token pools total and central pool separately
+                tokenPoolsSol: ((cachedHealth.totalPendingAirdropLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
+                centralPoolSol: ((cachedHealth.centralPoolLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
                 // M-8 FIX: Expose deployment fee so frontend stays in sync with backend config
                 deploymentFee: config.DEPLOYMENT_FEE_SOL,

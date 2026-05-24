@@ -203,8 +203,10 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
 
             const resolvedRecentLaunches = await resolveImages(recentLaunches || []);
 
-            // Get total pending airdrop pool (sum of all token pools)
+            // Get total pending airdrop pool (sum of all token pools) and central pool
             let airdropPoolSol = 0;
+            let tokenPoolsSol = 0;
+            let centralPoolSol = 0;
             try {
                 const poolSum = await db.get(`
                     SELECT COALESCE(SUM(p), 0) as total FROM (
@@ -213,13 +215,20 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
                         SELECT pending_airdrop_lamports as p FROM robinhood_tokens WHERE pending_airdrop_lamports > 0
                     ) combined
                 `);
-                airdropPoolSol = parseInt(poolSum?.total || 0) / 1e9;
+                tokenPoolsSol = parseInt(poolSum?.total || 0) / 1e9;
+                airdropPoolSol = tokenPoolsSol; // backwards-compat
+            } catch (e) { /* use 0 */ }
+            try {
+                const cpRow = await db.get("SELECT value FROM stats WHERE key = 'centralPoolLamports'");
+                centralPoolSol = parseInt(cpRow?.value || 0) / 1e9;
             } catch (e) { /* use 0 */ }
 
             const payload = {
                 // Stats
                 totalTokens: stats?.total || 0,
                 airdropPoolSol,
+                tokenPoolsSol,
+                centralPoolSol,
                 totalPoints: globalState.totalPoints || 0,
 
                 // Leaderboard — robinhood partner tokens only

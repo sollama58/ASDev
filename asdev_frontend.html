@@ -1684,14 +1684,25 @@
                     </div>
                     <h2 class="text-white text-2xl sm:text-3xl font-normal tracking-tight mb-2">Earn SOL by holding<br class="hidden sm:block"> tokens you already own.</h2>
                     <p class="text-gray-400 text-xs sm:text-sm leading-relaxed max-w-xl">
-                        ROBINHOOD collects trading fees from partner tokens on Pumpfun and redistributes them as automated SOL airdrops every 15 minutes. The more tokens you hold, the larger your share of each airdrop pool.
+                        ROBINHOOD collects trading fees from partner tokens on Pumpfun and splits them 50/50: half goes directly to each token's holders, half fills a shared central pool distributed by volume-weighted holdings. Airdrops fire automatically every 15 minutes.
                     </p>
                 </div>
-                <div class="flex flex-col items-center justify-center rounded-2xl px-6 py-5 text-center flex-shrink-0 min-w-[140px]" style="background: rgba(109,40,217,0.1); border: 1px solid rgba(139,92,246,0.2);">
-                    <div class="text-[9px] text-purple-400/70 uppercase tracking-widest mb-1">Current Pool</div>
-                    <div class="text-3xl sm:text-4xl text-purple-200 font-bold font-mono leading-none" id="home-airdrop-balance" style="text-shadow: 0 0 20px rgba(139,92,246,0.5);">—</div>
-                    <div class="text-[9px] text-purple-400/50 mt-1.5 font-mono">SOL</div>
-                    <div class="text-[9px] text-gray-600 mt-2">Distributes every 15 min</div>
+                <div class="flex flex-row gap-2 flex-shrink-0">
+                    <div class="flex flex-col items-center justify-center rounded-2xl px-3 py-3 text-center min-w-[120px]" style="background: rgba(109,40,217,0.1); border: 1px solid rgba(139,92,246,0.2);">
+                        <div class="text-[9px] text-purple-400/70 uppercase tracking-widest mb-1">Token Pools</div>
+                        <div class="text-xl sm:text-2xl text-purple-200 font-bold font-mono leading-none" id="home-airdrop-balance" style="text-shadow: 0 0 20px rgba(139,92,246,0.5);">—</div>
+                        <div class="text-[9px] text-purple-400/50 mt-1 font-mono">fires at 1 SOL each</div>
+                    </div>
+                    <div class="flex flex-col items-center justify-center rounded-2xl px-3 py-3 text-center min-w-[120px]" style="background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.2);">
+                        <div class="text-[9px] text-orange-400/70 uppercase tracking-widest mb-1">Central Pool</div>
+                        <div class="text-xl sm:text-2xl text-orange-200 font-bold font-mono leading-none" id="home-central-pool-balance" style="text-shadow: 0 0 20px rgba(245,158,11,0.4);">—</div>
+                        <div class="text-[9px] text-orange-400/50 mt-1.5 w-full" id="central-pool-progress-wrap">
+                            <div class="w-full rounded-full h-1" style="background:rgba(245,158,11,0.15);">
+                                <div id="central-pool-progress-bar" class="h-1 rounded-full transition-all duration-700" style="width:0%;background:linear-gradient(90deg,#f59e0b,#ef4444);"></div>
+                            </div>
+                            <div class="text-[8px] text-orange-500/60 mt-0.5 font-mono" id="central-pool-progress-label">0 / 2.5 SOL</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1726,21 +1737,21 @@
                     <div class="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-black font-mono flex-shrink-0" style="background: linear-gradient(135deg, #f59e0b, #d97706);">1</div>
                     <div>
                         <div class="text-white font-semibold text-xs mb-1">Hold Partner Tokens</div>
-                        <div class="text-gray-500 text-[11px] leading-relaxed">Buy and hold any token registered on the ROBINHOOD platform. Each token you hold earns you a share of its SOL pool proportional to your % of tracked holder balances (LP and burnt tokens excluded).</div>
+                        <div class="text-gray-500 text-[11px] leading-relaxed">Buy and hold any token registered on the ROBINHOOD platform. Each token you hold earns from <span class="text-purple-400">its own pool</span> (proportional to your % of tracked holders) and from the <span class="text-orange-400">central pool</span> (volume-weighted across all tokens).</div>
                     </div>
                 </div>
                 <div class="flex flex-col gap-2">
                     <div class="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-black font-mono flex-shrink-0" style="background: linear-gradient(135deg, #a855f7, #7c3aed);">2</div>
                     <div>
-                        <div class="text-white font-semibold text-xs mb-1">Hold Tokens</div>
-                        <div class="text-gray-500 text-[11px] leading-relaxed">Your share of each token's airdrop is determined by your % of tracked holder balances (LP and burnt tokens excluded). Top 100 ASDF holders receive 2× weight in SOL airdrop distribution.</div>
+                        <div class="text-white font-semibold text-xs mb-1">Dual Pool System</div>
+                        <div class="text-gray-500 text-[11px] leading-relaxed">Creator fees are split 50/50: half goes to that token's holders directly, half fills the central pool shared by all holders weighted by their token's daily trading volume. Top 100 ASDF holders get 2× weight.</div>
                     </div>
                 </div>
                 <div class="flex flex-col gap-2">
                     <div class="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-black font-mono flex-shrink-0" style="background: linear-gradient(135deg, #10b981, #059669);">3</div>
                     <div>
                         <div class="text-white font-semibold text-xs mb-1">Receive SOL Airdrops</div>
-                        <div class="text-gray-500 text-[11px] leading-relaxed">Every 15 minutes, each token's individual pool is distributed proportionally to its holders (minimum 0.01 SOL per recipient). No claiming required — SOL is sent directly to your wallet.</div>
+                        <div class="text-gray-500 text-[11px] leading-relaxed">Every 15 minutes, token pools fire when they reach <span class="text-yellow-400">1 SOL</span> each; the central pool fires when it reaches <span class="text-orange-400">2.5 SOL</span>. SOL is sent directly to your wallet — no claiming required.</div>
                     </div>
                 </div>
             </div>
@@ -1751,30 +1762,31 @@
             <h3 class="text-purple-400 font-mono text-[11px] sm:text-xs uppercase tracking-widest mb-4 pb-3 flex items-center gap-2" style="border-bottom: 1px solid rgba(139,92,246,0.1);">
                 <i data-lucide="zap" class="w-3.5 h-3.5"></i>Distribution Mechanics
             </h3>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
-                <div class="rounded-xl p-3" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(245,158,11,0.1);">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4 mb-3">
+                <div class="rounded-xl p-3" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(139,92,246,0.2);">
                     <div class="flex items-center gap-2 mb-2">
-                        <i data-lucide="percent" class="w-3.5 h-3.5 text-yellow-400"></i>
-                        <span class="text-yellow-400 font-mono text-[10px] uppercase tracking-wider">Your Share Formula</span>
+                        <i data-lucide="coins" class="w-3.5 h-3.5 text-purple-400"></i>
+                        <span class="text-purple-400 font-mono text-[10px] uppercase tracking-wider">Per-Token Pool</span>
                     </div>
-                    <p class="text-gray-500 text-[11px] leading-relaxed">Your SOL = Pool × 99% × (Your Balance ÷ Total Tracked Holder Balances). LP wallets and burnt tokens are excluded from the denominator — only real holders count.</p>
+                    <p class="text-gray-500 text-[11px] leading-relaxed mb-2">47.5% of collected fees → each token's own pool. Fires at <span class="text-yellow-400 font-mono">1 SOL</span>.</p>
+                    <p class="text-[10px] font-mono" style="color:rgba(139,92,246,0.7);">Share = pool × (balance ÷ tracked supply)</p>
                 </div>
-                <div class="rounded-xl p-3" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(16,185,129,0.1);">
+                <div class="rounded-xl p-3" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(245,158,11,0.2);">
                     <div class="flex items-center gap-2 mb-2">
-                        <i data-lucide="layers" class="w-3.5 h-3.5 text-green-400"></i>
-                        <span class="text-green-400 font-mono text-[10px] uppercase tracking-wider">Independent Pools</span>
+                        <i data-lucide="globe" class="w-3.5 h-3.5 text-orange-400"></i>
+                        <span class="text-orange-400 font-mono text-[10px] uppercase tracking-wider">Central Pool</span>
                     </div>
-                    <p class="text-gray-500 text-[11px] leading-relaxed">Each token has its own SOL pool funded by creator trading fees. Platform tokens and Robinhood partner tokens each have separate pools — hold both to earn from both simultaneously.</p>
+                    <p class="text-gray-500 text-[11px] leading-relaxed mb-2">47.5% of all fees → shared pool. Fires at <span class="text-orange-400 font-mono">2.5 SOL</span>.</p>
+                    <p class="text-[10px] font-mono" style="color:rgba(245,158,11,0.7);">Score = Σ (balance/1B) × (vol/totalVol)</p>
                 </div>
-                <div class="rounded-xl p-3 sm:col-span-2" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(139,92,246,0.12);">
+                <div class="rounded-xl p-3" style="background: rgba(5,5,14,0.5); border: 1px solid rgba(16,185,129,0.12);">
                     <div class="flex items-center gap-2 mb-2">
-                        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-purple-400"></i>
-                        <span class="text-purple-400 font-mono text-[10px] uppercase tracking-wider">Bonuses</span>
+                        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-green-400"></i>
+                        <span class="text-green-400 font-mono text-[10px] uppercase tracking-wider">Bonuses</span>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-gray-500">
-                        <div><span class="text-green-400">2× ASDF Boost</span> — Top 100 ASDF token holders receive 2× effective balance weight in every SOL distribution.</div>
-                        <div><span class="text-fuchsia-400">Per-Token Pools</span> — Each token's pool fires independently when it exceeds 0.05 SOL, so high-volume tokens pay out more frequently.</div>
-                        <div><span class="text-orange-400">Automatic</span> — No claiming required. SOL is sent directly to your wallet every cycle (min 0.01 SOL per recipient).</div>
+                    <div class="flex flex-col gap-1.5 text-[11px] text-gray-500">
+                        <div><span class="text-green-400">2× ASDF</span> — Top 100 $ASDF holders get 2× weight in per-token distributions.</div>
+                        <div><span class="text-orange-400">Auto</span> — SOL sent directly to your wallet, no claiming. Min 0.01 SOL per payout.</div>
                     </div>
                 </div>
             </div>
@@ -1829,6 +1841,17 @@
                     <div class="text-2xl sm:text-3xl text-green-400 font-bold font-mono leading-none" id="expected-airdrop">0.0000</div>
                     <div class="text-[9px] text-green-500/50 font-mono mt-1" id="expected-airdrop-label">SOL (Est.)</div>
                     <div class="hidden text-[9px] text-yellow-400/70 font-mono mt-0.5" id="expected-airdrop-min-warn">Below 0.01 SOL min</div>
+                    <!-- v27.0: Per-pool breakdown — hidden until wallet data loaded -->
+                    <div id="pool-breakdown-section" class="hidden mt-2 pt-2 flex flex-col gap-0.5" style="border-top: 1px solid rgba(16,185,129,0.1);">
+                        <div class="flex items-center justify-between text-[10px]">
+                            <span class="text-purple-400/60">↳ Token Pools</span>
+                            <span class="text-purple-300 font-mono" id="expected-airdrop-token-pools">0.0000 SOL</span>
+                        </div>
+                        <div class="flex items-center justify-between text-[10px]">
+                            <span class="text-orange-400/60">↳ Central Pool</span>
+                            <span class="text-orange-300 font-mono" id="expected-airdrop-central-pool">0.0000 SOL</span>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -2497,29 +2520,32 @@
         <h3 class="text-purple-400 font-mono text-lg mb-4 uppercase tracking-widest border-b border-purple-800/50 pb-2 font-normal">SOL Airdrop System</h3>
         <div class="font-sans text-sm text-purple-200 space-y-3">
             <div class="bg-green-900/30 p-3 rounded border border-green-700/50 mb-4">
-                <p class="text-green-400 text-xs uppercase mb-1">Per-Token Airdrops</p>
-                <p class="text-xs text-gray-300">Each token has its own independent SOL airdrop pool funded by its creator fees. Airdrops are distributed proportionally to holders of that specific token only — no cross-token sharing. Minimum <span class="text-yellow-300">0.01 SOL</span> per recipient per cycle.</p>
+                <p class="text-green-400 text-xs uppercase mb-1">Per-Token Pools</p>
+                <p class="text-xs text-gray-300">Each token has its own independent SOL airdrop pool (47.5% of collected fees). Distributed proportionally to that token's top 250 holders — LP wallets and burnt supply excluded. Fires when the pool exceeds <span class="text-yellow-300">1 SOL</span>.</p>
+            </div>
+            <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 mb-4">
+                <p class="text-purple-400 text-xs uppercase mb-1">Central Pool</p>
+                <p class="text-xs text-gray-300">The other 47.5% of every fee goes into a single cross-token central pool. Your share is weighted by your holdings in each token scaled by that token's daily volume. Fires when the pool exceeds <span class="text-orange-300">2.5 SOL</span>.</p>
             </div>
             <div class="bg-orange-900/30 p-3 rounded border border-orange-700/50 mb-4">
                 <p class="text-orange-400 text-xs uppercase mb-1">Timing</p>
-                <p class="text-xs text-gray-300">Fees collected every <span class="text-yellow-400">2.5 minutes</span> (>0.05 SOL). Airdrops distributed every <span class="text-yellow-400">15 minutes</span> — each token's pool fires independently when it exceeds 0.05 SOL. Minimum <span class="text-yellow-400">0.01 SOL per recipient</span>.</p>
+                <p class="text-xs text-gray-300">Fees collected every <span class="text-yellow-400">2.5 minutes</span>. Airdrops distributed every <span class="text-yellow-400">15 minutes</span> — token pools fire at <span class="text-yellow-400">1 SOL</span> each, central pool fires at <span class="text-orange-400">2.5 SOL</span>. Minimum <span class="text-yellow-400">0.01 SOL per recipient</span>.</p>
             </div>
-            <p>Your SOL share is calculated based on your <span class="text-yellow-400">% of tracked holder balances</span> in eligible tokens:</p>
+            <p>Your SOL share comes from two sources:</p>
             <ul class="list-disc list-inside ml-4 space-y-2 text-purple-300">
-                <li><span class="text-white">Eligibility:</span> Top <span class="text-yellow-400">250 holders</span> of tokens with <span class="text-green-400">>$100 24hr volume</span> receive airdrops.</li>
-                <li><span class="text-white">Your Share:</span> <span class="text-cyan-400">(Your Balance / Total Tracked Holder Balances)</span> — LP tokens and burnt supply are excluded from the denominator.</li>
-                <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+SOL</span> for holding partner tokens — same share formula, independent pool per token.</li>
-                <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400">2× SOL airdrop share</span> if you're a Top 100 $ASDF holder.</li>
+                <li><span class="text-white">Per-Token:</span> <span class="text-cyan-400">(Your Balance / Tracked Holder Balances)</span> for each token you hold — LP and burnt tokens excluded.</li>
+                <li><span class="text-white">Central Pool:</span> <span class="text-cyan-400">Σ (Balance / 1B Supply) × (Token Volume / Total Volume)</span> across all eligible tokens you hold.</li>
+                <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400">2× weight</span> in per-token distributions for Top 100 $ASDF holders.</li>
             </ul>
             <div class="bg-cyan-900/30 p-3 rounded border border-cyan-700/50 mt-4">
-                <p class="text-cyan-400 text-xs uppercase mb-1">Distribution Formula (v26.3)</p>
-                <p class="text-xs text-gray-300">Your SOL = Pool × 99% × <span class="text-cyan-400">(Your Balance / Sum of All Tracked Holder Balances)</span></p>
-                <p class="text-xs text-gray-400 mt-1">Denominator = only tracked holders — LP wallets and burnt tokens are excluded.</p>
+                <p class="text-cyan-400 text-xs uppercase mb-1">Central Pool Formula</p>
+                <p class="text-xs text-gray-300">Score = Σ <span class="text-cyan-400">(holderBalance / 1,000,000,000) × (tokenVol24h / totalVol)</span> per eligible token held</p>
+                <p class="text-xs text-gray-400 mt-1">Your central pool share = centralPool × (Your Score / Total Scores). High-volume tokens weigh more.</p>
             </div>
             <div class="bg-yellow-900/30 p-3 rounded border border-yellow-700/50 mt-4">
                 <p class="text-yellow-400 text-xs uppercase mb-1">Example</p>
-                <p class="text-xs text-gray-300">Token pool = 1 SOL. Tracked holder total = 500M tokens. You hold 5M = 1% of tracked supply → you receive 0.0099 SOL. ASDF Top 100 holders receive 2× this amount.</p>
-                <p class="text-xs text-gray-400 mt-1">Higher-volume tokens accumulate larger pools — more SOL for the same ownership %.</p>
+                <p class="text-xs text-gray-300">Token pool fires at 1 SOL: you hold 1% of tracked supply → receive ~0.0099 SOL. Central pool fires at 2.5 SOL: your cross-token volume score is 5% of all scores → receive ~0.125 SOL.</p>
+                <p class="text-xs text-gray-400 mt-1">Hold more tokens across high-volume pairs to maximize your central pool share.</p>
             </div>
         </div>
     </div>
@@ -2539,9 +2565,10 @@
                 </ul>
 
                 <h4 class="text-orange-400 mb-3 border-b border-orange-800 pb-1 font-normal">2. The Flywheel (Fee Collection)</h4>
-                <p class="text-orange-200 mb-2">Every <span class="text-yellow-400">2.5 minutes</span>, if pending fees > 0.05 SOL:</p>
+                <p class="text-orange-200 mb-2">Every <span class="text-yellow-400">2.5 minutes</span>, collected fees are split:</p>
                 <ul class="list-disc list-inside text-gray-400 space-y-1 mb-4">
-                    <li><span class="text-green-400">95.0%</span>: Added to this token's SOL airdrop pool (distributed to its holders).</li>
+                    <li><span class="text-purple-400">47.5%</span>: Added to that token's per-token SOL airdrop pool (distributed to its holders).</li>
+                    <li><span class="text-orange-400">47.5%</span>: Added to the central pool (shared across all tokens, volume-weighted).</li>
                     <li><span class="text-red-400">4.5%</span>: Sent to $ASDF Burns Wallet.</li>
                     <li><span class="text-red-400">0.5%</span>: Sent to Upkeep and Reserves Wallet.</li>
                 </ul>
@@ -2557,9 +2584,15 @@
                     <li><span class="text-white">Robinhood Bonus:</span> <span class="text-green-400">+SOL</span> for holding partner tokens — same formula, each token's pool is independent.</li>
                     <li><span class="text-white">ASDF Multiplier:</span> <span class="text-green-400">2× SOL airdrop share</span> for Top 100 $ASDF holders in every distribution.</li>
                 </ul>
-                <div class="bg-purple-900/20 p-3 rounded border border-purple-700/30 mt-4">
-                    <p class="text-[10px] text-purple-300 uppercase tracking-widest mb-1">Per-Token Airdrop Pools</p>
-                    <p class="text-xs text-gray-300">Each partner token accumulates its own independent SOL pool from creator fees. Pools are distributed directly to that token's holders proportional to their % of total supply.</p>
+                <div class="grid grid-cols-1 gap-2 mt-4">
+                    <div class="bg-purple-900/20 p-3 rounded border border-purple-700/30">
+                        <p class="text-[10px] text-purple-300 uppercase tracking-widest mb-1">Per-Token Pools (47.5%)</p>
+                        <p class="text-xs text-gray-300">Each token's pool fires independently when it reaches <span class="text-yellow-400">1 SOL</span>. Distributed to that token's top 250 holders proportional to balance.</p>
+                    </div>
+                    <div class="bg-orange-900/20 p-3 rounded border border-orange-700/30">
+                        <p class="text-[10px] text-orange-300 uppercase tracking-widest mb-1">Central Pool (47.5%)</p>
+                        <p class="text-xs text-gray-300">Fires when it reaches <span class="text-orange-400">2.5 SOL</span>. Your share = Σ (balance/1B supply) × (token vol / total vol) — high-volume tokens weigh more.</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2568,10 +2601,10 @@
             <h4 class="text-green-400 mb-3 border-b border-green-800 pb-1 font-normal">4. Automated Airdrop Engine</h4>
             <p class="text-gray-300 mb-2">Runs every <span class="text-yellow-400">15 minutes</span> automatically.</p>
             <ul class="list-disc list-inside text-gray-400 space-y-1">
-                <li><span class="text-white">Trigger:</span> Each token's pool is distributed when it exceeds <span class="text-yellow-400">0.05 SOL</span>.</li>
-                <li><span class="text-white">Action:</span> Sends SOL directly to that token's holders proportional to their % of 1B total supply.</li>
+                <li><span class="text-white">Per-Token Trigger:</span> Each token's pool fires when it exceeds <span class="text-yellow-400">1 SOL</span>. Distributed proportionally to that token's holders.</li>
+                <li><span class="text-white">Central Pool Trigger:</span> The shared central pool fires when it exceeds <span class="text-orange-400">2.5 SOL</span>. Distributed by volume-weighted cross-token score.</li>
                 <li><span class="text-white">Minimum:</span> Recipients must be owed at least <span class="text-yellow-400">0.01 SOL</span> — smaller shares are skipped until a future cycle.</li>
-                <li><span class="text-white">Distribution:</span> Each token's pool is independent — no cross-token sharing.</li>
+                <li><span class="text-white">No Claiming:</span> SOL is sent directly to your wallet automatically.</li>
             </ul>
         </div>
     </div>
@@ -2607,7 +2640,7 @@
                 </div>
                 <div class="bg-green-900/20 p-3 rounded border border-green-800/50">
                     <p class="text-green-400 text-xs uppercase mb-1">Airdrop Cycle</p>
-                    <p class="text-xs text-gray-300">Every <span class="text-yellow-400">15 minutes</span></p>
+                    <p class="text-xs text-gray-300">Every <span class="text-yellow-400">15 min</span> — token pools at <span class="text-yellow-400">1 SOL</span>, central at <span class="text-orange-400">2.5 SOL</span></p>
                 </div>
             </div>
 
@@ -2625,9 +2658,9 @@
             <div>
                 <h4 class="text-green-400 mb-2 border-b border-green-800 pb-1 font-normal">Benefits for Holders</h4>
                 <ul class="list-disc list-inside text-gray-400 space-y-1">
-                    <li><span class="text-white">Top 250 Holders</span> receive SOL from each token's independent pool</li>
-                    <li>Your share = <span class="text-cyan-400">(Your Balance / Total Tracked Holder Balances)</span> — LP/burnt excluded</li>
-                    <li>Airdrops stack with platform token holdings — hold both to earn from both pools</li>
+                    <li><span class="text-white">Per-token pool:</span> Top 250 holders share 47.5% of collected fees proportionally by balance</li>
+                    <li><span class="text-white">Central pool:</span> 47.5% of all fees are shared across all holders weighted by volume — hold high-volume tokens for a bigger slice</li>
+                    <li>Airdrops stack with platform token holdings — earn from both pools simultaneously</li>
                     <li>SOL is sent directly to your wallet; no claiming required</li>
                 </ul>
             </div>
@@ -2643,15 +2676,20 @@
             </div>
 
             <div class="bg-cyan-900/30 p-3 rounded border border-cyan-700/50 mt-4">
-                <p class="text-cyan-400 text-xs uppercase mb-1">Distribution Formula (v26.3)</p>
-                <p class="text-xs text-gray-300">Your SOL = Pool × 99% × <span class="text-cyan-400">(Your Balance / Total Tracked Holder Balances)</span></p>
-                <p class="text-xs text-gray-400 mt-1">Identical formula for platform and partner (Robinhood) tokens</p>
-                <p class="text-xs text-gray-400 mt-1">LP wallets and burnt tokens are excluded from the denominator</p>
+                <p class="text-cyan-400 text-xs uppercase mb-1">Per-Token Formula</p>
+                <p class="text-xs text-gray-300">Your SOL = Token Pool × 99% × <span class="text-cyan-400">(Your Balance / Total Tracked Holder Balances)</span></p>
+                <p class="text-xs text-gray-400 mt-1">LP wallets and burnt tokens are excluded from the denominator. Fires at <span class="text-yellow-400">1 SOL</span>.</p>
+            </div>
+
+            <div class="bg-orange-900/30 p-3 rounded border border-orange-700/50 mt-4">
+                <p class="text-orange-400 text-xs uppercase mb-1">Central Pool Formula</p>
+                <p class="text-xs text-gray-300">Score = Σ <span class="text-orange-400">(balance / 1B supply) × (tokenVol24h / totalVol)</span> per eligible token held</p>
+                <p class="text-xs text-gray-400 mt-1">Your central pool share = centralPool × (Your Score / Total Scores). Fires at <span class="text-orange-400">2.5 SOL</span>.</p>
             </div>
 
             <div class="bg-purple-900/30 p-3 rounded border border-purple-700/50 mt-4">
                 <p class="text-purple-400 text-xs uppercase mb-1">ASDF Bonus</p>
-                <p class="text-xs text-gray-300">Top 100 <span class="text-purple-400">$ASDF</span> holders receive <span class="text-white font-semibold">2× weight</span> in SOL airdrop distribution</p>
+                <p class="text-xs text-gray-300">Top 100 <span class="text-purple-400">$ASDF</span> holders receive <span class="text-white font-semibold">2× weight</span> in per-token distributions</p>
                 <p class="text-xs text-gray-400 mt-1">Applies to both platform and partner (Robinhood) tokens</p>
             </div>
         </div>
@@ -2777,9 +2815,10 @@
             <div class="bg-yellow-900/30 p-4 rounded border border-yellow-700/50">
                 <p class="text-yellow-400 text-xs uppercase mb-2 font-bold">How to Earn SOL Airdrops</p>
                 <ul class="text-xs text-gray-300 space-y-1.5">
-                    <li class="flex items-start gap-2"><span class="text-yellow-400">•</span><span><span class="text-white font-medium">Hold tokens</span> - Be in top 250 holders; your share = your balance ÷ total tracked balances</span></li>
-                    <li class="flex items-start gap-2"><span class="text-green-400">•</span><span><span class="text-white font-medium">Robinhood partners</span> - Hold external tokens that share fees with us</span></li>
-                    <li class="flex items-start gap-2"><span class="text-purple-400">•</span><span><span class="text-white font-medium">ASDF multiplier</span> - Top 100 $ASDF holders get 2× weight in SOL airdrop distribution</span></li>
+                    <li class="flex items-start gap-2"><span class="text-yellow-400">•</span><span><span class="text-white font-medium">Per-token pool</span> - Be in top 250 holders; your share = balance ÷ total tracked balances. Fires at <span class="text-yellow-400">1 SOL</span>.</span></li>
+                    <li class="flex items-start gap-2"><span class="text-orange-400">•</span><span><span class="text-white font-medium">Central pool</span> - Earn from every token you hold, weighted by each token's daily volume. Fires at <span class="text-orange-400">2.5 SOL</span>.</span></li>
+                    <li class="flex items-start gap-2"><span class="text-green-400">•</span><span><span class="text-white font-medium">Robinhood partners</span> - Hold external tokens that share fees with us — counts toward both pools</span></li>
+                    <li class="flex items-start gap-2"><span class="text-purple-400">•</span><span><span class="text-white font-medium">ASDF multiplier</span> - Top 100 $ASDF holders get 2× weight in per-token distributions</span></li>
                 </ul>
             </div>
 
@@ -2800,27 +2839,29 @@
                 <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
                     <p class="text-gray-400 text-[10px] uppercase mb-1">Fee Collection</p>
                     <p class="text-white font-mono text-lg">Every 2.5 min</p>
-                    <p class="text-[10px] text-gray-500">When >0.05 SOL pending</p>
+                    <p class="text-[10px] text-gray-500">47.5% token pool + 47.5% central</p>
                 </div>
                 <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
                     <p class="text-gray-400 text-[10px] uppercase mb-1">SOL Airdrops</p>
                     <p class="text-white font-mono text-lg">Every 15 min</p>
-                    <p class="text-[10px] text-gray-500">When >1.0 SOL in pool</p>
+                    <p class="text-[10px] text-gray-500">Token pools: 1 SOL · Central: 2.5 SOL</p>
                 </div>
             </div>
 
             <!-- Fee Distribution -->
             <div class="bg-gray-800/30 p-3 rounded border border-gray-700/50">
                 <p class="text-gray-400 text-xs uppercase mb-2 font-bold">Fee Distribution</p>
-                <div class="flex items-center gap-2 text-xs">
-                    <span class="bg-purple-600 px-2 py-1 rounded text-white font-bold">95%</span>
-                    <span class="text-gray-300">Airdrop Pool</span>
-                    <span class="text-gray-600">|</span>
-                    <span class="bg-red-600 px-2 py-1 rounded text-white font-bold">4.5%</span>
-                    <span class="text-gray-300">Burns</span>
-                    <span class="text-gray-600">|</span>
-                    <span class="bg-gray-600 px-2 py-1 rounded text-white font-bold">0.5%</span>
-                    <span class="text-gray-300">Reserves</span>
+                <div class="w-full rounded-full overflow-hidden flex h-4 mb-2 text-[9px] font-bold">
+                    <div class="flex items-center justify-center text-white" style="width:47.5%;background:#7c3aed;">47.5%</div>
+                    <div class="flex items-center justify-center text-white" style="width:47.5%;background:#ea580c;">47.5%</div>
+                    <div class="flex items-center justify-center text-white" style="width:4.5%;background:#dc2626;"></div>
+                    <div class="flex items-center justify-center text-white" style="width:0.5%;background:#4b5563;"></div>
+                </div>
+                <div class="flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
+                    <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#7c3aed;"></span><span class="text-gray-300">Token Pools</span></span>
+                    <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#ea580c;"></span><span class="text-gray-300">Central Pool</span></span>
+                    <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#dc2626;"></span><span class="text-gray-300">Burns (4.5%)</span></span>
+                    <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#4b5563;"></span><span class="text-gray-300">Reserves (0.5%)</span></span>
                 </div>
             </div>
 
@@ -3272,10 +3313,20 @@
 
             // Update stats
             if (data.airdropPoolSol !== undefined) {
-                const poolFormatted = parseFloat(data.airdropPoolSol).toFixed(3);
+                const tokenPoolsSolWs = parseFloat(data.tokenPoolsSol ?? data.airdropPoolSol);
+                const poolFormatted = tokenPoolsSolWs.toFixed(3);
                 if (ui.airdropBalance) ui.airdropBalance.innerHTML = `${poolFormatted}&nbsp;<span class="text-lg align-top text-purple-400">SOL</span>`;
                 updateCountdownPool(poolFormatted);
                 syncHomeStats();
+            }
+            if (data.centralPoolSol !== undefined && ui.homeCentralPoolBalance) {
+                const cpSolVal = parseFloat(data.centralPoolSol);
+                const cpFmt = cpSolVal.toFixed(2);
+                ui.homeCentralPoolBalance.innerHTML = `${cpFmt}&nbsp;<span class="text-base align-top text-orange-400">SOL</span>`;
+                const pbar = document.getElementById('central-pool-progress-bar');
+                const plabel = document.getElementById('central-pool-progress-label');
+                if (pbar) pbar.style.width = Math.min(100, (cpSolVal / 2.5) * 100).toFixed(1) + '%';
+                if (plabel) plabel.textContent = cpFmt + ' / 2.5 SOL';
             }
 
             // Update leaderboard if provided
@@ -3575,6 +3626,7 @@
         leaderboardLastUpdated: document.getElementById('leaderboard-last-updated'),
         airdropBalance: document.getElementById('airdrop-balance'),
         homeAirdropBalance: document.getElementById('home-airdrop-balance'),
+        homeCentralPoolBalance: document.getElementById('home-central-pool-balance'),
         homeMetricPump: document.getElementById('home-metric-pump'),
         homeMetricFees: document.getElementById('home-metric-fees'),
         homeRobinhoodCount: document.getElementById('home-robinhood-count'),
@@ -3929,6 +3981,19 @@
             ui.userTotalPoints.innerText = positionsCount;
             updateExpectedAirdropDisplay(data.expectedAirdrop, data.belowMinimum);
 
+            // v27.0: Populate per-pool breakdown
+            const tokenPoolExpected = parseFloat(data.perTokenExpectedAirdrop || 0);
+            const cpExpected = parseFloat(data.centralPoolExpectedAirdrop || holdingsData.centralPoolExpectedSol || 0);
+            const tokenPoolsEl = document.getElementById('expected-airdrop-token-pools');
+            const centralPoolEl = document.getElementById('expected-airdrop-central-pool');
+            const breakdownSection = document.getElementById('pool-breakdown-section');
+            if (tokenPoolsEl) tokenPoolsEl.textContent = tokenPoolExpected.toFixed(4) + ' SOL';
+            if (centralPoolEl) centralPoolEl.textContent = cpExpected.toFixed(4) + ' SOL';
+            // Show breakdown section when there is any airdrop data
+            if (breakdownSection && (tokenPoolExpected > 0 || cpExpected > 0)) {
+                breakdownSection.classList.remove('hidden');
+            }
+
             if (data.isAsdfTop50) {
                 ui.pointsMultiplierBadge.classList.remove('hidden');
             } else {
@@ -3939,7 +4004,7 @@
             const holdings = (holdingsData.holdings || []).filter(h => h.isEligible);
             if (!holdingsBody) return;
 
-            if (holdings.length === 0) {
+            if (holdings.length === 0 && cpExpected <= 0) {
                 holdingsBody.innerHTML = '<tr><td colspan="4" class="text-center text-purple-400/30 py-5 font-mono text-[10px]">No eligible token holdings found</td></tr>';
                 return;
             }
@@ -3977,7 +4042,29 @@
                     <td class="py-1.5 text-right font-mono">${expCell} <span class="text-gray-500 text-[9px]">SOL</span></td>
                 </tr>`;
             }
-            holdingsBody.innerHTML = rows;
+            // v27.0: Add central pool row at the bottom
+            if (cpExpected > 0) {
+                const cpExpCell = cpExpected < MIN_AIRDROP
+                    ? `<span class="text-yellow-400/80" title="Below 0.01 SOL minimum">${cpExpected.toFixed(5)} ⚠</span>`
+                    : `<span class="text-orange-300">${cpExpected.toFixed(5)}</span>`;
+                rows += `<tr style="border-top:2px solid rgba(245,158,11,0.2);background:rgba(245,158,11,0.04);">
+                    <td class="py-2 pr-2">
+                        <div class="flex items-center gap-1.5">
+                            <div class="w-5 h-5 rounded flex items-center justify-center" style="background:linear-gradient(135deg,rgba(245,158,11,0.25),rgba(239,68,68,0.15));border:1px solid rgba(245,158,11,0.4);">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-orange-300"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                            </div>
+                            <div>
+                                <span class="text-orange-300 font-mono font-bold text-[11px]">Central Pool</span>
+                                <span class="text-orange-500/50 text-[9px] ml-1">all tokens</span>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="py-2 pr-2 text-right font-mono text-[9px]" style="color:rgba(245,158,11,0.5);">vol-weighted</td>
+                    <td class="py-2 pr-2 text-right font-mono text-[9px]" style="color:rgba(245,158,11,0.4);">shared</td>
+                    <td class="py-2 text-right font-mono">${cpExpCell} <span class="text-gray-500 text-[9px]">SOL</span></td>
+                </tr>`;
+            }
+            holdingsBody.innerHTML = rows || '<tr><td colspan="4" class="text-center text-purple-400/30 py-5 font-mono text-[10px]">No eligible token holdings found</td></tr>';
 
         } catch (e) {
             console.error("Status check error", e);
@@ -4096,11 +4183,20 @@
                 // v14.0: Also display actual wallet balance
                 // v25.3: Also update countdown banner pool amount
                 if (data.airdropPoolSol !== undefined) {
-                    const airdropPoolSol = parseFloat(data.airdropPoolSol);
-                    const poolHTML = `${airdropPoolSol.toFixed(2)}&nbsp;<span class="text-lg align-top text-purple-400">SOL</span>`;
-                    if (ui.airdropBalance) ui.airdropBalance.innerHTML = poolHTML;
-                    if (ui.homeAirdropBalance) ui.homeAirdropBalance.innerHTML = poolHTML;
-                    updateCountdownPool(airdropPoolSol.toFixed(2));
+                    const tokenPoolsSol = parseFloat(data.tokenPoolsSol ?? data.airdropPoolSol);
+                    const tokenPoolHTML = `${tokenPoolsSol.toFixed(2)}&nbsp;<span class="text-lg align-top text-purple-400">SOL</span>`;
+                    if (ui.airdropBalance) ui.airdropBalance.innerHTML = tokenPoolHTML;
+                    if (ui.homeAirdropBalance) ui.homeAirdropBalance.innerHTML = tokenPoolHTML;
+                    updateCountdownPool(tokenPoolsSol.toFixed(2));
+                    // v27.0: Central pool display
+                    if (data.centralPoolSol !== undefined && ui.homeCentralPoolBalance) {
+                        const cpSol = parseFloat(data.centralPoolSol);
+                        ui.homeCentralPoolBalance.innerHTML = `${cpSol.toFixed(2)}&nbsp;<span class="text-base align-top text-orange-400">SOL</span>`;
+                        const pbar = document.getElementById('central-pool-progress-bar');
+                        const plabel = document.getElementById('central-pool-progress-label');
+                        if (pbar) pbar.style.width = Math.min(100, (cpSol / 2.5) * 100).toFixed(1) + '%';
+                        if (plabel) plabel.textContent = cpSol.toFixed(2) + ' / 2.5 SOL';
+                    }
                 } else if (data.pumpHoldings !== undefined) {
                     // Fallback for backwards compatibility
                     currentPumpHoldings = parseFloat(data.pumpHoldings);

@@ -456,6 +456,24 @@ async function createSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_airdrop_logs_mint ON airdrop_logs(mint)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_airdrop_history_mint ON user_airdrop_history(mint)`);
 
+    // v27.0: Central pool — accumulates 50% of all token creator rewards for cross-token distribution
+    await pool.query(`
+        INSERT INTO stats (key, value) VALUES ('centralPoolLamports', 0) ON CONFLICT (key) DO NOTHING;
+    `);
+    await pool.query(`
+        INSERT INTO stats (key, value) VALUES ('lifetimeCentralPoolLamports', 0) ON CONFLICT (key) DO NOTHING;
+    `);
+
+    // v27.0: Track central pool expected airdrop separately per user for frontend breakdown
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_points' AND column_name = 'central_pool_expected_sol') THEN
+                ALTER TABLE user_points ADD COLUMN central_pool_expected_sol REAL DEFAULT 0;
+            END IF;
+        END $$;
+    `);
+
     // v25.24: Migration - Fix null balance values that cause BigInt conversion errors
     // Set default for balance column and fix any existing null values
     await pool.query(`
