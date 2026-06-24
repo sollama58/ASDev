@@ -7,6 +7,7 @@ const { BN } = require('@coral-xyz/anchor');
 const { TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, WALLETS } = require('../config/constants');
+const ASDF_SYNC_INTERVAL = config.ASDF_UPDATE_INTERVAL || 5 * 60 * 1000;
 const { logger } = require('../services');
 
 /**
@@ -90,9 +91,8 @@ function start(deps) {
     // Run immediately
     updateAsdfHolders(deps);
     
-    // Then run every 2 minutes
-    setInterval(() => updateAsdfHolders(deps), 2 * 60 * 1000);
-    logger.info("ASDF Sync started (2 min interval)");
+    setInterval(() => updateAsdfHolders(deps), ASDF_SYNC_INTERVAL);
+    logger.info(`ASDF Sync started (${ASDF_SYNC_INTERVAL / 1000}s interval)`);
 }
 
 module.exports = { updateAsdfHolders, start };

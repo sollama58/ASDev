@@ -21,6 +21,7 @@ const axios = require('axios');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
 const { logger, mutex, postgres, redis } = require('../services');
+const { fetchTokenAccountsHeliusDAS } = require('../services/heliusDAS');
 
 // v25.22 SCALABILITY: Mutex to prevent overlapping holder scans
 const holderScannerMutex = mutex.getMutex('holder_scanner');
@@ -52,93 +53,7 @@ async function withRetry(fn, context = 'RPC call') {
     throw lastError;
 }
 
-/**
- * v25.66: Fetch token accounts using Helius DAS API with pagination
- * v25.67: Fixed response parsing - handle both result wrapper and direct response
- * This handles tokens with many holders that exceed getProgramAccounts limits
- * @param {string} mint - Token mint address
- * @param {number} limit - Max accounts to fetch
- * @returns {Promise<Array<{owner: string, balance: string}>>}
- */
-async function fetchTokenAccountsHeliusDAS(mint, limit = 250) {
-    if (!config.HELIUS_API_KEY) {
-        logger.warn('[HolderScanner] No HELIUS_API_KEY configured, cannot use DAS API fallback');
-        return null;
-    }
-
-    const accounts = [];
-    let page = 1;
-    const pageSize = 100;
-
-    try {
-        while (accounts.length < limit) {
-            const response = await axios.post(
-                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
-                {
-                    jsonrpc: '2.0',
-                    id: 'token-accounts',
-                    method: 'getTokenAccounts',
-                    params: {
-                        mint: mint,
-                        page: page,
-                        limit: pageSize,
-                        options: {
-                            showZeroBalance: false
-                        }
-                    }
-                },
-                { timeout: 15000 }
-            );
-
-            // v25.67: Handle both wrapped (jsonrpc result) and direct response formats
-            const result = response.data?.result || response.data;
-            const tokenAccounts = result?.token_accounts || [];
-
-            if (tokenAccounts.length === 0) {
-                // v25.67: Log first page failure for debugging
-                if (page === 1) {
-                    logger.debug(`[HolderScanner] Helius DAS returned 0 accounts for ${mint.slice(0, 8)} (page 1)`, {
-                        hasResult: !!response.data?.result,
-                        directData: !!response.data?.token_accounts,
-                        responseKeys: Object.keys(response.data || {}).slice(0, 5)
-                    });
-                }
-                break;
-            }
-
-            for (const acc of tokenAccounts) {
-                if (accounts.length >= limit) break;
-                // v25.67: Handle amount as number or string, also check for tokenAmount nested structure
-                const owner = acc.owner;
-                const amount = acc.amount ?? acc.tokenAmount?.amount ?? acc.balance;
-
-                if (owner && amount !== undefined && amount !== null && amount !== 0 && amount !== '0') {
-                    accounts.push({
-                        owner: owner,
-                        balance: amount.toString()
-                    });
-                }
-            }
-
-            if (tokenAccounts.length < pageSize) {
-                break;
-            }
-
-            page++;
-            await new Promise(r => setTimeout(r, 100));
-        }
-
-        // v25.67: Log success for debugging
-        if (accounts.length > 0) {
-            logger.debug(`[HolderScanner] Helius DAS found ${accounts.length} accounts for ${mint.slice(0, 8)}`);
-        }
-
-        return accounts;
-    } catch (e) {
-        logger.warn(`[HolderScanner] Helius DAS API failed for ${mint.slice(0, 8)}: ${e.message}`);
-        return null;
-    }
-}
+// fetchTokenAccountsHeliusDAS is imported from ../services/heliusDAS
 
 // Constants for point calculation
 const TOP_HOLDERS_LIMIT = 250; // Track top 250 holders per eligible token
@@ -340,7 +255,7 @@ async function updateGlobalState(deps) {
 
                 // v25.66: Use Helius DAS API fallback for tokens with many holders (gets all 250)
                 if (usedFallback) {
-                    const dasAccounts = await fetchTokenAccountsHeliusDAS(token.mint, TOP_HOLDERS_LIMIT);
+                    const dasAccounts = await fetchTokenAccountsHeliusDAS(token.mint, TOP_HOLDERS_LIMIT, 'HolderScanner');
 
                     if (dasAccounts && dasAccounts.length > 0) {
                         // Sort by balance descending and filter

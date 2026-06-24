@@ -30,6 +30,7 @@ const signatureVerifier = require('./signatureVerifier');
 const claudeKoth = require('./claudeKoth');
 const pags = require('./pags');
 const pagsTwitterAuth = require('./pagsTwitterAuth');
+const heliusDAS = require('./heliusDAS');
 
 // v13.0: Use PostgreSQL as the database layer
 const database = postgres;
@@ -56,4 +57,5 @@ module.exports = {
     claudeKoth,
     pags,
     pagsTwitterAuth,
+    heliusDAS,
 };

@@ -39,7 +39,9 @@
       "PowerShell(Get-ChildItem -Path \"C:\\\\VSCode\\\\ASDev\" -Recurse -Directory -ErrorAction SilentlyContinue | Select-Object -First 30 FullName | ForEach-Object { $_.FullName })",
       "PowerShell(head -30)",
       "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\tasks\\\\flywheel.js\")",
-      "PowerShell(if \\($?\\) { \"OK\" } else { \"SYNTAX ERROR\" })"
+      "PowerShell(if \\($?\\) { \"OK\" } else { \"SYNTAX ERROR\" })",
+      "Bash(Get-ChildItem -Path \"c:\\\\VSCode\\\\ASDev\" -Force)",
+      "Bash(Select-Object Name, PSIsContainer)"
     ]
   }
 }

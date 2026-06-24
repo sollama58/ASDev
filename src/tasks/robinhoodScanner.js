@@ -13,10 +13,19 @@ const axios = require('axios');
 const config = require('../config/env');
 const { PROGRAMS, WALLETS } = require('../config/constants');
 const { logger, pump, mutex, mintExtractor, imageUtils } = require('../services');
+const { fetchTokenAccountsHeliusDAS } = require('../services/heliusDAS');
 
 // RACE CONDITION FIX: Use mutex instead of boolean flag
 const scannerMutex = mutex.getMutex('robinhood_scanner');
 let websocketSubscription = null;
+
+// Per-token reverify cooldown: skip tokens verified within the last 2 hours
+const REVERIFY_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+const lastReverifiedAt = new Map(); // mint -> timestamp
+
+// Zero-pending fee cache: skip vault checks for tokens confirmed empty within 30 min
+const ZERO_PENDING_COOLDOWN_MS = 30 * 60 * 1000;
+const lastZeroPendingAt = new Map(); // mint -> timestamp
 
 /**
  * Parse fee sharing config account data
@@ -252,9 +261,14 @@ async function reverifyRobinhoodTokens(deps) {
             return;
         }
 
-        logger.info(`[Robinhood] Re-verifying ${tokens.length} tokens...`);
+        const now = Date.now();
+        const tokensNeedingReverify = tokens.filter(t => {
+            const last = lastReverifiedAt.get(t.mint);
+            return !last || (now - last) >= REVERIFY_COOLDOWN_MS;
+        });
+        logger.info(`[Robinhood] Re-verifying ${tokensNeedingReverify.length}/${tokens.length} tokens (${tokens.length - tokensNeedingReverify.length} skipped, verified within 2h)...`);
 
-        for (const token of tokens) {
+        for (const token of tokensNeedingReverify) {
             try {
                 // Re-verify on-chain fee recipient status
                 const result = await mintExtractor.verifyFeeRecipient(
@@ -272,11 +286,16 @@ async function reverifyRobinhoodTokens(deps) {
                         // Verification succeeded and we're genuinely no longer a fee recipient
                         logger.warn(`[Robinhood] ${token.ticker} (${token.mint.slice(0, 8)}...) - No longer a fee recipient, deactivating`);
                         await db.run('UPDATE robinhood_tokens SET "isActive" = 0 WHERE id = $1', [token.id]);
+                        lastReverifiedAt.set(token.mint, Date.now());
                     }
-                } else if (result.feeShareBps !== token.feeShareBps) {
-                    // Fee share changed - update it
-                    logger.info(`[Robinhood] ${token.ticker} - Fee share changed: ${token.feeShareBps} -> ${result.feeShareBps} bps`);
-                    await db.run('UPDATE robinhood_tokens SET "feeShareBps" = $1 WHERE id = $2', [result.feeShareBps, token.id]);
+                } else {
+                    if (result.feeShareBps !== token.feeShareBps) {
+                        // Fee share changed - update it
+                        logger.info(`[Robinhood] ${token.ticker} - Fee share changed: ${token.feeShareBps} -> ${result.feeShareBps} bps`);
+                        await db.run('UPDATE robinhood_tokens SET "feeShareBps" = $1 WHERE id = $2', [result.feeShareBps, token.id]);
+                    }
+                    // Mark as verified — won't be re-checked for 2 hours
+                    lastReverifiedAt.set(token.mint, Date.now());
                 }
 
                 // Rate limit
@@ -436,94 +455,7 @@ async function updateRobinhoodTokenMetadata(deps) {
     }
 }
 
-/**
- * v25.66: Fetch token accounts using Helius DAS API with pagination
- * v25.67: Fixed response parsing - handle both result wrapper and direct response
- * This handles tokens with many holders that exceed getProgramAccounts limits
- * @param {string} mint - Token mint address
- * @param {number} limit - Max accounts to fetch
- * @returns {Promise<Array<{owner: string, balance: string}>>}
- */
-async function fetchTokenAccountsHeliusDAS(mint, limit = 250) {
-    if (!config.HELIUS_API_KEY) {
-        logger.warn('[Robinhood] No HELIUS_API_KEY configured, cannot use DAS API fallback');
-        return null;
-    }
-
-    const accounts = [];
-    let page = 1;
-    const pageSize = 100; // Helius DAS supports up to 1000 per page, but 100 is safer
-
-    try {
-        while (accounts.length < limit) {
-            const response = await axios.post(
-                `https://mainnet.helius-rpc.com/?api-key=${config.HELIUS_API_KEY}`,
-                {
-                    jsonrpc: '2.0',
-                    id: 'token-accounts',
-                    method: 'getTokenAccounts',
-                    params: {
-                        mint: mint,
-                        page: page,
-                        limit: pageSize,
-                        options: {
-                            showZeroBalance: false
-                        }
-                    }
-                },
-                { timeout: 15000 }
-            );
-
-            // v25.67: Handle both wrapped (jsonrpc result) and direct response formats
-            const result = response.data?.result || response.data;
-            const tokenAccounts = result?.token_accounts || [];
-
-            if (tokenAccounts.length === 0) {
-                // v25.67: Log first page failure for debugging
-                if (page === 1) {
-                    logger.debug(`[Robinhood] Helius DAS returned 0 accounts for ${mint.slice(0, 8)} (page 1)`, {
-                        hasResult: !!response.data?.result,
-                        directData: !!response.data?.token_accounts,
-                        responseKeys: Object.keys(response.data || {}).slice(0, 5)
-                    });
-                }
-                break; // No more accounts
-            }
-
-            for (const acc of tokenAccounts) {
-                if (accounts.length >= limit) break;
-                // v25.67: Handle amount as number or string, also check for tokenAmount nested structure
-                const owner = acc.owner;
-                const amount = acc.amount ?? acc.tokenAmount?.amount ?? acc.balance;
-
-                if (owner && amount !== undefined && amount !== null && amount !== 0 && amount !== '0') {
-                    accounts.push({
-                        owner: owner,
-                        balance: amount.toString()
-                    });
-                }
-            }
-
-            // Check if there are more pages
-            if (tokenAccounts.length < pageSize) {
-                break; // Last page
-            }
-
-            page++;
-            await new Promise(r => setTimeout(r, 100)); // Rate limit between pages
-        }
-
-        // v25.67: Log success for debugging
-        if (accounts.length > 0) {
-            logger.debug(`[Robinhood] Helius DAS found ${accounts.length} accounts for ${mint.slice(0, 8)}`);
-        }
-
-        return accounts;
-    } catch (e) {
-        logger.warn(`[Robinhood] Helius DAS API failed for ${mint.slice(0, 8)}: ${e.message}`);
-        return null;
-    }
-}
+// fetchTokenAccountsHeliusDAS is imported from ../services/heliusDAS
 
 /**
  * Update holders for all active Robinhood tokens
@@ -635,7 +567,7 @@ async function updateRobinhoodHolders(deps) {
 
                 // v25.66: Use Helius DAS API fallback for tokens with many holders
                 if (usedFallback) {
-                    const dasAccounts = await fetchTokenAccountsHeliusDAS(token.mint, TOP_HOLDERS_LIMIT);
+                    const dasAccounts = await fetchTokenAccountsHeliusDAS(token.mint, TOP_HOLDERS_LIMIT, 'Robinhood');
 
                     if (dasAccounts && dasAccounts.length > 0) {
                         // Sort by balance descending and filter
@@ -700,38 +632,39 @@ async function updateRobinhoodHolders(deps) {
                 );
                 const hadExistingHolders = (existingHolders?.count || 0) > 0;
 
-                // If we got holders from RPC, update the database
+                // If we got holders from RPC, update the database atomically
                 if (holdersToInsert.length > 0) {
-                    // DELETE then batch INSERT
-                    await db.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [token.mint]);
-
                     const BATCH_SIZE = 50;
                     const now = Date.now();
 
-                    for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
-                        const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
-                        const placeholders = batch.map((_, idx) => {
-                            const baseIdx = idx * 5;
-                            return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5})`;
-                        }).join(', ');
+                    await db.transaction(async (tx) => {
+                        await tx.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [token.mint]);
 
-                        const params = batch.flatMap((h, idx) => [
-                            h.mint,
-                            h.owner,
-                            h.balance,
-                            i + idx + 1,  // rank
-                            now
-                        ]);
+                        for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
+                            const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
+                            const placeholders = batch.map((_, idx) => {
+                                const baseIdx = idx * 5;
+                                return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5})`;
+                            }).join(', ');
 
-                        await db.run(`
-                            INSERT INTO robinhood_token_holders (mint, "holderPubkey", balance, rank, "updatedAt")
-                            VALUES ${placeholders}
-                            ON CONFLICT (mint, "holderPubkey") DO UPDATE SET
-                                balance = EXCLUDED.balance,
-                                rank = EXCLUDED.rank,
-                                "updatedAt" = EXCLUDED."updatedAt"
-                        `, params);
-                    }
+                            const params = batch.flatMap((h, idx) => [
+                                h.mint,
+                                h.owner,
+                                h.balance,
+                                i + idx + 1,
+                                now
+                            ]);
+
+                            await tx.run(`
+                                INSERT INTO robinhood_token_holders (mint, "holderPubkey", balance, rank, "updatedAt")
+                                VALUES ${placeholders}
+                                ON CONFLICT (mint, "holderPubkey") DO UPDATE SET
+                                    balance = EXCLUDED.balance,
+                                    rank = EXCLUDED.rank,
+                                    "updatedAt" = EXCLUDED."updatedAt"
+                            `, params);
+                        }
+                    });
 
                     totalHoldersUpdated += holdersToInsert.length;
                     tokensWithHolders++;
@@ -836,9 +769,16 @@ async function updatePendingFeesInDb(deps) {
         // Get all active Robinhood tokens
         const tokens = await db.all('SELECT id, mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 500');
 
+        const now = Date.now();
         let totalUpdated = 0;
         for (const token of tokens) {
             try {
+                // Skip vault check for tokens confirmed to have zero pending fees within 30 min
+                const lastZero = lastZeroPendingAt.get(token.mint);
+                if (lastZero && (now - lastZero) < ZERO_PENDING_COOLDOWN_MS) {
+                    continue;
+                }
+
                 // v25.90: Use same vault derivation logic as getRobinhoodPendingFees
                 let bcVault, ammVaultAta;
                 if (token.feeVaultAddress) {
@@ -862,7 +802,9 @@ async function updatePendingFeesInDb(deps) {
                         const ourShare = Math.floor((bcInfo.lamports - 5000) * (token.feeShareBps / 10000));
                         tokenFeeAmount += ourShare;
                     }
-                } catch (e) { /* Silent */ }
+                } catch (e) {
+                    logger.debug(`[Robinhood] BC vault check failed for ${token.ticker || token.mint?.slice(0, 8)}`, { error: e.message });
+                }
 
                 // Check AMM vault
                 try {
@@ -872,12 +814,22 @@ async function updatePendingFeesInDb(deps) {
                         const ourShare = Math.floor(parseInt(bal.value.amount) * (token.feeShareBps / 10000));
                         tokenFeeAmount += ourShare;
                     }
-                } catch (e) { /* Silent */ }
+                } catch (e) {
+                    logger.debug(`[Robinhood] AMM vault check failed for ${token.ticker || token.mint?.slice(0, 8)}`, { error: e.message });
+                }
 
                 // Update database with pending fees in SOL (not lamports)
                 const pendingFeesSol = tokenFeeAmount / LAMPORTS_PER_SOL;
                 await db.run('UPDATE robinhood_tokens SET "pendingFees" = $1 WHERE id = $2', [pendingFeesSol, token.id]);
                 totalUpdated++;
+
+                // Cache zero-pending result so this vault is skipped for 30 minutes
+                if (tokenFeeAmount === 0) {
+                    lastZeroPendingAt.set(token.mint, Date.now());
+                } else {
+                    // Has pending fees — clear the zero cache so it stays visible
+                    lastZeroPendingAt.delete(token.mint);
+                }
 
             } catch (e) {
                 logger.debug(`[Robinhood] Pending fee update error for ${token.ticker}`, { error: e.message });
@@ -952,9 +904,6 @@ async function updateRegisteredTokensMarketData(deps) {
  */
 async function updateRobinhoodState(deps) {
     try {
-        // Update market data for registered tokens (main tokens table)
-        await updateRegisteredTokensMarketData(deps);
-
         // Re-verify fee share status and update metadata for Robinhood tokens
         // This catches on-chain changes to fee sharing configs
         await reverifyRobinhoodTokens(deps);
@@ -1085,7 +1034,7 @@ async function scanSingleTokenHolders(deps, mint, ticker = null) {
 
         // v25.66: Use Helius DAS API fallback for tokens with many holders
         if (usedFallback) {
-            const dasAccounts = await fetchTokenAccountsHeliusDAS(mint, TOP_HOLDERS_LIMIT);
+            const dasAccounts = await fetchTokenAccountsHeliusDAS(mint, TOP_HOLDERS_LIMIT, 'Robinhood');
 
             if (dasAccounts && dasAccounts.length > 0) {
                 // Sort by balance descending and filter
