@@ -1061,6 +1061,46 @@ function initAsdfSyncWorker(deps) {
     logger.info('[Worker] ASDF sync worker initialized');
 }
 
+function initAnsemSyncWorker(deps) {
+    const { fetchTokenAccountsHeliusDAS } = require('../services/heliusDAS');
+
+    async function updateAnsemHolders() {
+        try {
+            const mint = TOKENS.ANSEM;
+            if (!mint) {
+                logger.warn('[Worker] ANSEM token address not configured');
+                return;
+            }
+
+            // Top 1000 holders — use Helius DAS to avoid RPC limits
+            const accounts = await fetchTokenAccountsHeliusDAS(mint, 1000, 'AnsemSync');
+            if (!accounts || accounts.length === 0) {
+                logger.warn('[Worker] ANSEM Sync: Helius DAS returned no accounts');
+                return;
+            }
+
+            // Sort by balance descending and take top 1000 owners
+            const sorted = accounts
+                .filter(a => a.owner && BigInt(a.balance || '0') > 0n)
+                .sort((a, b) => {
+                    const diff = BigInt(b.balance || '0') - BigInt(a.balance || '0');
+                    return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+                })
+                .slice(0, 1000)
+                .map(a => a.owner);
+
+            await redis.setAnsemTop1000Holders(sorted);
+            logger.info(`[Worker] ANSEM Sync: Updated Top 1000 Holders. Tracking ${sorted.length}.`);
+        } catch (e) {
+            logger.error('[Worker] ANSEM Sync Failed', { error: e.message });
+        }
+    }
+
+    updateAnsemHolders();
+    setInterval(updateAnsemHolders, 5 * 60 * 1000); // every 5 minutes
+    logger.info('[Worker] ANSEM sync worker initialized');
+}
+
 module.exports = {
     initDeployWorker,
     initSocialWorker,
@@ -1069,4 +1109,5 @@ module.exports = {
     initMetadataUpdaterWorker,
     initRobinhoodScannerWorker,
     initAsdfSyncWorker,
+    initAnsemSyncWorker,
 };

@@ -599,6 +599,134 @@
         .lb-empty-icon { font-size: 32px; margin-bottom: 12px; }
         .lb-empty-text { font-size: 14px; }
 
+        /* ── Wallet Lookup ── */
+        .wallet-lookup-body { padding: 16px 20px 20px; }
+
+        .lookup-summary {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1px;
+            background: var(--border);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+            margin-top: 16px;
+        }
+        .lookup-stat {
+            background: var(--surface2);
+            padding: 14px 16px;
+            text-align: center;
+        }
+        .lookup-stat-label {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.4px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 5px;
+        }
+        .lookup-stat-value {
+            font-size: 18px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            color: var(--accent);
+            line-height: 1.1;
+        }
+        .lookup-stat-value.dim { color: var(--text); }
+        .lookup-stat-sub {
+            font-size: 10px;
+            color: var(--muted);
+            margin-top: 2px;
+        }
+
+        .lookup-below-min {
+            margin-top: 10px;
+            padding: 8px 12px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            color: var(--text2);
+        }
+
+        .lookup-holdings {
+            margin-top: 14px;
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+        }
+        .lookup-holdings-title {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.4px;
+            text-transform: uppercase;
+            color: var(--muted);
+            padding: 9px 14px;
+            background: var(--surface2);
+            border-bottom: 1px solid var(--border);
+        }
+        .lookup-holdings-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .lookup-holdings-table th {
+            padding: 7px 12px;
+            text-align: left;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--muted);
+            background: var(--surface2);
+            border-bottom: 1px solid var(--border);
+        }
+        .lookup-holdings-table th.right { text-align: right; }
+        .lookup-holdings-table td {
+            padding: 9px 12px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text2);
+        }
+        .lookup-holdings-table td.right { text-align: right; }
+        .lookup-holdings-table tr:last-child td { border-bottom: none; }
+        .lookup-holdings-table tr:hover td { background: var(--surface2); }
+
+        .lookup-no-holdings {
+            padding: 24px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .lookup-calc-note {
+            margin-top: 14px;
+            padding: 13px 14px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .lookup-calc-title {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.4px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 2px;
+        }
+        .lookup-calc-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 9px;
+            font-size: 12px;
+            color: var(--text2);
+            line-height: 1.55;
+        }
+        .lookup-calc-icon { flex-shrink: 0; font-size: 14px; line-height: 1.4; }
+        .lookup-calc-row strong { color: var(--text); }
+
         /* ── Register ── */
         .register-body { padding: 20px; }
 
@@ -1387,6 +1515,46 @@
         </div>
     </div>
 
+    <!-- Wallet Lookup -->
+    <div class="card" id="wallet-lookup-card">
+        <div class="card-header">
+            <span class="card-title">My Expected Airdrop</span>
+        </div>
+        <div class="wallet-lookup-body">
+            <div class="input-group">
+                <input
+                    class="mint-input"
+                    id="lookup-input"
+                    type="text"
+                    placeholder="Paste your wallet address…"
+                    maxlength="44"
+                    autocomplete="off"
+                    spellcheck="false"
+                    onkeydown="if(event.key==='Enter')lookupWallet()"
+                />
+                <button class="btn btn-primary" id="lookup-btn" onclick="lookupWallet()">Check</button>
+            </div>
+
+            <div class="lookup-calc-note">
+                <div class="lookup-calc-title">How your amount is calculated</div>
+                <div class="lookup-calc-row">
+                    <span class="lookup-calc-icon">🏦</span>
+                    <span><strong>Token Pools</strong> — for each registered token you hold, your share = your balance ÷ tracked supply × that token's individual pool (99% distributable). <strong>ASDF Top 100</strong> and <strong>ANSEM Top 1000</strong> holders each receive <strong>2× weight</strong> (stackable to 4×). Fires when a token's pool reaches 1 SOL.</span>
+                </div>
+                <div class="lookup-calc-row">
+                    <span class="lookup-calc-icon">⚖️</span>
+                    <span><strong>Central Pool</strong> — shared across all holders of all eligible tokens, weighted by the <strong>market cap</strong> of each token you hold. Higher-market-cap tokens contribute more to your score (0.5×–1.5× multiplier). <strong>ASDF Top 100</strong> and <strong>ANSEM Top 1000</strong> holders each receive <strong>2× weight</strong> (stackable to 4×). Fires when the central pool reaches 2.5 SOL.</span>
+                </div>
+                <div class="lookup-calc-row">
+                    <span class="lookup-calc-icon">➕</span>
+                    <span><strong>Total</strong> = token pool shares + central pool share. Must be ≥ 0.01 SOL per cycle to receive a payout — smaller amounts accumulate until the threshold is met.</span>
+                </div>
+            </div>
+
+            <div id="lookup-result"></div>
+        </div>
+    </div>
+
     <!-- Leaderboard -->
     <div class="card">
         <div class="card-header">
@@ -1573,6 +1741,39 @@
                 <div class="about-section-title">For Token Holders</div>
                 <p>Simply hold tokens that are registered on Bullpad. SOL distributions are sent directly to your wallet based on your proportional share of the token's supply (excluding LP and burnt tokens). You can track expected airdrop amounts by clicking any token in the leaderboard.</p>
                 <p>A minimum distribution of 0.01 SOL per wallet applies — holders below this threshold in a given cycle are skipped to avoid dust transactions.</p>
+            </div>
+
+            <div class="about-divider"></div>
+
+            <div class="about-section">
+                <div class="about-section-title">How Your Airdrop Amount is Calculated</div>
+                <p>Your total expected airdrop each cycle is the sum of two independent calculations — one from the Central Pool and one from each Individual Token Pool you hold.</p>
+
+                <div class="about-steps" style="margin-top:14px">
+                    <div class="about-step">
+                        <div class="about-step-icon">🏦</div>
+                        <div class="about-step-text">
+                            <strong>Individual Token Pool (per-token):</strong> When a token's individual pool reaches 1 SOL, 99% is distributed to its holders.<br><br>
+                            Your share = <code style="background:var(--surface3);padding:1px 5px;border-radius:3px;font-size:11px">your balance ÷ total tracked supply × distributable pool</code><br><br>
+                            Balances held by LP and bonding curve accounts are excluded from the denominator. <strong>ASDF Top 100</strong> and <strong>ANSEM Top 1000</strong> holders each have their effective balance doubled (stackable to 4× if you hold both), giving greater weight in this distribution.
+                        </div>
+                    </div>
+                    <div class="about-step">
+                        <div class="about-step-icon">⚖️</div>
+                        <div class="about-step-text">
+                            <strong>Central Pool (shared):</strong> When the central pool reaches 2.5 SOL, 99% is distributed across all holders of all eligible tokens. The split is <em>market-cap-weighted</em> — tokens with higher market cap contribute more weight to your score.<br><br>
+                            For each eligible token you hold:<br>
+                            <code style="background:var(--surface3);padding:1px 5px;border-radius:3px;font-size:11px">score contribution = (your balance ÷ 1B supply) × market cap multiplier × ASDF bonus × ANSEM bonus</code><br><br>
+                            The market cap multiplier ranges from <strong>0.5×</strong> (very low relative market cap) to <strong>1.5×</strong> (very high relative market cap). <strong>ASDF Top 100</strong> and <strong>ANSEM Top 1000</strong> holders each receive an additional <strong>2× bonus</strong> (stackable to 4×). Your final share is your total score divided by the sum of all users' scores.
+                        </div>
+                    </div>
+                    <div class="about-step">
+                        <div class="about-step-icon">➕</div>
+                        <div class="about-step-text">
+                            <strong>Your total expected airdrop</strong> = sum of your share from each individual token pool you hold + your share of the central pool. These are added together and sent as a single SOL transaction. If the combined amount is below <strong>0.01 SOL</strong>, you are skipped for that cycle.
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -2039,6 +2240,124 @@ function updateCentralPoolThresholdBar(currentSol, thresholdSol) {
     badge.className   = 'cp-threshold-badge ' + (isReady ? 'ready' : 'building');
     cur.textContent   = currentSol.toFixed(4) + ' SOL';
     if (maxEl) maxEl.textContent = thresholdSol.toFixed(2);
+}
+
+// ── Wallet Lookup ──────────────────────────────────────────────────────────────
+async function lookupWallet() {
+    const input  = document.getElementById('lookup-input');
+    const result = document.getElementById('lookup-result');
+    const btn    = document.getElementById('lookup-btn');
+    const addr   = (input.value || '').trim();
+
+    if (!addr) return;
+    if (addr.length < 32 || addr.length > 44) {
+        result.innerHTML = `<div style="margin-top:12px;font-size:12px;color:var(--red)">Invalid wallet address.</div>`;
+        return;
+    }
+
+    btn.disabled    = true;
+    btn.textContent = 'Checking…';
+    result.innerHTML = '';
+
+    try {
+        const [holderRes, holdingsRes] = await Promise.all([
+            fetch(`${BACKEND_URL}/api/check-holder?userPubkey=${encodeURIComponent(addr)}`),
+            fetch(`${BACKEND_URL}/api/user-holdings?userPubkey=${encodeURIComponent(addr)}`)
+        ]);
+
+        const holder   = holderRes.ok   ? await holderRes.json()   : null;
+        const holdings = holdingsRes.ok ? await holdingsRes.json() : null;
+
+        if (!holder) {
+            result.innerHTML = `<div style="margin-top:12px;font-size:12px;color:var(--red)">Failed to fetch data. Try again.</div>`;
+            return;
+        }
+
+        const totalSol   = parseFloat(holder.expectedAirdrop || 0);
+        const centralSol = parseFloat(holder.centralPoolExpectedAirdrop || 0);
+        const tokenSol   = parseFloat(holder.perTokenExpectedAirdrop || 0);
+        const positions  = holder.heldPositionsCount || 0;
+
+        const isBelow  = holder.belowMinimum;
+        const isHolder = holder.isHolder;
+
+        // Summary boxes
+        const summaryHTML = `
+            <div class="lookup-summary">
+                <div class="lookup-stat">
+                    <div class="lookup-stat-label">Total Expected</div>
+                    <div class="lookup-stat-value">${totalSol.toFixed(4)}</div>
+                    <div class="lookup-stat-sub">SOL</div>
+                </div>
+                <div class="lookup-stat">
+                    <div class="lookup-stat-label">Central Pool</div>
+                    <div class="lookup-stat-value dim">${centralSol.toFixed(4)}</div>
+                    <div class="lookup-stat-sub">SOL</div>
+                </div>
+                <div class="lookup-stat">
+                    <div class="lookup-stat-label">Token Pools</div>
+                    <div class="lookup-stat-value dim">${tokenSol.toFixed(4)}</div>
+                    <div class="lookup-stat-sub">SOL · ${positions} position${positions !== 1 ? 's' : ''}</div>
+                </div>
+            </div>`;
+
+        const belowHTML = isBelow
+            ? `<div class="lookup-below-min">⚠ Your expected airdrop (${totalSol.toFixed(4)} SOL) is below the 0.01 SOL minimum per wallet. You will be skipped in the current cycle until your share grows above the threshold.</div>`
+            : '';
+
+        // Per-token holdings table
+        let holdingsHTML = '';
+        const tokenList = (holdings?.holdings || []);
+        if (!isHolder || tokenList.length === 0) {
+            holdingsHTML = `<div class="lookup-holdings"><div class="lookup-no-holdings">No registered token positions found for this wallet.</div></div>`;
+        } else {
+            const rows = tokenList.map(h => {
+                const expSol  = parseFloat(h.expectedAirdropSol || 0);
+                const eligible = h.isEligible
+                    ? `<span style="font-size:10px;font-weight:700;color:var(--green);background:var(--green-dim);border:1px solid rgba(34,197,94,0.25);border-radius:3px;padding:1px 5px">ELIGIBLE</span>`
+                    : `<span style="font-size:10px;font-weight:700;color:var(--muted);background:var(--surface3);border:1px solid var(--border2);border-radius:3px;padding:1px 5px">LOW VOL</span>`;
+                return `<tr>
+                    <td><strong style="color:var(--text)">$${esc(h.ticker || '?')}</strong></td>
+                    <td>${esc(h.name || '')}</td>
+                    <td class="right">${parseFloat(h.ownershipPct || 0).toFixed(2)}%</td>
+                    <td class="right">${eligible}</td>
+                    <td class="right" style="color:var(--accent);font-weight:700">${expSol > 0 ? expSol.toFixed(6) + ' SOL' : '—'}</td>
+                </tr>`;
+            }).join('');
+
+            const centralPoolSol = parseFloat(holdings.centralPoolExpectedSol || 0);
+            const centralRow = centralPoolSol > 0
+                ? `<tr style="border-top:1px solid var(--border2)">
+                       <td colspan="4" style="color:var(--muted);font-style:italic">Central Pool share (across all tokens)</td>
+                       <td class="right" style="color:var(--accent);font-weight:700">${centralPoolSol.toFixed(6)} SOL</td>
+                   </tr>`
+                : '';
+
+            holdingsHTML = `
+                <div class="lookup-holdings">
+                    <div class="lookup-holdings-title">Per-Token Breakdown</div>
+                    <table class="lookup-holdings-table">
+                        <thead>
+                            <tr>
+                                <th>Token</th>
+                                <th>Name</th>
+                                <th class="right">Your %</th>
+                                <th class="right">Status</th>
+                                <th class="right">Expected</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}${centralRow}</tbody>
+                    </table>
+                </div>`;
+        }
+
+        result.innerHTML = summaryHTML + belowHTML + holdingsHTML;
+    } catch (e) {
+        result.innerHTML = `<div style="margin-top:12px;font-size:12px;color:var(--red)">Error: ${esc(e.message)}</div>`;
+    } finally {
+        btn.disabled    = false;
+        btn.textContent = 'Check';
+    }
 }
 
 function copyWallet() {

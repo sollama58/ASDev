@@ -41,6 +41,7 @@ function startAll(deps) {
     const metadataWorker = workers.initMetadataUpdaterWorker(deps);
     const robinhoodWorker = workers.initRobinhoodScannerWorker(deps);
     workers.initAsdfSyncWorker(deps);
+    workers.initAnsemSyncWorker(deps);
 
     // Track workers for graceful shutdown
     if (holderWorker) activeWorkers.push(holderWorker);

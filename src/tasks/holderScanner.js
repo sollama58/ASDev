@@ -485,9 +485,10 @@ async function updateGlobalState(deps) {
         globalState.kothPot = 0; // v26.0: KOTH is now informational only
         logger.info(`[HolderScanner] Global Points: ${globalState.totalPoints.toFixed(2)}`);
 
-        // v26.1: Build per-user expected airdrop using ASDF-weighted formula
-        // ASDF Top 100 holders receive 2× weight in actual airdrop distribution
-        // Expected = sum over tokens of (distributable * effectiveBal / totalEffectiveBal)
+        // v27.1: Build per-user expected airdrop using ASDF + ANSEM weighted formula
+        // ASDF Top 100 and ANSEM Top 1000 each receive 2× weight (4× if holding both)
+        const ansemTop1000Holders = await redis.getAnsemTop1000Holders().catch(() => new Set());
+
         const userExpectedAirdropMap = new Map();
         let totalPendingAirdropLamports = 0;
         try {
@@ -525,11 +526,12 @@ async function updateGlobalState(deps) {
                 const distributable = pendingLamports * BigInt(99) / BigInt(100);
                 const holders = holdersByMint.get(row.mint) || [];
 
-                // Compute weighted totals — ASDF Top 100 get 2× effective balance
+                // ASDF Top 100 and ANSEM Top 1000 each get 2× effective balance (4× if both)
                 const weightedHolders = holders.map(h => {
                     const bal = BigInt(h.balance || '0');
-                    const weight = asdfTop100Holders.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
-                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * weight };
+                    const asdfMult  = asdfTop100Holders.has(h.holderPubkey)   ? BigInt(2) : BigInt(1);
+                    const ansemMult = ansemTop1000Holders.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
+                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * asdfMult * ansemMult };
                 });
                 const totalEffectiveBal = weightedHolders.reduce((sum, h) => sum + h.effectiveBal, BigInt(0));
                 if (totalEffectiveBal === BigInt(0)) continue;
@@ -542,7 +544,7 @@ async function updateGlobalState(deps) {
                 }
             }
             globalState.availableSolForAirdrop = totalPendingAirdropLamports / LAMPORTS_PER_SOL;
-            logger.info(`[HolderScanner] Per-token expected airdrops (ASDF-weighted): ${userExpectedAirdropMap.size} users, total pending: ${globalState.availableSolForAirdrop.toFixed(4)} SOL`);
+            logger.info(`[HolderScanner] Per-token expected airdrops (ASDF+ANSEM weighted): ${userExpectedAirdropMap.size} users, total pending: ${globalState.availableSolForAirdrop.toFixed(4)} SOL`);
         } catch (e) {
             logger.error('[HolderScanner] Failed to compute per-token expected airdrops', { error: e.message });
             globalState.availableSolForAirdrop = 0;
@@ -555,20 +557,20 @@ async function updateGlobalState(deps) {
             const centralPoolLamports = Number(centralPoolRow?.value || 0);
 
             if (centralPoolLamports > 0) {
-                // Fetch all eligible tokens (platform + robinhood) with volume
+                // Fetch all eligible tokens (platform + robinhood) with market cap
                 const cpPlatform = await db.all(
-                    'SELECT mint, volume24h FROM tokens WHERE volume24h >= $1',
+                    'SELECT mint, "marketCap" as mcap FROM tokens WHERE volume24h >= $1',
                     [MIN_VOLUME_USD]
                 );
                 const cpRobinhood = await db.all(
-                    'SELECT mint, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
+                    'SELECT mint, "marketCap" as mcap FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
                     [MIN_VOLUME_USD]
                 );
                 const cpAllEligible = [...cpPlatform, ...cpRobinhood];
-                const cpTotalVol = cpAllEligible.reduce((s, t) => s + (parseFloat(t.volume24h) || 0), 0);
+                const cpTotalMcap = cpAllEligible.reduce((s, t) => s + (parseFloat(t.mcap) || 0), 0);
 
-                if (cpTotalVol > 0 && cpAllEligible.length > 0) {
-                    const cpVolByMint = new Map(cpAllEligible.map(t => [t.mint, parseFloat(t.volume24h) || 0]));
+                if (cpTotalMcap > 0 && cpAllEligible.length > 0) {
+                    const cpMcapByMint = new Map(cpAllEligible.map(t => [t.mint, parseFloat(t.mcap) || 0]));
                     const cpPlatformMints = cpPlatform.map(t => t.mint).filter(Boolean);
                     const cpRobinhoodMints = cpRobinhood.map(t => t.mint).filter(Boolean);
 
@@ -581,18 +583,20 @@ async function updateGlobalState(deps) {
                             : []
                     ]);
 
-                    // Build volume-weighted score per user
+                    // Build mcap-weighted score per user, with ASDF Top 100 and ANSEM Top 1000 2× bonus
                     const cpN = cpAllEligible.length;
                     const cpUserScores = new Map();
                     for (const h of [...cpPlatformHolders, ...cpRobinhoodHolders]) {
-                        const vol = cpVolByMint.get(h.mint) || 0;
+                        const mcap    = cpMcapByMint.get(h.mint) || 0;
                         const balance = BigInt(h.balance || '0');
                         if (balance === BigInt(0)) continue;
                         const PUMP_SUPPLY = BigInt('1000000000000000');
-                        // ±50% volume scaling matching central pool distribution formula
-                        const volMultiplier = Math.min(1.5, Math.max(0.5, 0.5 + (vol / cpTotalVol) * cpN * 0.5));
-                        const balanceRatio = Number(balance * BigInt(1e9) / PUMP_SUPPLY) / 1e9;
-                        const contribution = balanceRatio * volMultiplier;
+                        // ±50% mcap scaling matching actual distribution formula
+                        const mcapMultiplier = Math.min(1.5, Math.max(0.5, 0.5 + (mcap / cpTotalMcap) * cpN * 0.5));
+                        const balanceRatio   = Number(balance * BigInt(1e9) / PUMP_SUPPLY) / 1e9;
+                        const asdfMult       = asdfTop100Holders.has(h.holderPubkey)   ? 2 : 1;
+                        const ansemMult      = ansemTop1000Holders.has(h.holderPubkey) ? 2 : 1;
+                        const contribution   = balanceRatio * mcapMultiplier * asdfMult * ansemMult;
                         if (contribution > 0) {
                             cpUserScores.set(h.holderPubkey, (cpUserScores.get(h.holderPubkey) || 0) + contribution);
                         }

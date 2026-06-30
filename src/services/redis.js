@@ -22,6 +22,7 @@ let isConnected = false;
 const GLOBAL_STATE_KEYS = {
     LAST_BACKEND_UPDATE: 'globalState:lastBackendUpdate',
     ASDF_TOP100_HOLDERS: 'globalState:asdfTop100Holders',
+    ANSEM_TOP1000_HOLDERS: 'globalState:ansemTop1000Holders',
     TOTAL_POINTS: 'globalState:totalPoints',
     DEV_PUMP_HOLDINGS: 'globalState:devPumpHoldings',
     USER_EXPECTED_AIRDROPS: 'globalState:userExpectedAirdrops',
@@ -33,6 +34,7 @@ const GLOBAL_STATE_KEYS = {
 const GLOBAL_STATE_TTL = {
     LAST_BACKEND_UPDATE: 180,       // 3 minutes - refreshed frequently
     ASDF_TOP100_HOLDERS: 300,       // 5 minutes - updated every 2 mins
+    ANSEM_TOP1000_HOLDERS: 300,     // 5 minutes - updated every 5 mins
     TOTAL_POINTS: 300,              // 5 minutes
     DEV_PUMP_HOLDINGS: 300,         // 5 minutes
     USER_EXPECTED_AIRDROPS: 300,    // 5 minutes - critical for airdrop display
@@ -402,6 +404,28 @@ async function isAsdfTop100Holder(pubkey) {
     return await redisConnection.sismember(GLOBAL_STATE_KEYS.ASDF_TOP100_HOLDERS, pubkey);
 }
 
+async function setAnsemTop1000Holders(holders) {
+    if (!redisConnection) return;
+    if (holders.length > 0) {
+        const tempKey = GLOBAL_STATE_KEYS.ANSEM_TOP1000_HOLDERS + ':tmp';
+        await redisConnection.del(tempKey);
+        const CHUNK_SIZE = 100;
+        for (let i = 0; i < holders.length; i += CHUNK_SIZE) {
+            await redisConnection.sadd(tempKey, ...holders.slice(i, i + CHUNK_SIZE));
+        }
+        await redisConnection.rename(tempKey, GLOBAL_STATE_KEYS.ANSEM_TOP1000_HOLDERS);
+        await redisConnection.expire(GLOBAL_STATE_KEYS.ANSEM_TOP1000_HOLDERS, GLOBAL_STATE_TTL.ANSEM_TOP1000_HOLDERS);
+    } else {
+        await redisConnection.del(GLOBAL_STATE_KEYS.ANSEM_TOP1000_HOLDERS);
+    }
+}
+
+async function getAnsemTop1000Holders() {
+    if (!redisConnection) return new Set();
+    const members = await redisConnection.smembers(GLOBAL_STATE_KEYS.ANSEM_TOP1000_HOLDERS);
+    return new Set(members);
+}
+
 /**
  * Total Points
  */
@@ -727,6 +751,8 @@ module.exports = {
     getLastBackendUpdate,
     setAsdfTop100Holders,
     getAsdfTop100Holders,
+    setAnsemTop1000Holders,
+    getAnsemTop1000Holders,
     isAsdfTop100Holder,
     setTotalPoints,
     getTotalPoints,

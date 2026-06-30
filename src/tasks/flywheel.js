@@ -564,8 +564,11 @@ async function processTokenAirdrops(deps) {
 
         logger.info(`[TokenAirdrop] Processing ${allToDistribute.length} token pools (${platformTokensToAirdrop.length} platform, ${robinhoodTokensToAirdrop.length} robinhood)`);
 
-        // Fetch ASDF Top 100 holders once — they receive 2× weight in airdrop distribution
-        const asdfTop100 = await redis.getAsdfTop100Holders().catch(() => new Set());
+        // Fetch bonus-holder sets once — ASDF Top 100 and ANSEM Top 1000 each receive 2× weight
+        const [asdfTop100, ansemTop1000] = await Promise.all([
+            redis.getAsdfTop100Holders().catch(() => new Set()),
+            redis.getAnsemTop1000Holders().catch(() => new Set()),
+        ]);
 
         for (const token of allToDistribute) {
             if (availableBalance < TOKEN_AIRDROP_THRESHOLD_LAMPORTS) {
@@ -593,11 +596,12 @@ async function processTokenAirdrops(deps) {
                     continue;
                 }
 
-                // Build weighted holder list — ASDF Top 100 get 2× effective balance
+                // Build weighted holder list — ASDF Top 100 and ANSEM Top 1000 each get 2× (stack to 4× if both)
                 const weightedHolders = holders.map(h => {
                     const bal = BigInt(h.balance || '0');
-                    const weight = asdfTop100.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
-                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * weight };
+                    const asdfMult  = asdfTop100.has(h.holderPubkey)  ? BigInt(2) : BigInt(1);
+                    const ansemMult = ansemTop1000.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
+                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * asdfMult * ansemMult };
                 });
 
                 const totalEffectiveBal = weightedHolders.reduce((sum, h) => sum + h.effectiveBal, BigInt(0));
@@ -606,9 +610,9 @@ async function processTokenAirdrops(deps) {
                     continue;
                 }
 
-                const asdfCount = weightedHolders.filter(h => h.effectiveBal > h.balance).length;
-                if (asdfCount > 0) {
-                    logger.debug(`[TokenAirdrop] ${token.ticker}: ${asdfCount} ASDF Top 100 holders with 2× weight`);
+                const bonusCount = weightedHolders.filter(h => h.effectiveBal > h.balance).length;
+                if (bonusCount > 0) {
+                    logger.debug(`[TokenAirdrop] ${token.ticker}: ${bonusCount} holders with bonus weight (ASDF Top 100 and/or ANSEM Top 1000)`);
                 }
 
                 // Share proportional to weighted effective balance
@@ -758,13 +762,13 @@ async function processCentralPoolAirdrop(deps) {
         return;
     }
 
-    // Fetch all eligible tokens (platform + robinhood) with their volume
+    // Fetch all eligible tokens (platform + robinhood) with their market cap
     const eligiblePlatform = await db.all(
-        'SELECT mint, volume24h, \'platform\' as source FROM tokens WHERE volume24h >= $1',
+        'SELECT mint, "marketCap" as mcap FROM tokens WHERE volume24h >= $1',
         [100]
     );
     const eligibleRobinhood = await db.all(
-        'SELECT mint, volume24h, \'robinhood\' as source FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
+        'SELECT mint, "marketCap" as mcap FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
         [100]
     );
     const allEligible = [...eligiblePlatform, ...eligibleRobinhood];
@@ -774,38 +778,40 @@ async function processCentralPoolAirdrop(deps) {
         return;
     }
 
-    const totalVol = allEligible.reduce((s, t) => s + (parseFloat(t.volume24h) || 0), 0);
-    if (totalVol === 0) return;
+    const totalMcap = allEligible.reduce((s, t) => s + (parseFloat(t.mcap) || 0), 0);
+    if (totalMcap === 0) return;
 
-    const volByMint = new Map(allEligible.map(t => [t.mint, parseFloat(t.volume24h) || 0]));
+    const mcapByMint = new Map(allEligible.map(t => [t.mint, parseFloat(t.mcap) || 0]));
 
-    // Fetch all holders for eligible tokens in two batches
-    const platformMints = eligiblePlatform.map(t => t.mint).filter(Boolean);
+    // Fetch all holders and bonus sets in parallel
+    const platformMints  = eligiblePlatform.map(t => t.mint).filter(Boolean);
     const robinhoodMints = eligibleRobinhood.map(t => t.mint).filter(Boolean);
 
-    const [platformHolders, robinhoodHolders] = await Promise.all([
+    const [platformHolders, robinhoodHolders, asdfTop100, ansemTop1000] = await Promise.all([
         platformMints.length > 0
             ? db.all('SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)', [platformMints])
             : [],
         robinhoodMints.length > 0
             ? db.all('SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1)', [robinhoodMints])
-            : []
+            : [],
+        redis.getAsdfTop100Holders().catch(() => new Set()),
+        redis.getAnsemTop1000Holders().catch(() => new Set()),
     ]);
 
-    // Build user score map: pubkey -> sum of (balance/TOTAL_SUPPLY) * (vol/totalVol)
-    // This score represents volume-weighted ownership across all eligible tokens
+    // Build user score map: mcap-weighted ownership, with 2× bonus for ASDF Top 100 and ANSEM Top 1000
+    // At avg mcap (1/N share) → 1.0×; at 0 mcap → 0.5×; at 2× avg → 1.5× (capped).
     const N = allEligible.length;
     const userScores = new Map();
     for (const h of [...platformHolders, ...robinhoodHolders]) {
-        const vol = volByMint.get(h.mint) || 0;
+        const mcap    = mcapByMint.get(h.mint) || 0;
         const balance = BigInt(h.balance || '0');
         if (balance === BigInt(0)) continue;
-        // ±50% volume scaling: equal-weight baseline with volume as a modifier.
-        // At avg vol (1/N share) → 1.0×; at 0 vol → 0.5×; at 2× avg → 1.5× (capped).
-        const volRatio = vol / totalVol;
-        const volMultiplier = Math.min(1.5, Math.max(0.5, 0.5 + volRatio * N * 0.5));
-        const balanceRatio = Number(balance * BigInt(1e9) / PUMP_FUN_TOTAL_SUPPLY_BIG) / 1e9;
-        const contribution = balanceRatio * volMultiplier;
+        const mcapRatio      = mcap / totalMcap;
+        const mcapMultiplier = Math.min(1.5, Math.max(0.5, 0.5 + mcapRatio * N * 0.5));
+        const balanceRatio   = Number(balance * BigInt(1e9) / PUMP_FUN_TOTAL_SUPPLY_BIG) / 1e9;
+        const asdfMult       = asdfTop100.has(h.holderPubkey)  ? 2 : 1;
+        const ansemMult      = ansemTop1000.has(h.holderPubkey) ? 2 : 1;
+        const contribution   = balanceRatio * mcapMultiplier * asdfMult * ansemMult;
         if (contribution > 0) {
             userScores.set(h.holderPubkey, (userScores.get(h.holderPubkey) || 0) + contribution);
         }
@@ -846,7 +852,7 @@ async function processCentralPoolAirdrop(deps) {
         return;
     }
 
-    logger.info(`[CentralPool] Distributing ${(distributable / LAMPORTS_PER_SOL).toFixed(4)} SOL central pool to ${recipients.length} holders across ${allEligible.length} tokens`);
+    logger.info(`[CentralPool] Distributing ${(distributable / LAMPORTS_PER_SOL).toFixed(4)} SOL central pool to ${recipients.length} holders across ${allEligible.length} tokens (mcap-weighted, ASDF/ANSEM 2× bonus)`);
 
     const airdropId = `central_${Date.now()}`;
     const allSignatures = [];
