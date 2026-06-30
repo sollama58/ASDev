@@ -23,9 +23,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
-const { Connection, Keypair, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
+const { Connection, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
 const { Wallet } = require('@coral-xyz/anchor');
-const bs58 = require('bs58');
 const fs = require('fs');
 const path = require('path');
 
@@ -128,7 +127,7 @@ async function main() {
                 .finally(() => clearTimeout(timeout));
         }
     });
-    const devKeypair = Keypair.fromSecretKey(bs58.decode(config.DEV_WALLET_PRIVATE_KEY));
+    const devKeypair = config.devKeypair;
     const wallet = new Wallet(devKeypair);
 
     // Validate wallet matches expected platform dev wallet
@@ -269,15 +268,10 @@ async function main() {
         }
     };
 
-    // Initialize PAGS keypair from environment variable
-    let pagsKeypair = null;
-    if (config.PAGS_WALLET_PRIVATE_KEY) {
-        try {
-            pagsKeypair = Keypair.fromSecretKey(bs58.decode(config.PAGS_WALLET_PRIVATE_KEY));
-            logger.info(`[PAGS] Keypair loaded: ${pagsKeypair.publicKey.toString()}`);
-        } catch (e) {
-            logger.error(`[PAGS] Failed to load keypair from PAGS_WALLET_PRIVATE_KEY: ${e.message}`);
-        }
+    // PAGS keypair decoded once in config/env.js
+    const pagsKeypair = config.pagsKeypair;
+    if (pagsKeypair) {
+        logger.info(`[PAGS] Keypair loaded: ${pagsKeypair.publicKey.toString()}`);
     } else {
         logger.warn('[PAGS] No PAGS_WALLET_PRIVATE_KEY set — falling back to devKeypair');
     }

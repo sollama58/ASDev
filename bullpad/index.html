@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bullpad</title>
+    <meta name="description" content="SOL airdrop pool powered by on-chain fee sharing">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐂</text></svg>">
+
+    <style>
+        :root {
+            --bg:           #080808;
+            --surface:      #0f0f0f;
+            --surface2:     #161616;
+            --surface3:     #1e1e1e;
+            --border:       #202020;
+            --border2:      #2a2a2a;
+            --text:         #e8e8e8;
+            --text2:        #a0a0a0;
+            --muted:        #555;
+            --accent:       #f59e0b;
+            --accent-glow:  rgba(245,158,11,0.12);
+            --accent-dim:   rgba(245,158,11,0.08);
+            --green:        #22c55e;
+            --green-dim:    rgba(34,197,94,0.1);
+            --red:          #ef4444;
+            --red-dim:      rgba(239,68,68,0.1);
+            --radius:       10px;
+            --radius-sm:    6px;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ── Header ── */
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 200;
+            height: 56px;
+            background: rgba(8,8,8,0.92);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            font-size: 17px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            user-select: none;
+        }
+
+        .logo-bull { font-size: 22px; line-height: 1; }
+
+        .ws-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .ws-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--muted);
+            transition: background 0.4s, box-shadow 0.4s;
+            flex-shrink: 0;
+        }
+
+        .ws-dot.live {
+            background: var(--green);
+            box-shadow: 0 0 0 2px rgba(34,197,94,0.25);
+        }
+
+        /* ── Layout ── */
+        main {
+            max-width: 940px;
+            margin: 0 auto;
+            padding: 36px 20px 80px;
+            display: flex;
+            flex-direction: column;
+            gap: 28px;
+        }
+
+        /* ── Card ── */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-title {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.8px;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        /* ── Pool Section ── */
+        .pool-body {
+            padding: 48px 24px 40px;
+            text-align: center;
+            position: relative;
+        }
+
+        .pool-body::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(ellipse 60% 50% at 50% 0%, var(--accent-dim), transparent);
+            pointer-events: none;
+        }
+
+        .pool-eyebrow {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 14px;
+        }
+
+        .pool-sol {
+            font-size: 64px;
+            font-weight: 800;
+            letter-spacing: -3px;
+            color: var(--accent);
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+            text-shadow: 0 0 40px rgba(245,158,11,0.25);
+        }
+
+        .pool-sol-unit {
+            font-size: 22px;
+            font-weight: 500;
+            color: var(--text2);
+            letter-spacing: 0;
+            margin-left: 4px;
+        }
+
+        .pool-divider {
+            width: 1px;
+            height: 40px;
+            background: var(--border2);
+            margin: 28px auto;
+        }
+
+        .countdown-label {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 10px;
+        }
+
+        .countdown {
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: 3px;
+            font-variant-numeric: tabular-nums;
+            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+            color: var(--text);
+        }
+
+        .countdown.imminent { color: var(--accent); animation: pulse 1s ease-in-out infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .pool-stats-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1px;
+            background: var(--border);
+            border-top: 1px solid var(--border);
+        }
+
+        .pool-stat {
+            background: var(--surface);
+            padding: 18px 16px;
+            text-align: center;
+        }
+
+        .pool-stat-value {
+            font-size: 17px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: var(--text);
+        }
+
+        .pool-stat-label {
+            font-size: 10px;
+            color: var(--muted);
+            margin-top: 3px;
+            letter-spacing: 0.5px;
+        }
+
+        /* ── Leaderboard ── */
+        .lb-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .lb-table th {
+            padding: 10px 16px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--muted);
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            text-align: left;
+            background: var(--surface);
+        }
+
+        .lb-table th.right { text-align: right; }
+
+        .lb-table td {
+            padding: 11px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            vertical-align: middle;
+        }
+
+        .lb-table td.right {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .lb-table tr:last-child td { border-bottom: none; }
+
+        .lb-table tbody tr {
+            transition: background 0.1s;
+            cursor: default;
+        }
+
+        .lb-table tbody tr:hover td { background: var(--surface2); }
+
+        .rank-num {
+            font-size: 12px;
+            color: var(--muted);
+            width: 32px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .token-cell {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .token-avatar {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: var(--surface3);
+            object-fit: cover;
+            flex-shrink: 0;
+            border: 1px solid var(--border2);
+        }
+
+        .token-avatar-placeholder {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: var(--surface3);
+            flex-shrink: 0;
+            border: 1px solid var(--border2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: var(--muted);
+            font-weight: 700;
+        }
+
+        .token-ticker {
+            font-weight: 700;
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .token-name-sub {
+            font-size: 11px;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 140px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            padding: 2px 7px;
+            border-radius: 20px;
+        }
+
+        .badge-green {
+            background: var(--green-dim);
+            color: var(--green);
+            border: 1px solid rgba(34,197,94,0.2);
+        }
+
+        .badge-muted {
+            background: rgba(85,85,85,0.1);
+            color: var(--muted);
+            border: 1px solid var(--border2);
+        }
+
+        .sol-amount {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .lb-empty {
+            padding: 56px 24px;
+            text-align: center;
+            color: var(--muted);
+        }
+
+        .lb-empty-icon { font-size: 32px; margin-bottom: 12px; }
+        .lb-empty-text { font-size: 14px; }
+
+        /* ── Register ── */
+        .register-body { padding: 20px; }
+
+        .register-hint {
+            font-size: 13px;
+            color: var(--text2);
+            line-height: 1.6;
+            margin-bottom: 18px;
+            padding: 12px 14px;
+            background: var(--accent-dim);
+            border: 1px solid rgba(245,158,11,0.15);
+            border-radius: var(--radius-sm);
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+
+        .mint-input {
+            flex: 1;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            color: var(--text);
+            padding: 10px 13px;
+            font-size: 13px;
+            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+            min-width: 0;
+        }
+
+        .mint-input::placeholder { color: var(--muted); }
+
+        .mint-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 10px 18px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: opacity 0.15s, transform 0.1s;
+            white-space: nowrap;
+            font-family: inherit;
+        }
+
+        .btn:hover:not(:disabled) { opacity: 0.88; }
+        .btn:active:not(:disabled) { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .btn-primary { background: var(--accent); color: #000; }
+        .btn-secondary { background: var(--surface3); color: var(--text); border: 1px solid var(--border2); }
+        .btn-sm { padding: 8px 14px; font-size: 12px; }
+
+        .msg {
+            padding: 11px 13px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            line-height: 1.5;
+            margin-bottom: 12px;
+        }
+
+        .msg-error   { background: var(--red-dim);   border: 1px solid rgba(239,68,68,0.25);  color: #fca5a5; }
+        .msg-success { background: var(--green-dim);  border: 1px solid rgba(34,197,94,0.25);  color: #86efac; }
+        .msg-info    { background: var(--accent-dim); border: 1px solid rgba(245,158,11,0.2);  color: #fcd34d; }
+
+        .preview-card {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 14px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            margin-bottom: 14px;
+        }
+
+        .preview-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            object-fit: cover;
+            background: var(--surface3);
+            flex-shrink: 0;
+            border: 1px solid var(--border2);
+        }
+
+        .preview-avatar-placeholder {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: var(--surface3);
+            flex-shrink: 0;
+            border: 1px solid var(--border2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            color: var(--muted);
+            font-weight: 700;
+        }
+
+        .preview-info { flex: 1; min-width: 0; }
+        .preview-ticker { font-size: 16px; font-weight: 800; color: var(--text); }
+        .preview-name   { font-size: 12px; color: var(--text2); margin-top: 1px; }
+        .preview-meta   { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+        /* ── Toast ── */
+        #toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 16px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 500;
+            max-width: 340px;
+            z-index: 9999;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(12px);
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+
+        #toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        #toast.toast-success {
+            background: rgba(34,197,94,0.12);
+            border: 1px solid rgba(34,197,94,0.3);
+            color: #86efac;
+        }
+
+        #toast.toast-error {
+            background: var(--red-dim);
+            border: 1px solid rgba(239,68,68,0.3);
+            color: #fca5a5;
+        }
+
+        /* ── Skeleton ── */
+        @keyframes shimmer {
+            0%   { opacity: 0.35; }
+            50%  { opacity: 0.65; }
+            100% { opacity: 0.35; }
+        }
+
+        .skel {
+            background: var(--surface3);
+            border-radius: 4px;
+            animation: shimmer 1.6s ease-in-out infinite;
+        }
+
+        .skel-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 13px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* ── Footer ── */
+        footer {
+            text-align: center;
+            padding: 28px 20px;
+            border-top: 1px solid var(--border);
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 640px) {
+            main { padding: 20px 14px 60px; gap: 20px; }
+            .pool-sol { font-size: 48px; letter-spacing: -2px; }
+            .countdown { font-size: 24px; }
+            .pool-stats-row { grid-template-columns: repeat(3, 1fr); }
+            .pool-stat-value { font-size: 14px; }
+            .col-vol, .col-status { display: none; }
+            .input-group { flex-direction: column; }
+            .token-name-sub { max-width: 90px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+    <div class="logo">
+        <span class="logo-bull">🐂</span>
+        <span>Bullpad</span>
+    </div>
+    <div class="ws-indicator">
+        <div class="ws-dot" id="ws-dot"></div>
+        <span id="ws-label">Connecting</span>
+    </div>
+</header>
+
+<!-- ── Main ── -->
+<main>
+
+    <!-- Pool -->
+    <div class="card" id="pool-card">
+        <div class="card-header">
+            <span class="card-title">Airdrop Pool</span>
+            <span id="pool-updated" style="font-size:11px;color:var(--muted)"></span>
+        </div>
+        <div class="pool-body">
+            <div class="pool-eyebrow">Current Pool</div>
+            <div>
+                <span class="pool-sol" id="pool-sol">—</span>
+                <span class="pool-sol-unit">SOL</span>
+            </div>
+            <div class="pool-divider"></div>
+            <div class="countdown-label">Next Airdrop In</div>
+            <div class="countdown" id="countdown">—:——:——</div>
+        </div>
+        <div class="pool-stats-row">
+            <div class="pool-stat">
+                <div class="pool-stat-value" id="stat-airdropped">—</div>
+                <div class="pool-stat-label">Total Airdropped</div>
+            </div>
+            <div class="pool-stat">
+                <div class="pool-stat-value" id="stat-tokens">—</div>
+                <div class="pool-stat-label">Registered Tokens</div>
+            </div>
+            <div class="pool-stat">
+                <div class="pool-stat-value" id="stat-interval">—</div>
+                <div class="pool-stat-label">Drop Interval</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaderboard -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Registered Tokens</span>
+            <button class="btn btn-secondary btn-sm" onclick="loadLeaderboard(true)">↻ Refresh</button>
+        </div>
+        <div id="lb-body">
+            <div class="skel-row"><div class="skel" style="width:30px;height:30px;border-radius:50%;flex-shrink:0"></div><div style="flex:1;display:flex;flex-direction:column;gap:6px"><div class="skel" style="height:12px;width:100px"></div><div class="skel" style="height:10px;width:60px"></div></div><div class="skel" style="height:12px;width:70px;margin-left:auto"></div></div>
+            <div class="skel-row"><div class="skel" style="width:30px;height:30px;border-radius:50%;flex-shrink:0"></div><div style="flex:1;display:flex;flex-direction:column;gap:6px"><div class="skel" style="height:12px;width:80px"></div><div class="skel" style="height:10px;width:50px"></div></div><div class="skel" style="height:12px;width:60px;margin-left:auto"></div></div>
+            <div class="skel-row"><div class="skel" style="width:30px;height:30px;border-radius:50%;flex-shrink:0"></div><div style="flex:1;display:flex;flex-direction:column;gap:6px"><div class="skel" style="height:12px;width:120px"></div><div class="skel" style="height:10px;width:70px"></div></div><div class="skel" style="height:12px;width:80px;margin-left:auto"></div></div>
+        </div>
+    </div>
+
+    <!-- Register -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Register Your Token</span>
+        </div>
+        <div class="register-body">
+            <div class="register-hint">
+                Register any Pump.fun token that has <strong>fee sharing configured on-chain</strong>. Once registered, the token earns a share of the airdrop pool every drop cycle.
+            </div>
+            <div class="input-group">
+                <input
+                    class="mint-input"
+                    id="mint-input"
+                    type="text"
+                    placeholder="Token mint address (e.g. 6EF8rr…)"
+                    maxlength="44"
+                    autocomplete="off"
+                    spellcheck="false"
+                />
+                <button class="btn btn-primary" id="verify-btn" onclick="verifyToken()">Verify</button>
+            </div>
+            <div id="reg-msg"></div>
+            <div id="reg-preview" style="display:none"></div>
+            <div id="reg-actions" style="display:none"></div>
+        </div>
+    </div>
+
+</main>
+
+<footer>🐂 Bullpad — SOL airdrop pool powered by on-chain fee sharing</footer>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ── Config ─────────────────────────────────────────────────────────────────────
+const BACKEND_URL  = 'https://asdev-1kvy.onrender.com'; // ← update to your backend URL
+const WS_URL       = BACKEND_URL.replace(/^https/, 'wss') + '/ws';
+const POLL_HEALTH  = 30_000;
+const POLL_LB      = 60_000;
+
+// ── State ──────────────────────────────────────────────────────────────────────
+let nextAirdropAt   = null;
+let countdownTimer  = null;
+let ws              = null;
+let wsReconnTimer   = null;
+let verifiedToken   = null; // pending registration
+
+// ── Formatting ─────────────────────────────────────────────────────────────────
+const fmt = {
+    sol(v) {
+        const n = parseFloat(v) || 0;
+        return n.toFixed(4);
+    },
+    usd(v) {
+        const n = parseFloat(v) || 0;
+        if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2) + 'M';
+        if (n >= 1_000)     return '$' + (n / 1_000).toFixed(1) + 'K';
+        return '$' + n.toFixed(0);
+    },
+    countdown(ms) {
+        if (ms <= 0) return '00:00:00';
+        const s   = Math.floor(ms / 1000);
+        const h   = Math.floor(s / 3600);
+        const m   = Math.floor((s % 3600) / 60);
+        const sec = s % 60;
+        return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+    },
+    interval(ms) {
+        const m = Math.round(ms / 60_000);
+        return m >= 60 ? (m / 60).toFixed(0) + 'h' : m + 'm';
+    },
+    ago(ts) {
+        const d = Date.now() - ts;
+        if (d < 10_000)    return 'just now';
+        if (d < 60_000)    return Math.floor(d / 1_000) + 's ago';
+        if (d < 3_600_000) return Math.floor(d / 60_000) + 'm ago';
+        return Math.floor(d / 3_600_000) + 'h ago';
+    },
+};
+
+function pad(n) { return String(n).padStart(2, '0'); }
+
+function esc(s) {
+    return String(s ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ── Pool / Health ──────────────────────────────────────────────────────────────
+async function loadHealth() {
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/health`);
+        if (!r.ok) return;
+        applyHealth(await r.json());
+    } catch {}
+}
+
+function applyHealth(d) {
+    // Pool amount
+    const sol = parseFloat(d.airdropPoolSol) || 0;
+    document.getElementById('pool-sol').textContent = fmt.sol(sol);
+
+    // Stats row
+    const totalDrop = parseFloat(d.totalSolAirdropped) || 0;
+    document.getElementById('stat-airdropped').textContent = totalDrop.toFixed(2) + ' SOL';
+    if (d.airdropIntervalMs) {
+        document.getElementById('stat-interval').textContent = fmt.interval(d.airdropIntervalMs);
+    }
+
+    // Countdown
+    if (d.nextAirdropTime) {
+        nextAirdropAt = d.nextAirdropTime;
+        tickCountdown();
+    }
+
+    document.getElementById('pool-updated').textContent = 'Updated ' + fmt.ago(Date.now());
+}
+
+// ── Countdown ──────────────────────────────────────────────────────────────────
+function startCountdown() {
+    if (countdownTimer) clearInterval(countdownTimer);
+    tickCountdown();
+    countdownTimer = setInterval(tickCountdown, 1000);
+}
+
+function tickCountdown() {
+    if (!nextAirdropAt) return;
+    const el        = document.getElementById('countdown');
+    const remaining = nextAirdropAt - Date.now();
+
+    if (remaining <= 0) {
+        el.textContent = 'Dropping…';
+        el.classList.add('imminent');
+        setTimeout(loadHealth, 3000);
+        return;
+    }
+
+    el.textContent = fmt.countdown(remaining);
+    el.classList.toggle('imminent', remaining < 60_000);
+}
+
+// ── Leaderboard ────────────────────────────────────────────────────────────────
+let lbLoading = false;
+
+async function loadLeaderboard(showSpinner = false) {
+    if (lbLoading) return;
+    lbLoading = true;
+
+    const body = document.getElementById('lb-body');
+
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/leaderboard`);
+        if (!r.ok) throw new Error(r.status);
+        const data   = await r.json();
+        const tokens = (data.tokens || []).slice().sort(
+            (a, b) => (parseFloat(b.marketCap) || 0) - (parseFloat(a.marketCap) || 0)
+        );
+
+        document.getElementById('stat-tokens').textContent = tokens.length;
+
+        if (!tokens.length) {
+            body.innerHTML = `
+                <div class="lb-empty">
+                    <div class="lb-empty-icon">🐂</div>
+                    <div class="lb-empty-text">No tokens registered yet — be the first!</div>
+                </div>`;
+            return;
+        }
+
+        const rows = tokens.map((t, i) => {
+            const avatar = t.image
+                ? `<img class="token-avatar" src="${esc(t.image)}" alt="" loading="lazy"
+                        onerror="this.outerHTML='<div class=\\'token-avatar-placeholder\\'>${esc((t.ticker||'?')[0])}</div>'">`
+                : `<div class="token-avatar-placeholder">${esc((t.ticker||'?')[0])}</div>`;
+
+            const statusBadge = t.isEligible
+                ? `<span class="badge badge-green">ELIGIBLE</span>`
+                : `<span class="badge badge-muted">LOW VOL</span>`;
+
+            const pending = parseFloat(t.pendingAirdropSol) > 0
+                ? `<span class="sol-amount">◎ ${parseFloat(t.pendingAirdropSol).toFixed(4)}</span>`
+                : `<span style="color:var(--muted)">—</span>`;
+
+            return `
+                <tr>
+                    <td><span class="rank-num">${i + 1}</span></td>
+                    <td>
+                        <div class="token-cell">
+                            ${avatar}
+                            <div>
+                                <div class="token-ticker">$${esc(t.ticker || '?')}</div>
+                                <div class="token-name-sub">${esc(t.name || '')}</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="right">${fmt.usd(t.marketCap)}</td>
+                    <td class="right col-vol">${fmt.usd(t.volume)}</td>
+                    <td class="right">${pending}</td>
+                    <td class="right col-status">${statusBadge}</td>
+                </tr>`;
+        }).join('');
+
+        body.innerHTML = `
+            <table class="lb-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Token</th>
+                        <th class="right">Market Cap</th>
+                        <th class="right col-vol">24h Volume</th>
+                        <th class="right">Pending SOL</th>
+                        <th class="right col-status">Status</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+
+    } catch (e) {
+        body.innerHTML = `
+            <div class="lb-empty">
+                <div class="lb-empty-icon" style="font-size:24px">⚠️</div>
+                <div class="lb-empty-text">
+                    Failed to load tokens.
+                    <a href="#" onclick="loadLeaderboard(true);return false"
+                       style="color:var(--accent);text-decoration:none"> Retry</a>
+                </div>
+            </div>`;
+    } finally {
+        lbLoading = false;
+    }
+}
+
+// ── Token Registration ──────────────────────────────────────────────────────────
+function setMsg(html, type) {
+    const el = document.getElementById('reg-msg');
+    el.innerHTML = html ? `<div class="msg msg-${type}">${html}</div>` : '';
+}
+
+function showPreview(token) {
+    const avatar = token.image
+        ? `<img class="preview-avatar" src="${esc(token.image)}" alt=""
+                onerror="this.outerHTML='<div class=\\'preview-avatar-placeholder\\'>${esc((token.ticker||'?')[0])}</div>'">`
+        : `<div class="preview-avatar-placeholder">${esc((token.ticker||'?')[0])}</div>`;
+
+    const mcap = token.marketCap ? fmt.usd(token.marketCap) : '—';
+    const vol  = token.volume24h  ? fmt.usd(token.volume24h) : '—';
+
+    document.getElementById('reg-preview').innerHTML = `
+        <div class="preview-card">
+            ${avatar}
+            <div class="preview-info">
+                <div class="preview-ticker">$${esc(token.ticker || token.symbol || '?')}</div>
+                <div class="preview-name">${esc(token.name || '')}</div>
+                <div class="preview-meta">MCap ${mcap} · Vol ${vol} · <span style="font-family:monospace;font-size:10px">${esc(token.mint.slice(0,8))}…</span></div>
+            </div>
+        </div>`;
+    document.getElementById('reg-preview').style.display = 'block';
+}
+
+async function verifyToken() {
+    const mint = document.getElementById('mint-input').value.trim();
+    if (mint.length < 32 || mint.length > 44) {
+        setMsg('Enter a valid Solana mint address (32–44 characters).', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('verify-btn');
+    btn.disabled     = true;
+    btn.textContent  = 'Checking…';
+    setMsg('', '');
+    document.getElementById('reg-preview').style.display = 'none';
+    document.getElementById('reg-actions').style.display = 'none';
+    verifiedToken = null;
+
+    try {
+        // 1. Check if already registered
+        const regR  = await fetch(`${BACKEND_URL}/api/check-registration/${encodeURIComponent(mint)}`);
+        const regD  = await regR.json();
+
+        if (regD.registered) {
+            const t = regD.token;
+            showPreview({ ...t, mint });
+            setMsg(`✓ <strong>$${esc(t.ticker)}</strong> is already registered and earning airdrop fees.`, 'success');
+            return;
+        }
+
+        // 2. Fetch metadata for preview
+        const metaR = await fetch(`${BACKEND_URL}/api/token-metadata/${encodeURIComponent(mint)}`);
+        const metaD = await metaR.json();
+
+        if (metaD.success && metaD.metadata) {
+            const m = metaD.metadata;
+            verifiedToken = { mint, name: m.name, ticker: m.symbol, image: m.image, marketCap: null, volume24h: null };
+            showPreview(verifiedToken);
+            setMsg(
+                'Token found. Click <strong>Register</strong> to submit — fee sharing must already be configured on Pump.fun.',
+                'info'
+            );
+            document.getElementById('reg-actions').innerHTML =
+                `<button class="btn btn-primary" id="register-btn" onclick="registerToken()">Register Token</button>`;
+            document.getElementById('reg-actions').style.display = 'block';
+        } else {
+            setMsg('Token metadata not found. Make sure this is a valid Pump.fun mint address.', 'error');
+        }
+    } catch {
+        setMsg('Request failed. Please check your connection and try again.', 'error');
+    } finally {
+        btn.disabled    = false;
+        btn.textContent = 'Verify';
+    }
+}
+
+async function registerToken() {
+    if (!verifiedToken) return;
+    const btn = document.getElementById('register-btn');
+    btn.disabled    = true;
+    btn.textContent = 'Registering…';
+
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/register-token`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ mint: verifiedToken.mint }),
+        });
+        const d = await r.json();
+
+        if (d.success) {
+            const t       = d.token;
+            const sharePct = t.feeSharePercent ?? ((t.feeShareBps || 0) / 100);
+            setMsg(
+                `🎉 <strong>$${esc(t.ticker)}</strong> registered! Fee share: ${sharePct}%. Airdrops start next cycle.`,
+                'success'
+            );
+            document.getElementById('reg-actions').style.display = 'none';
+            document.getElementById('mint-input').value = '';
+            verifiedToken = null;
+            toast('Token registered!', 'success');
+            setTimeout(loadLeaderboard, 1200);
+        } else {
+            const errMsg = d.error || d.message || 'Registration failed. Ensure fee sharing is configured on-chain.';
+            setMsg(esc(errMsg), 'error');
+            btn.disabled    = false;
+            btn.textContent = 'Register Token';
+        }
+    } catch {
+        setMsg('Registration request failed. Please try again.', 'error');
+        btn.disabled    = false;
+        btn.textContent = 'Register Token';
+    }
+}
+
+document.getElementById('mint-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') verifyToken();
+});
+
+// ── WebSocket ──────────────────────────────────────────────────────────────────
+function connectWS() {
+    if (ws && ws.readyState <= 1) return; // already open or connecting
+    try {
+        ws = new WebSocket(WS_URL);
+
+        ws.onopen = () => {
+            setWSStatus(true);
+            if (wsReconnTimer) { clearTimeout(wsReconnTimer); wsReconnTimer = null; }
+        };
+
+        ws.onclose = () => {
+            setWSStatus(false);
+            wsReconnTimer = setTimeout(connectWS, 6000);
+        };
+
+        ws.onerror = () => ws.close();
+
+        ws.onmessage = e => {
+            try {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'initial' || msg.type === 'update') {
+                    if (msg.data) applyHealth(msg.data);
+                } else if (msg.type === 'airdrop') {
+                    const d   = msg.data || {};
+                    const amt = parseFloat(d.amount || 0).toFixed(4);
+                    const rec = d.recipients || 0;
+                    toast(`🎉 Airdrop! ◎ ${amt} SOL → ${rec} holders`, 'success');
+                    if (d.nextAirdropTime) {
+                        nextAirdropAt = d.nextAirdropTime;
+                    }
+                    setTimeout(loadHealth,      2000);
+                    setTimeout(loadLeaderboard, 2500);
+                } else if (msg.type === 'launch') {
+                    const d = msg.data || {};
+                    if (d.ticker) toast(`🚀 New token: $${esc(d.ticker)}`, 'success');
+                }
+            } catch {}
+        };
+
+        // Heartbeat
+        const hb = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) ws.send('{"type":"ping"}');
+            else clearInterval(hb);
+        }, 25_000);
+
+    } catch {
+        setWSStatus(false);
+        wsReconnTimer = setTimeout(connectWS, 6000);
+    }
+}
+
+function setWSStatus(online) {
+    document.getElementById('ws-dot').className   = 'ws-dot' + (online ? ' live' : '');
+    document.getElementById('ws-label').textContent = online ? 'Live' : 'Reconnecting';
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────────
+let toastTimer = null;
+
+function toast(msg, type = 'success') {
+    const el    = document.getElementById('toast');
+    el.textContent = msg;
+    el.className   = `toast-${type}`;
+    // Force reflow so transition fires
+    el.offsetHeight; // eslint-disable-line no-unused-expressions
+    el.classList.add('visible');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('visible'), 4500);
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────────
+loadHealth();
+loadLeaderboard();
+startCountdown();
+connectWS();
+
+setInterval(loadHealth,      POLL_HEALTH);
+setInterval(loadLeaderboard, POLL_LB);
+</script>
+
+</body>
+</html>

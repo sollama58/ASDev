@@ -547,7 +547,7 @@ async function main() {
 
     // Initialize connection
     const connection = new Connection(config.RPC_URL, 'confirmed');
-    const devKeypair = Keypair.fromSecretKey(bs58.decode(config.DEV_WALLET_PRIVATE_KEY));
+    const devKeypair = config.devKeypair;
 
     console.log(`🔗 RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : 'Mainnet'}`);
     console.log(`👛 Dev Wallet: ${devKeypair.publicKey.toString()}`);

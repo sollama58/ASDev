@@ -60,7 +60,7 @@ async function main() {
     // Initialize Solana connection
     console.log('[3/6] Connecting to Solana...');
     const connection = new Connection(config.RPC_URL, 'confirmed');
-    const devKeypair = Keypair.fromSecretKey(bs58.decode(config.DEV_WALLET_PRIVATE_KEY));
+    const devKeypair = config.devKeypair;
     console.log(`      Wallet: ${devKeypair.publicKey.toString()}`);
 
     // Check wallet balance (for info only - we use hardwired 0.10 SOL for test)

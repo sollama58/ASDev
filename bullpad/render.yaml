@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: bullpad
+    env: static
+    staticPublishPath: .
+    buildCommand: ""
+    pullRequestPreviewsEnabled: false

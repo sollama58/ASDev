@@ -3,6 +3,8 @@
  * Loads and validates environment variables
  */
 require('dotenv').config();
+const { Keypair } = require('@solana/web3.js');
+const bs58 = require('bs58');
 
 // Environment validation
 const requiredEnvVars = ['DEV_WALLET_PRIVATE_KEY'];
@@ -40,7 +42,7 @@ const config = {
             : "https://api.mainnet-beta.solana.com";
     },
 
-    // Wallet
+    // Wallet — raw key is redacted after keypairs are built below; use config.devKeypair
     DEV_WALLET_PRIVATE_KEY: process.env.DEV_WALLET_PRIVATE_KEY,
 
     // Fees & Transactions
@@ -135,7 +137,7 @@ const config = {
     // PAGS (Pay-to-Twitter/X) Configuration
     PAGS_ENABLED: process.env.PAGS_ENABLED !== 'false', // Enabled by default
     PAGS_WALLET: process.env.PAGS_WALLET, // Public key of wallet that holds PAGS fees before claims
-    PAGS_WALLET_PRIVATE_KEY: process.env.PAGS_WALLET_PRIVATE_KEY, // Base58 private key for signing claim transactions
+    PAGS_WALLET_PRIVATE_KEY: process.env.PAGS_WALLET_PRIVATE_KEY, // redacted after keypair is built below; use config.pagsKeypair
     PAGS_MIN_CLAIM_SOL: parseFloat(process.env.PAGS_MIN_CLAIM_SOL) || 0.01, // Minimum claim amount
     // SECURITY: Session secret MUST be set in production
     PAGS_SESSION_SECRET: (() => {
@@ -161,5 +163,22 @@ const config = {
         return process.env.DISK_ROOT || (fs.existsSync('/var/data') ? '/var/data' : './data');
     }
 };
+
+// Build keypairs once from raw keys, then redact the raw strings so they don't
+// linger in memory or appear in accidental config serializations.
+config.devKeypair = Keypair.fromSecretKey(bs58.decode(config.DEV_WALLET_PRIVATE_KEY));
+config.DEV_WALLET_PRIVATE_KEY = '[REDACTED]';
+process.env.DEV_WALLET_PRIVATE_KEY = '[REDACTED]';
+
+config.pagsKeypair = null;
+if (config.PAGS_WALLET_PRIVATE_KEY) {
+    try {
+        config.pagsKeypair = Keypair.fromSecretKey(bs58.decode(config.PAGS_WALLET_PRIVATE_KEY));
+    } catch (e) {
+        console.error('[PAGS] Failed to decode PAGS_WALLET_PRIVATE_KEY:', e.message);
+    }
+    config.PAGS_WALLET_PRIVATE_KEY = '[REDACTED]';
+    process.env.PAGS_WALLET_PRIVATE_KEY = '[REDACTED]';
+}
 
 module.exports = config;

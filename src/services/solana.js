@@ -2,9 +2,8 @@
  * Solana Service
  * Connection, transaction helpers, and wallet management
  */
-const { Connection, Keypair, ComputeBudgetProgram, sendAndConfirmTransaction, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
+const { Connection, ComputeBudgetProgram, sendAndConfirmTransaction, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
 const { Wallet } = require('@coral-xyz/anchor');
-const bs58 = require('bs58');
 const config = require('../config/env');
 const logger = require('./logger');
 
@@ -21,18 +20,11 @@ const connection = new Connection(config.RPC_URL, {
     }
 });
 
-// Initialize dev wallet
-let devKeypair = null;
-let wallet = null;
-
-if (config.DEV_WALLET_PRIVATE_KEY) {
-    try {
-        devKeypair = Keypair.fromSecretKey(bs58.decode(config.DEV_WALLET_PRIVATE_KEY));
-        wallet = new Wallet(devKeypair);
-        logger.info(`RPC: ${config.HELIUS_API_KEY ? 'Helius' : 'Public'}`);
-    } catch (e) {
-        logger.error('Failed to initialize dev wallet', { error: e.message });
-    }
+// Dev wallet keypair is decoded once in config/env.js and redacted there
+const devKeypair = config.devKeypair;
+const wallet = devKeypair ? new Wallet(devKeypair) : null;
+if (devKeypair) {
+    logger.info(`RPC: ${config.HELIUS_API_KEY ? 'Helius' : 'Public'}`);
 }
 
 /**
