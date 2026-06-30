@@ -1309,10 +1309,16 @@ async function getCoinCreator(mintPubkey, connection) {
         ammRpcError = e;
     }
 
-    // v25.115: If BOTH attempts failed due to RPC errors, throw so caller knows
-    // verification was inconclusive (don't return null which would deactivate the token)
-    if (bcRpcError && ammRpcError) {
-        throw new Error(`Both BC and AMM RPC calls failed: BC=${bcRpcError.message}, AMM=${ammRpcError.message}`);
+    // v25.89: If EITHER attempt failed due to an RPC error, the result is inconclusive —
+    // the missing account on the other path is meaningless (graduated tokens have no BC,
+    // pre-graduation tokens have no AMM). Throw so verifyFeeRecipient returns {error}
+    // instead of {isRecipient:false}, preventing incorrect deactivations on network issues.
+    if (bcRpcError || ammRpcError) {
+        const parts = [
+            bcRpcError  ? `BC=${bcRpcError.message}`  : null,
+            ammRpcError ? `AMM=${ammRpcError.message}` : null,
+        ].filter(Boolean).join(', ');
+        throw new Error(`RPC error during coin_creator lookup: ${parts}`);
     }
 
     logger.info(`[MintExtractor] ${mintStr.slice(0, 8)}... - No coin_creator found in BC or AMM`);

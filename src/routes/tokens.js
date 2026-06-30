@@ -3159,8 +3159,18 @@ function init(deps) {
                 connection
             );
 
+            if (verification.error) {
+                logger.warn(`[FeeShareRefresh] ${mint.slice(0, 8)}... - Verification inconclusive (RPC error), keeping current state: ${verification.error}`);
+                return res.json({
+                    success: false,
+                    changed: false,
+                    rpcError: true,
+                    message: `Verification failed due to RPC error — token state unchanged: ${verification.error}`
+                });
+            }
+
             if (!verification.isRecipient) {
-                // We're no longer a fee recipient - deactivate the token
+                // Verification succeeded on-chain and we are genuinely no longer a fee recipient
                 await db.run(
                     'UPDATE robinhood_tokens SET "isActive" = 0 WHERE mint = $1',
                     [mint]
@@ -3438,8 +3448,16 @@ function init(deps) {
                         connection
                     );
 
-                    if (!verification.isRecipient) {
-                        // No longer a fee recipient - deactivate
+                    if (verification.error) {
+                        // RPC error — result is inconclusive, don't touch isActive
+                        results.push({
+                            mint: token.mint,
+                            ticker: token.ticker,
+                            action: 'skipped',
+                            reason: `RPC error: ${verification.error}`
+                        });
+                    } else if (!verification.isRecipient) {
+                        // Verification succeeded on-chain: genuinely no longer a fee recipient
                         await db.run(
                             'UPDATE robinhood_tokens SET "isActive" = 0 WHERE mint = $1',
                             [token.mint]

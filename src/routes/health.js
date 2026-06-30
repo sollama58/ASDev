@@ -2777,6 +2777,73 @@ function init(deps) {
     });
 
     /**
+     * POST /admin/reactivate-deactivated-tokens
+     * Re-verify all inactive robinhood_tokens on-chain and reactivate those that
+     * still have fee sharing configured. Skips tokens where verification is
+     * inconclusive due to RPC errors (error flag set).
+     */
+    router.post('/admin/reactivate-deactivated-tokens', adminAuth, async (req, res) => {
+        try {
+            const mintExtractor = require('../services/mintExtractor');
+            const platformWallet = devKeypair.publicKey.toString();
+
+            const inactiveTokens = await db.all(
+                'SELECT mint, ticker, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 0'
+            );
+
+            if (!inactiveTokens.length) {
+                return res.json({ success: true, message: 'No deactivated tokens found', reactivated: 0, stillInactive: 0, errors: 0, results: [] });
+            }
+
+            logger.info(`[Admin] Reactivating deactivated tokens: checking ${inactiveTokens.length} tokens...`);
+
+            let reactivated = 0, stillInactive = 0, errors = 0;
+            const results = [];
+
+            for (const token of inactiveTokens) {
+                try {
+                    const verification = await mintExtractor.verifyFeeRecipient(token.mint, platformWallet, connection);
+
+                    if (verification.error) {
+                        errors++;
+                        results.push({ mint: token.mint, ticker: token.ticker, action: 'skipped', reason: `RPC error: ${verification.error}` });
+                    } else if (verification.isRecipient) {
+                        await db.run(
+                            'UPDATE robinhood_tokens SET "isActive" = 1, "feeShareBps" = $1 WHERE mint = $2',
+                            [verification.feeShareBps || token.feeShareBps, token.mint]
+                        );
+                        reactivated++;
+                        results.push({ mint: token.mint, ticker: token.ticker, action: 'reactivated', feeShareBps: verification.feeShareBps });
+                        logger.info(`[Admin] Reactivated ${token.ticker} (${token.mint.slice(0, 8)}...)`);
+                    } else {
+                        stillInactive++;
+                        results.push({ mint: token.mint, ticker: token.ticker, action: 'still_inactive', reason: 'No fee sharing found on-chain' });
+                    }
+
+                    await new Promise(r => setTimeout(r, 100));
+                } catch (e) {
+                    errors++;
+                    results.push({ mint: token.mint, ticker: token.ticker, action: 'error', reason: e.message });
+                }
+            }
+
+            logger.info(`[Admin] Reactivation complete: ${reactivated} reactivated, ${stillInactive} still inactive, ${errors} errors`);
+
+            res.json({
+                success: true,
+                message: `Reactivated ${reactivated} token${reactivated !== 1 ? 's' : ''} of ${inactiveTokens.length} checked`,
+                reactivated,
+                stillInactive,
+                errors,
+                results
+            });
+        } catch (e) {
+            logger.error('[Admin] Reactivate-deactivated-tokens error', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    /**
      * GET /debug/robinhood-token/:mint
      * v25.68: Debug endpoint to check Robinhood token status and holders
      * Helps diagnose why holdings might not be showing up

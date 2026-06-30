@@ -958,6 +958,87 @@
             margin: 18px 0;
         }
 
+        /* ── Filter Modal ── */
+        .filter-toggle-row {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 14px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+        }
+
+        .filter-toggle-row:hover { border-color: var(--border2); background: var(--surface3); }
+
+        .filter-toggle-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 4px;
+        }
+
+        .filter-toggle-sub {
+            font-size: 11px;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        .toggle-wrap { flex-shrink: 0; position: relative; }
+
+        .toggle-input {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-track {
+            display: block;
+            width: 36px;
+            height: 20px;
+            background: var(--surface3);
+            border: 1px solid var(--border2);
+            border-radius: 10px;
+            position: relative;
+            transition: background 0.2s, border-color 0.2s;
+            cursor: pointer;
+        }
+
+        .toggle-thumb {
+            display: block;
+            width: 14px;
+            height: 14px;
+            background: var(--muted);
+            border-radius: 50%;
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        .toggle-input:checked + .toggle-track {
+            background: var(--accent-dim);
+            border-color: rgba(245,158,11,0.4);
+        }
+
+        .toggle-input:checked + .toggle-track .toggle-thumb {
+            background: var(--accent);
+            transform: translateX(16px);
+        }
+
+        .filter-active-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+            margin-left: 5px;
+            vertical-align: middle;
+        }
+
         /* ── Toast ── */
         #toast {
             position: fixed;
@@ -1109,7 +1190,8 @@
                 <span class="card-title">Registered Tokens</span>
                 <span class="card-count" id="lb-count"></span>
             </div>
-            <div style="display:flex;gap:8px">
+            <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-secondary btn-sm" id="filter-btn" onclick="openFilterModal()">⚙ Filter</button>
                 <button class="btn btn-secondary btn-sm" onclick="loadLeaderboard(true)">↻ Refresh</button>
                 <button class="btn btn-secondary btn-sm" id="view-all-btn" onclick="openViewAllModal()" style="display:none">View All</button>
             </div>
@@ -1191,6 +1273,40 @@
 <footer>🐂 Bullpad — SOL airdrop pool powered by on-chain fee sharing</footer>
 
 <div id="toast"></div>
+
+<!-- ── Filter Modal ── -->
+<div class="modal-overlay" id="filter-modal" onclick="handleOverlayClick(event,'filter-modal')">
+    <div class="modal" style="max-width:360px">
+        <div class="modal-header">
+            <span class="modal-title">Filter Tokens</span>
+            <button class="modal-close" onclick="closeModal('filter-modal')">✕</button>
+        </div>
+        <div class="modal-body" style="padding:20px;display:flex;flex-direction:column;gap:16px">
+            <p style="font-size:13px;color:var(--text2);line-height:1.6">By default only active, eligible tokens are shown. Enable filters below to reveal additional tokens.</p>
+            <label class="filter-toggle-row" id="filter-deactivated-row">
+                <div>
+                    <div class="filter-toggle-label">Show Deactivated</div>
+                    <div class="filter-toggle-sub">Tokens whose on-chain fee sharing has been removed or could not be verified.</div>
+                </div>
+                <div class="toggle-wrap">
+                    <input type="checkbox" id="filter-deactivated" class="toggle-input" onchange="applyFilters()">
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </div>
+            </label>
+            <label class="filter-toggle-row" id="filter-lowvol-row">
+                <div>
+                    <div class="filter-toggle-label">Show Low Volume</div>
+                    <div class="filter-toggle-sub">Active tokens with less than $100 in 24h volume — ineligible for the current airdrop cycle.</div>
+                </div>
+                <div class="toggle-wrap">
+                    <input type="checkbox" id="filter-lowvol" class="toggle-input" onchange="applyFilters()">
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </div>
+            </label>
+            <button class="btn btn-secondary btn-sm" onclick="resetFilters()" style="align-self:flex-start">Reset to Default</button>
+        </div>
+    </div>
+</div>
 
 <!-- ── About Modal ── -->
 <div class="modal-overlay" id="about-modal" onclick="handleOverlayClick(event,'about-modal')">
@@ -1290,6 +1406,9 @@ let wsReconnTimer   = null;
 let verifiedToken   = null;
 let allTokensCache  = [];
 
+// Filter state — both off by default (hide deactivated + low vol)
+const filters = { showDeactivated: false, showLowVol: false };
+
 // ── Formatting ─────────────────────────────────────────────────────────────────
 const fmt = {
     sol(v) {
@@ -1348,10 +1467,83 @@ function handleOverlayClick(e, id) {
 
 document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-        ['about-modal','token-modal','viewall-modal'].forEach(closeModal);
+        ['filter-modal','about-modal','token-modal','viewall-modal'].forEach(closeModal);
         document.body.style.overflow = '';
     }
 });
+
+// ── Filter Modal ───────────────────────────────────────────────────────────────
+function openFilterModal() {
+    document.getElementById('filter-deactivated').checked = filters.showDeactivated;
+    document.getElementById('filter-lowvol').checked      = filters.showLowVol;
+    openModal('filter-modal');
+}
+
+function applyFilters() {
+    filters.showDeactivated = document.getElementById('filter-deactivated').checked;
+    filters.showLowVol      = document.getElementById('filter-lowvol').checked;
+    updateFilterBtn();
+    renderLeaderboardFromCache();
+}
+
+function resetFilters() {
+    filters.showDeactivated = false;
+    filters.showLowVol      = false;
+    document.getElementById('filter-deactivated').checked = false;
+    document.getElementById('filter-lowvol').checked      = false;
+    updateFilterBtn();
+    renderLeaderboardFromCache();
+    closeModal('filter-modal');
+}
+
+function updateFilterBtn() {
+    const active = filters.showDeactivated || filters.showLowVol;
+    const btn = document.getElementById('filter-btn');
+    btn.innerHTML = active
+        ? '⚙ Filter<span class="filter-active-dot"></span>'
+        : '⚙ Filter';
+}
+
+function getFilteredTokens() {
+    return allTokensCache.filter(t => {
+        const deactivated = t.isActive === false;
+        const lowVol      = !deactivated && !t.isEligible;
+        const eligible    = !deactivated && t.isEligible;
+        if (eligible)    return true;
+        if (deactivated) return filters.showDeactivated;
+        if (lowVol)      return filters.showLowVol;
+        return false;
+    });
+}
+
+function renderLeaderboardFromCache() {
+    if (!allTokensCache.length) return;
+    const filtered = getFilteredTokens();
+    const total    = allTokensCache.length;
+    const showing  = filtered.length;
+
+    const countEl = document.getElementById('lb-count');
+    if (filters.showDeactivated || filters.showLowVol) {
+        countEl.textContent = showing > TOP_N
+            ? `Top ${TOP_N} of ${showing} shown (${total} total)`
+            : `${showing} shown of ${total} total`;
+    } else {
+        countEl.textContent = total > TOP_N ? `Top ${TOP_N} of ${total}` : '';
+    }
+
+    document.getElementById('view-all-btn').style.display = showing > TOP_N ? '' : 'none';
+
+    const body = document.getElementById('lb-body');
+    if (!filtered.length) {
+        body.innerHTML = `
+            <div class="lb-empty">
+                <div class="lb-empty-icon">🔍</div>
+                <div class="lb-empty-text">No tokens match the current filters.</div>
+            </div>`;
+        return;
+    }
+    body.innerHTML = buildTableHTML(filtered.slice(0, TOP_N));
+}
 
 // ── About Modal ────────────────────────────────────────────────────────────────
 function openAboutModal() { openModal('about-modal'); }
@@ -1359,7 +1551,7 @@ function openAboutModal() { openModal('about-modal'); }
 // ── View All Modal ─────────────────────────────────────────────────────────────
 function openViewAllModal() {
     const body = document.getElementById('viewall-body');
-    body.innerHTML = buildTableHTML(allTokensCache);
+    body.innerHTML = buildTableHTML(getFilteredTokens());
     openModal('viewall-modal');
 }
 
@@ -1640,14 +1832,9 @@ async function loadLeaderboard(showSpinner = false) {
             .map(t => ({ ...t, pendingAirdropSol: pendingMap[t.mint] ?? null }))
             .sort((a, b) => (parseFloat(b.marketCap) || 0) - (parseFloat(a.marketCap) || 0));
 
-        const total = allTokensCache.length;
-        document.getElementById('stat-tokens').textContent = total;
-        document.getElementById('lb-count').textContent = total > TOP_N ? `Top ${TOP_N} of ${total}` : '';
+        document.getElementById('stat-tokens').textContent = allTokensCache.length;
 
-        const viewAllBtn = document.getElementById('view-all-btn');
-        viewAllBtn.style.display = total > TOP_N ? '' : 'none';
-
-        if (!total) {
+        if (!allTokensCache.length) {
             body.innerHTML = `
                 <div class="lb-empty">
                     <div class="lb-empty-icon">🐂</div>
@@ -1656,7 +1843,7 @@ async function loadLeaderboard(showSpinner = false) {
             return;
         }
 
-        body.innerHTML = buildTableHTML(allTokensCache.slice(0, TOP_N));
+        renderLeaderboardFromCache();
 
     } catch (e) {
         body.innerHTML = `

@@ -536,6 +536,13 @@
                 <button class="btn btn-danger btn-sm" onclick="runAction('reset-points','as-reset-pts')">Run</button>
             </div>
 
+            <div class="action-cell">
+                <div class="action-header"><span class="action-icon">♻️</span><span class="action-name">Reactivate Tokens</span></div>
+                <div class="action-desc">Re-verify all deactivated tokens on-chain. Restores any that still have fee sharing configured (skips those with genuine RPC errors).</div>
+                <div class="action-status" id="as-reactivate"></div>
+                <button class="btn btn-secondary btn-sm" onclick="reactivateDeactivated()">Run</button>
+            </div>
+
         </div>
     </div>
 
@@ -797,6 +804,41 @@ async function runAction(endpoint, statusId) {
         toast('Request failed', 'error');
     } finally {
         setTimeout(() => { btn.disabled = false; }, 3000);
+    }
+}
+
+// ── Reactivate Deactivated Tokens ─────────────────────────────────────────────
+async function reactivateDeactivated() {
+    const statusEl = document.getElementById('as-reactivate');
+    const btn = statusEl.closest('.action-cell').querySelector('button');
+    btn.disabled = true;
+    statusEl.className = 'action-status running';
+    statusEl.textContent = 'Verifying on-chain…';
+
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/admin/reactivate-deactivated-tokens`, {
+            method: 'POST',
+            headers: apiHeaders(),
+        });
+        const d = await r.json();
+
+        if (r.ok) {
+            const { reactivated, stillInactive, errors } = d;
+            statusEl.className = 'action-status ok';
+            statusEl.textContent = `✓ ${reactivated} reactivated · ${stillInactive} inactive · ${errors} errors`;
+            toast(`♻️ ${reactivated} token${reactivated !== 1 ? 's' : ''} reactivated`, reactivated > 0 ? 'success' : 'info');
+            if (reactivated > 0) setTimeout(loadStats, 1500);
+        } else {
+            statusEl.className = 'action-status err';
+            statusEl.textContent = '✗ ' + (d.error || r.status);
+            toast('Failed: ' + (d.error || r.status), 'error');
+        }
+    } catch (e) {
+        statusEl.className = 'action-status err';
+        statusEl.textContent = '✗ Request failed';
+        toast('Request failed', 'error');
+    } finally {
+        setTimeout(() => { btn.disabled = false; }, 4000);
     }
 }
 
