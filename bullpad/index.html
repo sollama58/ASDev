@@ -324,6 +324,26 @@
             margin-left: 2px;
         }
 
+        .pool-split-note {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin-top: 12px;
+            padding: 10px 13px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            color: var(--text2);
+            line-height: 1.5;
+        }
+        .pool-split-icon {
+            flex-shrink: 0;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        .pool-split-note strong { color: var(--text); }
+
         .btn-recipients {
             display: inline-block;
             margin-top: 14px;
@@ -1268,6 +1288,10 @@
                     <div class="pool-breakdown-val" id="token-pools-sol">—<span>SOL</span></div>
                 </div>
             </div>
+            <div class="pool-split-note">
+                <span class="pool-split-icon">⚖️</span>
+                <span>Each token's collected fees are split <strong>50% → Central Pool</strong> (shared across all registered tokens) and <strong>50% → that token's pool</strong> (for its holders only).</span>
+            </div>
             <button class="btn-recipients" onclick="openRecipients()">View Expected Recipients →</button>
             <div class="pool-divider"></div>
             <div class="countdown-label">Next Airdrop In</div>
@@ -1443,16 +1467,20 @@
                         <div class="about-step-text"><strong>Fee collection:</strong> Every trade on a registered token generates a fee. A portion of that fee is sent directly to the Bullpad platform wallet on-chain via Pump.fun's fee-sharing mechanism.</div>
                     </div>
                     <div class="about-step">
+                        <div class="about-step-icon">⚖️</div>
+                        <div class="about-step-text"><strong>50 / 50 fee split:</strong> Each time fees are collected from a token, they are split evenly — <strong>50% goes into the Central Pool</strong> (shared across all registered tokens' holder bases) and <strong>50% goes into that token's Individual Pool</strong> (distributed exclusively to holders of that specific token). This means active traders across all tokens contribute to everyone, while your token's own trading volume directly benefits your holders.</div>
+                    </div>
+                    <div class="about-step">
                         <div class="about-step-icon">🏦</div>
-                        <div class="about-step-text"><strong>Pool accumulation:</strong> Collected fees accumulate in the central pool. Each registered token also has its own individual pending pool that grows with every trade.</div>
+                        <div class="about-step-text"><strong>Two pools, two payouts:</strong> At each airdrop cycle, a holder's total expected SOL comes from both pools — their share of the Central Pool (based on holdings across all eligible tokens) plus their share of any Individual Pools for tokens they hold. The amounts are summed and sent in a single transaction.</div>
                     </div>
                     <div class="about-step">
                         <div class="about-step-icon">🎯</div>
-                        <div class="about-step-text"><strong>Airdrop distribution:</strong> Every 15 minutes, the pool is distributed to holders of all eligible registered tokens, proportional to their token holdings. SOL lands directly in wallets — no action required.</div>
+                        <div class="about-step-text"><strong>Airdrop distribution:</strong> Every 15 minutes, eligible pools are distributed to holders proportional to their token holdings. SOL lands directly in wallets — no action required.</div>
                     </div>
                     <div class="about-step">
                         <div class="about-step-icon">✅</div>
-                        <div class="about-step-text"><strong>Eligibility:</strong> A token must have ≥ $100 in 24-hour trading volume to receive a distribution in a given cycle. Tokens below this threshold still accumulate fees but skip that cycle's drop.</div>
+                        <div class="about-step-text"><strong>Eligibility:</strong> A token must have ≥ $100 in 24-hour trading volume to receive a distribution in a given cycle. Tokens below this threshold still accumulate fees in both pools but skip that cycle's drop.</div>
                     </div>
                 </div>
             </div>
