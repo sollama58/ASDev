@@ -389,6 +389,9 @@ function init(deps) {
                 // v27.0: Per-token pools total and central pool separately
                 tokenPoolsSol: ((cachedHealth.totalPendingAirdropLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
                 centralPoolSol: ((cachedHealth.centralPoolLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
+                // v27.1: Thresholds for UI display (central pool fixed 2.5 SOL; token pool from env)
+                centralPoolThresholdSol: 2.5,
+                tokenPoolThresholdSol: parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0,
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
                 // M-8 FIX: Expose deployment fee so frontend stays in sync with backend config
                 deploymentFee: config.DEPLOYMENT_FEE_SOL,

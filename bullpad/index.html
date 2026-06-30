@@ -359,6 +359,66 @@
         }
         .btn-recipients:hover { color: var(--accent); border-color: rgba(245,158,11,0.4); }
 
+        .cp-threshold {
+            margin-top: 18px;
+            padding: 12px 14px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+        }
+        .cp-threshold-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .cp-threshold-label {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.4px;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+        .cp-threshold-badge {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .5px;
+            padding: 2px 7px;
+            border-radius: 4px;
+        }
+        .cp-threshold-badge.ready {
+            color: var(--green);
+            background: var(--green-dim);
+            border: 1px solid rgba(34,197,94,0.25);
+        }
+        .cp-threshold-badge.building {
+            color: var(--accent);
+            background: var(--accent-dim);
+            border: 1px solid rgba(245,158,11,0.25);
+        }
+        .cp-threshold-track {
+            height: 5px;
+            background: var(--surface3);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 7px;
+        }
+        .cp-threshold-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.6s ease, background 0.3s;
+            background: var(--accent);
+        }
+        .cp-threshold-fill.ready { background: var(--green); }
+        .cp-threshold-nums {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+            color: var(--text2);
+        }
+        .cp-threshold-nums strong { color: var(--text); }
+
         .pool-stats-row {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -1296,6 +1356,20 @@
             <div class="pool-divider"></div>
             <div class="countdown-label">Next Airdrop In</div>
             <div class="countdown" id="countdown">—:——:——</div>
+
+            <div class="cp-threshold" id="cp-threshold-wrap">
+                <div class="cp-threshold-header">
+                    <span class="cp-threshold-label">Central Pool Status</span>
+                    <span class="cp-threshold-badge building" id="cp-threshold-badge">BUILDING</span>
+                </div>
+                <div class="cp-threshold-track">
+                    <div class="cp-threshold-fill" id="cp-threshold-fill" style="width:0%"></div>
+                </div>
+                <div class="cp-threshold-nums">
+                    <strong id="cp-threshold-current">— SOL</strong>
+                    <span>threshold: <span id="cp-threshold-max">2.50</span> SOL</span>
+                </div>
+            </div>
         </div>
         <div class="pool-stats-row">
             <div class="pool-stat">
@@ -1553,12 +1627,14 @@ const POLL_LB      = 60_000;
 const TOP_N        = 10;
 
 // ── State ──────────────────────────────────────────────────────────────────────
-let nextAirdropAt   = null;
-let countdownTimer  = null;
-let ws              = null;
-let wsReconnTimer   = null;
-let verifiedToken   = null;
-let allTokensCache  = [];
+let nextAirdropAt         = null;
+let countdownTimer        = null;
+let ws                    = null;
+let wsReconnTimer         = null;
+let verifiedToken         = null;
+let allTokensCache        = [];
+let centralPoolThreshold  = 2.5;   // SOL — updated from health
+let tokenPoolThreshold    = 1.0;   // SOL — updated from health
 
 // Filter state — both off by default (hide deactivated + low vol)
 const filters = { showDeactivated: false, showLowVol: false };
@@ -1924,6 +2000,11 @@ function applyHealth(d) {
     if (centralEl) centralEl.innerHTML = fmt.sol(centralSol) + '<span>SOL</span>';
     if (tokenEl)   tokenEl.innerHTML   = fmt.sol(tokenSol)   + '<span>SOL</span>';
 
+    // Update threshold state and bar
+    if (d.centralPoolThresholdSol) centralPoolThreshold = parseFloat(d.centralPoolThresholdSol);
+    if (d.tokenPoolThresholdSol)   tokenPoolThreshold   = parseFloat(d.tokenPoolThresholdSol);
+    updateCentralPoolThresholdBar(centralSol, centralPoolThreshold);
+
     const totalDrop = parseFloat(d.totalSolAirdropped) || 0;
     document.getElementById('stat-airdropped').textContent = totalDrop.toFixed(2) + ' SOL';
     if (d.airdropIntervalMs) {
@@ -1940,6 +2021,24 @@ function applyHealth(d) {
     if (d.wallet) {
         document.getElementById('platform-wallet').textContent = d.wallet;
     }
+}
+
+function updateCentralPoolThresholdBar(currentSol, thresholdSol) {
+    const pct     = thresholdSol > 0 ? Math.min(currentSol / thresholdSol, 1) : 0;
+    const isReady = currentSol >= thresholdSol;
+
+    const fill   = document.getElementById('cp-threshold-fill');
+    const badge  = document.getElementById('cp-threshold-badge');
+    const cur    = document.getElementById('cp-threshold-current');
+    const maxEl  = document.getElementById('cp-threshold-max');
+
+    if (!fill) return;
+    fill.style.width = (pct * 100).toFixed(1) + '%';
+    fill.classList.toggle('ready', isReady);
+    badge.textContent = isReady ? 'READY TO FIRE' : 'BUILDING';
+    badge.className   = 'cp-threshold-badge ' + (isReady ? 'ready' : 'building');
+    cur.textContent   = currentSol.toFixed(4) + ' SOL';
+    if (maxEl) maxEl.textContent = thresholdSol.toFixed(2);
 }
 
 function copyWallet() {
@@ -2006,8 +2105,19 @@ function buildTokenRow(t, i) {
             ? `<span class="badge badge-green">ELIGIBLE</span>`
             : `<span class="badge badge-muted">LOW VOL</span>`;
 
-    const pending = parseFloat(t.pendingAirdropSol) > 0
-        ? `<span class="sol-amount">◎ ${parseFloat(t.pendingAirdropSol).toFixed(4)}</span>`
+    const pendingSol = parseFloat(t.pendingAirdropSol) || 0;
+    const poolReady  = pendingSol > 0 && pendingSol >= tokenPoolThreshold;
+    const poolPct    = tokenPoolThreshold > 0 ? Math.min(pendingSol / tokenPoolThreshold, 1) : 0;
+    const pending = pendingSol > 0
+        ? `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+               <span class="sol-amount" style="color:${poolReady ? 'var(--green)' : 'var(--accent)'}">◎ ${pendingSol.toFixed(4)}</span>
+               <div style="display:flex;align-items:center;gap:5px">
+                   <div style="width:48px;height:3px;background:var(--surface3);border-radius:2px;overflow:hidden">
+                       <div style="width:${(poolPct*100).toFixed(1)}%;height:100%;background:${poolReady ? 'var(--green)' : 'var(--accent)'};border-radius:2px"></div>
+                   </div>
+                   <span style="font-size:9px;font-weight:700;letter-spacing:.4px;color:${poolReady ? 'var(--green)' : 'var(--muted)'}">${poolReady ? 'READY' : `${(poolPct*100).toFixed(0)}%`}</span>
+               </div>
+           </div>`
         : `<span style="color:var(--muted)">—</span>`;
 
     const vol = t.volume24h ?? t.volume;
@@ -2042,7 +2152,7 @@ function buildTableHTML(tokens) {
                     <th>Token</th>
                     <th class="right">Market Cap</th>
                     <th class="right col-vol">24h Volume</th>
-                    <th class="right">Pending SOL</th>
+                    <th class="right">Token Pool</th>
                     <th class="right col-status">Status</th>
                 </tr>
             </thead>
@@ -2068,7 +2178,7 @@ async function loadLeaderboard(showSpinner = false) {
         }
 
         allTokensCache = tokens
-            .map(t => ({ ...t, pendingAirdropSol: pendingMap[t.mint] ?? null }))
+            .map(t => ({ ...t, pendingAirdropSol: pendingMap[t.mint] ?? t.pendingAirdropSol ?? null }))
             .sort((a, b) => (parseFloat(b.marketCap) || 0) - (parseFloat(a.marketCap) || 0));
 
         document.getElementById('stat-tokens').textContent = allTokensCache.length;

@@ -78,16 +78,19 @@ function init(deps) {
             const offset = Math.min(Math.max(0, rawOffset), 50000); // Min 0, Max 50000
 
             // Cache per page (limit + offset combo)
-            const cacheKey = `all_launches_v2589_${limit}_${offset}`;
+            const cacheKey = `all_launches_v2600_${limit}_${offset}`;
             const { rows, total } = await redis.smartCache(cacheKey, 15, async () => {
                 // v25.0: UNION query to get both platform tokens and robinhood tokens
                 // v25.89: Include ALL robinhood_tokens regardless of isActive so registered tokens
                 //         are always visible; inactive ones are shown with a deactivated badge
+                // v27.1: Include pending_airdrop_lamports for threshold display
                 const combinedQuery = `
-                    SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'platform' as source, 1 as "isActive"
+                    SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'platform' as source, 1 as "isActive",
+                           COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports
                     FROM tokens
                     UNION ALL
-                    SELECT mint, "creatorPubkey" as "userPubkey", name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source, "isActive"
+                    SELECT mint, "creatorPubkey" as "userPubkey", name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source, "isActive",
+                           COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports
                     FROM robinhood_tokens
                     ORDER BY volume24h DESC
                     LIMIT $1 OFFSET $2
@@ -138,7 +141,9 @@ function init(deps) {
                 // v25.0: Include source to differentiate token types
                 source: r.source || 'platform',
                 // v25.89: Whether token is active (fee sharing confirmed on-chain)
-                isActive: r.isActive !== 0
+                isActive: r.isActive !== 0,
+                // v27.1: Individual token pending pool
+                pendingAirdropSol: ((r.pending_airdrop_lamports || 0) / 1e9).toFixed(6)
             }));
             res.json({
                 tokens: allLaunches,
