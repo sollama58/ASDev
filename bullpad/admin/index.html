@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bullpad Admin</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐂</text></svg>">
+
+    <style>
+        :root {
+            --bg:           #080808;
+            --surface:      #0f0f0f;
+            --surface2:     #161616;
+            --surface3:     #1e1e1e;
+            --border:       #202020;
+            --border2:      #2a2a2a;
+            --text:         #e8e8e8;
+            --text2:        #a0a0a0;
+            --muted:        #555;
+            --accent:       #f59e0b;
+            --accent-glow:  rgba(245,158,11,0.12);
+            --accent-dim:   rgba(245,158,11,0.08);
+            --green:        #22c55e;
+            --green-dim:    rgba(34,197,94,0.1);
+            --red:          #ef4444;
+            --red-dim:      rgba(239,68,68,0.1);
+            --blue:         #60a5fa;
+            --blue-dim:     rgba(96,165,250,0.1);
+            --purple:       #a78bfa;
+            --purple-dim:   rgba(167,139,250,0.1);
+            --radius:       10px;
+            --radius-sm:    6px;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ── Header ── */
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 200;
+            height: 56px;
+            background: rgba(8,8,8,0.92);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            font-size: 17px;
+            font-weight: 700;
+        }
+
+        .logo-tag {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--accent);
+            background: var(--accent-dim);
+            border: 1px solid rgba(245,158,11,0.2);
+            padding: 2px 7px;
+            border-radius: 4px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .ws-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .ws-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--muted);
+            transition: background 0.4s, box-shadow 0.4s;
+        }
+
+        .ws-dot.live {
+            background: var(--green);
+            box-shadow: 0 0 0 2px rgba(34,197,94,0.25);
+        }
+
+        /* ── Login screen ── */
+        #login-screen {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: calc(100vh - 56px);
+            padding: 24px;
+        }
+
+        .login-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 36px 32px;
+            width: 100%;
+            max-width: 380px;
+        }
+
+        .login-icon { font-size: 36px; text-align: center; margin-bottom: 16px; }
+        .login-title {
+            font-size: 20px;
+            font-weight: 800;
+            text-align: center;
+            margin-bottom: 6px;
+        }
+
+        .login-sub {
+            font-size: 13px;
+            color: var(--muted);
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        /* ── Layout ── */
+        #dashboard { display: none; }
+
+        main {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 28px 20px 80px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        /* ── Cards ── */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 13px 18px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-title {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.8px;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        /* ── Stats grid ── */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1px;
+            background: var(--border);
+        }
+
+        .stat-cell {
+            background: var(--surface);
+            padding: 18px 16px;
+        }
+
+        .stat-value {
+            font-size: 20px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            color: var(--text);
+            line-height: 1.1;
+        }
+
+        .stat-label {
+            font-size: 10px;
+            color: var(--muted);
+            margin-top: 4px;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-value.accent { color: var(--accent); }
+        .stat-value.green  { color: var(--green); }
+
+        /* ── Actions grid ── */
+        .actions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1px;
+            background: var(--border);
+        }
+
+        .action-cell {
+            background: var(--surface);
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .action-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .action-icon {
+            font-size: 18px;
+            line-height: 1;
+        }
+
+        .action-name {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .action-desc {
+            font-size: 11px;
+            color: var(--muted);
+            line-height: 1.5;
+            flex: 1;
+        }
+
+        .action-status {
+            font-size: 11px;
+            min-height: 16px;
+            color: var(--muted);
+        }
+
+        .action-status.running { color: var(--accent); }
+        .action-status.ok      { color: var(--green); }
+        .action-status.err     { color: var(--red); }
+
+        /* ── Buttons ── */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 9px 16px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: opacity 0.15s, transform 0.1s;
+            white-space: nowrap;
+            font-family: inherit;
+        }
+
+        .btn:hover:not(:disabled) { opacity: 0.85; }
+        .btn:active:not(:disabled) { transform: scale(0.97); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .btn-primary   { background: var(--accent); color: #000; }
+        .btn-secondary { background: var(--surface3); color: var(--text); border: 1px solid var(--border2); }
+        .btn-danger    { background: var(--red-dim); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+        .btn-sm        { padding: 7px 13px; font-size: 12px; }
+        .btn-full      { width: 100%; }
+
+        /* ── Inputs ── */
+        .field-input {
+            width: 100%;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            color: var(--text);
+            padding: 10px 13px;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+            font-family: inherit;
+        }
+
+        .field-input[type="password"] { letter-spacing: 2px; }
+        .field-input::placeholder { color: var(--muted); letter-spacing: normal; }
+
+        .field-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .field-label {
+            display: block;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            color: var(--text2);
+            margin-bottom: 6px;
+        }
+
+        .field-group { margin-bottom: 14px; }
+
+        /* ── Messages ── */
+        .msg {
+            padding: 10px 13px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            line-height: 1.5;
+            margin-top: 10px;
+        }
+
+        .msg-error   { background: var(--red-dim);   border: 1px solid rgba(239,68,68,0.25);  color: #fca5a5; }
+        .msg-success { background: var(--green-dim);  border: 1px solid rgba(34,197,94,0.25);  color: #86efac; }
+        .msg-info    { background: var(--accent-dim); border: 1px solid rgba(245,158,11,0.2);  color: #fcd34d; }
+
+        /* ── Log tables ── */
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .log-table th {
+            padding: 9px 14px;
+            text-align: left;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--muted);
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            background: var(--surface);
+        }
+
+        .log-table th.right { text-align: right; }
+
+        .log-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .log-table td.right { text-align: right; }
+
+        .log-table tr:last-child td { border-bottom: none; }
+        .log-table tbody tr:hover td { background: var(--surface2); }
+
+        .mono { font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace; }
+
+        .sol-val { color: var(--accent); font-weight: 600; }
+        .green-val { color: var(--green); }
+        .muted-val { color: var(--muted); }
+
+        /* ── Import token section ── */
+        .import-body { padding: 18px; }
+
+        .import-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        /* ── Toast ── */
+        #toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 11px 15px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 500;
+            max-width: 340px;
+            z-index: 9999;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(12px);
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+
+        #toast.visible { opacity: 1; transform: translateY(0); }
+        #toast.toast-success { background: var(--green-dim); border: 1px solid rgba(34,197,94,0.3); color: #86efac; }
+        #toast.toast-error   { background: var(--red-dim);   border: 1px solid rgba(239,68,68,0.3);  color: #fca5a5; }
+        #toast.toast-info    { background: var(--accent-dim); border: 1px solid rgba(245,158,11,0.25); color: #fcd34d; }
+
+        /* ── Skeleton ── */
+        @keyframes shimmer { 0%,100% { opacity:.3; } 50% { opacity:.6; } }
+        .skel { background: var(--surface3); border-radius: 4px; animation: shimmer 1.6s ease-in-out infinite; }
+
+        /* ── Responsive ── */
+        @media (max-width: 700px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .actions-grid { grid-template-columns: 1fr 1fr; }
+        }
+
+        @media (max-width: 480px) {
+            .actions-grid { grid-template-columns: 1fr; }
+            .import-row { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+    <div class="logo">
+        <span>🐂</span>
+        <span>Bullpad</span>
+        <span class="logo-tag">Admin</span>
+    </div>
+    <div class="header-right">
+        <div class="ws-indicator" id="ws-indicator" style="display:none">
+            <div class="ws-dot" id="ws-dot"></div>
+            <span id="ws-label">Connecting</span>
+        </div>
+        <a href="/" style="font-size:12px;color:var(--muted);text-decoration:none">← Back to site</a>
+        <button class="btn btn-secondary btn-sm" id="logout-btn" onclick="logout()" style="display:none">Log out</button>
+    </div>
+</header>
+
+<!-- ── Login ── -->
+<div id="login-screen">
+    <div class="login-card">
+        <div class="login-icon">🔐</div>
+        <div class="login-title">Admin Access</div>
+        <div class="login-sub">Enter your admin API key to continue</div>
+
+        <div class="field-group">
+            <label class="field-label" for="pw-input">API Key</label>
+            <input class="field-input" id="pw-input" type="password" placeholder="Enter admin key…" autocomplete="current-password" />
+        </div>
+
+        <button class="btn btn-primary btn-full" id="login-btn" onclick="doLogin()">Authenticate</button>
+        <div id="login-msg"></div>
+    </div>
+</div>
+
+<!-- ── Dashboard ── -->
+<div id="dashboard">
+<main>
+
+    <!-- Stats -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">System Overview</span>
+            <button class="btn btn-secondary btn-sm" onclick="loadStats()">↻ Refresh</button>
+        </div>
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-cell"><div class="stat-value skel" style="width:80px;height:24px"></div><div class="stat-label">Pool</div></div>
+            <div class="stat-cell"><div class="stat-value skel" style="width:80px;height:24px"></div><div class="stat-label">SOL Balance</div></div>
+            <div class="stat-cell"><div class="stat-value skel" style="width:80px;height:24px"></div><div class="stat-label">Total Airdropped</div></div>
+            <div class="stat-cell"><div class="stat-value skel" style="width:80px;height:24px"></div><div class="stat-label">Registered Tokens</div></div>
+            <div class="stat-cell"><div class="stat-value skel" style="width:80px;height:24px"></div><div class="stat-label">Pending Fees</div></div>
+            <div class="stat-cell"><div class="stat-value skel" style="width:80px;height:24px"></div><div class="stat-label">Total Launches</div></div>
+            <div class="stat-cell"><div class="stat-value skel" style="width:80px;height:24px"></div><div class="stat-label">Next Airdrop</div></div>
+            <div class="stat-cell"><div class="stat-value skel" style="width:80px;height:24px"></div><div class="stat-label">Last Claim</div></div>
+        </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Actions</span>
+        </div>
+        <div class="actions-grid" id="actions-grid">
+
+            <div class="action-cell">
+                <div class="action-header"><span class="action-icon">🪂</span><span class="action-name">Trigger Airdrop</span></div>
+                <div class="action-desc">Force an immediate SOL distribution to all eligible holders. Requires pool balance ≥ threshold.</div>
+                <div class="action-status" id="as-airdrop"></div>
+                <button class="btn btn-primary btn-sm" onclick="runAction('trigger-airdrop','as-airdrop')">Run</button>
+            </div>
+
+            <div class="action-cell">
+                <div class="action-header"><span class="action-icon">💰</span><span class="action-name">Trigger Fee Claim</span></div>
+                <div class="action-desc">Collect pending fees from creator vaults and Robinhood token pools into the airdrop pool.</div>
+                <div class="action-status" id="as-fee-claim"></div>
+                <button class="btn btn-primary btn-sm" onclick="runAction('trigger-fee-claim','as-fee-claim')">Run</button>
+            </div>
+
+            <div class="action-cell">
+                <div class="action-header"><span class="action-icon">👥</span><span class="action-name">Holder Scan</span></div>
+                <div class="action-desc">Recalculate points for all holders across all eligible tokens. Updates airdrop expectations.</div>
+                <div class="action-status" id="as-holder-scan"></div>
+                <button class="btn btn-secondary btn-sm" onclick="runAction('trigger-holder-scan','as-holder-scan')">Run</button>
+            </div>
+
+            <div class="action-cell">
+                <div class="action-header"><span class="action-icon">📊</span><span class="action-name">Update Metadata</span></div>
+                <div class="action-desc">Refresh token names, images, and on-chain data for all registered tokens via Helius.</div>
+                <div class="action-status" id="as-metadata"></div>
+                <button class="btn btn-secondary btn-sm" onclick="runAction('trigger-metadata-update','as-metadata')">Run</button>
+            </div>
+
+            <div class="action-cell">
+                <div class="action-header"><span class="action-icon">📈</span><span class="action-name">Refresh Volumes</span></div>
+                <div class="action-desc">Pull fresh market cap, volume, and price data from DexScreener for all tokens.</div>
+                <div class="action-status" id="as-volumes"></div>
+                <button class="btn btn-secondary btn-sm" onclick="runAction('refresh-all-volumes','as-volumes')">Run</button>
+            </div>
+
+            <div class="action-cell">
+                <div class="action-header"><span class="action-icon">🔍</span><span class="action-name">Robinhood Scan</span></div>
+                <div class="action-desc">Scan for new Pump.fun fee-sharing tokens and update holder data for existing ones.</div>
+                <div class="action-status" id="as-rh-scan"></div>
+                <button class="btn btn-secondary btn-sm" onclick="runAction('trigger-robinhood-scan','as-rh-scan')">Run</button>
+            </div>
+
+            <div class="action-cell">
+                <div class="action-header"><span class="action-icon">💎</span><span class="action-name">Refresh RH Fees</span></div>
+                <div class="action-desc">Re-read pending fee balances from on-chain vaults for all Robinhood partner tokens.</div>
+                <div class="action-status" id="as-rh-fees"></div>
+                <button class="btn btn-secondary btn-sm" onclick="runAction('refresh-robinhood-pending-fees','as-rh-fees')">Run</button>
+            </div>
+
+            <div class="action-cell">
+                <div class="action-header"><span class="action-icon">📋</span><span class="action-name">Reset Points</span></div>
+                <div class="action-desc">Wipe and fully recalculate all user point values from scratch. Takes a few minutes.</div>
+                <div class="action-status" id="as-reset-pts"></div>
+                <button class="btn btn-danger btn-sm" onclick="runAction('reset-points','as-reset-pts')">Run</button>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Import Token -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Import Token</span>
+        </div>
+        <div class="import-body">
+            <p style="font-size:13px;color:var(--text2);margin-bottom:14px">
+                Manually import a token by mint address. Use <strong>Robinhood</strong> mode for fee-sharing partner tokens.
+            </p>
+            <div class="import-row">
+                <input class="field-input" id="import-mint" type="text" placeholder="Mint address…"
+                    style="font-family:monospace;font-size:12px" maxlength="44" autocomplete="off" spellcheck="false" />
+                <label style="display:flex;align-items:center;gap:6px;font-size:13px;white-space:nowrap;color:var(--text2);cursor:pointer">
+                    <input type="checkbox" id="import-rh" style="accent-color:var(--accent)"> Robinhood
+                </label>
+                <button class="btn btn-primary btn-sm" onclick="importToken()" style="white-space:nowrap">Import</button>
+            </div>
+            <div id="import-msg"></div>
+        </div>
+    </div>
+
+    <!-- Airdrop Logs -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Airdrop History</span>
+            <button class="btn btn-secondary btn-sm" onclick="loadAirdropLogs()">↻ Refresh</button>
+        </div>
+        <div id="airdrop-logs-body">
+            <div style="padding:28px;text-align:center;color:var(--muted);font-size:13px">Loading…</div>
+        </div>
+    </div>
+
+    <!-- Fee Claim Logs -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Fee Claim History</span>
+            <button class="btn btn-secondary btn-sm" onclick="loadFeeClaimLogs()">↻ Refresh</button>
+        </div>
+        <div id="fee-logs-body">
+            <div style="padding:28px;text-align:center;color:var(--muted);font-size:13px">Loading…</div>
+        </div>
+    </div>
+
+    <!-- Server Logs -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Server Logs</span>
+            <button class="btn btn-secondary btn-sm" onclick="loadServerLogs()">↻ Refresh</button>
+        </div>
+        <div id="server-logs-body">
+            <div style="padding:28px;text-align:center;color:var(--muted);font-size:13px">Click Refresh to load logs</div>
+        </div>
+    </div>
+
+</main>
+</div><!-- #dashboard -->
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ── Config ─────────────────────────────────────────────────────────────────────
+const BACKEND_URL = 'https://asdev-1kvy.onrender.com';
+const WS_URL      = BACKEND_URL.replace(/^https/, 'wss') + '/ws';
+
+// ── Auth state ─────────────────────────────────────────────────────────────────
+let adminKey = sessionStorage.getItem('bullpad_admin_key') || '';
+
+function apiHeaders() {
+    return { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey };
+}
+
+// ── Formatting ─────────────────────────────────────────────────────────────────
+function fmtSol(v)  { return (parseFloat(v) || 0).toFixed(4) + ' SOL'; }
+function fmtNum(v)  { return (parseFloat(v) || 0).toLocaleString(); }
+function fmtUsd(v) {
+    const n = parseFloat(v) || 0;
+    if (n >= 1_000_000) return '$' + (n/1_000_000).toFixed(2) + 'M';
+    if (n >= 1_000)     return '$' + (n/1_000).toFixed(1) + 'K';
+    return '$' + n.toFixed(0);
+}
+function fmtTs(ts) {
+    if (!ts) return '—';
+    return new Date(ts).toLocaleString();
+}
+function fmtAgo(ts) {
+    if (!ts) return '—';
+    const d = Date.now() - ts;
+    if (d < 60_000)    return Math.floor(d/1000) + 's ago';
+    if (d < 3_600_000) return Math.floor(d/60_000) + 'm ago';
+    if (d < 86_400_000) return Math.floor(d/3_600_000) + 'h ago';
+    return Math.floor(d/86_400_000) + 'd ago';
+}
+function fmtCountdown(ts) {
+    if (!ts) return '—';
+    const diff = ts - Date.now();
+    if (diff <= 0) return 'now';
+    const m = Math.floor(diff/60_000);
+    const s = Math.floor((diff%60_000)/1000);
+    return m + 'm ' + s + 's';
+}
+function esc(s) {
+    return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Login ──────────────────────────────────────────────────────────────────────
+document.getElementById('pw-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+});
+
+async function doLogin() {
+    const pw  = document.getElementById('pw-input').value.trim();
+    const btn = document.getElementById('login-btn');
+    const msg = document.getElementById('login-msg');
+
+    if (!pw) { msg.innerHTML = '<div class="msg msg-error">Enter your API key.</div>'; return; }
+
+    btn.disabled    = true;
+    btn.textContent = 'Authenticating…';
+    msg.innerHTML   = '';
+
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/admin/verify`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ password: pw }),
+        });
+        const d = await r.json();
+
+        if (r.ok && d.valid) {
+            adminKey = pw;
+            sessionStorage.setItem('bullpad_admin_key', pw);
+            showDashboard();
+        } else {
+            msg.innerHTML = `<div class="msg msg-error">${esc(d.error || 'Invalid key.')}</div>`;
+            btn.disabled    = false;
+            btn.textContent = 'Authenticate';
+        }
+    } catch {
+        msg.innerHTML = '<div class="msg msg-error">Connection failed. Check the backend URL.</div>';
+        btn.disabled    = false;
+        btn.textContent = 'Authenticate';
+    }
+}
+
+function showDashboard() {
+    document.getElementById('login-screen').style.display  = 'none';
+    document.getElementById('dashboard').style.display     = 'block';
+    document.getElementById('logout-btn').style.display    = 'inline-flex';
+    document.getElementById('ws-indicator').style.display  = 'flex';
+    loadStats();
+    loadAirdropLogs();
+    loadFeeClaimLogs();
+    connectWS();
+}
+
+function logout() {
+    sessionStorage.removeItem('bullpad_admin_key');
+    adminKey = '';
+    location.reload();
+}
+
+// ── Stats ──────────────────────────────────────────────────────────────────────
+let statsInterval = null;
+
+async function loadStats() {
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/health`);
+        if (!r.ok) return;
+        const d = await r.json();
+        renderStats(d);
+    } catch {}
+}
+
+function renderStats(d) {
+    const pendingFees = (parseFloat(d.platformPendingFees)||0) + (parseFloat(d.robinhoodPendingFees)||0);
+    const nextDrop    = d.nextAirdropTime ? fmtCountdown(d.nextAirdropTime) : '—';
+    const lastClaim   = d.lastClaimTime   ? fmtAgo(d.lastClaimTime)        : '—';
+
+    document.getElementById('stats-grid').innerHTML = `
+        <div class="stat-cell">
+            <div class="stat-value accent">${(parseFloat(d.airdropPoolSol)||0).toFixed(4)}</div>
+            <div class="stat-label">Airdrop Pool (SOL)</div>
+        </div>
+        <div class="stat-cell">
+            <div class="stat-value">${(parseFloat(d.solBalance)||0).toFixed(4)}</div>
+            <div class="stat-label">Wallet Balance (SOL)</div>
+        </div>
+        <div class="stat-cell">
+            <div class="stat-value green">${(parseFloat(d.totalSolAirdropped)||0).toFixed(2)}</div>
+            <div class="stat-label">Total Airdropped (SOL)</div>
+        </div>
+        <div class="stat-cell">
+            <div class="stat-value">${fmtNum(d.robinhood?.activeTokens ?? 0)}</div>
+            <div class="stat-label">Registered Tokens</div>
+        </div>
+        <div class="stat-cell">
+            <div class="stat-value">${pendingFees.toFixed(4)}</div>
+            <div class="stat-label">Pending Fees (SOL)</div>
+        </div>
+        <div class="stat-cell">
+            <div class="stat-value">${fmtNum(d.totalLaunches)}</div>
+            <div class="stat-label">Total Launches</div>
+        </div>
+        <div class="stat-cell">
+            <div class="stat-value" id="next-drop-stat">${nextDrop}</div>
+            <div class="stat-label">Next Airdrop</div>
+        </div>
+        <div class="stat-cell">
+            <div class="stat-value">${(parseFloat(d.lastClaimAmount)||0).toFixed(4)}</div>
+            <div class="stat-label">Last Claim · ${lastClaim}</div>
+        </div>`;
+
+    // Live countdown in stat cell
+    if (d.nextAirdropTime) {
+        if (statsInterval) clearInterval(statsInterval);
+        statsInterval = setInterval(() => {
+            const el = document.getElementById('next-drop-stat');
+            if (el) el.textContent = fmtCountdown(d.nextAirdropTime);
+        }, 1000);
+    }
+}
+
+// ── Actions ────────────────────────────────────────────────────────────────────
+async function runAction(endpoint, statusId) {
+    const statusEl = document.getElementById(statusId);
+    // Find and disable the button in the same action-cell
+    const cell = statusEl.closest('.action-cell');
+    const btn  = cell.querySelector('button');
+    btn.disabled    = true;
+    statusEl.className = 'action-status running';
+    statusEl.textContent = 'Running…';
+
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/admin/${endpoint}`, {
+            method:  'POST',
+            headers: apiHeaders(),
+        });
+        const d = await r.json();
+
+        if (r.ok) {
+            statusEl.className   = 'action-status ok';
+            const msg = d.message || d.status || 'Done';
+            statusEl.textContent = '✓ ' + msg;
+            toast('✓ ' + msg, 'success');
+            setTimeout(loadStats, 2000);
+        } else {
+            statusEl.className   = 'action-status err';
+            statusEl.textContent = '✗ ' + (d.error || r.status);
+            toast('Failed: ' + (d.error || r.status), 'error');
+        }
+    } catch (e) {
+        statusEl.className   = 'action-status err';
+        statusEl.textContent = '✗ Request failed';
+        toast('Request failed', 'error');
+    } finally {
+        setTimeout(() => { btn.disabled = false; }, 3000);
+    }
+}
+
+// ── Import Token ───────────────────────────────────────────────────────────────
+async function importToken() {
+    const mint  = document.getElementById('import-mint').value.trim();
+    const isRh  = document.getElementById('import-rh').checked;
+    const msgEl = document.getElementById('import-msg');
+
+    if (!mint || mint.length < 32) {
+        msgEl.innerHTML = '<div class="msg msg-error">Enter a valid mint address.</div>';
+        return;
+    }
+
+    msgEl.innerHTML = '<div class="msg msg-info">Importing…</div>';
+
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/admin/import-token`, {
+            method:  'POST',
+            headers: apiHeaders(),
+            body:    JSON.stringify({ mint, isRobinhood: isRh }),
+        });
+        const d = await r.json();
+
+        if (r.ok) {
+            const t = d.token || {};
+            msgEl.innerHTML = `<div class="msg msg-success">✓ Imported <strong>$${esc(t.ticker||mint.slice(0,8))}</strong>${t.name ? ' — ' + esc(t.name) : ''}</div>`;
+            document.getElementById('import-mint').value = '';
+            toast('Token imported!', 'success');
+        } else {
+            msgEl.innerHTML = `<div class="msg msg-error">${esc(d.error || 'Import failed.')}</div>`;
+        }
+    } catch {
+        msgEl.innerHTML = '<div class="msg msg-error">Request failed.</div>';
+    }
+}
+
+document.getElementById('import-mint').addEventListener('keydown', e => {
+    if (e.key === 'Enter') importToken();
+});
+
+// ── Airdrop Logs ───────────────────────────────────────────────────────────────
+async function loadAirdropLogs() {
+    const body = document.getElementById('airdrop-logs-body');
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/admin/airdrop-logs?limit=20`, { headers: apiHeaders() });
+        if (!r.ok) throw new Error(r.status);
+        const logs = await r.json();
+
+        if (!logs.length) {
+            body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted)">No airdrop history yet.</div>';
+            return;
+        }
+
+        const rows = logs.map(l => `
+            <tr>
+                <td class="mono muted-val">${esc(fmtTs(l.timestamp))}</td>
+                <td class="right sol-val">◎ ${(parseFloat(l.amount)||0).toFixed(4)}</td>
+                <td class="right">${fmtNum(l.recipients)}</td>
+                <td class="right muted-val">${fmtNum(l.totalPoints)}</td>
+                <td class="right muted-val mono">${l.signatures || '—'}</td>
+            </tr>`).join('');
+
+        body.innerHTML = `
+            <table class="log-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th class="right">Amount</th>
+                        <th class="right">Recipients</th>
+                        <th class="right">Total Points</th>
+                        <th class="right">Txns</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    } catch (e) {
+        body.innerHTML = `<div style="padding:24px;text-align:center;color:var(--red)">Failed to load — ${esc(String(e))}</div>`;
+    }
+}
+
+// ── Fee Claim Logs ─────────────────────────────────────────────────────────────
+async function loadFeeClaimLogs() {
+    const body = document.getElementById('fee-logs-body');
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/admin/fee-claim-logs?limit=30`, { headers: apiHeaders() });
+        if (!r.ok) throw new Error(r.status);
+        const logs = await r.json();
+
+        if (!logs.length) {
+            body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted)">No fee claim history yet.</div>';
+            return;
+        }
+
+        const rows = logs.map(l => {
+            const amount = parseFloat(l.amount || l.claimAmount || 0);
+            const amountHtml = amount > 0
+                ? `<span class="sol-val">◎ ${amount.toFixed(4)}</span>`
+                : `<span class="muted-val">—</span>`;
+            return `
+                <tr>
+                    <td class="mono muted-val">${esc(fmtTs(l.timestamp || l.claimedAt))}</td>
+                    <td class="right">${amountHtml}</td>
+                    <td class="right muted-val">${esc(l.type || l.source || '—')}</td>
+                    <td class="right muted-val mono" style="max-width:180px;overflow:hidden;text-overflow:ellipsis">${esc(l.signature || l.txHash || '—')}</td>
+                </tr>`;
+        }).join('');
+
+        body.innerHTML = `
+            <table class="log-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th class="right">Amount</th>
+                        <th class="right">Type</th>
+                        <th class="right">Signature</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    } catch (e) {
+        body.innerHTML = `<div style="padding:24px;text-align:center;color:var(--red)">Failed to load — ${esc(String(e))}</div>`;
+    }
+}
+
+// ── Server Logs ────────────────────────────────────────────────────────────────
+async function loadServerLogs() {
+    const body = document.getElementById('server-logs-body');
+    body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted)">Loading…</div>';
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/debug/logs`, { headers: apiHeaders() });
+        if (!r.ok) throw new Error(r.status);
+        const text = await r.text();
+        const lines = text.trim().split('\n').slice(-200); // last 200 lines
+        body.innerHTML = `
+            <pre style="
+                padding:16px;
+                font-family:'SF Mono','Fira Code','Courier New',monospace;
+                font-size:11px;
+                color:var(--text2);
+                line-height:1.5;
+                overflow-x:auto;
+                white-space:pre-wrap;
+                word-break:break-all;
+                max-height:500px;
+                overflow-y:auto;
+            ">${esc(lines.join('\n'))}</pre>`;
+        // scroll to bottom
+        const pre = body.querySelector('pre');
+        if (pre) pre.scrollTop = pre.scrollHeight;
+    } catch (e) {
+        body.innerHTML = `<div style="padding:24px;text-align:center;color:var(--red)">Failed to load — ${esc(String(e))}</div>`;
+    }
+}
+
+// ── WebSocket ──────────────────────────────────────────────────────────────────
+let ws = null;
+let wsReconnTimer = null;
+
+function connectWS() {
+    if (ws && ws.readyState <= 1) return;
+    try {
+        ws = new WebSocket(WS_URL);
+        ws.onopen  = () => setWSStatus(true);
+        ws.onclose = () => { setWSStatus(false); wsReconnTimer = setTimeout(connectWS, 6000); };
+        ws.onerror = () => ws.close();
+        ws.onmessage = e => {
+            try {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'initial' || msg.type === 'update') {
+                    if (msg.data) renderStats(msg.data);
+                } else if (msg.type === 'airdrop') {
+                    const d = msg.data || {};
+                    toast(`🎉 Airdrop: ◎ ${parseFloat(d.amount||0).toFixed(4)} → ${d.recipients||0} holders`, 'success');
+                    setTimeout(loadStats, 1500);
+                    setTimeout(loadAirdropLogs, 2000);
+                }
+            } catch {}
+        };
+        const hb = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) ws.send('{"type":"ping"}');
+            else clearInterval(hb);
+        }, 25_000);
+    } catch {
+        setWSStatus(false);
+        wsReconnTimer = setTimeout(connectWS, 6000);
+    }
+}
+
+function setWSStatus(online) {
+    document.getElementById('ws-dot').className   = 'ws-dot' + (online ? ' live' : '');
+    document.getElementById('ws-label').textContent = online ? 'Live' : 'Reconnecting';
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function toast(msg, type = 'success') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className   = `toast-${type}`;
+    el.offsetHeight;
+    el.classList.add('visible');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('visible'), 4500);
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────────
+// Auto-login if key already in session
+if (adminKey) {
+    // Quick verify before showing dashboard
+    fetch(`${BACKEND_URL}/api/admin/airdrop-logs?limit=1`, { headers: { 'X-Admin-Key': adminKey } })
+        .then(r => {
+            if (r.ok) showDashboard();
+            else { sessionStorage.removeItem('bullpad_admin_key'); adminKey = ''; }
+        })
+        .catch(() => {});
+}
+</script>
+
+</body>
+</html>

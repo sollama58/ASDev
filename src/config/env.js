@@ -154,7 +154,7 @@ const config = {
     HEADER_IMAGE_URL: process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO",
 
     // Security
-    CORS_ORIGINS: process.env.CORS_ORIGINS?.split(',').map(s => s.trim()) || ['*'],
+    CORS_ORIGINS: process.env.CORS_ORIGINS?.split(',').map(s => s.trim().replace(/\/+$/, '')) || ['*'],
     ADMIN_API_KEY: process.env.ADMIN_API_KEY,
 
     // Data Storage

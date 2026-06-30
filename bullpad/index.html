@@ -763,6 +763,26 @@ function tickCountdown() {
 // ── Leaderboard ────────────────────────────────────────────────────────────────
 let lbLoading = false;
 
+// Fetch ALL pages from /api/all-launches (server caps at 100/page)
+async function fetchAllTokens() {
+    const PAGE = 100;
+    let all = [];
+    let offset = 0;
+    let total = Infinity;
+
+    while (offset < total) {
+        const r = await fetch(`${BACKEND_URL}/api/all-launches?limit=${PAGE}&offset=${offset}`);
+        if (!r.ok) throw new Error(r.status);
+        const d = await r.json();
+        const page = d.tokens || [];
+        total = d.pagination?.total ?? page.length;
+        all = all.concat(page);
+        offset += PAGE;
+        if (page.length < PAGE) break; // last page was short
+    }
+    return all;
+}
+
 async function loadLeaderboard(showSpinner = false) {
     if (lbLoading) return;
     lbLoading = true;
@@ -770,16 +790,26 @@ async function loadLeaderboard(showSpinner = false) {
     const body = document.getElementById('lb-body');
 
     try {
-        const r = await fetch(`${BACKEND_URL}/api/leaderboard`);
-        if (!r.ok) throw new Error(r.status);
-        const data   = await r.json();
-        const tokens = (data.tokens || []).slice().sort(
-            (a, b) => (parseFloat(b.marketCap) || 0) - (parseFloat(a.marketCap) || 0)
-        );
+        // Fetch all tokens + leaderboard (for pendingAirdropSol) in parallel
+        const [tokens, lbData] = await Promise.all([
+            fetchAllTokens(),
+            fetch(`${BACKEND_URL}/api/leaderboard`).then(r => r.ok ? r.json() : { tokens: [] }),
+        ]);
 
-        document.getElementById('stat-tokens').textContent = tokens.length;
+        // Build pending-SOL lookup from leaderboard endpoint
+        const pendingMap = {};
+        for (const t of (lbData.tokens || [])) {
+            pendingMap[t.mint] = t.pendingAirdropSol;
+        }
 
-        if (!tokens.length) {
+        // Merge and sort by market cap descending
+        const merged = tokens
+            .map(t => ({ ...t, pendingAirdropSol: pendingMap[t.mint] ?? null }))
+            .sort((a, b) => (parseFloat(b.marketCap) || 0) - (parseFloat(a.marketCap) || 0));
+
+        document.getElementById('stat-tokens').textContent = merged.length;
+
+        if (!merged.length) {
             body.innerHTML = `
                 <div class="lb-empty">
                     <div class="lb-empty-icon">🐂</div>
@@ -788,11 +818,12 @@ async function loadLeaderboard(showSpinner = false) {
             return;
         }
 
-        const rows = tokens.map((t, i) => {
+        const rows = merged.map((t, i) => {
+            const firstChar = esc((t.ticker || '?')[0]);
             const avatar = t.image
                 ? `<img class="token-avatar" src="${esc(t.image)}" alt="" loading="lazy"
-                        onerror="this.outerHTML='<div class=\\'token-avatar-placeholder\\'>${esc((t.ticker||'?')[0])}</div>'">`
-                : `<div class="token-avatar-placeholder">${esc((t.ticker||'?')[0])}</div>`;
+                        onerror="this.outerHTML='<div class=\\'token-avatar-placeholder\\'>${firstChar}</div>'">`
+                : `<div class="token-avatar-placeholder">${firstChar}</div>`;
 
             const statusBadge = t.isEligible
                 ? `<span class="badge badge-green">ELIGIBLE</span>`
@@ -801,6 +832,9 @@ async function loadLeaderboard(showSpinner = false) {
             const pending = parseFloat(t.pendingAirdropSol) > 0
                 ? `<span class="sol-amount">◎ ${parseFloat(t.pendingAirdropSol).toFixed(4)}</span>`
                 : `<span style="color:var(--muted)">—</span>`;
+
+            // volume24h is the field name from all-launches
+            const vol = t.volume24h ?? t.volume;
 
             return `
                 <tr>
@@ -815,7 +849,7 @@ async function loadLeaderboard(showSpinner = false) {
                         </div>
                     </td>
                     <td class="right">${fmt.usd(t.marketCap)}</td>
-                    <td class="right col-vol">${fmt.usd(t.volume)}</td>
+                    <td class="right col-vol">${fmt.usd(vol)}</td>
                     <td class="right">${pending}</td>
                     <td class="right col-status">${statusBadge}</td>
                 </tr>`;
