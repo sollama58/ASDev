@@ -70,6 +70,25 @@
 
         .logo-bull { font-size: 22px; line-height: 1; }
 
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .about-link {
+            font-size: 13px;
+            color: var(--text2);
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-family: inherit;
+            padding: 0;
+            transition: color 0.15s;
+        }
+
+        .about-link:hover { color: var(--accent); }
+
         .ws-indicator {
             display: flex;
             align-items: center;
@@ -102,6 +121,62 @@
             gap: 28px;
         }
 
+        /* ── About Banner ── */
+        .about-banner {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px 22px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .about-banner-left {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            min-width: 0;
+        }
+
+        .about-banner-icon {
+            font-size: 28px;
+            flex-shrink: 0;
+            line-height: 1;
+        }
+
+        .about-banner-text {}
+        .about-banner-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 3px;
+        }
+
+        .about-banner-sub {
+            font-size: 13px;
+            color: var(--text2);
+            line-height: 1.5;
+        }
+
+        .btn-ghost {
+            background: none;
+            border: 1px solid var(--border2);
+            color: var(--text2);
+            padding: 8px 14px;
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            font-family: inherit;
+            transition: border-color 0.15s, color 0.15s;
+            flex-shrink: 0;
+        }
+
+        .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
         /* ── Card ── */
         .card {
             background: var(--surface);
@@ -118,11 +193,22 @@
             border-bottom: 1px solid var(--border);
         }
 
+        .card-header-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         .card-title {
             font-size: 10px;
             font-weight: 700;
             letter-spacing: 1.8px;
             text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .card-count {
+            font-size: 11px;
             color: var(--muted);
         }
 
@@ -265,7 +351,7 @@
 
         .lb-table tbody tr {
             transition: background 0.1s;
-            cursor: default;
+            cursor: pointer;
         }
 
         .lb-table tbody tr:hover td { background: var(--surface2); }
@@ -357,6 +443,20 @@
             font-weight: 600;
         }
 
+        .sol-amount-link {
+            color: var(--accent);
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .sol-amount-link:hover { text-decoration: underline; }
+
+        .lb-footer {
+            padding: 14px 20px;
+            border-top: 1px solid var(--border);
+            text-align: center;
+        }
+
         .lb-empty {
             padding: 56px 24px;
             text-align: center;
@@ -369,12 +469,80 @@
         /* ── Register ── */
         .register-body { padding: 20px; }
 
+        .how-it-works {
+            margin-bottom: 22px;
+        }
+
+        .hiw-title {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.8px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 14px;
+        }
+
+        .steps {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+        }
+
+        .step {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface2);
+        }
+
+        .step:last-child { border-bottom: none; }
+
+        .step-num {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: var(--accent-dim);
+            border: 1px solid rgba(245,158,11,0.25);
+            color: var(--accent);
+            font-size: 11px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+
+        .step-body {}
+        .step-label {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 3px;
+        }
+        .step-desc {
+            font-size: 12px;
+            color: var(--text2);
+            line-height: 1.6;
+        }
+
+        .register-divider {
+            height: 1px;
+            background: var(--border);
+            margin: 20px 0;
+        }
+
         .register-hint {
             font-size: 13px;
             color: var(--text2);
             line-height: 1.6;
-            margin-bottom: 18px;
-            padding: 12px 14px;
+            margin-bottom: 16px;
+            padding: 11px 13px;
             background: var(--accent-dim);
             border: 1px solid rgba(245,158,11,0.15);
             border-radius: var(--radius-sm);
@@ -484,6 +652,312 @@
         .preview-name   { font-size: 12px; color: var(--text2); margin-top: 1px; }
         .preview-meta   { font-size: 11px; color: var(--muted); margin-top: 4px; }
 
+        /* ── Modals ── */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.75);
+            z-index: 500;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+            backdrop-filter: blur(4px);
+        }
+
+        .modal-overlay.open {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .modal {
+            background: var(--surface);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius);
+            width: 100%;
+            max-width: 580px;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            transform: translateY(16px) scale(0.98);
+            transition: transform 0.2s;
+            overflow: hidden;
+        }
+
+        .modal-overlay.open .modal { transform: translateY(0) scale(1); }
+
+        .modal-lg { max-width: 760px; }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .modal-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .modal-close {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: var(--surface3);
+            border: 1px solid var(--border2);
+            color: var(--text2);
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+            transition: background 0.1s, color 0.1s;
+        }
+
+        .modal-close:hover { background: var(--border2); color: var(--text); }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        /* ── Token Detail Modal ── */
+        .token-detail-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .token-detail-avatar {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            object-fit: cover;
+            background: var(--surface3);
+            flex-shrink: 0;
+            border: 1px solid var(--border2);
+        }
+
+        .token-detail-avatar-placeholder {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: var(--surface3);
+            flex-shrink: 0;
+            border: 1px solid var(--border2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            color: var(--muted);
+            font-weight: 700;
+        }
+
+        .token-detail-info { flex: 1; min-width: 0; }
+        .token-detail-ticker {
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--text);
+        }
+        .token-detail-name {
+            font-size: 13px;
+            color: var(--text2);
+            margin-top: 2px;
+        }
+        .token-detail-mint {
+            font-size: 11px;
+            color: var(--muted);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            margin-top: 4px;
+        }
+
+        .token-detail-actions {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .pumpfun-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 7px 12px;
+            background: none;
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            color: var(--text2);
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: border-color 0.15s, color 0.15s;
+        }
+
+        .pumpfun-link:hover { border-color: var(--accent); color: var(--accent); }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1px;
+            background: var(--border);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .stat-cell {
+            background: var(--surface2);
+            padding: 14px 12px;
+            text-align: center;
+        }
+
+        .stat-cell-value {
+            font-size: 16px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: var(--text);
+        }
+
+        .stat-cell-value.accent { color: var(--accent); }
+
+        .stat-cell-label {
+            font-size: 10px;
+            color: var(--muted);
+            margin-top: 3px;
+            letter-spacing: 0.4px;
+        }
+
+        .holders-section-title {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.8px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 10px;
+        }
+
+        .holder-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .holder-table th {
+            padding: 8px 10px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            color: var(--muted);
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .holder-table th.right { text-align: right; }
+
+        .holder-table td {
+            padding: 9px 10px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .holder-table td.right { text-align: right; }
+
+        .holder-table tr:last-child td { border-bottom: none; }
+
+        .holder-table tbody tr:hover td { background: var(--surface3); }
+
+        .holder-wallet {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 11px;
+            color: var(--text2);
+        }
+
+        .holder-rank { color: var(--muted); font-weight: 700; }
+
+        .below-min-note {
+            font-size: 11px;
+            color: var(--muted);
+            margin-top: 12px;
+            padding: 9px 11px;
+            background: var(--surface2);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+        }
+
+        .no-holders-note {
+            text-align: center;
+            color: var(--muted);
+            font-size: 13px;
+            padding: 28px 0;
+        }
+
+        /* ── About Modal ── */
+        .about-section { margin-bottom: 22px; }
+        .about-section:last-child { margin-bottom: 0; }
+
+        .about-section-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 10px;
+        }
+
+        .about-section p {
+            font-size: 13px;
+            color: var(--text2);
+            line-height: 1.7;
+            margin-bottom: 10px;
+        }
+
+        .about-section p:last-child { margin-bottom: 0; }
+
+        .about-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .about-step {
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+        }
+
+        .about-step-icon {
+            font-size: 18px;
+            line-height: 1.2;
+            flex-shrink: 0;
+        }
+
+        .about-step-text {
+            font-size: 13px;
+            color: var(--text2);
+            line-height: 1.6;
+        }
+
+        .about-step-text strong { color: var(--text); }
+
+        .about-divider {
+            height: 1px;
+            background: var(--border);
+            margin: 18px 0;
+        }
+
         /* ── Toast ── */
         #toast {
             position: fixed;
@@ -558,6 +1032,9 @@
             .col-vol, .col-status { display: none; }
             .input-group { flex-direction: column; }
             .token-name-sub { max-width: 90px; }
+            .about-banner { flex-direction: column; align-items: flex-start; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .modal { max-height: 92vh; }
         }
     </style>
 </head>
@@ -569,14 +1046,29 @@
         <span class="logo-bull">🐂</span>
         <span>Bullpad</span>
     </div>
-    <div class="ws-indicator">
-        <div class="ws-dot" id="ws-dot"></div>
-        <span id="ws-label">Connecting</span>
+    <div class="header-right">
+        <button class="about-link" onclick="openAboutModal()">About</button>
+        <div class="ws-indicator">
+            <div class="ws-dot" id="ws-dot"></div>
+            <span id="ws-label">Connecting</span>
+        </div>
     </div>
 </header>
 
 <!-- ── Main ── -->
 <main>
+
+    <!-- About Banner -->
+    <div class="about-banner">
+        <div class="about-banner-left">
+            <div class="about-banner-icon">🐂</div>
+            <div class="about-banner-text">
+                <div class="about-banner-title">What is Bullpad?</div>
+                <div class="about-banner-sub">A SOL airdrop pool funded by on-chain fee sharing from registered Pump.fun tokens. Every trade earns fees — every 15 minutes, the pool drops to holders.</div>
+            </div>
+        </div>
+        <button class="btn-ghost" onclick="openAboutModal()">Learn More →</button>
+    </div>
 
     <!-- Pool -->
     <div class="card" id="pool-card">
@@ -613,8 +1105,14 @@
     <!-- Leaderboard -->
     <div class="card">
         <div class="card-header">
-            <span class="card-title">Registered Tokens</span>
-            <button class="btn btn-secondary btn-sm" onclick="loadLeaderboard(true)">↻ Refresh</button>
+            <div class="card-header-left">
+                <span class="card-title">Registered Tokens</span>
+                <span class="card-count" id="lb-count"></span>
+            </div>
+            <div style="display:flex;gap:8px">
+                <button class="btn btn-secondary btn-sm" onclick="loadLeaderboard(true)">↻ Refresh</button>
+                <button class="btn btn-secondary btn-sm" id="view-all-btn" onclick="openViewAllModal()" style="display:none">View All</button>
+            </div>
         </div>
         <div id="lb-body">
             <div class="skel-row"><div class="skel" style="width:30px;height:30px;border-radius:50%;flex-shrink:0"></div><div style="flex:1;display:flex;flex-direction:column;gap:6px"><div class="skel" style="height:12px;width:100px"></div><div class="skel" style="height:10px;width:60px"></div></div><div class="skel" style="height:12px;width:70px;margin-left:auto"></div></div>
@@ -629,9 +1127,47 @@
             <span class="card-title">Register Your Token</span>
         </div>
         <div class="register-body">
-            <div class="register-hint">
-                Register any Pump.fun token that has <strong>fee sharing configured on-chain</strong>. Once registered, the token earns a share of the airdrop pool every drop cycle.
+
+            <div class="how-it-works">
+                <div class="hiw-title">How It Works</div>
+                <div class="steps">
+                    <div class="step">
+                        <div class="step-num">1</div>
+                        <div class="step-body">
+                            <div class="step-label">Configure fee sharing on Pump.fun</div>
+                            <div class="step-desc">On your token's Pump.fun page, go to <em>Creator Settings</em> and add the Bullpad platform wallet as a fee recipient. Set any percentage — even 1% qualifies. This is done fully on-chain.</div>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-num">2</div>
+                        <div class="step-body">
+                            <div class="step-label">Paste your token's mint address below</div>
+                            <div class="step-desc">Enter the Solana mint address of your token. Click <strong>Verify</strong> to confirm the token exists and that fee sharing is configured correctly on-chain.</div>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-num">3</div>
+                        <div class="step-body">
+                            <div class="step-label">Submit registration</div>
+                            <div class="step-desc">Click <strong>Register Token</strong>. The backend verifies fee sharing on-chain — no manual approval needed. Your token is added to the pool immediately.</div>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-num">4</div>
+                        <div class="step-body">
+                            <div class="step-label">Earn SOL airdrops every 15 minutes</div>
+                            <div class="step-desc">Trading fees from your token flow into the Bullpad pool. Every 15 minutes, the pool distributes SOL to your token's holders proportional to their holdings. Tokens need ≥ $100 in 24h volume to be eligible for a given cycle.</div>
+                        </div>
+                    </div>
+                </div>
             </div>
+
+            <div class="register-divider"></div>
+
+            <div class="register-hint">
+                Enter your token's mint address to verify fee sharing is configured, then register to start earning airdrop distributions.
+            </div>
+
             <div class="input-group">
                 <input
                     class="mint-input"
@@ -656,6 +1192,86 @@
 
 <div id="toast"></div>
 
+<!-- ── About Modal ── -->
+<div class="modal-overlay" id="about-modal" onclick="handleOverlayClick(event,'about-modal')">
+    <div class="modal">
+        <div class="modal-header">
+            <span class="modal-title">🐂 About Bullpad</span>
+            <button class="modal-close" onclick="closeModal('about-modal')">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="about-section">
+                <div class="about-section-title">What is Bullpad?</div>
+                <p>Bullpad is a <strong>SOL airdrop pool</strong> powered entirely by on-chain fee sharing. When Pump.fun token creators configure the Bullpad wallet as a fee recipient, a portion of every trade flows into a shared pool. That pool is then distributed to token holders automatically every 15 minutes — no claims, no waiting.</p>
+            </div>
+
+            <div class="about-divider"></div>
+
+            <div class="about-section">
+                <div class="about-section-title">How the Pool Works</div>
+                <div class="about-steps">
+                    <div class="about-step">
+                        <div class="about-step-icon">💸</div>
+                        <div class="about-step-text"><strong>Fee collection:</strong> Every trade on a registered token generates a fee. A portion of that fee is sent directly to the Bullpad platform wallet on-chain via Pump.fun's fee-sharing mechanism.</div>
+                    </div>
+                    <div class="about-step">
+                        <div class="about-step-icon">🏦</div>
+                        <div class="about-step-text"><strong>Pool accumulation:</strong> Collected fees accumulate in the central pool. Each registered token also has its own individual pending pool that grows with every trade.</div>
+                    </div>
+                    <div class="about-step">
+                        <div class="about-step-icon">🎯</div>
+                        <div class="about-step-text"><strong>Airdrop distribution:</strong> Every 15 minutes, the pool is distributed to holders of all eligible registered tokens, proportional to their token holdings. SOL lands directly in wallets — no action required.</div>
+                    </div>
+                    <div class="about-step">
+                        <div class="about-step-icon">✅</div>
+                        <div class="about-step-text"><strong>Eligibility:</strong> A token must have ≥ $100 in 24-hour trading volume to receive a distribution in a given cycle. Tokens below this threshold still accumulate fees but skip that cycle's drop.</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="about-divider"></div>
+
+            <div class="about-section">
+                <div class="about-section-title">For Token Creators</div>
+                <p>Registration is free and permissionless. Add the Bullpad wallet as a fee recipient on Pump.fun, then register your token's mint address here. The platform verifies fee sharing on-chain automatically — no manual approval. Your token's holders start receiving SOL airdrops in the next cycle.</p>
+                <p>Fee sharing can be removed at any time on Pump.fun, which will deactivate your token's registration. You can re-register anytime by re-adding fee sharing and using <strong>Re-register</strong>.</p>
+            </div>
+
+            <div class="about-divider"></div>
+
+            <div class="about-section">
+                <div class="about-section-title">For Token Holders</div>
+                <p>Simply hold tokens that are registered on Bullpad. SOL distributions are sent directly to your wallet based on your proportional share of the token's supply (excluding LP and burnt tokens). You can track expected airdrop amounts by clicking any token in the leaderboard.</p>
+                <p>A minimum distribution of 0.01 SOL per wallet applies — holders below this threshold in a given cycle are skipped to avoid dust transactions.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Token Detail Modal ── -->
+<div class="modal-overlay" id="token-modal" onclick="handleOverlayClick(event,'token-modal')">
+    <div class="modal">
+        <div class="modal-header">
+            <span class="modal-title" id="token-modal-title">Token Details</span>
+            <button class="modal-close" onclick="closeModal('token-modal')">✕</button>
+        </div>
+        <div class="modal-body" id="token-modal-body">
+        </div>
+    </div>
+</div>
+
+<!-- ── View All Modal ── -->
+<div class="modal-overlay" id="viewall-modal" onclick="handleOverlayClick(event,'viewall-modal')">
+    <div class="modal modal-lg">
+        <div class="modal-header">
+            <span class="modal-title">All Registered Tokens</span>
+            <button class="modal-close" onclick="closeModal('viewall-modal')">✕</button>
+        </div>
+        <div class="modal-body" style="padding:0" id="viewall-body">
+        </div>
+    </div>
+</div>
+
 <script>
 'use strict';
 
@@ -664,13 +1280,15 @@ const BACKEND_URL  = 'https://asdev-1kvy.onrender.com';
 const WS_URL       = BACKEND_URL.replace(/^https/, 'wss') + '/ws';
 const POLL_HEALTH  = 30_000;
 const POLL_LB      = 60_000;
+const TOP_N        = 10;
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let nextAirdropAt   = null;
 let countdownTimer  = null;
 let ws              = null;
 let wsReconnTimer   = null;
-let verifiedToken   = null; // pending registration
+let verifiedToken   = null;
+let allTokensCache  = [];
 
 // ── Formatting ─────────────────────────────────────────────────────────────────
 const fmt = {
@@ -713,6 +1331,165 @@ function esc(s) {
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// ── Modals ─────────────────────────────────────────────────────────────────────
+function openModal(id) {
+    document.getElementById(id).classList.add('open');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeModal(id) {
+    document.getElementById(id).classList.remove('open');
+    document.body.style.overflow = '';
+}
+
+function handleOverlayClick(e, id) {
+    if (e.target === document.getElementById(id)) closeModal(id);
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+        ['about-modal','token-modal','viewall-modal'].forEach(closeModal);
+        document.body.style.overflow = '';
+    }
+});
+
+// ── About Modal ────────────────────────────────────────────────────────────────
+function openAboutModal() { openModal('about-modal'); }
+
+// ── View All Modal ─────────────────────────────────────────────────────────────
+function openViewAllModal() {
+    const body = document.getElementById('viewall-body');
+    body.innerHTML = buildTableHTML(allTokensCache);
+    openModal('viewall-modal');
+}
+
+// ── Token Detail Modal ─────────────────────────────────────────────────────────
+async function openTokenModal(token) {
+    document.getElementById('token-modal-title').textContent = `$${token.ticker || '?'}`;
+
+    const firstChar = esc((token.ticker || '?')[0]);
+    const avatar = token.image
+        ? `<img class="token-detail-avatar" src="${esc(token.image)}" alt=""
+                onerror="this.outerHTML='<div class=\\'token-detail-avatar-placeholder\\'>${firstChar}</div>'">`
+        : `<div class="token-detail-avatar-placeholder">${firstChar}</div>`;
+
+    const vol = token.volume24h ?? token.volume;
+
+    const statusBadge = token.isActive === false
+        ? `<span class="badge badge-red" style="font-size:11px">DEACTIVATED</span>`
+        : token.isEligible
+            ? `<span class="badge badge-green" style="font-size:11px">ELIGIBLE</span>`
+            : `<span class="badge badge-muted" style="font-size:11px">LOW VOL</span>`;
+
+    const mintShort = token.mint
+        ? token.mint.slice(0, 6) + '…' + token.mint.slice(-4)
+        : '';
+
+    const pendingSol = parseFloat(token.pendingAirdropSol) > 0
+        ? `◎ ${parseFloat(token.pendingAirdropSol).toFixed(4)}`
+        : '—';
+
+    const body = document.getElementById('token-modal-body');
+
+    body.innerHTML = `
+        <div class="token-detail-header">
+            ${avatar}
+            <div class="token-detail-info">
+                <div class="token-detail-ticker">$${esc(token.ticker || '?')} ${statusBadge}</div>
+                <div class="token-detail-name">${esc(token.name || '')}</div>
+                <div class="token-detail-mint">${mintShort}</div>
+            </div>
+            <div class="token-detail-actions">
+                <a class="pumpfun-link" href="https://pump.fun/coin/${esc(token.mint)}" target="_blank" rel="noopener">
+                    pump.fun ↗
+                </a>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-cell">
+                <div class="stat-cell-value">${fmt.usd(token.marketCap)}</div>
+                <div class="stat-cell-label">Market Cap</div>
+            </div>
+            <div class="stat-cell">
+                <div class="stat-cell-value">${fmt.usd(vol)}</div>
+                <div class="stat-cell-label">24h Volume</div>
+            </div>
+            <div class="stat-cell">
+                <div class="stat-cell-value accent">${pendingSol}</div>
+                <div class="stat-cell-label">Pending Pool</div>
+            </div>
+        </div>
+
+        <div class="holders-section-title">Top Holders &amp; Expected Airdrop</div>
+        <div id="holder-list-body"><div class="no-holders-note">Loading holders…</div></div>
+    `;
+
+    openModal('token-modal');
+
+    // Fetch holder data (only available for robinhood/fee-sharing tokens)
+    if (token.source === 'robinhood' || token.pendingAirdropSol !== null) {
+        try {
+            const r = await fetch(`${BACKEND_URL}/api/robinhood/holders/${encodeURIComponent(token.mint)}`);
+            if (!r.ok) throw new Error(r.status);
+            const d = await r.json();
+            renderHolders(d);
+        } catch {
+            document.getElementById('holder-list-body').innerHTML =
+                `<div class="no-holders-note">Holder data unavailable for this token.</div>`;
+        }
+    } else {
+        document.getElementById('holder-list-body').innerHTML =
+            `<div class="no-holders-note">Holder airdrop data is only tracked for fee-sharing registered tokens.</div>`;
+    }
+}
+
+function renderHolders(data) {
+    const holders = data.holders || [];
+    const el = document.getElementById('holder-list-body');
+
+    if (!holders.length) {
+        el.innerHTML = `<div class="no-holders-note">No holders tracked yet for this token.</div>`;
+        return;
+    }
+
+    const hasBelow = holders.some(h => h.belowMinimum);
+
+    const rows = holders.map(h => {
+        const wallet = h.holderPubkey
+            ? h.holderPubkey.slice(0,6) + '…' + h.holderPubkey.slice(-4)
+            : '—';
+        const expected = parseFloat(h.expectedAirdropSol) > 0
+            ? `<span class="sol-amount">◎ ${parseFloat(h.expectedAirdropSol).toFixed(6)}</span>`
+            : `<span style="color:var(--muted)">—</span>`;
+        const belowNote = h.belowMinimum
+            ? ` <span style="color:var(--muted);font-size:10px">(below min)</span>`
+            : '';
+        return `
+            <tr>
+                <td class="holder-rank">#${h.rank}</td>
+                <td class="holder-wallet">${wallet}</td>
+                <td class="right" style="color:var(--text2)">${parseFloat(h.supplyPct).toFixed(2)}%</td>
+                <td class="right">${expected}${belowNote}</td>
+            </tr>`;
+    }).join('');
+
+    el.innerHTML = `
+        <table class="holder-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Wallet</th>
+                    <th class="right">Supply %</th>
+                    <th class="right">Expected Airdrop</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+        ${hasBelow ? `<div class="below-min-note">⚠ Holders marked "below min" hold less than the 0.01 SOL minimum distribution threshold and will be skipped in the current cycle.</div>` : ''}
+    `;
+}
+
 // ── Pool / Health ──────────────────────────────────────────────────────────────
 async function loadHealth() {
     try {
@@ -723,18 +1500,15 @@ async function loadHealth() {
 }
 
 function applyHealth(d) {
-    // Pool amount
     const sol = parseFloat(d.airdropPoolSol) || 0;
     document.getElementById('pool-sol').textContent = fmt.sol(sol);
 
-    // Stats row
     const totalDrop = parseFloat(d.totalSolAirdropped) || 0;
     document.getElementById('stat-airdropped').textContent = totalDrop.toFixed(2) + ' SOL';
     if (d.airdropIntervalMs) {
         document.getElementById('stat-interval').textContent = fmt.interval(d.airdropIntervalMs);
     }
 
-    // Countdown
     if (d.nextAirdropTime) {
         nextAirdropAt = d.nextAirdropTime;
         tickCountdown();
@@ -769,7 +1543,6 @@ function tickCountdown() {
 // ── Leaderboard ────────────────────────────────────────────────────────────────
 let lbLoading = false;
 
-// Fetch ALL pages from /api/all-launches (server caps at 100/page)
 async function fetchAllTokens() {
     const PAGE = 100;
     let all = [];
@@ -784,9 +1557,66 @@ async function fetchAllTokens() {
         total = d.pagination?.total ?? page.length;
         all = all.concat(page);
         offset += PAGE;
-        if (page.length < PAGE) break; // last page was short
+        if (page.length < PAGE) break;
     }
     return all;
+}
+
+function buildTokenRow(t, i) {
+    const firstChar = esc((t.ticker || '?')[0]);
+    const avatar = t.image
+        ? `<img class="token-avatar" src="${esc(t.image)}" alt="" loading="lazy"
+                onerror="this.outerHTML='<div class=\\'token-avatar-placeholder\\'>${firstChar}</div>'">`
+        : `<div class="token-avatar-placeholder">${firstChar}</div>`;
+
+    const statusBadge = t.isActive === false
+        ? `<span class="badge badge-red">DEACTIVATED</span>`
+        : t.isEligible
+            ? `<span class="badge badge-green">ELIGIBLE</span>`
+            : `<span class="badge badge-muted">LOW VOL</span>`;
+
+    const pending = parseFloat(t.pendingAirdropSol) > 0
+        ? `<span class="sol-amount">◎ ${parseFloat(t.pendingAirdropSol).toFixed(4)}</span>`
+        : `<span style="color:var(--muted)">—</span>`;
+
+    const vol = t.volume24h ?? t.volume;
+    const idx = allTokensCache.indexOf(t);
+
+    return `
+        <tr onclick="openTokenModal(allTokensCache[${idx}])" style="cursor:pointer">
+            <td><span class="rank-num">${i + 1}</span></td>
+            <td>
+                <div class="token-cell">
+                    ${avatar}
+                    <div>
+                        <div class="token-ticker">$${esc(t.ticker || '?')}</div>
+                        <div class="token-name-sub">${esc(t.name || '')}</div>
+                    </div>
+                </div>
+            </td>
+            <td class="right">${fmt.usd(t.marketCap)}</td>
+            <td class="right col-vol">${fmt.usd(vol)}</td>
+            <td class="right">${pending}</td>
+            <td class="right col-status">${statusBadge}</td>
+        </tr>`;
+}
+
+function buildTableHTML(tokens) {
+    const rows = tokens.map((t, i) => buildTokenRow(t, i)).join('');
+    return `
+        <table class="lb-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Token</th>
+                    <th class="right">Market Cap</th>
+                    <th class="right col-vol">24h Volume</th>
+                    <th class="right">Pending SOL</th>
+                    <th class="right col-status">Status</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>`;
 }
 
 async function loadLeaderboard(showSpinner = false) {
@@ -796,26 +1626,28 @@ async function loadLeaderboard(showSpinner = false) {
     const body = document.getElementById('lb-body');
 
     try {
-        // Fetch all tokens + leaderboard (for pendingAirdropSol) in parallel
         const [tokens, lbData] = await Promise.all([
             fetchAllTokens(),
             fetch(`${BACKEND_URL}/api/leaderboard`).then(r => r.ok ? r.json() : { tokens: [] }),
         ]);
 
-        // Build pending-SOL lookup from leaderboard endpoint
         const pendingMap = {};
         for (const t of (lbData.tokens || [])) {
             pendingMap[t.mint] = t.pendingAirdropSol;
         }
 
-        // Merge and sort by market cap descending
-        const merged = tokens
+        allTokensCache = tokens
             .map(t => ({ ...t, pendingAirdropSol: pendingMap[t.mint] ?? null }))
             .sort((a, b) => (parseFloat(b.marketCap) || 0) - (parseFloat(a.marketCap) || 0));
 
-        document.getElementById('stat-tokens').textContent = merged.length;
+        const total = allTokensCache.length;
+        document.getElementById('stat-tokens').textContent = total;
+        document.getElementById('lb-count').textContent = total > TOP_N ? `Top ${TOP_N} of ${total}` : '';
 
-        if (!merged.length) {
+        const viewAllBtn = document.getElementById('view-all-btn');
+        viewAllBtn.style.display = total > TOP_N ? '' : 'none';
+
+        if (!total) {
             body.innerHTML = `
                 <div class="lb-empty">
                     <div class="lb-empty-icon">🐂</div>
@@ -824,59 +1656,7 @@ async function loadLeaderboard(showSpinner = false) {
             return;
         }
 
-        const rows = merged.map((t, i) => {
-            const firstChar = esc((t.ticker || '?')[0]);
-            const avatar = t.image
-                ? `<img class="token-avatar" src="${esc(t.image)}" alt="" loading="lazy"
-                        onerror="this.outerHTML='<div class=\\'token-avatar-placeholder\\'>${firstChar}</div>'">`
-                : `<div class="token-avatar-placeholder">${firstChar}</div>`;
-
-            const statusBadge = t.isActive === false
-                ? `<span class="badge badge-red">DEACTIVATED</span>`
-                : t.isEligible
-                    ? `<span class="badge badge-green">ELIGIBLE</span>`
-                    : `<span class="badge badge-muted">LOW VOL</span>`;
-
-            const pending = parseFloat(t.pendingAirdropSol) > 0
-                ? `<span class="sol-amount">◎ ${parseFloat(t.pendingAirdropSol).toFixed(4)}</span>`
-                : `<span style="color:var(--muted)">—</span>`;
-
-            // volume24h is the field name from all-launches
-            const vol = t.volume24h ?? t.volume;
-
-            return `
-                <tr>
-                    <td><span class="rank-num">${i + 1}</span></td>
-                    <td>
-                        <div class="token-cell">
-                            ${avatar}
-                            <div>
-                                <div class="token-ticker">$${esc(t.ticker || '?')}</div>
-                                <div class="token-name-sub">${esc(t.name || '')}</div>
-                            </div>
-                        </div>
-                    </td>
-                    <td class="right">${fmt.usd(t.marketCap)}</td>
-                    <td class="right col-vol">${fmt.usd(vol)}</td>
-                    <td class="right">${pending}</td>
-                    <td class="right col-status">${statusBadge}</td>
-                </tr>`;
-        }).join('');
-
-        body.innerHTML = `
-            <table class="lb-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Token</th>
-                        <th class="right">Market Cap</th>
-                        <th class="right col-vol">24h Volume</th>
-                        <th class="right">Pending SOL</th>
-                        <th class="right col-status">Status</th>
-                    </tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>`;
+        body.innerHTML = buildTableHTML(allTokensCache.slice(0, TOP_N));
 
     } catch (e) {
         body.innerHTML = `
@@ -936,7 +1716,6 @@ async function verifyToken() {
     verifiedToken = null;
 
     try {
-        // 1. Check if already registered
         const regR  = await fetch(`${BACKEND_URL}/api/check-registration/${encodeURIComponent(mint)}`);
         const regD  = await regR.json();
 
@@ -947,7 +1726,6 @@ async function verifyToken() {
             return;
         }
 
-        // 2. Fetch metadata for preview
         const metaR = await fetch(`${BACKEND_URL}/api/token-metadata/${encodeURIComponent(mint)}`);
         const metaD = await metaR.json();
 
@@ -1018,7 +1796,7 @@ document.getElementById('mint-input').addEventListener('keydown', e => {
 
 // ── WebSocket ──────────────────────────────────────────────────────────────────
 function connectWS() {
-    if (ws && ws.readyState <= 1) return; // already open or connecting
+    if (ws && ws.readyState <= 1) return;
     try {
         ws = new WebSocket(WS_URL);
 
@@ -1044,9 +1822,7 @@ function connectWS() {
                     const amt = parseFloat(d.amount || 0).toFixed(4);
                     const rec = d.recipients || 0;
                     toast(`🎉 Airdrop! ◎ ${amt} SOL → ${rec} holders`, 'success');
-                    if (d.nextAirdropTime) {
-                        nextAirdropAt = d.nextAirdropTime;
-                    }
+                    if (d.nextAirdropTime) nextAirdropAt = d.nextAirdropTime;
                     setTimeout(loadHealth,      2000);
                     setTimeout(loadLeaderboard, 2500);
                 } else if (msg.type === 'launch') {
@@ -1056,7 +1832,6 @@ function connectWS() {
             } catch {}
         };
 
-        // Heartbeat
         const hb = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) ws.send('{"type":"ping"}');
             else clearInterval(hb);
@@ -1069,7 +1844,7 @@ function connectWS() {
 }
 
 function setWSStatus(online) {
-    document.getElementById('ws-dot').className   = 'ws-dot' + (online ? ' live' : '');
+    document.getElementById('ws-dot').className    = 'ws-dot' + (online ? ' live' : '');
     document.getElementById('ws-label').textContent = online ? 'Live' : 'Reconnecting';
 }
 
@@ -1080,8 +1855,7 @@ function toast(msg, type = 'success') {
     const el    = document.getElementById('toast');
     el.textContent = msg;
     el.className   = `toast-${type}`;
-    // Force reflow so transition fires
-    el.offsetHeight; // eslint-disable-line no-unused-expressions
+    el.offsetHeight;
     el.classList.add('visible');
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.remove('visible'), 4500);
