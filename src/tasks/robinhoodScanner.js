@@ -27,6 +27,17 @@ const lastReverifiedAt = new Map(); // mint -> timestamp
 const ZERO_PENDING_COOLDOWN_MS = 30 * 60 * 1000;
 const lastZeroPendingAt = new Map(); // mint -> timestamp
 
+// H-2: Periodic cleanup for cooldown Maps to prevent unbounded growth
+setInterval(() => {
+    const now = Date.now();
+    for (const [mint, ts] of lastReverifiedAt) {
+        if (now - ts > REVERIFY_COOLDOWN_MS * 2) lastReverifiedAt.delete(mint);
+    }
+    for (const [mint, ts] of lastZeroPendingAt) {
+        if (now - ts > ZERO_PENDING_COOLDOWN_MS * 2) lastZeroPendingAt.delete(mint);
+    }
+}, 60 * 60 * 1000); // Run hourly
+
 /**
  * Parse fee sharing config account data
  *

@@ -92,7 +92,7 @@ const config = {
     // SCALABILITY FIX: Increased default pool size for better concurrency
     DATABASE_URL: process.env.DATABASE_URL || null,
     DB_POOL_MIN: parseInt(process.env.DB_POOL_MIN) || 5,   // Increased from 2
-    DB_POOL_MAX: parseInt(process.env.DB_POOL_MAX) || 25,  // Increased from 10
+    DB_POOL_MAX: parseInt(process.env.DB_POOL_MAX) || 50,  // L-5: Increased from 25 for scalability
     DB_IDLE_TIMEOUT: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
     DB_CONNECTION_TIMEOUT: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 10000, // Increased from 5000
     // v24.0: SSL configuration options

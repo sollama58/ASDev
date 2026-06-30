@@ -157,9 +157,15 @@ async function updateGlobalState(deps) {
         // v18.0: Update holders for all eligible tokens (>$100 volume) - tracking Top 250 with balances
         // v25.65: Critical bugfix - don't delete holders on RPC failure
         // v25.66: Added fallback for tokens with many holders
-        for (const token of eligibleTokens) {
+        // C-1: Process tokens in parallel batches of RPC_PARALLEL_BATCH_SIZE (5) with 200ms between batches
+        const tokenBatches = [];
+        for (let i = 0; i < eligibleTokens.length; i += RPC_PARALLEL_BATCH_SIZE) {
+            tokenBatches.push(eligibleTokens.slice(i, i + RPC_PARALLEL_BATCH_SIZE));
+        }
+
+        async function processToken(token) {
             try {
-                if (!token.mint) continue;
+                if (!token.mint) return;
 
                 const tokenMintPublicKey = new PublicKey(token.mint);
                 const [bondingCurvePDA] = PublicKey.findProgramAddressSync(
@@ -288,7 +294,7 @@ async function updateGlobalState(deps) {
                 // Don't delete existing holders if scan failed
                 if (!scanSucceeded) {
                     await new Promise(r => setTimeout(r, 500)); // Shorter delay after failure
-                    continue;
+                    return;
                 }
 
                 // v25.65: Check if we have existing holders before potentially clearing them
@@ -323,8 +329,11 @@ async function updateGlobalState(deps) {
             } catch (e) {
                 logger.error(`Holder update loop error for ${token.mint}: ${e.message}`);
             }
+        } // end processToken()
 
-            await new Promise(r => setTimeout(r, 2000));
+        for (const batch of tokenBatches) {
+            await Promise.allSettled(batch.map(processToken));
+            await new Promise(r => setTimeout(r, 200)); // 200ms between batches (was 2s per token)
         }
 
         // v25.22 SCALABILITY: Refresh materialized views after holder updates
@@ -342,39 +351,22 @@ async function updateGlobalState(deps) {
         let tempTotalPoints = 0;
 
         if (eligibleMints.length > 0) {
-            // BATCH: single query for all eligible token holders
-            const allPlatformHolderRows = await db.all(
-                `SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1) ORDER BY mint, rank ASC`,
+            // H-6: DB-side aggregation — GROUP BY eliminates loading all rows into Node.js
+            const platformAggRows = await db.all(
+                `SELECT "holderPubkey",
+                    SUM((balance::bigint * 1000)::numeric / 1000000000000000) AS "basePoints",
+                    COUNT(*) AS "positionsCount"
+                 FROM token_holders WHERE mint = ANY($1) AND balance > '0'
+                 GROUP BY "holderPubkey"`,
                 [eligibleMints]
             );
-            const platformHoldersByMint = new Map();
-            for (const row of allPlatformHolderRows) {
-                if (!platformHoldersByMint.has(row.mint)) platformHoldersByMint.set(row.mint, []);
-                platformHoldersByMint.get(row.mint).push(row);
-            }
-            logger.debug(`[HolderScanner] Platform: loaded ${allPlatformHolderRows.length} holder rows for ${eligibleMints.length} tokens`);
-
-            for (const token of eligibleTokens) {
-                if (!token.mint) continue;
-                const holders = platformHoldersByMint.get(token.mint) || [];
-                if (holders.length === 0) continue;
-
-                for (const holder of holders) {
-                    const holderBalance = BigInt(holder.balance || '0');
-                    if (holderBalance === BigInt(0)) continue;
-
-                    // Points = % of total 1B supply × BASE_POINTS_PER_TOKEN
-                    const proportionalPoints = Number((holderBalance * BigInt(BASE_POINTS_PER_TOKEN * 1000)) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
-
-                    const entry = rawPointsMap.get(holder.holderPubkey) || {
-                        basePoints: 0,
-                        robinhoodPoints: 0,
-                        positionsCount: 0
-                    };
-                    entry.basePoints += proportionalPoints;
-                    entry.positionsCount++;
-                    rawPointsMap.set(holder.holderPubkey, entry);
-                }
+            logger.debug(`[HolderScanner] Platform: aggregated ${platformAggRows.length} unique holders from ${eligibleMints.length} tokens`);
+            for (const row of platformAggRows) {
+                rawPointsMap.set(row.holderPubkey, {
+                    basePoints: parseFloat(row.basePoints) || 0,
+                    robinhoodPoints: 0,
+                    positionsCount: parseInt(row.positionsCount) || 0
+                });
             }
         }
 
@@ -407,53 +399,29 @@ async function updateGlobalState(deps) {
             logger.info(`[HolderScanner] Robinhood: ${allActiveRobinhoodTokens.length} total active, ${robinhoodMints.length} with volume >= $${MIN_VOLUME_USD}`);
 
             if (robinhoodMints.length > 0) {
-                // v26.1: BATCH - single query for all robinhood token holders (replaces N per-token queries)
-                const allRhHolderRows = await db.all(
-                    `SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1) ORDER BY mint, rank ASC`,
+                // H-6: DB-side aggregation for robinhood holders
+                const robinhoodAggRows = await db.all(
+                    `SELECT "holderPubkey",
+                        SUM((balance::bigint * 1000)::numeric / 1000000000000000) AS "robinhoodPoints",
+                        COUNT(*) AS "positionsCount"
+                     FROM robinhood_token_holders WHERE mint = ANY($1) AND balance > '0'
+                     GROUP BY "holderPubkey"`,
                     [robinhoodMints]
                 );
-                const rhHoldersByMint = new Map();
-                for (const row of allRhHolderRows) {
-                    if (!rhHoldersByMint.has(row.mint)) rhHoldersByMint.set(row.mint, []);
-                    rhHoldersByMint.get(row.mint).push(row);
-                }
-                logger.debug(`[HolderScanner] Robinhood: loaded ${allRhHolderRows.length} holder rows for ${robinhoodMints.length} tokens`);
-
-                // v26.2: Points = pure supply ownership, no volume/feeShare scaling
-                for (const rhToken of robinhoodTokens) {
-                    if (!rhToken.mint) continue;
-
-                    const holders = rhHoldersByMint.get(rhToken.mint) || [];
-                    if (holders.length === 0) {
-                        logger.debug(`[HolderScanner] Robinhood token ${rhToken.ticker || rhToken.mint.slice(0, 8)} has 0 holders in tracking table`);
-                        continue;
+                logger.debug(`[HolderScanner] Robinhood: aggregated ${robinhoodAggRows.length} unique holders from ${robinhoodMints.length} tokens`);
+                for (const row of robinhoodAggRows) {
+                    const pts = parseFloat(row.robinhoodPoints) || 0;
+                    const existing = rawPointsMap.get(row.holderPubkey);
+                    if (existing) {
+                        existing.robinhoodPoints += pts;
+                        existing.positionsCount += parseInt(row.positionsCount) || 0;
+                    } else {
+                        rawPointsMap.set(row.holderPubkey, { basePoints: 0, robinhoodPoints: pts, positionsCount: parseInt(row.positionsCount) || 0 });
                     }
-
-                    let tokenPointsDistributed = 0;
-                    for (const holder of holders) {
-                        const holderBalance = BigInt(holder.balance || '0');
-                        if (holderBalance === BigInt(0)) continue;
-
-                        const proportionalPoints = Number((holderBalance * BigInt(BASE_POINTS_PER_TOKEN * 1000)) / PUMP_FUN_TOTAL_SUPPLY) / 1000;
-
-                        const entry = rawPointsMap.get(holder.holderPubkey) || {
-                            basePoints: 0,
-                            robinhoodPoints: 0,
-                            positionsCount: 0
-                        };
-                        entry.robinhoodPoints += proportionalPoints;
-                        entry.positionsCount++;
-                        rawPointsMap.set(holder.holderPubkey, entry);
-
-                        tokenPointsDistributed += proportionalPoints;
-                        robinhoodHoldersWithPoints++;
-                    }
-                    robinhoodPointsTotal += tokenPointsDistributed;
-
-                    logger.debug(`[HolderScanner] Robinhood ${rhToken.ticker || rhToken.mint.slice(0, 8)}: ${holders.length} holders, ${tokenPointsDistributed.toFixed(2)} points`);
+                    robinhoodPointsTotal += pts;
                 }
-
-                logger.info(`[HolderScanner] Robinhood points: ${robinhoodPointsTotal.toFixed(2)} total across ${robinhoodHoldersWithPoints} holder positions`);
+                robinhoodHoldersWithPoints = robinhoodAggRows.length;
+                logger.info(`[HolderScanner] Robinhood points: ${robinhoodPointsTotal.toFixed(2)} total across ${robinhoodHoldersWithPoints} unique holders`);
             }
         } catch (e) {
             logger.error('[HolderScanner] Robinhood holder points calculation error', { error: e.message });

@@ -9,6 +9,7 @@ const WebSocket = require('ws');
 const logger = require('./logger');
 const imageUtils = require('./imageUtils');
 const config = require('../config/env');
+const redis = require('./redis');
 
 let wss = null;
 let broadcastInterval = null;
@@ -136,6 +137,21 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
 
     const doBroadcast = async () => {
         try {
+            // H-1: Skip expensive DB queries when nobody is connected
+            if (wss && wss.clients.size === 0) return;
+
+            // H-1: Use cached payload if fresh (avoid redundant DB queries within 15s)
+            const redisConn = redis?.getConnection?.();
+            if (redisConn) {
+                try {
+                    const cached = await redisConn.get('ws_broadcast_cache');
+                    if (cached) {
+                        broadcast('update', JSON.parse(cached));
+                        return;
+                    }
+                } catch (_) { /* skip cache on error */ }
+            }
+
             // Gather all data the frontend needs
             const [
                 stats,
@@ -247,6 +263,13 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
                 // Timestamp for frontend sync
                 serverTime: Date.now()
             };
+
+            // H-1: Cache payload in Redis for 15s so rapid reconnects reuse it
+            if (redisConn) {
+                try {
+                    await redisConn.set('ws_broadcast_cache', JSON.stringify(payload), 'EX', 15);
+                } catch (_) { /* non-fatal */ }
+            }
 
             broadcast('update', payload);
         } catch (e) {

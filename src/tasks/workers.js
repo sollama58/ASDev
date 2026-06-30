@@ -683,10 +683,8 @@ function initHolderScannerWorker(deps) {
             // v25.33: Write to user_points table (single source of truth)
             const now = Date.now();
             try {
-                // Clear old points that are no longer active
-                await db.run('DELETE FROM user_points WHERE updated_at < $1 OR updated_at IS NULL', [now - 3600000]); // Remove stale entries older than 1 hour
-
-                // Batch upsert in chunks of 100 for performance
+                // L-7: UPSERT fresh data FIRST, then delete stale rows AFTER
+                // This eliminates the zero-data window between DELETE and INSERT
                 const BATCH_SIZE = 100;
                 for (let i = 0; i < userPointsData.length; i += BATCH_SIZE) {
                     const batch = userPointsData.slice(i, i + BATCH_SIZE);
@@ -721,6 +719,8 @@ function initHolderScannerWorker(deps) {
                             updated_at = EXCLUDED.updated_at
                     `, params);
                 }
+                // L-7: Delete stale rows AFTER fresh data is written — no zero-data window
+                await db.run('DELETE FROM user_points WHERE updated_at < $1 OR updated_at IS NULL', [now - 3600000]);
                 logger.info(`[Worker] Wrote ${userPointsData.length} users to user_points table`);
             } catch (e) {
                 logger.error('[Worker] Failed to write user_points table', { error: e.message });
@@ -828,29 +828,35 @@ function initMetadataUpdaterWorker(deps) {
                         }
                     }
 
-                    // Update tokens that DexScreener has data for
+                    // M-10: Bulk UPDATE using VALUES clause — 1 round trip instead of N
                     const misses = [];
+                    const updateRows = [];
+                    const now = Date.now();
                     for (const t of chunk) {
                         const data = updates.get(t.mint);
-                        // v25.4: Check if token already has an image (preserve Imgur URLs)
-                        const tokenHasImage = t.image && t.image !== '' && t.image !== 'null';
-
                         if (data) {
-                            // v25.4: Only update image if token doesn't already have one
-                            if (data.imageUrl && !tokenHasImage) {
-                                await db.run(
-                                    `UPDATE tokens SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4, image = $5 WHERE mint = $6`,
-                                    [data.volume24h, data.marketCap, data.priceUsd, Date.now(), data.imageUrl, t.mint]
-                                );
-                            } else {
-                                await db.run(
-                                    `UPDATE tokens SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4 WHERE mint = $5`,
-                                    [data.volume24h, data.marketCap, data.priceUsd, Date.now(), t.mint]
-                                );
-                            }
+                            const tokenHasImage = t.image && t.image !== '' && t.image !== 'null';
+                            // Pass null for image if token already has one (COALESCE preserves existing)
+                            updateRows.push([t.mint, data.volume24h, data.marketCap, data.priceUsd, now, tokenHasImage ? null : (data.imageUrl || null)]);
                         } else {
                             misses.push(t.mint);
                         }
+                    }
+                    if (updateRows.length > 0) {
+                        const placeholders = updateRows.map((_, i) =>
+                            `($${i*6+1}, $${i*6+2}::numeric, $${i*6+3}::numeric, $${i*6+4}::numeric, $${i*6+5}::bigint, $${i*6+6})`
+                        ).join(', ');
+                        await db.run(
+                            `UPDATE tokens SET
+                                volume24h = v.volume24h,
+                                "marketCap" = v.market_cap,
+                                "priceUsd" = v.price_usd,
+                                "lastUpdated" = v.last_updated,
+                                image = COALESCE(v.image, tokens.image)
+                             FROM (VALUES ${placeholders}) AS v(mint, volume24h, market_cap, price_usd, last_updated, image)
+                             WHERE tokens.mint = v.mint`,
+                            updateRows.flat()
+                        );
                     }
 
                     // Batch fetch Helius data for all DexScreener misses (1 call instead of N)

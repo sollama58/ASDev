@@ -41,7 +41,12 @@
       "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\tasks\\\\flywheel.js\")",
       "PowerShell(if \\($?\\) { \"OK\" } else { \"SYNTAX ERROR\" })",
       "Bash(Get-ChildItem -Path \"c:\\\\VSCode\\\\ASDev\" -Force)",
-      "Bash(Select-Object Name, PSIsContainer)"
+      "Bash(Select-Object Name, PSIsContainer)",
+      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\tasks\\\\flywheel.js\" 2>&1)",
+      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\routes\\\\health.js\" 2>&1)",
+      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\tasks\\\\holderScanner.js\" 2>&1)",
+      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\services\\\\postgres.js\" 2>&1)",
+      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\routes\\\\tokens.js\" 2>&1)"
     ]
   }
 }

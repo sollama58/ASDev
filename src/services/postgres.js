@@ -312,6 +312,8 @@ async function createSchema() {
     // Index for fast user lookups
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_airdrop_history_pubkey ON user_airdrop_history("userPubkey")`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_airdrop_history_timestamp ON user_airdrop_history(timestamp DESC)`);
+    // H-5: Composite index speeds up rank queries that filter by pubkey and sort/sum by amount
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_airdrop_history_pubkey_amount ON user_airdrop_history("userPubkey", amount)`);
 
     // ASDF holders table
     await pool.query(`

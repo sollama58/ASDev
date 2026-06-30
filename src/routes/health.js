@@ -5,6 +5,7 @@
  * v24.0 - Parallelized Robinhood fee calculation, added circuit breaker
  */
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const config = require('../config/env');
@@ -12,6 +13,15 @@ const { TOKENS, PROGRAMS } = require('../config/constants');
 const { pump, logger, imageUtils, circuitBreaker, redis, claudeKoth } = require('../services');
 
 const router = express.Router();
+
+// L-1: Dedicated rate limit for health endpoint to prevent polling abuse
+const healthRateLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 60, // 60 requests/min per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown'
+});
 
 // v24.0 SECURITY FIX: Rate limiter using Redis for multi-instance support
 // Fallback to in-memory Map if Redis unavailable
@@ -21,6 +31,13 @@ const ADMIN_RATE_LIMIT_KEY_PREFIX = 'admin_rate_limit:';
 
 // In-memory fallback for when Redis is unavailable
 const adminLoginAttemptsFallback = new Map();
+// H-8: Periodic cleanup to prevent unbounded Map growth
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, val] of adminLoginAttemptsFallback) {
+        if (now > val.resetAt) adminLoginAttemptsFallback.delete(key);
+    }
+}, ADMIN_LOGIN_WINDOW_MS);
 
 async function checkAdminRateLimit(ip) {
     const now = Date.now();
@@ -150,13 +167,83 @@ const adminAuth = (req, res, next) => {
 function init(deps) {
     const { connection, devKeypair, db, redis, getStats, getTotalLaunches, globalState } = deps;
 
+    // C-2: Background job to refresh Robinhood pending fees every 2 minutes
+    // Keeps expensive RPC calls off the health endpoint hot path
+    let isCalculatingRobinhoodPendingFees = false;
+    async function refreshRobinhoodPendingFeesCache() {
+        if (isCalculatingRobinhoodPendingFees) return;
+        isCalculatingRobinhoodPendingFees = true;
+        try {
+            const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 200');
+            let pendingFees = 0;
+            const pendingDetails = [];
+            const BATCH_SIZE = 10;
+            for (let i = 0; i < robinhoodTokens.length; i += BATCH_SIZE) {
+                const batch = robinhoodTokens.slice(i, i + BATCH_SIZE);
+                const batchResults = await Promise.all(batch.map(async (token) => {
+                    try {
+                        let bcVault, ammVaultAta;
+                        if (token.feeVaultAddress) {
+                            const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
+                            bcVault = feeVaultPubkey;
+                            const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
+                            ammVaultAta = feeVaults.ammVaultAta;
+                        } else {
+                            const creatorPubkey = new PublicKey(token.creatorPubkey);
+                            const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                            bcVault = vaults.bcVault;
+                            ammVaultAta = vaults.ammVaultAta;
+                        }
+                        const [bcLamports, ammBalance] = await Promise.all([
+                            circuitBreaker.execute('solana-rpc-health', async () => {
+                                const bcInfo = await connection.getAccountInfo(bcVault);
+                                return bcInfo?.lamports || 0;
+                            }, 0, { failureThreshold: 10, timeout: 60000 }),
+                            circuitBreaker.execute('solana-rpc-health', async () => {
+                                const ammVaultAtaKey = await ammVaultAta;
+                                const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
+                                return parseInt(bal.value.amount) || 0;
+                            }, 0, { failureThreshold: 10, timeout: 60000 })
+                        ]);
+                        let tokenPendingFees = 0;
+                        if (bcLamports > 5000) tokenPendingFees += Math.floor((bcLamports - 5000) * (token.feeShareBps / 10000));
+                        if (ammBalance > 0) tokenPendingFees += Math.floor(ammBalance * (token.feeShareBps / 10000));
+                        if (tokenPendingFees > 0) {
+                            return { mint: token.mint, ticker: token.ticker, pendingLamports: tokenPendingFees, feeShareBps: token.feeShareBps };
+                        }
+                        return null;
+                    } catch (e) {
+                        logger.debug(`[Health/BG] Pending fee check error for ${token.mint}`, { error: e.message });
+                        return null;
+                    }
+                }));
+                for (const result of batchResults) {
+                    if (result) {
+                        pendingFees += result.pendingLamports;
+                        pendingDetails.push(result);
+                    }
+                }
+            }
+            const redisConn = redis.getConnection?.();
+            if (redisConn) {
+                await redisConn.set('robinhood_pending_fees_bg', JSON.stringify({ pendingFees, pendingDetails, calculatedAt: Date.now() }), 'EX', 360);
+            }
+        } catch (e) {
+            logger.debug('[Health/BG] Robinhood pending fees job error', { error: e.message });
+        } finally {
+            isCalculatingRobinhoodPendingFees = false;
+        }
+    }
+    refreshRobinhoodPendingFeesCache();
+    setInterval(refreshRobinhoodPendingFeesCache, 2 * 60 * 1000);
+
     // Version endpoint
     router.get('/version', (req, res) => {
         res.json({ version: config.VERSION });
     });
 
     // Health check
-    router.get('/health', async (req, res) => {
+    router.get('/health', healthRateLimiter, async (req, res) => {
         try {
             const cachedHealth = await redis.smartCache('health_data', 10, async () => {
                 const stats = await getStats();
@@ -215,101 +302,21 @@ function init(deps) {
                 const robinhoodTokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
                 const robinhoodTotalFees = await db.get('SELECT SUM("totalFeesCollected") as total FROM robinhood_tokens');
 
-                // v24.0: Calculate pending fees from Robinhood tokens (parallelized with circuit breaker)
+                // C-2: Read Robinhood pending fees from background cache (refreshed every 2 min by setInterval job)
                 let robinhoodPendingFees = 0;
                 let robinhoodPendingDetails = [];
                 try {
-                    // v25.14 SCALABILITY: Limit to 200 tokens for health check to avoid timeout
-                    // v25.74: Include feeVaultAddress for fee sharing tokens
-                    const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 200');
-
-                    // v24.0: Process tokens in parallel batches for better responsiveness
-                    const BATCH_SIZE = 10;
-                    const batches = [];
-                    for (let i = 0; i < robinhoodTokens.length; i += BATCH_SIZE) {
-                        batches.push(robinhoodTokens.slice(i, i + BATCH_SIZE));
-                    }
-
-                    for (const batch of batches) {
-                        const batchResults = await Promise.all(batch.map(async (token) => {
-                            try {
-                                // v25.79: CRITICAL FIX - For fee sharing tokens, BOTH BC and AMM vaults
-                                // are derived from feeVaultAddress (coinCreator), NOT creatorPubkey.
-                                // The AMM pool stores coinCreator as the creator, not originalCreator.
-                                let bcVault;
-                                let ammVaultAta;
-
-                                if (token.feeVaultAddress) {
-                                    // v25.91: FEE program token - use feeVaultAddress directly for BC vault
-                                    // This is where fees actually accumulate (consistent with scanner and admin refresh)
-                                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                                    bcVault = feeVaultPubkey;
-                                    const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                                    ammVaultAta = feeVaults.ammVaultAta;
-                                } else {
-                                    // PUMP program token - derive from creatorPubkey
-                                    const creatorPubkey = new PublicKey(token.creatorPubkey);
-                                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
-                                    bcVault = vaults.bcVault;
-                                    ammVaultAta = vaults.ammVaultAta;
-                                }
-
-                                // v24.0: Use circuit breaker for RPC calls
-                                const [bcLamports, ammBalance] = await Promise.all([
-                                    circuitBreaker.execute(
-                                        'solana-rpc-health',
-                                        async () => {
-                                            const bcInfo = await connection.getAccountInfo(bcVault);
-                                            return bcInfo?.lamports || 0;
-                                        },
-                                        0,
-                                        { failureThreshold: 10, timeout: 60000 }
-                                    ),
-                                    circuitBreaker.execute(
-                                        'solana-rpc-health',
-                                        async () => {
-                                            const ammVaultAtaKey = await ammVaultAta;
-                                            const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-                                            return parseInt(bal.value.amount) || 0;
-                                        },
-                                        0,
-                                        { failureThreshold: 10, timeout: 60000 }
-                                    )
-                                ]);
-
-                                let tokenPendingFees = 0;
-                                if (bcLamports > 5000) {
-                                    tokenPendingFees += Math.floor((bcLamports - 5000) * (token.feeShareBps / 10000));
-                                }
-                                if (ammBalance > 0) {
-                                    tokenPendingFees += Math.floor(ammBalance * (token.feeShareBps / 10000));
-                                }
-
-                                if (tokenPendingFees > 0) {
-                                    return {
-                                        mint: token.mint,
-                                        ticker: token.ticker,
-                                        pendingLamports: tokenPendingFees,
-                                        feeShareBps: token.feeShareBps
-                                    };
-                                }
-                                return null;
-                            } catch (e) {
-                                logger.debug(`[Health] Robinhood pending fee check error for ${token.mint}`, { error: e.message });
-                                return null;
-                            }
-                        }));
-
-                        // Aggregate batch results
-                        for (const result of batchResults) {
-                            if (result) {
-                                robinhoodPendingFees += result.pendingLamports;
-                                robinhoodPendingDetails.push(result);
-                            }
+                    const robinhoodRedisConn = redis.getConnection?.();
+                    if (robinhoodRedisConn) {
+                        const cached = await robinhoodRedisConn.get('robinhood_pending_fees_bg');
+                        if (cached) {
+                            const parsed = JSON.parse(cached);
+                            robinhoodPendingFees = parsed.pendingFees || 0;
+                            robinhoodPendingDetails = parsed.pendingDetails || [];
                         }
                     }
                 } catch (e) {
-                    logger.debug('[Health] Robinhood pending fees error', { error: e.message });
+                    logger.debug('[Health] Failed to read robinhood pending fees from cache', { error: e.message });
                 }
 
                 // v26.0: Sum of all per-token pending airdrop lamports (replaces balance-based pool calc)
@@ -902,6 +909,10 @@ function init(deps) {
      * v25.90: Immediately refresh pending fees from on-chain and return per-token breakdown
      */
     router.post('/admin/refresh-robinhood-pending-fees', adminAuth, async (req, res) => {
+        // M-7: Run the heavy on-chain scan asynchronously; return 202 immediately
+        res.status(202).json({ success: true, message: 'Pending fee refresh started. Check logs for results.' });
+
+        (async () => {
         try {
             const { PublicKey } = require('@solana/web3.js');
             const pump = require('../services/pump');
@@ -981,18 +992,10 @@ function init(deps) {
             const totalPendingSol = totalPendingLamports / LAMPORTS_PER_SOL;
 
             logger.info(`[Admin] Refreshed pending fees: ${totalPendingSol.toFixed(4)} SOL across ${tokenFees.length} tokens with pending`);
-
-            res.json({
-                success: true,
-                totalPendingSol: totalPendingSol.toFixed(6),
-                totalTokensChecked: tokens.length,
-                tokensWithPending: tokenFees.length,
-                tokenFees
-            });
         } catch (e) {
             logger.error('[Admin] Refresh Robinhood pending fees error', { error: e.message });
-            res.status(500).json({ error: 'Failed to refresh pending fees' });
         }
+        })();
     });
 
     /**

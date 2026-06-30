@@ -123,10 +123,15 @@ function init(deps) {
                 `;
                 const rows = await db.all(combinedQuery, [limit, offset]);
 
-                // Get total count from both tables
-                const platformCount = await db.get('SELECT COUNT(*) as count FROM tokens');
-                const robinhoodCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens');
-                const total = parseInt(platformCount?.count || 0) + parseInt(robinhoodCount?.count || 0);
+                // M-1: Count distinct mints across both tables (deduplication-aware)
+                const totalRow = await db.get(`
+                    SELECT COUNT(*) as count FROM (
+                        SELECT DISTINCT mint FROM tokens
+                        UNION
+                        SELECT DISTINCT mint FROM robinhood_tokens
+                    ) distinct_mints
+                `);
+                const total = parseInt(totalRow?.count || 0);
 
                 // M-2 FIX: Fetch fallback images INSIDE the cache so N+1 HTTP calls happen at most once per TTL,
                 // not on every request. Results with resolved images are cached together with token rows.
@@ -482,17 +487,20 @@ function init(deps) {
         try {
             const { mint } = req.params;
             if (!isValidPubkey(mint)) return res.status(400).json({ error: "Invalid mint address" });
-            let holders = await db.all(
-                'SELECT rank, "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 250',
-                [mint]
-            );
-            if (holders.length === 0) {
-                // Not in platform table — check Robinhood table
-                holders = await db.all(
-                    'SELECT rank, "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 250',
+            // M-2: Cache per-token holder list for 30s
+            const holders = await redis.smartCache(`token_holders_${mint}`, 30, async () => {
+                let rows = await db.all(
+                    'SELECT rank, "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 250',
                     [mint]
                 );
-            }
+                if (rows.length === 0) {
+                    rows = await db.all(
+                        'SELECT rank, "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 250',
+                        [mint]
+                    );
+                }
+                return rows;
+            });
             res.json(holders);
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
@@ -541,21 +549,24 @@ function init(deps) {
 
             // If user not found in user_points, check if they have any holdings
             if (!userPoints) {
-                // Quick check for any holdings (for isHolder flag)
-                // v25.114: Check both platform and robinhood holder tables
-                const holdingsCount = await db.get(`
-                    SELECT (
-                        (SELECT COUNT(*) FROM token_holders WHERE "holderPubkey" = $1) +
-                        (SELECT COUNT(*) FROM robinhood_token_holders WHERE "holderPubkey" = $1)
-                    ) as count
-                `, [userPubkey]);
+                // M-6: Cache the "unknown user" response for 5s to avoid repeated DB scans
+                const unknownCacheKey = `check_holder_unknown_${hashPubkey(userPubkey)}`;
+                const holdingsCount = await redis.smartCache(unknownCacheKey, 5, async () => {
+                    const row = await db.get(`
+                        SELECT (
+                            (SELECT COUNT(*) FROM token_holders WHERE "holderPubkey" = $1) +
+                            (SELECT COUNT(*) FROM robinhood_token_holders WHERE "holderPubkey" = $1)
+                        ) as count
+                    `, [userPubkey]);
+                    return row?.count || 0;
+                });
 
                 return res.json({
-                    isHolder: (holdingsCount?.count || 0) > 0,
+                    isHolder: (holdingsCount || 0) > 0,
                     isAsdfTop50: false,
                     points: 0,
                     multiplier: 1,
-                    heldPositionsCount: holdingsCount?.count || 0,
+                    heldPositionsCount: holdingsCount || 0,
                     basePoints: 0,
                     robinhoodPoints: 0,
                     expectedAirdrop: 0,
@@ -616,7 +627,7 @@ function init(deps) {
             // We can't compute a correct ASDF-weighted denominator here without fetching all
             // holders per token. The accurate ASDF-adjusted aggregate is in user_points.
             const cacheKey = `user_holdings_detail_v4_${hashPubkey(userPubkey)}`;
-            const holdingsData = await redis.smartCache(cacheKey, 15, async () => {
+            const holdingsData = await redis.smartCache(cacheKey, 60, async () => { // H-4: 60s TTL
                 const holdings = [];
 
                 // v24.0: Single optimized query with JOINs for launched tokens
@@ -744,8 +755,9 @@ function init(deps) {
                     });
                 }
 
-                // Sort by expected airdrop SOL descending — most valuable position first
-                return holdings.sort((a, b) => parseFloat(b.expectedAirdropSol) - parseFloat(a.expectedAirdropSol));
+                // M-9: Sort by expected airdrop SOL descending (already computed — stable JS sort)
+                holdings.sort((a, b) => parseFloat(b.expectedAirdropSol) - parseFloat(a.expectedAirdropSol));
+                return holdings;
             });
 
             // v27.0: Attach central pool expected from user_points for frontend breakdown
@@ -773,41 +785,46 @@ function init(deps) {
     router.get('/all-eligible-users', async (req, res) => {
         try {
             const devPubkey = devKeypair.publicKey.toString();
-            // M-3 FIX: Add pagination to prevent full table dump on every request
             const limit = Math.min(parseInt(req.query.limit) || 500, 1000);
             const offset = Math.min(Math.max(parseInt(req.query.offset) || 0, 0), 100000);
 
-            // Ordered by expected_airdrop_sol — the primary metric (Option A)
-            const users = await db.all(`
-                SELECT
-                    pubkey,
-                    multiplier,
-                    expected_airdrop_sol,
-                    positions_count,
-                    is_asdf_holder
-                FROM user_points
-                WHERE expected_airdrop_sol > 0 AND pubkey != $1
-                ORDER BY expected_airdrop_sol DESC
-                LIMIT $2 OFFSET $3
-            `, [devPubkey, limit, offset]);
+            // C-4: Cache per pagination page for 30s to avoid repeated full-table scans
+            const cacheKey = `all_eligible_users_${limit}_${offset}`;
+            const result = await redis.smartCache(cacheKey, 30, async () => {
+                const users = await db.all(`
+                    SELECT
+                        pubkey,
+                        multiplier,
+                        expected_airdrop_sol,
+                        positions_count,
+                        is_asdf_holder
+                    FROM user_points
+                    WHERE expected_airdrop_sol > 0 AND pubkey != $1
+                    ORDER BY expected_airdrop_sol DESC
+                    LIMIT $2 OFFSET $3
+                `, [devPubkey, limit, offset]);
 
-            const globalTotalRow = await db.get(
-                'SELECT COUNT(*) as count, SUM(expected_airdrop_sol) as total_sol FROM user_points WHERE expected_airdrop_sol > 0 AND pubkey != $1',
-                [devPubkey]
-            );
-            const globalTotalSol = Math.round((parseFloat(globalTotalRow?.total_sol) || 0) * 10000) / 10000;
+                const globalTotalRow = await db.get(
+                    'SELECT COUNT(*) as count, SUM(expected_airdrop_sol) as total_sol FROM user_points WHERE expected_airdrop_sol > 0 AND pubkey != $1',
+                    [devPubkey]
+                );
+                const globalTotalSol = Math.round((parseFloat(globalTotalRow?.total_sol) || 0) * 10000) / 10000;
 
-            const eligibleUsers = users.map(user => ({
-                pubkey: user.pubkey,
-                positions: user.positions_count || 0,
-                isAsdfTop50: user.is_asdf_holder || false,
-                expectedAirdrop: user.expected_airdrop_sol || 0,
-                expectedAirdropCurrency: 'SOL'
-            }));
+                return {
+                    users: users.map(user => ({
+                        pubkey: user.pubkey,
+                        positions: user.positions_count || 0,
+                        isAsdfTop50: user.is_asdf_holder || false,
+                        expectedAirdrop: user.expected_airdrop_sol || 0,
+                        expectedAirdropCurrency: 'SOL'
+                    })),
+                    totalPendingSol: globalTotalSol
+                };
+            });
 
             res.json({
-                users: eligibleUsers,
-                totalPendingSol: globalTotalSol,
+                users: result.users,
+                totalPendingSol: result.totalPendingSol,
                 currency: 'SOL',
                 eligibilityThreshold: MIN_VOLUME_USD,
                 pagination: { limit, offset }
@@ -821,7 +838,10 @@ function init(deps) {
     // Airdrop logs
     router.get('/airdrop-logs', async (req, res) => {
         try {
-            const logs = await db.all('SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT 20');
+            // M-4: Cache airdrop logs for 10s — they change infrequently
+            const logs = await redis.smartCache('airdrop_logs_recent', 10, async () => {
+                return await db.all('SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT 20');
+            });
             res.json(logs);
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
@@ -837,6 +857,9 @@ function init(deps) {
             if (!isValidPubkey(pubkey)) {
                 return res.status(400).json({ error: "Invalid wallet address" });
             }
+
+            // C-4: Cache per-user stats for 30s — ranking queries are expensive
+            const cached = await redis.smartCache(`user_airdrop_stats_${hashPubkey(pubkey)}`, 30, async () => {
 
             // Get lifetime stats
             const statsQuery = await db.get(`
@@ -878,7 +901,7 @@ function init(deps) {
                 SELECT COUNT(DISTINCT "userPubkey") as count FROM user_airdrop_history
             `);
 
-            res.json({
+            return {
                 wallet: pubkey.substring(0, 4) + '...' + pubkey.substring(pubkey.length - 4),
                 walletFull: pubkey,
                 totalSolReceived: parseFloat(statsQuery?.totalSolReceived || 0).toFixed(6),
@@ -893,7 +916,10 @@ function init(deps) {
                     timestamp: a.timestamp,
                     airdropId: a.airdropId
                 }))
-            });
+            };
+            }); // end smartCache
+
+            res.json(cached);
         } catch (e) {
             logger.error('[user-airdrop-stats] Error', { error: e.message, pubkey: req.params.pubkey });
             res.status(500).json({ error: "Failed to fetch airdrop stats" });
@@ -905,31 +931,33 @@ function init(deps) {
     // Get all Robinhood tokens (external tokens sharing fees with us)
     router.get('/robinhood/tokens', async (req, res) => {
         try {
-            const tokens = await db.all(`
-                SELECT mint, ticker, name, image, "creatorPubkey", "feeShareBps",
-                       "isGraduated", "discoveredAt", "totalFeesCollected", volume24h, "marketCap", "isActive"
-                FROM robinhood_tokens
-                WHERE "isActive" = 1
-                ORDER BY "totalFeesCollected" DESC
-            `);
-
-            const formattedTokens = tokens.map(t => ({
-                mint: t.mint,
-                ticker: t.ticker || 'Unknown',
-                name: t.name || 'Robinhood Token',
-                image: t.image,
-                creator: t.creatorPubkey,
-                feeSharePercent: t.feeShareBps / 100,
-                isGraduated: !!t.isGraduated,
-                discoveredAt: t.discoveredAt,
-                totalFeesCollected: t.totalFeesCollected || 0,
-                volume24h: t.volume24h || 0,
-                marketCap: t.marketCap || 0
-            }));
+            // H-3: Cache robinhood token list for 15s
+            const formattedTokens = await redis.smartCache('robinhood_tokens_all', 15, async () => {
+                const tokens = await db.all(`
+                    SELECT mint, ticker, name, image, "creatorPubkey", "feeShareBps",
+                           "isGraduated", "discoveredAt", "totalFeesCollected", volume24h, "marketCap", "isActive"
+                    FROM robinhood_tokens
+                    WHERE "isActive" = 1
+                    ORDER BY "totalFeesCollected" DESC
+                `);
+                return tokens.map(t => ({
+                    mint: t.mint,
+                    ticker: t.ticker || 'Unknown',
+                    name: t.name || 'Robinhood Token',
+                    image: t.image,
+                    creator: t.creatorPubkey,
+                    feeSharePercent: t.feeShareBps / 100,
+                    isGraduated: !!t.isGraduated,
+                    discoveredAt: t.discoveredAt,
+                    totalFeesCollected: t.totalFeesCollected || 0,
+                    volume24h: t.volume24h || 0,
+                    marketCap: t.marketCap || 0
+                }));
+            });
 
             res.json({
                 tokens: formattedTokens,
-                count: tokens.length,
+                count: formattedTokens.length,
                 lastUpdate: globalState.lastBackendUpdate
             });
         } catch (e) {
@@ -995,17 +1023,22 @@ function init(deps) {
     // Get Robinhood stats summary
     router.get('/robinhood/stats', async (req, res) => {
         try {
-            const tokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
-            const totalFees = await db.get('SELECT SUM("totalFeesCollected") as total FROM robinhood_tokens');
-            const holderCount = await db.get('SELECT COUNT(DISTINCT "holderPubkey") as count FROM robinhood_token_holders');
-            const stats = await db.get('SELECT value FROM stats WHERE key = $1', ['lifetimeRobinhoodFeesLamports']);
-
-            res.json({
-                activeTokens: parseInt(tokenCount?.count) || 0,
-                totalFeesCollectedSol: totalFees?.total || 0,
-                uniqueHolders: parseInt(holderCount?.count) || 0,
-                lifetimeFeesLamports: stats?.value || 0
+            // M-3: Cache robinhood stats for 30s — aggregation queries are expensive
+            const data = await redis.smartCache('robinhood_stats', 30, async () => {
+                const [tokenCount, totalFees, holderCount, stats] = await Promise.all([
+                    db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1'),
+                    db.get('SELECT SUM("totalFeesCollected") as total FROM robinhood_tokens'),
+                    db.get('SELECT COUNT(DISTINCT "holderPubkey") as count FROM robinhood_token_holders'),
+                    db.get('SELECT value FROM stats WHERE key = $1', ['lifetimeRobinhoodFeesLamports'])
+                ]);
+                return {
+                    activeTokens: parseInt(tokenCount?.count) || 0,
+                    totalFeesCollectedSol: totalFees?.total || 0,
+                    uniqueHolders: parseInt(holderCount?.count) || 0,
+                    lifetimeFeesLamports: stats?.value || 0
+                };
             });
+            res.json(data);
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
         }
@@ -1356,6 +1389,8 @@ function init(deps) {
                 });
             }
 
+            // M-8: Cache token lookup for 60s per mint
+            const lookupResult = await redis.smartCache(`token_lookup_${mint}`, 60, async () => {
             // Check the tokens table (IGNITION-launched tokens)
             const ignitionToken = await db.get(`
                 SELECT mint, ticker, name, image, "metadataUri", "userPubkey", "marketCap", volume24h, timestamp
@@ -1363,10 +1398,7 @@ function init(deps) {
             `, [mint]);
 
             if (ignitionToken) {
-                // Token was launched via IGNITION platform
                 let image = ignitionToken.image;
-
-                // Apply metadataUri fallback for missing images
                 if ((!image || image === '' || image === 'null') && ignitionToken.metadataUri) {
                     try {
                         const fallbackImage = await imageUtils.fetchImageFromMetadataUri(ignitionToken.metadataUri, 3000);
@@ -1376,8 +1408,7 @@ function init(deps) {
                         }
                     } catch (e) { /* silent fail */ }
                 }
-
-                return res.json({
+                return {
                     registered: true,
                     type: 'ignition',
                     token: {
@@ -1390,18 +1421,16 @@ function init(deps) {
                         volume24h: ignitionToken.volume24h || 0,
                         registeredAt: ignitionToken.timestamp
                     }
-                });
+                };
             }
 
-            // Check the robinhood_tokens table (fee-sharing partner tokens)
             const robinhoodToken = await db.get(`
                 SELECT mint, ticker, name, image, "creatorPubkey", "feeShareBps", "marketCap", volume24h, "isActive", "discoveredAt"
                 FROM robinhood_tokens WHERE mint = $1
             `, [mint]);
 
             if (robinhoodToken) {
-                // Token is a Robinhood fee-sharing partner
-                return res.json({
+                return {
                     registered: true,
                     type: 'robinhood',
                     active: robinhoodToken.isActive === 1,
@@ -1417,18 +1446,19 @@ function init(deps) {
                         volume24h: robinhoodToken.volume24h || 0,
                         registeredAt: robinhoodToken.discoveredAt
                     }
-                });
+                };
             }
 
-            // Token not found in either table
-            return res.json({
+            return {
                 registered: false,
                 type: null,
                 mint: mint
-            });
+            };
+            }); // end smartCache
 
+            return res.json(lookupResult);
         } catch (e) {
-            logger.error('[TokenLookup] Error', { mint: req.params.mint, error: e.message, stack: e.stack });
+            logger.error('[TokenLookup] Error', { mint: req.params.mint, error: e.message });
             res.status(500).json({
                 registered: false,
                 error: 'Database error'
@@ -1756,6 +1786,10 @@ function init(deps) {
      * v25.5: Also handles 'null' string values and tries metadataUri fallback
      */
     router.post('/refresh-all-metadata', adminAuth, async (req, res) => {
+        // C-5: Respond immediately with 202 and run the heavy work asynchronously
+        res.status(202).json({ success: true, message: 'Metadata refresh started. Check logs for progress.' });
+
+        (async () => {
         try {
             // v25.5: Find all robinhood tokens with missing metadata (including 'null' string)
             const robinhoodTokens = await db.all(`
@@ -1893,21 +1927,11 @@ function init(deps) {
                 }
             }
 
-            res.json({
-                success: true,
-                message: `Metadata refresh complete`,
-                total: totalTokens,
-                updated,
-                failed
-            });
-
+            logger.info(`[BatchMetadataRefresh] Complete: ${updated} updated, ${failed} failed out of ${totalTokens}`);
         } catch (e) {
-            logger.error('[BatchMetadataRefresh] Error', { error: e.message, stack: e.stack });
-            res.status(500).json({
-                success: false,
-                error: 'Failed to refresh metadata'
-            });
+            logger.error('[BatchMetadataRefresh] Error', { error: e.message });
         }
+        })();
     });
 
     /**

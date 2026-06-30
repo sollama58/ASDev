@@ -997,6 +997,11 @@ async function getAiSelectedKoth(db) {
             // Store in Redis for API access
             const redisConn = redis.getConnection();
             if (redisConn) {
+                // L-4: Persist lastKothEvaluation timestamp in Redis for cross-process durability
+                try {
+                    await redisConn.set('koth_last_evaluation', String(now), 'EX', Math.ceil(KOTH_EVALUATION_INTERVAL_MS * 3 / 1000));
+                } catch (_) { /* non-fatal */ }
+
                 await redisConn.set('koth_ai_selection', JSON.stringify({
                     mint: result.token.mint,
                     ticker: result.token.ticker,
@@ -1214,7 +1219,13 @@ async function claimRobinhoodFees(deps) {
         // Get all active Robinhood tokens (v25.14 SCALABILITY: Limit to 500 tokens)
         const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 500');
 
-        for (const token of tokens) {
+        // C-3: Process tokens in parallel batches of 5 to avoid serial RPC bottleneck
+        const CLAIM_BATCH_SIZE = 5;
+        for (let bi = 0; bi < tokens.length; bi += CLAIM_BATCH_SIZE) {
+            const batchTokens = tokens.slice(bi, bi + CLAIM_BATCH_SIZE);
+            const batchResults = await Promise.allSettled(batchTokens.map(async (token) => {
+            let tokenTotalClaimed = 0;
+            const tokenEntries = [];
             try {
                 const creatorPubkey = new PublicKey(token.creatorPubkey);
 
@@ -1330,8 +1341,8 @@ async function claimRobinhoodFees(deps) {
 
                             const ourShare = Math.floor(bcPendingLamports * ((token.feeShareBps ?? 10000) / 10000));
                             tokenClaimed += ourShare;
-                            totalClaimed += ourShare;
-                            claimedTokens.push({
+                            tokenTotalClaimed += ourShare;
+                            tokenEntries.push({
                                 ticker: token.ticker || token.creatorPubkey.slice(0, 8),
                                 amount: ourShare,
                                 source: 'BC'
@@ -1505,8 +1516,8 @@ async function claimRobinhoodFees(deps) {
 
                             // Distribution succeeded!
                             const ourShareLamports = Math.floor(ammFeeLamports * ((token.feeShareBps ?? 10000) / 10000));
-                            totalClaimed += ourShareLamports;
-                            claimedTokens.push({
+                            tokenTotalClaimed += ourShareLamports;
+                            tokenEntries.push({
                                 ticker: token.ticker || token.creatorPubkey.slice(0, 8),
                                 amount: ourShareLamports,
                                 source: 'AMM'
@@ -1575,12 +1586,22 @@ async function claimRobinhoodFees(deps) {
                     logger.debug(`[Robinhood/AMM] ${token.ticker}: Check failed - ${e.message}`);
                 }
 
-                await new Promise(r => setTimeout(r, 500)); // Rate limiting between tokens
-
             } catch (e) {
                 logger.error(`[Robinhood] Fee claim error for ${token.creatorPubkey}`, { error: e.message });
             }
+            return { tokenTotalClaimed, tokenEntries };
+        })); // end Promise.allSettled batchTokens.map
+
+        for (const r of batchResults) {
+            if (r.status === 'fulfilled' && r.value) {
+                totalClaimed += r.value.tokenTotalClaimed;
+                claimedTokens.push(...r.value.tokenEntries);
+            }
         }
+        if (bi + CLAIM_BATCH_SIZE < tokens.length) {
+            await new Promise(r => setTimeout(r, 500)); // Rate limit between batches
+        }
+    } // end outer batch for loop
     } catch (e) {
         logger.error('[Robinhood] Claim fees error', { error: e.message });
     }
@@ -2374,6 +2395,19 @@ async function sendSolAirdropBatch(batch, deps) {
         return { signature: sig, actualLamports };
     } catch (e) {
         logger.error(`SOL Airdrop batch failed (${validItems?.length || batch.length} transfers)`, { error: e.message });
+        // L-6: Log failed recipients to Redis dead-letter list for auditing
+        try {
+            const redisConn = redis.getConnection();
+            if (redisConn && validItems?.length > 0) {
+                const entry = JSON.stringify({
+                    timestamp: Date.now(),
+                    error: e.message,
+                    recipients: validItems.map(i => ({ pubkey: i.user.toString(), lamports: i.amount }))
+                });
+                await redisConn.lpush('airdrop_dead_letter', entry);
+                await redisConn.ltrim('airdrop_dead_letter', 0, 999); // Keep last 1000 entries
+            }
+        } catch (_) { /* non-fatal */ }
         return null;
     }
 }
