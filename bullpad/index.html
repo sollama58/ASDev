@@ -286,6 +286,59 @@
             50% { opacity: 0.6; }
         }
 
+        .pool-breakdown {
+            display: flex;
+            gap: 0;
+            margin-top: 16px;
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+        }
+        .pool-breakdown-item {
+            flex: 1;
+            padding: 10px 14px;
+            background: var(--surface2);
+            text-align: center;
+        }
+        .pool-breakdown-item + .pool-breakdown-item {
+            border-left: 1px solid var(--border2);
+        }
+        .pool-breakdown-label {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.4px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+        .pool-breakdown-val {
+            font-size: 15px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: var(--text);
+        }
+        .pool-breakdown-val span {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text2);
+            margin-left: 2px;
+        }
+
+        .btn-recipients {
+            display: inline-block;
+            margin-top: 14px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text2);
+            background: none;
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            padding: 6px 14px;
+            cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .btn-recipients:hover { color: var(--accent); border-color: rgba(245,158,11,0.4); }
+
         .pool-stats-row {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -536,6 +589,48 @@
             background: var(--border);
             margin: 20px 0;
         }
+
+        .platform-wallet-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            padding: 10px 13px;
+            margin-bottom: 20px;
+        }
+        .platform-wallet-label {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.4px;
+            text-transform: uppercase;
+            color: var(--muted);
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .platform-wallet-addr {
+            font-family: 'SF Mono', 'Fira Mono', 'Consolas', monospace;
+            font-size: 12px;
+            color: var(--accent);
+            word-break: break-all;
+            flex: 1;
+            user-select: all;
+        }
+        .btn-copy-wallet {
+            background: var(--accent-dim);
+            border: 1px solid rgba(245,158,11,0.25);
+            color: var(--accent);
+            border-radius: var(--radius-sm);
+            padding: 5px 11px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+            transition: background 0.15s;
+        }
+        .btn-copy-wallet:hover { background: rgba(245,158,11,0.18); }
 
         .register-hint {
             font-size: 13px;
@@ -1163,6 +1258,17 @@
                 <span class="pool-sol" id="pool-sol">—</span>
                 <span class="pool-sol-unit">SOL</span>
             </div>
+            <div class="pool-breakdown">
+                <div class="pool-breakdown-item">
+                    <div class="pool-breakdown-label">Central Pool</div>
+                    <div class="pool-breakdown-val" id="central-pool-sol">—<span>SOL</span></div>
+                </div>
+                <div class="pool-breakdown-item">
+                    <div class="pool-breakdown-label">Token Pools</div>
+                    <div class="pool-breakdown-val" id="token-pools-sol">—<span>SOL</span></div>
+                </div>
+            </div>
+            <button class="btn-recipients" onclick="openRecipients()">View Expected Recipients →</button>
             <div class="pool-divider"></div>
             <div class="countdown-label">Next Airdrop In</div>
             <div class="countdown" id="countdown">—:——:——</div>
@@ -1242,6 +1348,12 @@
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <div class="platform-wallet-box">
+                <span class="platform-wallet-label">Bullpad Wallet</span>
+                <span class="platform-wallet-addr" id="platform-wallet">Loading…</span>
+                <button class="btn-copy-wallet" onclick="copyWallet()">Copy</button>
             </div>
 
             <div class="register-divider"></div>
@@ -1376,6 +1488,20 @@
     </div>
 </div>
 
+<!-- ── Recipients Modal ── -->
+<div class="modal-overlay" id="recipients-modal" onclick="handleOverlayClick(event,'recipients-modal')">
+    <div class="modal modal-lg">
+        <div class="modal-header">
+            <span class="modal-title">Expected Airdrop Recipients</span>
+            <button class="modal-close" onclick="closeModal('recipients-modal')">✕</button>
+        </div>
+        <div id="recipients-summary" style="padding:12px 20px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text2);display:flex;gap:20px"></div>
+        <div class="modal-body" style="padding:0;max-height:520px;overflow-y:auto" id="recipients-body">
+            <div style="padding:32px;text-align:center;color:var(--muted)">Loading…</div>
+        </div>
+    </div>
+</div>
+
 <!-- ── View All Modal ── -->
 <div class="modal-overlay" id="viewall-modal" onclick="handleOverlayClick(event,'viewall-modal')">
     <div class="modal modal-lg">
@@ -1467,7 +1593,7 @@ function handleOverlayClick(e, id) {
 
 document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-        ['filter-modal','about-modal','token-modal','viewall-modal'].forEach(closeModal);
+        ['filter-modal','about-modal','token-modal','viewall-modal','recipients-modal'].forEach(closeModal);
         document.body.style.overflow = '';
     }
 });
@@ -1547,6 +1673,60 @@ function renderLeaderboardFromCache() {
 
 // ── About Modal ────────────────────────────────────────────────────────────────
 function openAboutModal() { openModal('about-modal'); }
+
+// ── Recipients Modal ───────────────────────────────────────────────────────────
+async function openRecipients() {
+    const body    = document.getElementById('recipients-body');
+    const summary = document.getElementById('recipients-summary');
+    body.innerHTML    = '<div style="padding:32px;text-align:center;color:var(--muted)">Loading…</div>';
+    summary.innerHTML = '';
+    openModal('recipients-modal');
+
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/all-eligible-users?limit=1000`);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        const users = data.users || [];
+
+        summary.innerHTML = `
+            <span><strong style="color:var(--text)">${users.length.toLocaleString()}</strong> recipients</span>
+            <span><strong style="color:var(--accent)">${parseFloat(data.totalPendingSol || 0).toFixed(4)} SOL</strong> total pending</span>
+        `;
+
+        if (!users.length) {
+            body.innerHTML = '<div style="padding:32px;text-align:center;color:var(--muted)">No recipients yet.</div>';
+            return;
+        }
+
+        const rows = users.map((u, i) => {
+            const short = u.pubkey.slice(0, 4) + '…' + u.pubkey.slice(-4);
+            const sol   = parseFloat(u.expectedAirdrop || 0).toFixed(4);
+            return `<tr>
+                <td style="padding:9px 16px;color:var(--muted);font-variant-numeric:tabular-nums">${i + 1}</td>
+                <td style="padding:9px 8px;font-family:'SF Mono','Fira Mono',monospace;font-size:12px">
+                    <a href="https://solscan.io/account/${esc(u.pubkey)}" target="_blank" rel="noopener"
+                       style="color:var(--text2);text-decoration:none" title="${esc(u.pubkey)}">${esc(short)}</a>
+                </td>
+                <td style="padding:9px 8px;text-align:right;color:var(--text2);font-variant-numeric:tabular-nums">${u.positions || 0}</td>
+                <td style="padding:9px 16px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:var(--accent)">${sol} SOL</td>
+            </tr>`;
+        }).join('');
+
+        body.innerHTML = `<table style="width:100%;border-collapse:collapse">
+            <thead>
+                <tr style="border-bottom:1px solid var(--border)">
+                    <th style="padding:8px 16px;text-align:left;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:700">#</th>
+                    <th style="padding:8px 8px;text-align:left;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:700">Wallet</th>
+                    <th style="padding:8px 8px;text-align:right;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:700">Tokens</th>
+                    <th style="padding:8px 16px;text-align:right;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:700">Expected Airdrop</th>
+                </tr>
+            </thead>
+            <tbody style="font-size:13px">${rows}</tbody>
+        </table>`;
+    } catch (e) {
+        body.innerHTML = `<div style="padding:32px;text-align:center;color:var(--red)">Failed to load recipients: ${esc(e.message)}</div>`;
+    }
+}
 
 // ── View All Modal ─────────────────────────────────────────────────────────────
 function openViewAllModal() {
@@ -1692,8 +1872,15 @@ async function loadHealth() {
 }
 
 function applyHealth(d) {
-    const sol = parseFloat(d.airdropPoolSol) || 0;
-    document.getElementById('pool-sol').textContent = fmt.sol(sol);
+    const centralSol  = parseFloat(d.centralPoolSol)  || 0;
+    const tokenSol    = parseFloat(d.tokenPoolsSol)   || 0;
+    const totalSol    = centralSol + tokenSol;
+    document.getElementById('pool-sol').textContent = fmt.sol(totalSol);
+
+    const centralEl = document.getElementById('central-pool-sol');
+    const tokenEl   = document.getElementById('token-pools-sol');
+    if (centralEl) centralEl.innerHTML = fmt.sol(centralSol) + '<span>SOL</span>';
+    if (tokenEl)   tokenEl.innerHTML   = fmt.sol(tokenSol)   + '<span>SOL</span>';
 
     const totalDrop = parseFloat(d.totalSolAirdropped) || 0;
     document.getElementById('stat-airdropped').textContent = totalDrop.toFixed(2) + ' SOL';
@@ -1707,6 +1894,16 @@ function applyHealth(d) {
     }
 
     document.getElementById('pool-updated').textContent = 'Updated ' + fmt.ago(Date.now());
+
+    if (d.wallet) {
+        document.getElementById('platform-wallet').textContent = d.wallet;
+    }
+}
+
+function copyWallet() {
+    const addr = document.getElementById('platform-wallet').textContent;
+    if (!addr || addr === 'Loading…') return;
+    navigator.clipboard.writeText(addr).then(() => toast('Wallet address copied!', 'success'));
 }
 
 // ── Countdown ──────────────────────────────────────────────────────────────────
