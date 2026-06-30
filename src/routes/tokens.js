@@ -20,8 +20,14 @@ const { isValidPubkey } = require('./solana');
 const { redis, mintExtractor, logger, circuitBreaker, imageUtils, signatureVerifier, twitter } = require('../services');
 const robinhoodScanner = require('../tasks/robinhoodScanner');
 const { safeBalance, safeTotalBalance } = require('../utils');
+const crypto = require('crypto');
 const config = require('../config/env');
 const router = express.Router();
+
+// Hash a pubkey to a safe Redis key component (prevents key injection)
+function hashPubkey(pubkey) {
+    return crypto.createHash('sha256').update(pubkey).digest('hex').slice(0, 16);
+}
 
 // v18.0: Minimum 24hr volume for airdrop eligibility
 const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
@@ -51,10 +57,7 @@ const tokenRegistrationLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => {
-        // Use IP + optional submitter pubkey for more precise limiting
-        const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
-        const pubkey = req.body?.submitterPubkey || '';
-        return `${ip}:${pubkey.slice(0, 10)}`;
+        return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
     }
 });
 
@@ -63,6 +66,20 @@ const tokenRegistrationLimiter = rateLimit({
  */
 function init(deps) {
     const { db, globalState, devKeypair, connection } = deps;
+
+    // Bust the listing caches after any write that changes what tokens appear
+    async function bustListingCaches() {
+        try {
+            await Promise.all([
+                redis.invalidateCache('leaderboard_robinhood_data'),
+                // Bust first two pages of all-launches (covers the common case)
+                redis.invalidateCache('all_launches_v2600_50_0'),
+                redis.invalidateCache('all_launches_v2600_100_0'),
+            ]);
+        } catch (e) {
+            logger.debug('[Cache] Failed to bust listing caches', { error: e.message });
+        }
+    }
 
     // Get all launches - SCALABILITY FIX: Added pagination
     // v18.0: Added eligibility status based on volume threshold
@@ -84,14 +101,23 @@ function init(deps) {
                 // v25.89: Include ALL robinhood_tokens regardless of isActive so registered tokens
                 //         are always visible; inactive ones are shown with a deactivated badge
                 // v27.1: Include pending_airdrop_lamports for threshold display
+                // Deduplicate by mint (platform rows take priority over robinhood rows),
+                // then apply final sort and pagination on the deduplicated set.
                 const combinedQuery = `
-                    SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'platform' as source, 1 as "isActive",
-                           COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports
-                    FROM tokens
-                    UNION ALL
-                    SELECT mint, "creatorPubkey" as "userPubkey", name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source, "isActive",
-                           COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports
-                    FROM robinhood_tokens
+                    SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete, source, "isActive", pending_airdrop_lamports
+                    FROM (
+                        SELECT DISTINCT ON (mint) mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete, source, "isActive", pending_airdrop_lamports
+                        FROM (
+                            SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'platform' as source, 1 as "isActive",
+                                   COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports, 0 as _priority
+                            FROM tokens
+                            UNION ALL
+                            SELECT mint, "creatorPubkey" as "userPubkey", name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source, "isActive",
+                                   COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports, 1 as _priority
+                            FROM robinhood_tokens
+                        ) combined
+                        ORDER BY mint, _priority ASC
+                    ) deduped
                     ORDER BY volume24h DESC
                     LIMIT $1 OFFSET $2
                 `;
@@ -297,7 +323,7 @@ function init(deps) {
             // v25.28: Reduced TTL from 30s to 15s to save Redis memory
             let userHoldings = new Set();
             if (userPubkey && rows.length > 0) {
-                const userCacheKey = `user_rh_holdings_${userPubkey}`;
+                const userCacheKey = `user_rh_holdings_${hashPubkey(userPubkey)}`;
                 const cachedHoldings = await redis.smartCache(userCacheKey, 15, async () => {
                     const mints = rows.map(r => r.mint);
                     const placeholders = mints.map((_, i) => `$${i + 2}`).join(',');
@@ -589,7 +615,7 @@ function init(deps) {
             // Per-token expected airdrop uses simple balance/totalTracked (unweighted).
             // We can't compute a correct ASDF-weighted denominator here without fetching all
             // holders per token. The accurate ASDF-adjusted aggregate is in user_points.
-            const cacheKey = `user_holdings_detail_v4_${userPubkey}`;
+            const cacheKey = `user_holdings_detail_v4_${hashPubkey(userPubkey)}`;
             const holdingsData = await redis.smartCache(cacheKey, 15, async () => {
                 const holdings = [];
 
@@ -1193,6 +1219,8 @@ function init(deps) {
                 robinhoodScanner.scanSingleTokenHolders({ connection, db }, token.mint, token.ticker)
                     .catch(err => logger.warn(`[TokenRegistration] Immediate holder scan failed for ${token.ticker}`, { error: err.message }));
             }
+
+            bustListingCaches().catch(() => {});
 
             // v25.70: Post Twitter announcement for new Robinhood registration
             // Non-blocking - don't fail registration if tweet fails
@@ -1887,7 +1915,7 @@ function init(deps) {
      * v25.6: Refresh a single token's image from its metadataUri
      * Admin endpoint for fixing individual tokens
      */
-    router.post('/refresh-token-image', async (req, res) => {
+    router.post('/refresh-token-image', adminAuth, async (req, res) => {
         const { mint } = req.body;
 
         if (!mint || !isValidPubkey(mint)) {
@@ -1976,7 +2004,7 @@ function init(deps) {
      * Optional:
      * - originalCreator: Legacy parameter, no longer needed (auto-detected from on-chain data)
      */
-    router.post('/verify-token', async (req, res) => {
+    router.post('/verify-token', adminAuth, async (req, res) => {
         try {
             const { mint, originalCreator } = req.body;
 
@@ -2092,7 +2120,7 @@ function init(deps) {
     // ========== DIAGNOSTIC ENDPOINTS ==========
 
     // v19.0: Debug endpoint for expected airdrop calculation
-    router.get('/debug/airdrop-calculation', async (req, res) => {
+    router.get('/debug/airdrop-calculation', adminAuth, async (req, res) => {
         const { userPubkey } = req.query;
 
         try {
@@ -2148,7 +2176,7 @@ function init(deps) {
     });
 
     // Provides database health check and token count information
-    router.get('/debug/db-status', async (req, res) => {
+    router.get('/debug/db-status', adminAuth, async (req, res) => {
         try {
             const tokenCount = await db.get('SELECT COUNT(*) as count FROM tokens');
             const robinhoodCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
@@ -2183,7 +2211,7 @@ function init(deps) {
 
     // v19.0: Debug endpoint for fee sharing verification
     // Helps troubleshoot why a token registration might be failing
-    router.get('/debug/verify-fee-sharing/:mint', async (req, res) => {
+    router.get('/debug/verify-fee-sharing/:mint', adminAuth, async (req, res) => {
         try {
             const { mint } = req.params;
 
@@ -2699,7 +2727,7 @@ function init(deps) {
                     }
                 }
             } catch (e) {
-                metadataCreatorLookup = { error: e.message, stack: e.stack };
+                metadataCreatorLookup = { error: e.message };
             }
 
             // Check the known original creator if provided in query string
@@ -2971,16 +2999,14 @@ function init(deps) {
             });
 
         } catch (e) {
-            res.status(500).json({
-                error: e.message,
-                stack: e.stack
-            });
+            logger.error('[Debug] verify-fee-sharing error', { error: e.message, stack: e.stack });
+            res.status(500).json({ error: e.message });
         }
     });
 
     // v19.0: Metadata status debug endpoint
     // Shows which tokens have missing metadata (images, price, volume)
-    router.get('/debug/metadata-status', async (req, res) => {
+    router.get('/debug/metadata-status', adminAuth, async (req, res) => {
         try {
             // Get all tokens with their metadata status
             const tokens = await db.all(`
@@ -3064,7 +3090,7 @@ function init(deps) {
     });
 
     // v19.0: Test DexScreener fetch for a specific token
-    router.get('/debug/test-dexscreener/:mint', async (req, res) => {
+    router.get('/debug/test-dexscreener/:mint', adminAuth, async (req, res) => {
         try {
             const { mint } = req.params;
 
@@ -3127,7 +3153,7 @@ function init(deps) {
      * Refresh the fee share BPS for a Robinhood token from on-chain data
      * This allows users to update their token's reward distribution if it changed on Pump.fun
      */
-    router.post('/refresh-fee-share/:mint', async (req, res) => {
+    router.post('/refresh-fee-share/:mint', adminAuth, async (req, res) => {
         try {
             const { mint } = req.params;
 
@@ -3183,6 +3209,7 @@ function init(deps) {
 
                 logger.warn(`[FeeShareRefresh] ${mint.slice(0, 8)}... - No longer a fee recipient, deactivated`);
 
+                bustListingCaches().catch(() => {});
                 return res.json({
                     success: true,
                     changed: true,
@@ -3203,7 +3230,7 @@ function init(deps) {
                     'UPDATE robinhood_tokens SET "feeShareBps" = $1 WHERE mint = $2',
                     [currentBps, mint]
                 );
-
+                bustListingCaches().catch(() => {});
                 logger.info(`[FeeShareRefresh] ${robinhoodToken.ticker} (${mint.slice(0, 8)}...) - Fee share updated: ${previousBps} -> ${currentBps} bps`);
             }
 
@@ -3376,6 +3403,7 @@ function init(deps) {
                     // v25.65: Immediately scan holders for newly migrated token (non-blocking)
                     robinhoodScanner.scanSingleTokenHolders({ connection, db }, mint, existingToken.ticker)
                         .catch(err => logger.warn(`[TokenReregister] Immediate holder scan failed for ${existingToken.ticker}`, { error: err.message }));
+                    bustListingCaches().catch(() => {});
 
                     res.json({
                         success: true,
@@ -3421,7 +3449,7 @@ function init(deps) {
      * Admin endpoint to refresh fee shares for all active Robinhood tokens
      * Useful for syncing after Pump.fun allows users to change reward distributions
      */
-    router.post('/refresh-all-fee-shares', async (req, res) => {
+    router.post('/refresh-all-fee-shares', adminAuth, async (req, res) => {
         try {
             // Get all active robinhood tokens
             const tokens = await db.all(

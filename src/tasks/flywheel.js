@@ -89,9 +89,26 @@ const KOTH_MIN_HOLDERS = 10;
 const KOTH_MIN_MARKET_CAP = 1000;
 const KOTH_MIN_VOLUME = 100;
 // H-6 FIX: Cooldown prevents same token from winning KOTH repeatedly
-// Map<mint, expiresAtMs> — populated when a token wins, cleared after COOLDOWN_MS
 const KOTH_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
-const kothCooldowns = new Map();
+// Cooldowns are stored in Redis (key: koth_cooldown:<mint>, value: expiresAtMs as string)
+// so they survive process restarts and deploys.
+async function setKothCooldown(mint) {
+    const expiresAt = Date.now() + KOTH_COOLDOWN_MS;
+    const redisConn = redis.getConnection();
+    if (redisConn) {
+        await redisConn.set(`koth_cooldown:${mint}`, String(expiresAt), 'PX', KOTH_COOLDOWN_MS);
+    }
+}
+async function isKothCooldownActive(mint) {
+    const redisConn = redis.getConnection();
+    if (!redisConn) return false;
+    const val = await redisConn.get(`koth_cooldown:${mint}`);
+    return val !== null && parseInt(val) > Date.now();
+}
+async function clearKothCooldown(mint) {
+    const redisConn = redis.getConnection();
+    if (redisConn) await redisConn.del(`koth_cooldown:${mint}`);
+}
 let lastKothEvaluation = 0;
 let currentKothMint = null;
 let currentKothScore = 0;
@@ -351,23 +368,19 @@ async function evaluateKothCandidates(db) {
         scoredCandidates.sort((a, b) => b.totalScore - a.totalScore);
 
         // H-6 FIX: Skip tokens still in KOTH cooldown (won within last 6 hours)
-        const now6 = Date.now();
-        const eligibleCandidates = scoredCandidates.filter(c => {
-            const cooldownExpiry = kothCooldowns.get(c.mint);
-            if (!cooldownExpiry || now6 >= cooldownExpiry) {
-                if (cooldownExpiry) kothCooldowns.delete(c.mint); // prune expired entry
-                return true;
+        // Cooldowns are Redis-backed so they survive restarts and deploys.
+        const cooldownChecks = await Promise.all(scoredCandidates.map(c => isKothCooldownActive(c.mint)));
+        const eligibleCandidates = scoredCandidates.filter((c, i) => {
+            if (cooldownChecks[i]) {
+                logger.debug(`[KOTH] ${c.ticker} skipped — in cooldown`);
+                return false;
             }
-            logger.debug(`[KOTH] ${c.ticker} skipped — in cooldown for ${Math.ceil((cooldownExpiry - now6) / 60000)} more min`);
-            return false;
+            return true;
         });
 
         if (eligibleCandidates.length === 0) {
-            logger.info('[KOTH] All top candidates are in cooldown — clearing oldest cooldown to allow selection');
-            // Remove the earliest-expiring cooldown so at least one token can win
-            const oldestEntry = [...kothCooldowns.entries()].sort((a, b) => a[1] - b[1])[0];
-            if (oldestEntry) kothCooldowns.delete(oldestEntry[0]);
-            eligibleCandidates.push(...scoredCandidates.filter(c => !kothCooldowns.has(c.mint)));
+            logger.info('[KOTH] All top candidates are in cooldown — using top candidate anyway');
+            eligibleCandidates.push(scoredCandidates[0]);
         }
 
         // Select the winner
@@ -455,7 +468,7 @@ function generateKothReasoning(winner, runnerUp, stats) {
 }
 
 // v27.0: Per-token airdrop threshold raised to 1 SOL
-const TOKEN_AIRDROP_THRESHOLD_LAMPORTS = Math.floor((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0) * 1e9);
+const TOKEN_AIRDROP_THRESHOLD_LAMPORTS = Math.round((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0) * 1e9);
 
 // v26.0: Fixed 1B token supply for all pump.fun tokens (1B * 10^6 decimals)
 const PUMP_FUN_TOTAL_SUPPLY_BIG = BigInt('1000000000000000');
@@ -468,17 +481,25 @@ const MIN_RECIPIENT_LAMPORTS = Math.floor(0.01 * 1e9); // 10_000_000 lamports
 const CREATOR_REWARD_HOLDER_SPLIT = 0.5;
 const CREATOR_REWARD_POOL_SPLIT = 0.5;
 // Minimum central pool balance before triggering a distribution
-const CENTRAL_POOL_THRESHOLD_LAMPORTS = Math.floor(2.5 * 1e9); // 2.5 SOL
+const CENTRAL_POOL_THRESHOLD_LAMPORTS = Math.round(5.0 * 1e9); // 5 SOL
 
 /**
  * v27.0: Atomically add lamports to the central pool stat.
  */
 async function addToCentralPool(db, lamports) {
     if (lamports <= 0) return;
-    await db.run(
-        "UPDATE stats SET value = value + $1 WHERE key = 'centralPoolLamports'",
-        [lamports]
-    );
+    try {
+        const result = await db.run(
+            "UPDATE stats SET value = value + $1 WHERE key = 'centralPoolLamports'",
+            [lamports]
+        );
+        if (result?.rowCount === 0) {
+            logger.error(`[CentralPool] addToCentralPool: stats row not found — ${lamports} lamports NOT credited`);
+        }
+    } catch (e) {
+        logger.error(`[CentralPool] addToCentralPool failed — ${lamports} lamports NOT credited`, { error: e.message });
+        throw e; // re-throw so caller can handle
+    }
 }
 
 /**
@@ -553,7 +574,7 @@ async function processTokenAirdrops(deps) {
 
         if (allToDistribute.length === 0) {
             logger.info(`[TokenAirdrop] No tokens above ${(TOKEN_AIRDROP_THRESHOLD_LAMPORTS / LAMPORTS_PER_SOL).toFixed(3)} SOL threshold`);
-            // Still attempt central pool distribution — it accumulates independently and should fire at 2.5 SOL
+            // Still attempt central pool distribution — it accumulates independently and should fire at 5 SOL
             try {
                 await processCentralPoolAirdrop(deps);
             } catch (centralErr) {
@@ -617,18 +638,28 @@ async function processTokenAirdrops(deps) {
 
                 // Share proportional to weighted effective balance
                 const recipients = [];
+                const distributableBig = BigInt(Math.floor(distributable));
+                let allocatedSoFar = BigInt(0);
 
                 for (const holder of weightedHolders) {
                     try {
                         if (holder.balance <= BigInt(0)) continue;
 
-                        const share = Number((BigInt(distributable) * holder.effectiveBal) / totalEffectiveBal);
-                        if (share >= MIN_RECIPIENT_LAMPORTS) { // minimum 0.01 SOL per recipient
+                        const shareBig = distributableBig * holder.effectiveBal / totalEffectiveBal;
+                        const share = Number(shareBig);
+                        if (share >= MIN_RECIPIENT_LAMPORTS) {
                             recipients.push({ user: new PublicKey(holder.holderPubkey), amount: share });
+                            allocatedSoFar += shareBig;
                         }
                     } catch (e) {
                         logger.debug(`[TokenAirdrop] Skipping invalid holder ${holder.holderPubkey}: ${e.message}`);
                     }
+                }
+
+                // Distribute dust remainder to largest-share recipient to prevent lamport leakage
+                const dust = Number(distributableBig - allocatedSoFar);
+                if (dust > 0 && recipients.length > 0) {
+                    recipients[0].amount += dust;
                 }
 
                 if (recipients.length === 0) {
@@ -686,22 +717,26 @@ async function processTokenAirdrops(deps) {
                         ]
                     );
 
-                    // Log per-user distribution history
+                    // Log per-user distribution history (chunked to stay under pg 65535 param limit)
                     const airdropTimestamp = Date.now();
+                    const HISTORY_CHUNK = 1000; // 6 params each → max 6000 params per query
                     try {
-                        const values = recipients.map((_, i) => {
-                            const b = i * 6;
-                            return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6})`;
-                        }).join(', ');
-                        const params = recipients.flatMap(r => [
-                            r.user.toString(), airdropId,
-                            r.amount / LAMPORTS_PER_SOL, 0,
-                            airdropTimestamp, token.mint
-                        ]);
-                        await db.run(
-                            `INSERT INTO user_airdrop_history ("userPubkey", "airdropId", amount, points, timestamp, mint) VALUES ${values}`,
-                            params
-                        );
+                        for (let hi = 0; hi < recipients.length; hi += HISTORY_CHUNK) {
+                            const chunk = recipients.slice(hi, hi + HISTORY_CHUNK);
+                            const values = chunk.map((_, idx) => {
+                                const b = idx * 6;
+                                return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6})`;
+                            }).join(', ');
+                            const params = chunk.flatMap(r => [
+                                r.user.toString(), airdropId,
+                                r.amount / LAMPORTS_PER_SOL, 0,
+                                airdropTimestamp, token.mint
+                            ]);
+                            await db.run(
+                                `INSERT INTO user_airdrop_history ("userPubkey", "airdropId", amount, points, timestamp, mint) VALUES ${values}`,
+                                params
+                            );
+                        }
                     } catch (histErr) {
                         logger.warn('[TokenAirdrop] Failed to log user history', { error: histErr.message });
                     }
@@ -955,8 +990,8 @@ async function getAiSelectedKoth(db) {
             currentKothScore = result.score;
             currentKothReasoning = result.reasoning;
             lastKothEvaluation = now;
-            // H-6 FIX: Apply cooldown so winner can't dominate every cycle
-            kothCooldowns.set(result.token.mint, now + KOTH_COOLDOWN_MS);
+            // H-6 FIX: Apply cooldown so winner can't dominate every cycle (Redis-backed, survives restart)
+            await setKothCooldown(result.token.mint);
             logger.debug(`[KOTH] Cooldown set for ${result.token.ticker} — eligible again in ${KOTH_COOLDOWN_MS / 3600000}h`);
 
             // Store in Redis for API access
@@ -2848,6 +2883,11 @@ async function start(deps) {
     // v25.64: Staggered initial runs to avoid RPC spike at startup
     setTimeout(() => runFeeCollection(deps), 30000); // Fee collection at 30s (was 5s)
     setTimeout(() => processTokenAirdrops(deps), 120000); // Airdrop at 2min (was 10s)
+
+    // Run KOTH evaluation early so Redis has a valid selection before holderScanner first reads it.
+    // Without this, the first ~30 minutes after startup would have no KOTH and Robinhood tokens
+    // would be excluded from KOTH during that window.
+    setTimeout(() => evaluateKothCandidates(db).catch(e => logger.warn('[KOTH] Startup evaluation failed', { error: e.message })), 10000);
 }
 
 module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, processTokenAirdrops, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, refreshAllFeeShares, start, getAiSelectedKoth, resetKothCache };

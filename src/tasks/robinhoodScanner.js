@@ -632,16 +632,30 @@ async function updateRobinhoodHolders(deps) {
                 );
                 const hadExistingHolders = (existingHolders?.count || 0) > 0;
 
+                // Deduplicate by owner (one wallet may hold multiple token accounts)
+                const deduped = new Map();
+                for (const h of holdersToInsert) {
+                    if (deduped.has(h.owner)) {
+                        const prev = deduped.get(h.owner);
+                        deduped.set(h.owner, { ...prev, balance: (BigInt(prev.balance) + BigInt(h.balance)).toString() });
+                    } else {
+                        deduped.set(h.owner, h);
+                    }
+                }
+                const uniqueHolders = [...deduped.values()]
+                    .sort((a, b) => { const d = BigInt(b.balance) - BigInt(a.balance); return d > 0n ? 1 : d < 0n ? -1 : 0; })
+                    .slice(0, TOP_HOLDERS_LIMIT);
+
                 // If we got holders from RPC, update the database atomically
-                if (holdersToInsert.length > 0) {
+                if (uniqueHolders.length > 0) {
                     const BATCH_SIZE = 50;
                     const now = Date.now();
 
                     await db.transaction(async (tx) => {
                         await tx.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [token.mint]);
 
-                        for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
-                            const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
+                        for (let i = 0; i < uniqueHolders.length; i += BATCH_SIZE) {
+                            const batch = uniqueHolders.slice(i, i + BATCH_SIZE);
                             const placeholders = batch.map((_, idx) => {
                                 const baseIdx = idx * 5;
                                 return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5})`;
@@ -666,7 +680,7 @@ async function updateRobinhoodHolders(deps) {
                         }
                     });
 
-                    totalHoldersUpdated += holdersToInsert.length;
+                    totalHoldersUpdated += uniqueHolders.length;
                     tokensWithHolders++;
                 } else if (!hadExistingHolders) {
                     // v25.65: New token with no holders yet - this is normal, log for visibility
@@ -1089,15 +1103,29 @@ async function scanSingleTokenHolders(deps, mint, ticker = null) {
             }
         }
 
-        if (holdersToInsert.length > 0) {
+        // Deduplicate by owner (one wallet may hold multiple token accounts)
+        const dedupedSingle = new Map();
+        for (const h of holdersToInsert) {
+            if (dedupedSingle.has(h.owner)) {
+                const prev = dedupedSingle.get(h.owner);
+                dedupedSingle.set(h.owner, { ...prev, balance: (BigInt(prev.balance) + BigInt(h.balance)).toString() });
+            } else {
+                dedupedSingle.set(h.owner, h);
+            }
+        }
+        const uniqueHoldersSingle = [...dedupedSingle.values()]
+            .sort((a, b) => { const d = BigInt(b.balance) - BigInt(a.balance); return d > 0n ? 1 : d < 0n ? -1 : 0; })
+            .slice(0, TOP_HOLDERS_LIMIT);
+
+        if (uniqueHoldersSingle.length > 0) {
             // Clear any existing holders (shouldn't be any for new tokens, but just in case)
             await db.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [mint]);
 
             const BATCH_SIZE = 50;
             const now = Date.now();
 
-            for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
-                const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
+            for (let i = 0; i < uniqueHoldersSingle.length; i += BATCH_SIZE) {
+                const batch = uniqueHoldersSingle.slice(i, i + BATCH_SIZE);
                 const placeholders = batch.map((_, idx) => {
                     const baseIdx = idx * 5;
                     return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5})`;
@@ -1121,7 +1149,7 @@ async function scanSingleTokenHolders(deps, mint, ticker = null) {
                 `, params);
             }
 
-            logger.info(`[Robinhood] Immediate scan for ${ticker || mint.slice(0, 8)}: found ${holdersToInsert.length} holders`);
+            logger.info(`[Robinhood] Immediate scan for ${ticker || mint.slice(0, 8)}: found ${uniqueHoldersSingle.length} holders`);
         } else {
             logger.debug(`[Robinhood] Immediate scan for ${ticker || mint.slice(0, 8)}: no holders found yet (token may be very new)`);
         }

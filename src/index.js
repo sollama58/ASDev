@@ -202,10 +202,12 @@ async function main() {
         frontendUrl: config.FRONTEND_URL
     });
 
+    // credentials:true is incompatible with wildcard origin (browsers reject it).
+    // Only enable credentials when we have explicit allowed origins.
     const corsOptions = {
         origin: corsOrigins,
         optionsSuccessStatus: 200,
-        credentials: true, // v24.0: Allow credentials for authenticated requests
+        credentials: corsOrigins !== '*' && corsOrigins !== false,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Key', 'X-Requested-With']
     };

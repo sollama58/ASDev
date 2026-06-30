@@ -389,8 +389,8 @@ function init(deps) {
                 // v27.0: Per-token pools total and central pool separately
                 tokenPoolsSol: ((cachedHealth.totalPendingAirdropLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
                 centralPoolSol: ((cachedHealth.centralPoolLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
-                // v27.1: Thresholds for UI display (central pool fixed 2.5 SOL; token pool from env)
-                centralPoolThresholdSol: 2.5,
+                // v27.1: Thresholds for UI display (central pool fixed 5 SOL; token pool from env)
+                centralPoolThresholdSol: 5.0,
                 tokenPoolThresholdSol: parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0,
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
                 // M-8 FIX: Expose deployment fee so frontend stays in sync with backend config
@@ -491,144 +491,95 @@ function init(deps) {
 
     // v13.0: Import token by mint address (admin only)
     // Fetches metadata from Helius/DexScreener and adds to tokens table
-    router.post('/admin/import-token', adminAuth, async (req, res) => {
+    // Extracted import logic — shared by single and bulk import endpoints
+    async function importTokenLogic(mint, isRobinhood) {
         const axios = require('axios');
         const { PublicKey } = require('@solana/web3.js');
 
-        try {
-            const { mint, isRobinhood } = req.body;
+        // Validate mint is a valid pubkey
+        try { new PublicKey(mint); } catch (e) { throw Object.assign(new Error('Invalid mint address'), { status: 400 }); }
 
-            if (!mint) {
-                return res.status(400).json({ error: 'Missing mint address' });
-            }
-
-            // Validate mint is a valid pubkey
+        // Fetch metadata from Helius DAS API
+        let heliusMeta = null;
+        if (config.HELIUS_API_KEY) {
             try {
-                new PublicKey(mint);
-            } catch (e) {
-                return res.status(400).json({ error: 'Invalid mint address' });
-            }
-
-            // Fetch metadata from Helius DAS API
-            let heliusMeta = null;
-            if (config.HELIUS_API_KEY) {
-                try {
-                    // v25.14 SECURITY: Move API key from URL to header
-                    const heliusRes = await axios.post(
-                        'https://mainnet.helius-rpc.com/',
-                        {
-                            jsonrpc: '2.0',
-                            id: '1',
-                            method: 'getAsset',
-                            params: { id: mint, displayOptions: { showFungible: true } }
-                        },
-                        {
-                            timeout: 5000,
-                            headers: { 'Authorization': `Bearer ${config.HELIUS_API_KEY}` }
-                        }
-                    );
-                    const asset = heliusRes.data?.result;
-                    if (asset) {
-                        const metadata = asset.content?.metadata || {};
-                        heliusMeta = {
-                            name: metadata.name || 'Unknown',
-                            ticker: metadata.symbol || 'UNKNOWN',
-                            image: imageUtils.extractHeliusImage(asset),
-                            description: metadata.description || '',
-                            twitter: asset.content?.links?.twitter || null,
-                            website: asset.content?.links?.external_url || null,
-                            creator: asset.creators?.[0]?.address || null,
-                            marketCap: asset.token_info?.price_info?.total_price || 0,
-                            complete: false
-                        };
-                    }
-                } catch (e) {
-                    logger.debug('Helius metadata fetch failed', { error: e.message });
-                }
-            }
-
-            // Fetch from DexScreener for additional data
-            let dexMeta = null;
-            try {
-                const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 5000 });
-                const pairs = dexRes.data?.pairs || [];
-                if (pairs.length > 0) {
-                    const pair = pairs[0];
-                    dexMeta = {
-                        name: pair.baseToken?.name,
-                        ticker: pair.baseToken?.symbol,
-                        image: pair.info?.imageUrl,
-                        marketCap: pair.fdv || pair.marketCap || 0,
-                        volume24h: pair.volume?.h24 || 0
+                const heliusRes = await axios.post(
+                    'https://mainnet.helius-rpc.com/',
+                    { jsonrpc: '2.0', id: '1', method: 'getAsset', params: { id: mint, displayOptions: { showFungible: true } } },
+                    { timeout: 5000, headers: { 'Authorization': `Bearer ${config.HELIUS_API_KEY}` } }
+                );
+                const asset = heliusRes.data?.result;
+                if (asset) {
+                    const metadata = asset.content?.metadata || {};
+                    heliusMeta = {
+                        name: metadata.name || 'Unknown', ticker: metadata.symbol || 'UNKNOWN',
+                        image: imageUtils.extractHeliusImage(asset), description: metadata.description || '',
+                        twitter: asset.content?.links?.twitter || null, website: asset.content?.links?.external_url || null,
+                        creator: asset.creators?.[0]?.address || null,
+                        marketCap: asset.token_info?.price_info?.total_price || 0, complete: false
                     };
                 }
-            } catch (e) {
-                logger.debug('DexScreener metadata fetch failed', { error: e.message });
+            } catch (e) { logger.debug('Helius metadata fetch failed', { error: e.message }); }
+        }
+
+        // Fetch from DexScreener for additional data
+        let dexMeta = null;
+        try {
+            const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 5000 });
+            const pairs = dexRes.data?.pairs || [];
+            if (pairs.length > 0) {
+                const pair = pairs[0];
+                dexMeta = { name: pair.baseToken?.name, ticker: pair.baseToken?.symbol, image: pair.info?.imageUrl,
+                    marketCap: pair.fdv || pair.marketCap || 0, volume24h: pair.volume?.h24 || 0 };
             }
+        } catch (e) { logger.debug('DexScreener metadata fetch failed', { error: e.message }); }
 
-            if (!heliusMeta && !dexMeta) {
-                return res.status(404).json({ error: 'Token not found on Helius or DexScreener' });
-            }
+        if (!heliusMeta && !dexMeta) throw Object.assign(new Error('Token not found on Helius or DexScreener'), { status: 404 });
 
-            const metadata = {
-                name: heliusMeta?.name || dexMeta?.name || 'Unknown Token',
-                ticker: heliusMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
-                image: heliusMeta?.image || dexMeta?.image || null,
-                description: heliusMeta?.description || '',
-                twitter: heliusMeta?.twitter || null,
-                website: heliusMeta?.website || null,
-                creator: heliusMeta?.creator || null,
-                marketCap: dexMeta?.marketCap || heliusMeta?.marketCap || 0,
-                volume24h: dexMeta?.volume24h || 0,
-                complete: heliusMeta?.complete || false
-            };
+        const metadata = {
+            name: heliusMeta?.name || dexMeta?.name || 'Unknown Token',
+            ticker: heliusMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
+            image: heliusMeta?.image || dexMeta?.image || null,
+            description: heliusMeta?.description || '',
+            twitter: heliusMeta?.twitter || null, website: heliusMeta?.website || null,
+            creator: heliusMeta?.creator || null,
+            marketCap: dexMeta?.marketCap || heliusMeta?.marketCap || 0,
+            volume24h: dexMeta?.volume24h || 0, complete: heliusMeta?.complete || false
+        };
 
-            // Determine which table to insert into
-            if (isRobinhood) {
-                // Insert into robinhood_tokens
-                await db.run(`
-                    INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive", "isGraduated")
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10)
-                    ON CONFLICT (mint) DO UPDATE SET
-                        ticker = EXCLUDED.ticker,
-                        name = EXCLUDED.name,
-                        image = COALESCE(EXCLUDED.image, robinhood_tokens.image),
-                        "marketCap" = EXCLUDED."marketCap",
-                        volume24h = EXCLUDED.volume24h
-                `, [mint, metadata.ticker, metadata.name, metadata.image, metadata.creator || devKeypair.publicKey.toString(), 10000, Date.now(), metadata.marketCap, metadata.volume24h, metadata.complete ? 1 : 0]);
+        if (isRobinhood) {
+            await db.run(`
+                INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive", "isGraduated")
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10)
+                ON CONFLICT (mint) DO UPDATE SET
+                    ticker = EXCLUDED.ticker, name = EXCLUDED.name,
+                    image = COALESCE(EXCLUDED.image, robinhood_tokens.image),
+                    "marketCap" = EXCLUDED."marketCap", volume24h = EXCLUDED.volume24h
+            `, [mint, metadata.ticker, metadata.name, metadata.image, metadata.creator || devKeypair.publicKey.toString(), 10000, Date.now(), metadata.marketCap, metadata.volume24h, metadata.complete ? 1 : 0]);
+            logger.info(`[Admin] Imported Robinhood token: ${metadata.ticker} (${mint})`);
+        } else {
+            await db.run(`
+                INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, image, "marketCap", volume24h, timestamp, complete)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (mint) DO UPDATE SET
+                    ticker = EXCLUDED.ticker, name = EXCLUDED.name,
+                    image = COALESCE(EXCLUDED.image, tokens.image),
+                    "marketCap" = EXCLUDED."marketCap", volume24h = EXCLUDED.volume24h
+            `, [metadata.creator || devKeypair.publicKey.toString(), mint, metadata.ticker, metadata.name, metadata.description, metadata.twitter, metadata.website, metadata.image, metadata.marketCap, metadata.volume24h, Date.now(), metadata.complete ? 1 : 0]);
+            logger.info(`[Admin] Imported launched token: ${metadata.ticker} (${mint})`);
+        }
+        return { mint, ticker: metadata.ticker, name: metadata.name, marketCap: metadata.marketCap, isRobinhood: !!isRobinhood };
+    }
 
-                logger.info(`[Admin] Imported Robinhood token: ${metadata.ticker} (${mint})`);
-            } else {
-                // Insert into tokens table
-                await db.run(`
-                    INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, image, "marketCap", volume24h, timestamp, complete)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                    ON CONFLICT (mint) DO UPDATE SET
-                        ticker = EXCLUDED.ticker,
-                        name = EXCLUDED.name,
-                        image = COALESCE(EXCLUDED.image, tokens.image),
-                        "marketCap" = EXCLUDED."marketCap",
-                        volume24h = EXCLUDED.volume24h
-                `, [metadata.creator || devKeypair.publicKey.toString(), mint, metadata.ticker, metadata.name, metadata.description, metadata.twitter, metadata.website, metadata.image, metadata.marketCap, metadata.volume24h, Date.now(), metadata.complete ? 1 : 0]);
-
-                logger.info(`[Admin] Imported launched token: ${metadata.ticker} (${mint})`);
-            }
-
-            res.json({
-                success: true,
-                token: {
-                    mint,
-                    ticker: metadata.ticker,
-                    name: metadata.name,
-                    marketCap: metadata.marketCap,
-                    isRobinhood: !!isRobinhood
-                }
-            });
-
+    router.post('/admin/import-token', adminAuth, async (req, res) => {
+        try {
+            const { mint, isRobinhood } = req.body;
+            if (!mint) return res.status(400).json({ error: 'Missing mint address' });
+            const token = await importTokenLogic(mint, isRobinhood);
+            res.json({ success: true, token });
         } catch (e) {
             logger.error('[Admin] Token import error', { error: e.message });
-            // v22.0: Don't expose internal error details
-            res.status(500).json({ error: 'Import failed' });
+            res.status(e.status || 500).json({ error: e.status ? e.message : 'Import failed' });
         }
     });
 
@@ -649,19 +600,11 @@ function init(deps) {
 
             for (const mint of mints) {
                 try {
-                    // Make internal request to single import
-                    const axios = require('axios');
-                    const internalRes = await axios.post(
-                        `http://localhost:${config.PORT}/api/admin/import-token`,
-                        { mint, isRobinhood },
-                        { headers: { 'x-admin-key': req.headers['x-admin-key'] }, timeout: 10000 }
-                    );
-                    results.success.push({ mint, ticker: internalRes.data.token?.ticker });
+                    const token = await importTokenLogic(mint, isRobinhood);
+                    results.success.push({ mint, ticker: token.ticker });
                 } catch (e) {
-                    results.failed.push({ mint, error: e.response?.data?.error || e.message });
+                    results.failed.push({ mint, error: e.message });
                 }
-
-                // Rate limit
                 await new Promise(r => setTimeout(r, 500));
             }
 

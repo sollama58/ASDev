@@ -76,6 +76,75 @@
             gap: 16px;
         }
 
+        .built-by {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 10px;
+            font-weight: 500;
+            color: var(--muted);
+            letter-spacing: 0.2px;
+            text-decoration: none;
+            opacity: 0.75;
+            transition: opacity 0.15s;
+            white-space: nowrap;
+            padding: 0 4px 0 8px;
+            border-left: 1px solid var(--border);
+        }
+        .built-by:hover { opacity: 1; color: var(--accent); }
+        .built-by-label { font-size: 9px; color: var(--muted); letter-spacing: 0.3px; }
+
+        .ecosystem-wrap {
+            position: relative;
+        }
+        .ecosystem-btn {
+            font-size: 13px;
+            color: var(--text2);
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-family: inherit;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            transition: color 0.15s;
+        }
+        .ecosystem-btn:hover { color: var(--accent); }
+        .ecosystem-btn svg { opacity: 0.6; transition: transform 0.15s; }
+        .ecosystem-wrap:focus-within .ecosystem-btn svg,
+        .ecosystem-wrap.open .ecosystem-btn svg { transform: rotate(180deg); opacity: 1; }
+
+        .ecosystem-menu {
+            display: none;
+            position: absolute;
+            top: calc(100% + 10px);
+            right: 0;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: 8px;
+            padding: 6px;
+            min-width: 190px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            z-index: 500;
+        }
+        .ecosystem-wrap.open .ecosystem-menu { display: block; }
+        .ecosystem-menu a {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 13px;
+            color: var(--text);
+            text-decoration: none;
+            transition: background 0.12s, color 0.12s;
+        }
+        .ecosystem-menu a:hover { background: var(--surface3); color: var(--accent); }
+        .ecosystem-menu a .eco-icon { font-size: 16px; line-height: 1; }
+        .ecosystem-menu a .eco-label { font-weight: 600; }
+        .ecosystem-menu a .eco-sub { font-size: 10px; color: var(--muted); display: block; }
+
         .about-link {
             font-size: 13px;
             color: var(--text2);
@@ -1426,11 +1495,37 @@
 
 <!-- ── Header ── -->
 <header>
-    <div class="logo">
-        <span class="logo-bull">🐂</span>
-        <span>Bullpad</span>
+    <div style="display:flex;align-items:center;gap:0">
+        <div class="logo">
+            <span class="logo-bull">🐂</span>
+            <span>Bullpad</span>
+        </div>
+        <a href="https://alonisthe.dev" target="_blank" rel="noopener" class="built-by">
+            <span class="built-by-label">built by</span>
+            <span style="font-size:11px;font-weight:700;letter-spacing:-0.2px">ASDFASDFA</span>
+        </a>
     </div>
     <div class="header-right">
+        <div class="ecosystem-wrap" id="eco-wrap">
+            <button class="ecosystem-btn" onclick="toggleEcosystem(event)">
+                Ecosystem
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="ecosystem-menu">
+                <a href="https://alonisthe.dev" target="_blank" rel="noopener">
+                    <span class="eco-icon">🔤</span>
+                    <span><span class="eco-label">ASDFASDFA</span><span class="eco-sub">alonisthe.dev</span></span>
+                </a>
+                <a href="https://holdex.live" target="_blank" rel="noopener">
+                    <span class="eco-icon">📊</span>
+                    <span><span class="eco-label">HolDEX</span><span class="eco-sub">holdex.live</span></span>
+                </a>
+                <a href="https://pump.fun/coin/9zB5wRarXMj86MymwLumSKA1Dx35zPqqKfcZtK1Spump" target="_blank" rel="noopener">
+                    <span class="eco-icon">🚀</span>
+                    <span><span class="eco-label">Pumpfun</span><span class="eco-sub">pump.fun</span></span>
+                </a>
+            </div>
+        </div>
         <button class="about-link" onclick="openAboutModal()">About</button>
         <div class="ws-indicator">
             <div class="ws-dot" id="ws-dot"></div>
@@ -1495,7 +1590,7 @@
                 </div>
                 <div class="cp-threshold-nums">
                     <strong id="cp-threshold-current">— SOL</strong>
-                    <span>threshold: <span id="cp-threshold-max">2.50</span> SOL</span>
+                    <span>threshold: <span id="cp-threshold-max">5.00</span> SOL</span>
                 </div>
             </div>
         </div>
@@ -1543,7 +1638,7 @@
                 </div>
                 <div class="lookup-calc-row">
                     <span class="lookup-calc-icon">⚖️</span>
-                    <span><strong>Central Pool</strong> — shared across all holders of all eligible tokens, weighted by the <strong>market cap</strong> of each token you hold. Higher-market-cap tokens contribute more to your score (0.5×–1.5× multiplier). <strong>ASDF Top 100</strong> and <strong>ANSEM Top 1000</strong> holders each receive <strong>2× weight</strong> (stackable to 4×). Fires when the central pool reaches 2.5 SOL.</span>
+                    <span><strong>Central Pool</strong> — shared across all holders of all eligible tokens, weighted by the <strong>market cap</strong> of each token you hold. Higher-market-cap tokens contribute more to your score (0.5×–1.5× multiplier). <strong>ASDF Top 100</strong> and <strong>ANSEM Top 1000</strong> holders each receive <strong>2× weight</strong> (stackable to 4×). Fires when the central pool reaches 5 SOL.</span>
                 </div>
                 <div class="lookup-calc-row">
                     <span class="lookup-calc-icon">➕</span>
@@ -1761,7 +1856,7 @@
                     <div class="about-step">
                         <div class="about-step-icon">⚖️</div>
                         <div class="about-step-text">
-                            <strong>Central Pool (shared):</strong> When the central pool reaches 2.5 SOL, 99% is distributed across all holders of all eligible tokens. The split is <em>market-cap-weighted</em> — tokens with higher market cap contribute more weight to your score.<br><br>
+                            <strong>Central Pool (shared):</strong> When the central pool reaches 5 SOL, 99% is distributed across all holders of all eligible tokens. The split is <em>market-cap-weighted</em> — tokens with higher market cap contribute more weight to your score.<br><br>
                             For each eligible token you hold:<br>
                             <code style="background:var(--surface3);padding:1px 5px;border-radius:3px;font-size:11px">score contribution = (your balance ÷ 1B supply) × market cap multiplier × ASDF bonus × ANSEM bonus</code><br><br>
                             The market cap multiplier ranges from <strong>0.5×</strong> (very low relative market cap) to <strong>1.5×</strong> (very high relative market cap). <strong>ASDF Top 100</strong> and <strong>ANSEM Top 1000</strong> holders each receive an additional <strong>2× bonus</strong> (stackable to 4×). Your final share is your total score divided by the sum of all users' scores.
@@ -1834,11 +1929,11 @@ let ws                    = null;
 let wsReconnTimer         = null;
 let verifiedToken         = null;
 let allTokensCache        = [];
-let centralPoolThreshold  = 2.5;   // SOL — updated from health
+let centralPoolThreshold  = 5.0;   // SOL — updated from health
 let tokenPoolThreshold    = 1.0;   // SOL — updated from health
 
-// Filter state — both off by default (hide deactivated + low vol)
-const filters = { showDeactivated: false, showLowVol: false };
+// Filter state — low vol shown by default so newly registered tokens are visible
+const filters = { showDeactivated: false, showLowVol: true };
 
 // ── Formatting ─────────────────────────────────────────────────────────────────
 const fmt = {
@@ -1881,6 +1976,18 @@ function esc(s) {
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Escape a URL for safe use in single-quoted HTML attribute JS strings (e.g. onerror='...')
+function escUrl(u) { return esc(u).replace(/'/g, '%27'); }
+
+// ── Ecosystem dropdown ─────────────────────────────────────────────────────────
+function toggleEcosystem(e) {
+    e.stopPropagation();
+    document.getElementById('eco-wrap').classList.toggle('open');
+}
+document.addEventListener('click', () => {
+    document.getElementById('eco-wrap')?.classList.remove('open');
+});
+
 // ── Modals ─────────────────────────────────────────────────────────────────────
 function openModal(id) {
     document.getElementById(id).classList.add('open');
@@ -1919,9 +2026,9 @@ function applyFilters() {
 
 function resetFilters() {
     filters.showDeactivated = false;
-    filters.showLowVol      = false;
+    filters.showLowVol      = true;
     document.getElementById('filter-deactivated').checked = false;
-    document.getElementById('filter-lowvol').checked      = false;
+    document.getElementById('filter-lowvol').checked      = true;
     updateFilterBtn();
     renderLeaderboardFromCache();
     closeModal('filter-modal');
@@ -2060,7 +2167,7 @@ async function openTokenModal(token) {
 
     const firstChar = esc((token.ticker || '?')[0]);
     const avatar = token.image
-        ? `<img class="token-detail-avatar" src="${esc(token.image)}" alt=""
+        ? `<img class="token-detail-avatar" src="${escUrl(token.image)}" alt=""
                 onerror="this.outerHTML='<div class=\\'token-detail-avatar-placeholder\\'>${firstChar}</div>'">`
         : `<div class="token-detail-avatar-placeholder">${firstChar}</div>`;
 
@@ -2125,9 +2232,10 @@ async function openTokenModal(token) {
             if (!r.ok) throw new Error(r.status);
             const d = await r.json();
             renderHolders(d);
-        } catch {
+        } catch (e) {
+            console.warn('[TokenModal] Holder fetch error:', e.message);
             document.getElementById('holder-list-body').innerHTML =
-                `<div class="no-holders-note">Holder data unavailable for this token.</div>`;
+                `<div class="no-holders-note">Holder data unavailable — ${esc(e.message)}.</div>`;
         }
     } else {
         document.getElementById('holder-list-body').innerHTML =
@@ -2185,9 +2293,18 @@ function renderHolders(data) {
 async function loadHealth() {
     try {
         const r = await fetch(`${BACKEND_URL}/api/health`);
-        if (!r.ok) return;
+        if (!r.ok) {
+            document.getElementById('pool-sol').textContent = 'unavailable';
+            return;
+        }
         applyHealth(await r.json());
-    } catch {}
+        // Clear any previous error state
+        const poolEl = document.getElementById('pool-sol');
+        if (poolEl && poolEl.textContent === 'unavailable') poolEl.textContent = '—';
+    } catch (e) {
+        document.getElementById('pool-sol').textContent = 'unavailable';
+        console.warn('[Health] Backend unreachable:', e.message);
+    }
 }
 
 function applyHealth(d) {
@@ -2414,7 +2531,7 @@ async function fetchAllTokens() {
 function buildTokenRow(t, i) {
     const firstChar = esc((t.ticker || '?')[0]);
     const avatar = t.image
-        ? `<img class="token-avatar" src="${esc(t.image)}" alt="" loading="lazy"
+        ? `<img class="token-avatar" src="${escUrl(t.image)}" alt="" loading="lazy"
                 onerror="this.outerHTML='<div class=\\'token-avatar-placeholder\\'>${firstChar}</div>'">`
         : `<div class="token-avatar-placeholder">${firstChar}</div>`;
 
@@ -2536,7 +2653,7 @@ function setMsg(html, type) {
 
 function showPreview(token) {
     const avatar = token.image
-        ? `<img class="preview-avatar" src="${esc(token.image)}" alt=""
+        ? `<img class="preview-avatar" src="${escUrl(token.image)}" alt=""
                 onerror="this.outerHTML='<div class=\\'preview-avatar-placeholder\\'>${esc((token.ticker||'?')[0])}</div>'">`
         : `<div class="preview-avatar-placeholder">${esc((token.ticker||'?')[0])}</div>`;
 

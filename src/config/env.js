@@ -5,6 +5,7 @@
 require('dotenv').config();
 const { Keypair } = require('@solana/web3.js');
 const bs58 = require('bs58');
+const crypto = require('crypto');
 
 // Environment validation
 const requiredEnvVars = ['DEV_WALLET_PRIVATE_KEY'];
@@ -42,8 +43,8 @@ const config = {
             : "https://api.mainnet-beta.solana.com";
     },
 
-    // Wallet — raw key is redacted after keypairs are built below; use config.devKeypair
-    DEV_WALLET_PRIVATE_KEY: process.env.DEV_WALLET_PRIVATE_KEY,
+    // Wallet — keypair is built below; raw key is never stored in config
+    DEV_WALLET_PRIVATE_KEY: '[REDACTED]',
 
     // Fees & Transactions
     PRIORITY_FEE_MICRO_LAMPORTS: 100000,
@@ -129,16 +130,21 @@ const config = {
     // PAGS (Pay-to-Twitter/X) Configuration
     PAGS_ENABLED: process.env.PAGS_ENABLED !== 'false', // Enabled by default
     PAGS_WALLET: process.env.PAGS_WALLET, // Public key of wallet that holds PAGS fees before claims
-    PAGS_WALLET_PRIVATE_KEY: process.env.PAGS_WALLET_PRIVATE_KEY, // redacted after keypair is built below; use config.pagsKeypair
+    PAGS_WALLET_PRIVATE_KEY: '[REDACTED]', // keypair built below; raw key never stored in config
     PAGS_MIN_CLAIM_SOL: parseFloat(process.env.PAGS_MIN_CLAIM_SOL) || 0.01, // Minimum claim amount
-    // SECURITY: Session secret MUST be set in production
+    // SECURITY: Session secret MUST be set in production; random fallback in dev
     PAGS_SESSION_SECRET: (() => {
         const secret = process.env.PAGS_SESSION_SECRET;
         if (!secret && process.env.NODE_ENV === 'production') {
             console.error('FATAL: PAGS_SESSION_SECRET must be set in production');
             process.exit(1);
         }
-        return secret || 'pags-session-secret-dev-only';
+        if (!secret) {
+            const generated = crypto.randomBytes(32).toString('hex');
+            console.warn('[Security] PAGS_SESSION_SECRET not set — using ephemeral random secret (sessions will not survive restart)');
+            return generated;
+        }
+        return secret;
     })(),
     TWITTER_OAUTH_CALLBACK_URL: process.env.TWITTER_OAUTH_CALLBACK_URL || '/api/auth/twitter/callback',
 
@@ -156,21 +162,24 @@ const config = {
     }
 };
 
-// Build keypairs once from raw keys, then redact the raw strings so they don't
-// linger in memory or appear in accidental config serializations.
-config.devKeypair = Keypair.fromSecretKey(bs58.decode(config.DEV_WALLET_PRIVATE_KEY));
-config.DEV_WALLET_PRIVATE_KEY = '[REDACTED]';
+// Build keypairs directly from process.env (raw keys never stored in config object).
+// Redact env vars immediately after use so they don't survive in memory dumps.
+config.devKeypair = Keypair.fromSecretKey(bs58.decode(process.env.DEV_WALLET_PRIVATE_KEY));
 process.env.DEV_WALLET_PRIVATE_KEY = '[REDACTED]';
 
 config.pagsKeypair = null;
-if (config.PAGS_WALLET_PRIVATE_KEY) {
+if (process.env.PAGS_WALLET_PRIVATE_KEY && process.env.PAGS_WALLET_PRIVATE_KEY !== '[REDACTED]') {
     try {
-        config.pagsKeypair = Keypair.fromSecretKey(bs58.decode(config.PAGS_WALLET_PRIVATE_KEY));
+        config.pagsKeypair = Keypair.fromSecretKey(bs58.decode(process.env.PAGS_WALLET_PRIVATE_KEY));
     } catch (e) {
         console.error('[PAGS] Failed to decode PAGS_WALLET_PRIVATE_KEY:', e.message);
     }
-    config.PAGS_WALLET_PRIVATE_KEY = '[REDACTED]';
     process.env.PAGS_WALLET_PRIVATE_KEY = '[REDACTED]';
+}
+
+// Warn at startup if admin key not configured
+if (!process.env.ADMIN_API_KEY) {
+    console.warn('[Security] ADMIN_API_KEY not set — all admin endpoints will return 403. Set this env var to enable admin access.');
 }
 
 module.exports = config;
