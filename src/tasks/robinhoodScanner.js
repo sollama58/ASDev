@@ -574,7 +574,7 @@ async function updateRobinhoodHolders(deps) {
                         const sortedAccounts = dasAccounts
                             .filter(acc => {
                                 const bal = new BN(acc.balance);
-                                return bal.gt(threshold) && acc.owner !== bondingCurvePDAStr;
+                                return bal.gt(threshold) && acc.owner !== bondingCurvePDAStr && acc.owner !== WALLETS.PUMP_LIQUIDITY;
                             })
                             .sort((a, b) => {
                                 const balA = new BN(a.balance);
@@ -1041,7 +1041,7 @@ async function scanSingleTokenHolders(deps, mint, ticker = null) {
                 const sortedAccounts = dasAccounts
                     .filter(acc => {
                         const bal = new BN(acc.balance);
-                        return bal.gt(threshold) && acc.owner !== bondingCurvePDAStr;
+                        return bal.gt(threshold) && acc.owner !== bondingCurvePDAStr && acc.owner !== WALLETS.PUMP_LIQUIDITY;
                     })
                     .sort((a, b) => {
                         const balA = new BN(a.balance);
@@ -1083,7 +1083,7 @@ async function scanSingleTokenHolders(deps, mint, ticker = null) {
                 if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
                 if (acc.amount.lte(threshold)) continue;
 
-                if (acc.owner !== bondingCurvePDAStr) {
+                if (acc.owner !== bondingCurvePDAStr && acc.owner !== WALLETS.PUMP_LIQUIDITY) {
                     holdersToInsert.push({ mint, owner: acc.owner, balance: acc.balance });
                 }
             }

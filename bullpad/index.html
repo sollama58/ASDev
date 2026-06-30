@@ -1675,6 +1675,8 @@ function renderLeaderboardFromCache() {
 function openAboutModal() { openModal('about-modal'); }
 
 // ── Recipients Modal ───────────────────────────────────────────────────────────
+const MIN_AIRDROP_SOL = 0.01;
+
 async function openRecipients() {
     const body    = document.getElementById('recipients-body');
     const summary = document.getElementById('recipients-summary');
@@ -1688,8 +1690,12 @@ async function openRecipients() {
         const data = await r.json();
         const users = data.users || [];
 
+        const eligible   = users.filter(u => parseFloat(u.expectedAirdrop || 0) >= MIN_AIRDROP_SOL);
+        const belowMin   = users.filter(u => parseFloat(u.expectedAirdrop || 0) <  MIN_AIRDROP_SOL);
+
         summary.innerHTML = `
-            <span><strong style="color:var(--text)">${users.length.toLocaleString()}</strong> recipients</span>
+            <span><strong style="color:var(--green)">${eligible.length.toLocaleString()}</strong> eligible</span>
+            <span><strong style="color:var(--muted)">${belowMin.length.toLocaleString()}</strong> below min</span>
             <span><strong style="color:var(--accent)">${parseFloat(data.totalPendingSol || 0).toFixed(4)} SOL</strong> total pending</span>
         `;
 
@@ -1698,27 +1704,35 @@ async function openRecipients() {
             return;
         }
 
+        const thStyle = 'padding:8px 12px;text-align:left;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:700;white-space:nowrap';
+        const thRStyle = thStyle.replace('left','right');
+
         const rows = users.map((u, i) => {
-            const short = u.pubkey.slice(0, 4) + '…' + u.pubkey.slice(-4);
-            const sol   = parseFloat(u.expectedAirdrop || 0).toFixed(4);
-            return `<tr>
-                <td style="padding:9px 16px;color:var(--muted);font-variant-numeric:tabular-nums">${i + 1}</td>
-                <td style="padding:9px 8px;font-family:'SF Mono','Fira Mono',monospace;font-size:12px">
+            const short   = u.pubkey.slice(0, 4) + '…' + u.pubkey.slice(-4);
+            const sol     = parseFloat(u.expectedAirdrop || 0);
+            const isElig  = sol >= MIN_AIRDROP_SOL;
+            const badge   = isElig
+                ? `<span style="margin-left:6px;font-size:10px;font-weight:700;color:var(--green);background:var(--green-dim);border:1px solid rgba(34,197,94,0.25);border-radius:4px;padding:1px 5px;letter-spacing:.5px">ELIGIBLE</span>`
+                : `<span style="margin-left:6px;font-size:10px;font-weight:700;color:var(--muted);background:var(--surface3);border:1px solid var(--border2);border-radius:4px;padding:1px 5px;letter-spacing:.5px">BELOW MIN</span>`;
+            const solColor = isElig ? 'var(--accent)' : 'var(--text2)';
+            return `<tr style="border-bottom:1px solid var(--border);opacity:${isElig ? 1 : 0.6}">
+                <td style="padding:8px 12px;color:var(--muted);font-variant-numeric:tabular-nums;font-size:12px">${i + 1}</td>
+                <td style="padding:8px 8px;font-family:'SF Mono','Fira Mono',monospace;font-size:12px;white-space:nowrap">
                     <a href="https://solscan.io/account/${esc(u.pubkey)}" target="_blank" rel="noopener"
-                       style="color:var(--text2);text-decoration:none" title="${esc(u.pubkey)}">${esc(short)}</a>
+                       style="color:var(--text2);text-decoration:none" title="${esc(u.pubkey)}">${esc(short)}</a>${badge}
                 </td>
-                <td style="padding:9px 8px;text-align:right;color:var(--text2);font-variant-numeric:tabular-nums">${u.positions || 0}</td>
-                <td style="padding:9px 16px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:var(--accent)">${sol} SOL</td>
+                <td style="padding:8px 8px;text-align:right;color:var(--text2);font-variant-numeric:tabular-nums;font-size:12px">${u.positions || 0}</td>
+                <td style="padding:8px 12px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:${solColor};font-size:13px">${sol.toFixed(4)} SOL</td>
             </tr>`;
         }).join('');
 
         body.innerHTML = `<table style="width:100%;border-collapse:collapse">
             <thead>
-                <tr style="border-bottom:1px solid var(--border)">
-                    <th style="padding:8px 16px;text-align:left;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:700">#</th>
-                    <th style="padding:8px 8px;text-align:left;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:700">Wallet</th>
-                    <th style="padding:8px 8px;text-align:right;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:700">Tokens</th>
-                    <th style="padding:8px 16px;text-align:right;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:700">Expected Airdrop</th>
+                <tr style="border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--surface)">
+                    <th style="${thStyle}">#</th>
+                    <th style="${thStyle}">Wallet</th>
+                    <th style="${thRStyle}">Tokens</th>
+                    <th style="${thRStyle}">Expected Airdrop</th>
                 </tr>
             </thead>
             <tbody style="font-size:13px">${rows}</tbody>
