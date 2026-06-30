@@ -13,7 +13,6 @@
 const logger = require('./logger');
 const postgres = require('./postgres');
 const solana = require('./solana');
-const vanity = require('./vanity');
 const pinata = require('./pinata');
 const redis = require('./redis');
 const pump = require('./pump');
@@ -40,7 +39,6 @@ module.exports = {
     database,
     postgres,
     solana,
-    vanity,
     pinata,
     redis,
     pump,

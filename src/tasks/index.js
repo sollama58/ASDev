@@ -19,7 +19,7 @@ const flywheel = require('./flywheel');
 const robinhoodScanner = require('./robinhoodScanner');
 // const pagsClaimProcessor = require('./pagsClaimProcessor'); // PAGS disabled
 const workers = require('./workers');
-const { vanity, logger } = require('../services');
+const { logger } = require('../services');
 const config = require('../config/env');
 
 // v25.14 ROBUSTNESS: Track intervals for graceful shutdown
@@ -53,11 +53,6 @@ function startAll(deps) {
     // v25.45: Start tiered metadata updater for frequent price updates
     // Top 10 tokens update every 1 minute, all tokens every 5 minutes
     metadataUpdater.start(deps);
-
-    // Start vanity pool auto-refill
-    if (config.VANITY_GRINDER_ENABLED && config.VANITY_GRINDER_URL) {
-        vanity.startAutoRefill();
-    }
 
     // Initialize deploy and social workers
     const deployWorker = workers.initDeployWorker(deps);

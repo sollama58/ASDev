@@ -416,8 +416,7 @@ function init(deps) {
         const services = {
             database: { status: 'unknown', latency: null },
             redis: { status: 'unknown', latency: null },
-            solana_rpc: { status: 'unknown', latency: null },
-            vanity_grinder: { status: 'disabled', latency: null }
+            solana_rpc: { status: 'unknown', latency: null }
         };
 
         // Check Database
@@ -450,22 +449,6 @@ function init(deps) {
             services.solana_rpc = { status: 'online', latency: Date.now() - start };
         } catch (e) {
             services.solana_rpc = { status: 'offline', error: e.message };
-        }
-
-        // Check Vanity Grinder (if enabled)
-        if (config.VANITY_GRINDER_ENABLED && config.VANITY_GRINDER_URL) {
-            try {
-                const axios = require('axios');
-                const start = Date.now();
-                const response = await axios.get(`${config.VANITY_GRINDER_URL}/health`, { timeout: 5000 });
-                services.vanity_grinder = {
-                    status: response.data?.status === 'ok' ? 'online' : 'degraded',
-                    latency: Date.now() - start,
-                    poolSize: response.data?.poolSize
-                };
-            } catch (e) {
-                services.vanity_grinder = { status: 'offline', error: e.message };
-            }
         }
 
         const allOnline = Object.values(services).every(s => s.status === 'online' || s.status === 'disabled' || s.status === 'not_configured');

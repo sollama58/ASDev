@@ -110,14 +110,6 @@ const config = {
     CLOUDFLARE_ACCOUNT_HASH: process.env.CLOUDFLARE_ACCOUNT_HASH, // For imagedelivery.net URLs
     CLOUDFLARE_IMAGES_TOKEN: process.env.CLOUDFLARE_IMAGES_TOKEN,
 
-    // Vanity Grinder
-    VANITY_GRINDER_ENABLED: process.env.VANITY_GRINDER_ENABLED === 'true',
-    VANITY_GRINDER_URL: process.env.VANITY_GRINDER_URL,
-    VANITY_GRINDER_API_KEY: process.env.VANITY_GRINDER_API_KEY,
-    VANITY_POOL_MIN_SIZE: 10,
-    VANITY_POOL_REFILL_COUNT: 20,
-    VANITY_POOL_CHECK_INTERVAL: 30000,
-
     // Twitter OAuth 1.0a (for bot posting)
     TWITTER_API_KEY: process.env.TWITTER_API_KEY,
     TWITTER_API_SECRET: process.env.TWITTER_API_SECRET,

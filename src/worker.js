@@ -9,7 +9,7 @@
  * Environment Variables:
  *   SERVER_MODE=worker    - Required to start in worker mode
  *   WORKER_TASKS          - Comma-separated list of tasks to run (optional, defaults to all)
- *                           Options: holders,metadata,robinhood,asdf,flywheel,vanity
+ *                           Options: holders,metadata,robinhood,asdf,flywheel
  *
  * Usage:
  *   SERVER_MODE=worker node src/worker.js
@@ -38,7 +38,7 @@ if (process.env.SERVER_MODE !== 'worker') {
 }
 
 // Parse which tasks to run (defaults to all)
-const TASK_OPTIONS = ['holders', 'metadata', 'robinhood', 'asdf', 'flywheel', 'vanity'];
+const TASK_OPTIONS = ['holders', 'metadata', 'robinhood', 'asdf', 'flywheel'];
 const enabledTasks = process.env.WORKER_TASKS
     ? process.env.WORKER_TASKS.split(',').map(t => t.trim().toLowerCase())
     : TASK_OPTIONS;
@@ -200,7 +200,6 @@ async function startWorker() {
     };
 
     // Start selected background tasks
-    const { vanity } = require('./services');
     const workers = tasks.workers;
 
     if (enabledTasks.includes('holders')) {
@@ -226,11 +225,6 @@ async function startWorker() {
     if (enabledTasks.includes('flywheel')) {
         tasks.flywheel.start(deps);
         logger.info('[Worker] Flywheel started');
-    }
-
-    if (enabledTasks.includes('vanity') && config.VANITY_GRINDER_ENABLED && config.VANITY_GRINDER_URL) {
-        vanity.startAutoRefill();
-        logger.info('[Worker] Vanity pool auto-refill started');
     }
 
     logger.info(`Worker ${config.VERSION} running with ${enabledTasks.length} tasks`);

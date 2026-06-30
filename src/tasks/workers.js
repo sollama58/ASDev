@@ -10,7 +10,7 @@ const { getAssociatedTokenAddress, createCloseAccountInstruction, ASSOCIATED_TOK
 const axios = require('axios');
 const config = require('../config/env');
 const { PROGRAMS, WALLETS, TOKENS } = require('../config/constants');
-const { logger, redis, pump, vanity, solana, twitter, imageUtils, pinata } = require('../services');
+const { logger, redis, pump, solana, twitter, imageUtils, pinata } = require('../services');
 
 /**
  * Initialize deploy worker
@@ -29,9 +29,8 @@ function initDeployWorker(deps) {
      * Reusable for both real tokens and anti-bundling duds
      */
     async function launchTokenOnChain({ tokenName, tokenTicker, tokenMetadataUri, useMayhemMode, isDud = false }) {
-        // Use random keypair for dud tokens, vanity keypair for real tokens
         const { Keypair } = require('@solana/web3.js');
-        const mintKeypair = isDud ? Keypair.generate() : await vanity.getMintKeypair();
+        const mintKeypair = Keypair.generate();
         const mint = mintKeypair.publicKey;
         const creator = devKeypair.publicKey;
 

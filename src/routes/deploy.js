@@ -8,7 +8,7 @@
 const express = require('express');
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const config = require('../config/env');
-const { pinata, vanity, redis, logger, sanitizer, imageUtils } = require('../services');
+const { pinata, redis, logger, sanitizer, imageUtils } = require('../services');
 const { isValidPubkey } = require('./solana');
 
 const router = express.Router();
@@ -45,17 +45,6 @@ function isValidImageUrl(url) {
  */
 function init(deps) {
     const { connection, devKeypair, db, addFees } = deps;
-
-    // Test vanity grinder
-    router.get('/test-vanity', async (req, res) => {
-        try {
-            const keypair = await vanity.getMintKeypair();
-            res.json({ success: true, address: keypair.publicKey.toBase58() });
-        } catch (e) {
-            logger.error("Vanity grinder error", { error: e.message });
-            res.status(500).json({ error: "Vanity grinder unavailable" }); // SECURITY: Generic error
-        }
-    });
 
     // Prepare metadata
     // v24.0: Added input sanitization for all user-provided content

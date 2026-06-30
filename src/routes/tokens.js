@@ -78,16 +78,17 @@ function init(deps) {
             const offset = Math.min(Math.max(0, rawOffset), 50000); // Min 0, Max 50000
 
             // Cache per page (limit + offset combo)
-            const cacheKey = `all_launches_v25_${limit}_${offset}`;
+            const cacheKey = `all_launches_v2589_${limit}_${offset}`;
             const { rows, total } = await redis.smartCache(cacheKey, 15, async () => {
                 // v25.0: UNION query to get both platform tokens and robinhood tokens
+                // v25.89: Include ALL robinhood_tokens regardless of isActive so registered tokens
+                //         are always visible; inactive ones are shown with a deactivated badge
                 const combinedQuery = `
-                    SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'platform' as source
+                    SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete, 'platform' as source, 1 as "isActive"
                     FROM tokens
                     UNION ALL
-                    SELECT mint, "creatorPubkey" as "userPubkey", name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source
+                    SELECT mint, "creatorPubkey" as "userPubkey", name, ticker, image, NULL as "metadataUri", "marketCap", volume24h, "isGraduated" as complete, 'robinhood' as source, "isActive"
                     FROM robinhood_tokens
-                    WHERE "isActive" = 1
                     ORDER BY volume24h DESC
                     LIMIT $1 OFFSET $2
                 `;
@@ -95,7 +96,7 @@ function init(deps) {
 
                 // Get total count from both tables
                 const platformCount = await db.get('SELECT COUNT(*) as count FROM tokens');
-                const robinhoodCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
+                const robinhoodCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens');
                 const total = parseInt(platformCount?.count || 0) + parseInt(robinhoodCount?.count || 0);
 
                 // M-2 FIX: Fetch fallback images INSIDE the cache so N+1 HTTP calls happen at most once per TTL,
@@ -135,7 +136,9 @@ function init(deps) {
                 // v18.0: Eligibility based on volume threshold
                 isEligible: (r.volume24h || 0) >= MIN_VOLUME_USD,
                 // v25.0: Include source to differentiate token types
-                source: r.source || 'platform'
+                source: r.source || 'platform',
+                // v25.89: Whether token is active (fee sharing confirmed on-chain)
+                isActive: r.isActive !== 0
             }));
             res.json({
                 tokens: allLaunches,

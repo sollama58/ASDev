@@ -346,6 +346,12 @@
             border: 1px solid var(--border2);
         }
 
+        .badge-red {
+            background: var(--red-dim);
+            color: var(--red);
+            border: 1px solid rgba(239,68,68,0.2);
+        }
+
         .sol-amount {
             color: var(--accent);
             font-weight: 600;
@@ -825,9 +831,11 @@ async function loadLeaderboard(showSpinner = false) {
                         onerror="this.outerHTML='<div class=\\'token-avatar-placeholder\\'>${firstChar}</div>'">`
                 : `<div class="token-avatar-placeholder">${firstChar}</div>`;
 
-            const statusBadge = t.isEligible
-                ? `<span class="badge badge-green">ELIGIBLE</span>`
-                : `<span class="badge badge-muted">LOW VOL</span>`;
+            const statusBadge = t.isActive === false
+                ? `<span class="badge badge-red">DEACTIVATED</span>`
+                : t.isEligible
+                    ? `<span class="badge badge-green">ELIGIBLE</span>`
+                    : `<span class="badge badge-muted">LOW VOL</span>`;
 
             const pending = parseFloat(t.pendingAirdropSol) > 0
                 ? `<span class="sol-amount">◎ ${parseFloat(t.pendingAirdropSol).toFixed(4)}</span>`
