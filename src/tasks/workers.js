@@ -1070,6 +1070,15 @@ function initAsdfSyncWorker(deps) {
 function initAnsemSyncWorker(deps) {
     const { fetchTokenAccountsHeliusDAS } = require('../services/heliusDAS');
 
+    // Pre-compute ANSEM LP exclusion addresses once at worker init (fixed mint)
+    const ansemMintPubkey = new PublicKey(TOKENS.ANSEM);
+    const [ansemBondingCurve] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bonding-curve"), ansemMintPubkey.toBuffer()],
+        PROGRAMS.PUMP
+    );
+    const ANSEM_BONDING_CURVE_STR = ansemBondingCurve.toString();
+    const ANSEM_AMM_POOL_STR = pump.getPumpAmmPDAs(ansemMintPubkey).pool.toString();
+
     async function updateAnsemHolders() {
         try {
             const mint = TOKENS.ANSEM;
@@ -1085,9 +1094,13 @@ function initAnsemSyncWorker(deps) {
                 return;
             }
 
-            // Sort by balance descending and take top 1000 owners
+            // Sort by balance descending and take top 1000 owners, excluding LP accounts
             const sorted = accounts
-                .filter(a => a.owner && BigInt(a.balance || '0') > 0n)
+                .filter(a => a.owner
+                    && BigInt(a.balance || '0') > 0n
+                    && a.owner !== WALLETS.PUMP_LIQUIDITY
+                    && a.owner !== ANSEM_BONDING_CURVE_STR
+                    && a.owner !== ANSEM_AMM_POOL_STR)
                 .sort((a, b) => {
                     const diff = BigInt(b.balance || '0') - BigInt(a.balance || '0');
                     return diff > 0n ? 1 : diff < 0n ? -1 : 0;

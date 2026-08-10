@@ -28,6 +28,24 @@ const MAX_PRICE_USD = 1000000; // $1M per token max
 const MAX_MARKET_CAP_USD = 100000000000; // $100B max market cap
 const MAX_VOLUME_USD = 10000000000; // $10B max 24h volume
 
+// Throttle Helius fallback for tokens that chronically miss DexScreener (dead/delisted).
+// After CHRONIC_MISS_THRESHOLD consecutive misses, only retry Helius once per hour.
+const dexMissCount = new Map(); // mint -> consecutive miss count
+const lastHeliusFallbackAt = new Map(); // mint -> timestamp
+const CHRONIC_MISS_THRESHOLD = 3;
+const CHRONIC_MISS_RECHECK_MS = 60 * 60 * 1000; // 1 hour
+
+// Prune stale miss-tracking entries for tokens that haven't been seen in 24h
+setInterval(() => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const [mint, ts] of lastHeliusFallbackAt) {
+        if (ts < cutoff) {
+            dexMissCount.delete(mint);
+            lastHeliusFallbackAt.delete(mint);
+        }
+    }
+}, 6 * 60 * 60 * 1000);
+
 /**
  * v25.22 SECURITY: Validate and sanitize price/market data
  * Returns 0 for invalid values (NaN, Infinity, negative, or exceeds bounds)
@@ -365,7 +383,8 @@ async function updateAllTokenPrices(deps) {
                 const table = t.table;
 
                 if (data) {
-                    // Token has data from DexScreener
+                    // Token has DexScreener data — reset chronic-miss counter
+                    dexMissCount.delete(t.mint);
                     await db.run(
                         `UPDATE ${table} SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4 WHERE mint = $5`,
                         [data.volume24h, data.marketCap, data.priceUsd, Date.now(), t.mint]
@@ -373,7 +392,7 @@ async function updateAllTokenPrices(deps) {
                     totalUpdated++;
                 } else {
                     // v25.65 BUGFIX: Token has NO data from DexScreener - set volume to 0
-                    // This ensures 0 volume is properly reflected (was causing stale data issue)
+                    dexMissCount.set(t.mint, (dexMissCount.get(t.mint) || 0) + 1);
                     await db.run(
                         `UPDATE ${table} SET volume24h = 0, "lastUpdated" = $1 WHERE mint = $2`,
                         [Date.now(), t.mint]
@@ -384,17 +403,39 @@ async function updateAllTokenPrices(deps) {
                 }
             }
 
-            // Fallback to Helius for DexScreener misses (only fetch market cap, not volume)
+            // Fallback to Helius for DexScreener misses — throttle chronic misses (dead/delisted tokens)
+            // to avoid burning Helius credits every 5 min for tokens that will never have DexScreener data.
             if (misses.length > 0) {
-                const heliusData = await fetchHeliusMarketDataBatch(misses);
-                for (const t of chunk) {
-                    if (!updates.has(t.mint)) {  // Only process if DexScreener didn't have data
-                        const data = heliusData.get(t.mint);
-                        if (data && data.marketCap > 0) {
-                            await db.run(
-                                `UPDATE ${t.table} SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
-                                [data.marketCap, Date.now(), t.mint]
-                            );
+                const fallbackNow = Date.now();
+                const freshMisses = misses.filter(mint => {
+                    const missCount = dexMissCount.get(mint) || 0;
+                    if (missCount > CHRONIC_MISS_THRESHOLD) {
+                        const lastCall = lastHeliusFallbackAt.get(mint) || 0;
+                        return (fallbackNow - lastCall) > CHRONIC_MISS_RECHECK_MS;
+                    }
+                    return true;
+                });
+
+                if (freshMisses.length > 0) {
+                    const heliusData = await fetchHeliusMarketDataBatch(freshMisses);
+                    for (const mint of freshMisses) {
+                        lastHeliusFallbackAt.set(mint, fallbackNow);
+                    }
+                    for (const t of chunk) {
+                        if (!updates.has(t.mint) && freshMisses.includes(t.mint)) {
+                            const data = heliusData.get(t.mint);
+                            if (data) {
+                                if (data.marketCap > 0) {
+                                    await db.run(
+                                        `UPDATE ${t.table} SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
+                                        [data.marketCap, Date.now(), t.mint]
+                                    );
+                                }
+                                // Helius has data — reset miss count so token gets normal treatment
+                                if (data.marketCap > 0 || data.image) {
+                                    dexMissCount.delete(t.mint);
+                                }
+                            }
                         }
                     }
                 }

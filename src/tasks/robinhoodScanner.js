@@ -27,6 +27,11 @@ const lastReverifiedAt = new Map(); // mint -> timestamp
 const ZERO_PENDING_COOLDOWN_MS = 30 * 60 * 1000;
 const lastZeroPendingAt = new Map(); // mint -> timestamp
 
+// Token program cache: avoids querying the wrong SPL program after first successful scan
+const rhTokenProgramCache = new Map(); // mint -> 'TOKEN' | 'TOKEN_2022' | 'BOTH'
+const rhTokenProgramConfirmedAt = new Map(); // mint -> timestamp
+const RH_PROGRAM_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
+
 // H-2: Periodic cleanup for cooldown Maps to prevent unbounded growth
 setInterval(() => {
     const now = Date.now();
@@ -35,6 +40,12 @@ setInterval(() => {
     }
     for (const [mint, ts] of lastZeroPendingAt) {
         if (now - ts > ZERO_PENDING_COOLDOWN_MS * 2) lastZeroPendingAt.delete(mint);
+    }
+    for (const [mint, ts] of rhTokenProgramConfirmedAt) {
+        if (now - ts > RH_PROGRAM_CACHE_TTL * 3) {
+            rhTokenProgramCache.delete(mint);
+            rhTokenProgramConfirmedAt.delete(mint);
+        }
     }
 }, 60 * 60 * 1000); // Run hourly
 
@@ -368,29 +379,30 @@ async function updateRobinhoodTokenMetadata(deps) {
             return;
         }
 
+        // Market data (volume24h, marketCap, priceUsd) is handled by updateAllTokenPrices every 5 min.
+        // This function only fills missing ticker/name/image — skip tokens that already have all three.
         logger.info(`[Robinhood] Updating metadata for ${tokens.length} tokens...`);
-        let tokensWithVolume = 0;
         let tokensUpdated = 0;
 
         for (const token of tokens) {
             try {
-                // v25.64: ALWAYS fetch DexScreener data for market stats (volume, marketcap)
-                // This is critical for points eligibility (requires volume24h >= $100)
-                const dexMeta = await fetchDexScreenerMetadata(token.mint);
+                const needsMetadata = !token.ticker || token.ticker === 'UNKNOWN' || !token.name || token.name === 'Unknown Token';
+                const needsImage = !token.image || token.image === '';
 
-                // If token is missing metadata (image/name/ticker), try other sources
-                // Note: Check for both null/undefined AND empty string for image
-                const needsMetadata = !token.image || token.image === '' || token.ticker === 'UNKNOWN' || token.name === 'Unknown Token';
-                const needsImage = !token.image || token.image === '' || !dexMeta?.image;
+                if (!needsMetadata && !needsImage) {
+                    continue; // Already has complete metadata
+                }
+
+                // Try DexScreener first — has ticker/name/image for most listed tokens
+                const dexMeta = await fetchDexScreenerMetadata(token.mint);
 
                 let geckoMeta = null;
                 let heliusMeta = null;
                 let pumpMeta = null;
 
-                // Try GeckoTerminal if we need an image or DexScreener failed
-                if (needsImage) {
+                // Try GeckoTerminal if still need image after DexScreener
+                if (needsImage && !dexMeta?.image) {
                     geckoMeta = await fetchGeckoTerminalMetadata(token.mint);
-                    // If GeckoTerminal doesn't have the image, try the /info endpoint
                     if (!geckoMeta?.image) {
                         const geckoInfo = await fetchGeckoTerminalTokenInfo(token.mint);
                         if (geckoInfo?.image) {
@@ -400,50 +412,40 @@ async function updateRobinhoodTokenMetadata(deps) {
                     }
                 }
 
-                // Try Helius and Pump.fun if we still need metadata
-                if (needsMetadata && !geckoMeta?.image) {
+                // Try Helius and Pump.fun if still need metadata or image.
+                // Treat DexScreener's sentinel values ('UNKNOWN' ticker, 'Unknown' name) as "still missing".
+                const hasRealTicker = (t) => t && t !== 'UNKNOWN';
+                const hasRealName = (n) => n && n !== 'Unknown' && n !== 'Unknown Token';
+                const stillNeedsMetadata = needsMetadata && !hasRealTicker(dexMeta?.ticker) && !hasRealTicker(geckoMeta?.ticker);
+                const stillNeedsImage = needsImage && !dexMeta?.image && !geckoMeta?.image;
+                if (stillNeedsMetadata || stillNeedsImage) {
                     heliusMeta = await fetchHeliusMetadata(token.mint);
-                    if (!heliusMeta?.image) {
+                    if (stillNeedsImage && !heliusMeta?.image) {
                         pumpMeta = await fetchPumpFunMetadata(token.mint);
                     }
                 }
 
-                // Build updates with best available data
-                // For market data: prefer DexScreener (most accurate for trading)
-                // For metadata (name/ticker/image): use first non-null source
-                const updates = {
-                    volume24h: dexMeta?.volume24h || geckoMeta?.volume24h || token.volume24h || 0,
-                    marketCap: dexMeta?.marketCap || geckoMeta?.marketCap || pumpMeta?.marketCap || heliusMeta?.marketCap || token.marketCap || 0,
-                    ticker: dexMeta?.ticker || geckoMeta?.ticker || heliusMeta?.ticker || pumpMeta?.ticker || token.ticker || 'UNKNOWN',
-                    name: dexMeta?.name || geckoMeta?.name || heliusMeta?.name || pumpMeta?.name || token.name || 'Unknown Token',
-                    image: dexMeta?.image || geckoMeta?.image || heliusMeta?.image || pumpMeta?.image || token.image || null
-                };
+                // Use first real (non-sentinel) value from each source
+                const ticker = [dexMeta, geckoMeta, heliusMeta, pumpMeta].map(m => m?.ticker).find(hasRealTicker) || null;
+                const name = [dexMeta, geckoMeta, heliusMeta, pumpMeta].map(m => m?.name).find(hasRealName) || null;
+                const image = dexMeta?.image || geckoMeta?.image || heliusMeta?.image || pumpMeta?.image || null;
 
-                // Track volume stats
-                if (updates.volume24h >= 100) {
-                    tokensWithVolume++;
-                }
+                const hasMetadataUpdate = (ticker && ticker !== token.ticker) ||
+                                          (name && name !== token.name);
+                const hasImageUpdate = image && image !== '' && image !== token.image;
 
-                // v25.64: Always update if we have new volume/marketcap data, even if same value
-                // This ensures the data is always fresh from the source
-                const hasNewMarketData = dexMeta?.volume24h !== undefined || dexMeta?.marketCap !== undefined;
-                const hasChanges = hasNewMarketData ||
-                                   updates.volume24h !== token.volume24h ||
-                                   updates.marketCap !== token.marketCap ||
-                                   updates.ticker !== token.ticker ||
-                                   updates.name !== token.name ||
-                                   (updates.image && updates.image !== token.image);
-
-                if (hasChanges) {
-                    // FIX: Use NULLIF to convert empty string to NULL, so COALESCE preserves existing image
-                    // This prevents empty strings from APIs overwriting valid images
+                if (hasMetadataUpdate || hasImageUpdate) {
                     await db.run(
-                        'UPDATE robinhood_tokens SET volume24h = $1, "marketCap" = $2, ticker = $3, name = $4, image = COALESCE(NULLIF($5, \'\'), image) WHERE id = $6',
-                        [updates.volume24h, updates.marketCap, updates.ticker, updates.name, updates.image, token.id]
+                        `UPDATE robinhood_tokens SET
+                            ticker = CASE WHEN $1 IS NOT NULL AND $1 != 'UNKNOWN' THEN $1 ELSE ticker END,
+                            name = CASE WHEN $2 IS NOT NULL AND $2 != 'Unknown Token' AND $2 != 'Unknown' THEN $2 ELSE name END,
+                            image = COALESCE(NULLIF($3, ''), image)
+                        WHERE id = $4`,
+                        [ticker, name, image, token.id]
                     );
                     tokensUpdated++;
 
-                    if (updates.image && !token.image) {
+                    if (hasImageUpdate && !token.image) {
                         const source = dexMeta?.image ? 'DexScreener' :
                                       geckoMeta?.image ? 'GeckoTerminal' :
                                       heliusMeta?.image ? 'Helius' :
@@ -452,7 +454,6 @@ async function updateRobinhoodTokenMetadata(deps) {
                     }
                 }
 
-                // Rate limit API calls (slightly increased due to more API calls)
                 await new Promise(r => setTimeout(r, 350));
 
             } catch (e) {
@@ -460,7 +461,7 @@ async function updateRobinhoodTokenMetadata(deps) {
             }
         }
 
-        logger.info(`[Robinhood] Metadata update complete: ${tokensUpdated} updated, ${tokensWithVolume} have volume >= $100`);
+        logger.info(`[Robinhood] Metadata update complete: ${tokensUpdated} updated (${tokens.length} total, skipped tokens with complete metadata)`);
     } catch (e) {
         logger.error('[Robinhood] Metadata update error', { error: e.message });
     }
@@ -504,6 +505,8 @@ async function updateRobinhoodHolders(deps) {
 
                 const holdersToInsert = [];
                 const bondingCurvePDAStr = bondingCurvePDA.toString();
+                // Exclude the Pump AMM pool PDA — after graduation, pool holds tokens as LP
+                const ammPoolStr = pump.getPumpAmmPDAs(tokenMintPublicKey).pool.toString();
                 const threshold = new BN(1000000);
 
                 // v25.66: Try getProgramAccounts first, fallback to Helius DAS API for large tokens
@@ -541,17 +544,33 @@ async function updateRobinhoodHolders(deps) {
                     }
                 }
 
-                const results = await Promise.allSettled([
-                    queryWithRetry(PROGRAMS.TOKEN, 'TOKEN'),
-                    queryWithRetry(PROGRAMS.TOKEN_2022, 'TOKEN_2022')
-                ]);
+                // Use program cache to skip querying the wrong SPL program (~50% RPC savings once warmed)
+                const rhCachedProg = rhTokenProgramCache.get(token.mint);
+                const rhCacheAge = Date.now() - (rhTokenProgramConfirmedAt.get(token.mint) || 0);
+                const rhValidCache = rhCachedProg && rhCacheAge < RH_PROGRAM_CACHE_TTL;
+                const rhQueryPrograms = [];
+                if (!rhValidCache || rhCachedProg === 'TOKEN' || rhCachedProg === 'BOTH') rhQueryPrograms.push('TOKEN');
+                if (!rhValidCache || rhCachedProg === 'TOKEN_2022' || rhCachedProg === 'BOTH') rhQueryPrograms.push('TOKEN_2022');
 
-                tokenAccounts = results[0].status === 'fulfilled' ? results[0].value : [];
-                token2022Accounts = results[1].status === 'fulfilled' ? results[1].value : [];
+                const rhRawResults = await Promise.allSettled(
+                    rhQueryPrograms.map(prog => queryWithRetry(prog === 'TOKEN' ? PROGRAMS.TOKEN : PROGRAMS.TOKEN_2022, prog))
+                );
 
-                // Check for "too many accounts" errors - use Helius DAS API fallback
-                const tooManyToken = results[0].status === 'rejected' && (results[0].reason?.message?.includes('Too many accounts') || results[0].reason?.message?.includes('too many'));
-                const tooManyToken2022 = results[1].status === 'rejected' && (results[1].reason?.message?.includes('Too many accounts') || results[1].reason?.message?.includes('too many'));
+                const getRhResult = (prog) => {
+                    const idx = rhQueryPrograms.indexOf(prog);
+                    if (idx === -1) return { accounts: [], rejected: false, reason: null };
+                    const r = rhRawResults[idx];
+                    return { accounts: r.status === 'fulfilled' ? r.value : [], rejected: r.status === 'rejected', reason: r.reason };
+                };
+                const rhTokenRes = getRhResult('TOKEN');
+                const rhT2022Res = getRhResult('TOKEN_2022');
+                tokenAccounts = rhTokenRes.accounts;
+                token2022Accounts = rhT2022Res.accounts;
+
+                const rhIsTooMany = (r) => r.rejected && (r.reason?.message?.includes('Too many accounts') || r.reason?.message?.includes('too many'));
+                const tooManyToken = rhIsTooMany(rhTokenRes);
+                const tooManyToken2022 = rhIsTooMany(rhT2022Res);
+                const allQueriesFailed = rhQueryPrograms.every((_, i) => rhRawResults[i].status === 'rejected');
 
                 if (tooManyToken || tooManyToken2022) {
                     logger.debug(`[Robinhood] ${token.ticker || token.mint.slice(0, 8)} has too many holders, using Helius DAS API`);
@@ -559,15 +578,23 @@ async function updateRobinhoodHolders(deps) {
                     tokensUsedFallback++;
                     tokenAccounts = [];
                     token2022Accounts = [];
-                } else if (results[0].status === 'rejected' && results[1].status === 'rejected') {
-                    // Both failed (non-"too many") - skip token
-                    logger.warn(`[Robinhood] RPC failed for ${token.ticker || token.mint.slice(0, 8)}: TOKEN=${results[0].reason?.message}, TOKEN_2022=${results[1].reason?.message}`);
+                } else if (allQueriesFailed) {
+                    logger.warn(`[Robinhood] RPC failed for ${token.ticker || token.mint.slice(0, 8)}: TOKEN=${rhTokenRes.reason?.message}, TOKEN_2022=${rhT2022Res.reason?.message}`);
                     rpcFailed = true;
                     tokensSkippedRpcFail++;
                 } else {
-                    // At least one succeeded - log the failure for visibility
-                    if (results[0].status === 'rejected') logger.debug(`[Robinhood] TOKEN query failed for ${token.ticker || token.mint.slice(0, 8)}: ${results[0].reason?.message}`);
-                    if (results[1].status === 'rejected') logger.debug(`[Robinhood] TOKEN_2022 query failed for ${token.ticker || token.mint.slice(0, 8)}: ${results[1].reason?.message}`);
+                    if (rhTokenRes.rejected) logger.debug(`[Robinhood] TOKEN query failed for ${token.ticker || token.mint.slice(0, 8)}: ${rhTokenRes.reason?.message}`);
+                    if (rhT2022Res.rejected) logger.debug(`[Robinhood] TOKEN_2022 query failed for ${token.ticker || token.mint.slice(0, 8)}: ${rhT2022Res.reason?.message}`);
+                    // Update program cache only when querying both programs AND both returned without error.
+                    // Transient RPC failures must not poison the cache (e.g. TOKEN fails → wrongly cached as TOKEN_2022-only).
+                    if (rhQueryPrograms.length === 2 && !rhTokenRes.rejected && !rhT2022Res.rejected) {
+                        const hasToken = tokenAccounts.length > 0;
+                        const hasT2022 = token2022Accounts.length > 0;
+                        if (hasToken || hasT2022) {
+                            rhTokenProgramCache.set(token.mint, hasToken && hasT2022 ? 'BOTH' : hasToken ? 'TOKEN' : 'TOKEN_2022');
+                            rhTokenProgramConfirmedAt.set(token.mint, Date.now());
+                        }
+                    }
                 }
 
                 // v25.65: Skip this token if RPC failed - don't delete existing holders
@@ -585,7 +612,7 @@ async function updateRobinhoodHolders(deps) {
                         const sortedAccounts = dasAccounts
                             .filter(acc => {
                                 const bal = new BN(acc.balance);
-                                return bal.gt(threshold) && acc.owner !== bondingCurvePDAStr && acc.owner !== WALLETS.PUMP_LIQUIDITY;
+                                return bal.gt(threshold) && acc.owner !== bondingCurvePDAStr && acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== ammPoolStr;
                             })
                             .sort((a, b) => {
                                 const balA = new BN(a.balance);
@@ -629,7 +656,7 @@ async function updateRobinhoodHolders(deps) {
                         if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
                         if (acc.amount.lte(threshold)) continue;
 
-                        if (acc.owner !== bondingCurvePDAStr && acc.owner !== WALLETS.PUMP_LIQUIDITY) {
+                        if (acc.owner !== bondingCurvePDAStr && acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== ammPoolStr) {
                             holdersToInsert.push({ mint: token.mint, owner: acc.owner, balance: acc.balance });
                         }
                     }
@@ -785,84 +812,101 @@ async function getRobinhoodPendingFees(deps) {
 /**
  * v25.90: Update pending fees in database from on-chain data
  * This allows WebSocket broadcasts to display accurate pending fees on the frontend
+ * Batches all vault reads into getMultipleAccountsInfo calls (100 accounts per RPC call)
+ * instead of individual getAccountInfo per token, reducing ~1000 RPC calls to ~10.
  */
 async function updatePendingFeesInDb(deps) {
     const { connection, db } = deps;
     const LAMPORTS_PER_SOL = 1000000000;
 
     try {
-        // Get all active Robinhood tokens
         const tokens = await db.all('SELECT id, mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 500');
 
         const now = Date.now();
-        let totalUpdated = 0;
-        for (const token of tokens) {
-            try {
-                // Skip vault check for tokens confirmed to have zero pending fees within 30 min
-                const lastZero = lastZeroPendingAt.get(token.mint);
-                if (lastZero && (now - lastZero) < ZERO_PENDING_COOLDOWN_MS) {
-                    continue;
-                }
 
-                // v25.90: Use same vault derivation logic as getRobinhoodPendingFees
-                let bcVault, ammVaultAta;
+        // Filter out tokens in zero-pending cooldown — no need to check them
+        const tokensToCheck = tokens.filter(token => {
+            const lastZero = lastZeroPendingAt.get(token.mint);
+            return !lastZero || (now - lastZero) >= ZERO_PENDING_COOLDOWN_MS;
+        });
+
+        if (tokensToCheck.length === 0) return;
+
+        // Derive all vault addresses up front (ammVaultAta may be a Promise)
+        const vaultInfo = (await Promise.all(tokensToCheck.map(async token => {
+            try {
+                let bcVault, ammVaultAtaKey;
                 if (token.feeVaultAddress) {
                     bcVault = new PublicKey(token.feeVaultAddress);
-                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                    const vaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                    ammVaultAta = vaults.ammVaultAta;
+                    const vaults = pump.getShareholderFeeVaults(new PublicKey(token.feeVaultAddress));
+                    ammVaultAtaKey = await vaults.ammVaultAta;
                 } else {
-                    const creatorPubkey = new PublicKey(token.creatorPubkey);
-                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
+                    const vaults = pump.getShareholderFeeVaults(new PublicKey(token.creatorPubkey));
                     bcVault = vaults.bcVault;
-                    ammVaultAta = vaults.ammVaultAta;
+                    ammVaultAtaKey = await vaults.ammVaultAta;
                 }
+                return { token, bcVault, ammVaultAtaKey };
+            } catch (e) {
+                logger.debug(`[Robinhood] Vault derivation failed for ${token.ticker || token.mint?.slice(0, 8)}`, { error: e.message });
+                return null;
+            }
+        }))).filter(Boolean);
 
+        if (vaultInfo.length === 0) return;
+
+        // Batch-fetch all BC vaults and AMM vault ATAs — 100 accounts per getMultipleAccountsInfo call
+        const BATCH_SIZE = 100;
+        const bcAccountMap = new Map(); // mint -> AccountInfo | null
+        const ammAccountMap = new Map(); // mint -> AccountInfo | null
+
+        for (let i = 0; i < vaultInfo.length; i += BATCH_SIZE) {
+            const batch = vaultInfo.slice(i, i + BATCH_SIZE);
+            const [bcInfos, ammInfos] = await Promise.all([
+                connection.getMultipleAccountsInfo(batch.map(v => v.bcVault)),
+                connection.getMultipleAccountsInfo(batch.map(v => v.ammVaultAtaKey))
+            ]);
+            for (let j = 0; j < batch.length; j++) {
+                bcAccountMap.set(batch[j].token.mint, bcInfos[j]);
+                ammAccountMap.set(batch[j].token.mint, ammInfos[j]);
+            }
+        }
+
+        // Calculate fees from fetched account data and update DB
+        let totalUpdated = 0;
+        for (const { token } of vaultInfo) {
+            try {
                 let tokenFeeAmount = 0;
 
-                // Check BC vault
-                try {
-                    const bcInfo = await connection.getAccountInfo(bcVault);
-                    if (bcInfo && bcInfo.lamports > 5000) {
-                        const ourShare = Math.floor((bcInfo.lamports - 5000) * (token.feeShareBps / 10000));
-                        tokenFeeAmount += ourShare;
-                    }
-                } catch (e) {
-                    logger.debug(`[Robinhood] BC vault check failed for ${token.ticker || token.mint?.slice(0, 8)}`, { error: e.message });
+                const bcInfo = bcAccountMap.get(token.mint);
+                if (bcInfo && bcInfo.lamports > 5000) {
+                    tokenFeeAmount += Math.floor((bcInfo.lamports - 5000) * (token.feeShareBps / 10000));
                 }
 
-                // Check AMM vault
-                try {
-                    const ammVaultAtaKey = await ammVaultAta;
-                    const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-                    if (bal.value.amount && parseInt(bal.value.amount) > 0) {
-                        const ourShare = Math.floor(parseInt(bal.value.amount) * (token.feeShareBps / 10000));
-                        tokenFeeAmount += ourShare;
+                // Parse token amount from raw SPL token account data (u64 at offset 64)
+                const ammInfo = ammAccountMap.get(token.mint);
+                if (ammInfo && ammInfo.data && ammInfo.data.length >= 72) {
+                    const amount = Number(Buffer.from(ammInfo.data).readBigUInt64LE(64));
+                    if (amount > 0) {
+                        tokenFeeAmount += Math.floor(amount * (token.feeShareBps / 10000));
                     }
-                } catch (e) {
-                    logger.debug(`[Robinhood] AMM vault check failed for ${token.ticker || token.mint?.slice(0, 8)}`, { error: e.message });
                 }
 
-                // Update database with pending fees in SOL (not lamports)
                 const pendingFeesSol = tokenFeeAmount / LAMPORTS_PER_SOL;
                 await db.run('UPDATE robinhood_tokens SET "pendingFees" = $1 WHERE id = $2', [pendingFeesSol, token.id]);
                 totalUpdated++;
 
-                // Cache zero-pending result so this vault is skipped for 30 minutes
                 if (tokenFeeAmount === 0) {
-                    lastZeroPendingAt.set(token.mint, Date.now());
+                    lastZeroPendingAt.set(token.mint, now);
                 } else {
-                    // Has pending fees — clear the zero cache so it stays visible
                     lastZeroPendingAt.delete(token.mint);
                 }
-
             } catch (e) {
                 logger.debug(`[Robinhood] Pending fee update error for ${token.ticker}`, { error: e.message });
             }
         }
 
         if (totalUpdated > 0) {
-            logger.debug(`[Robinhood] Updated pending fees for ${totalUpdated} tokens`);
+            logger.debug(`[Robinhood] Updated pending fees for ${totalUpdated}/${tokens.length} tokens (${tokens.length - tokensToCheck.length} skipped via zero-cache)`);
         }
     } catch (e) {
         logger.error('[Robinhood] Update pending fees in DB error', { error: e.message });

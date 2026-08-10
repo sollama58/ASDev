@@ -20,7 +20,7 @@ const { BN } = require('@coral-xyz/anchor');
 const axios = require('axios');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, mutex, postgres, redis } = require('../services');
+const { logger, mutex, postgres, redis, pump } = require('../services');
 const { fetchTokenAccountsHeliusDAS } = require('../services/heliusDAS');
 
 // v25.22 SCALABILITY: Mutex to prevent overlapping holder scans
@@ -63,6 +63,23 @@ const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // v18.0: Minimum 2
 // v25.36: Pump.fun standard total supply (1 billion tokens with 6 decimals)
 // All pump.fun tokens have fixed 1B supply - use this for accurate % of supply calculation
 const PUMP_FUN_TOTAL_SUPPLY = BigInt('1000000000000000'); // 1B tokens * 10^6 decimals
+
+// Token program cache: avoids querying the wrong SPL program after first successful scan
+// Saves ~50% of getProgramAccounts RPC calls once warmed up. Expires every 2h for recheck.
+const tokenProgramCache = new Map(); // mint -> 'TOKEN' | 'TOKEN_2022' | 'BOTH'
+const tokenProgramConfirmedAt = new Map(); // mint -> timestamp
+const PROGRAM_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
+
+// Periodic cleanup to prevent unbounded growth if tokens churn
+setInterval(() => {
+    const cutoff = Date.now() - PROGRAM_CACHE_TTL * 3;
+    for (const [mint, ts] of tokenProgramConfirmedAt) {
+        if (ts < cutoff) {
+            tokenProgramCache.delete(mint);
+            tokenProgramConfirmedAt.delete(mint);
+        }
+    }
+}, 6 * 60 * 60 * 1000); // Run every 6 hours
 
 /**
  * Update global state (holders, points, expected airdrops)
@@ -175,46 +192,68 @@ async function updateGlobalState(deps) {
 
                 const holdersToInsert = [];
                 const bondingCurvePDAStr = bondingCurvePDA.toString();
+                // Exclude the Pump AMM pool PDA — after graduation, pool holds tokens as LP
+                const ammPoolStr = pump.getPumpAmmPDAs(tokenMintPublicKey).pool.toString();
                 const threshold = new BN(1000000); // Minimum balance threshold (dust filter)
                 let scanSucceeded = false;
                 let usedFallback = false;
 
                 try {
-                    // v25.114: Query BOTH Token and Token-2022 programs
-                    // Some tokens use standard SPL Token, others use Token-2022
-                    // Previously only queried TOKEN_2022 which missed standard Token holders
-                    // v25.115: Use Promise.allSettled so one failing query doesn't discard results from the other
-                    const results = await Promise.allSettled([
+                    // Use program cache to skip querying the wrong SPL program (~50% RPC savings once warmed)
+                    // Cache expires every 2h so program changes are eventually detected
+                    const cachedProg = tokenProgramCache.get(token.mint);
+                    const cacheAge = Date.now() - (tokenProgramConfirmedAt.get(token.mint) || 0);
+                    const validCache = cachedProg && cacheAge < PROGRAM_CACHE_TTL;
+                    const queryPrograms = [];
+                    if (!validCache || cachedProg === 'TOKEN' || cachedProg === 'BOTH') queryPrograms.push('TOKEN');
+                    if (!validCache || cachedProg === 'TOKEN_2022' || cachedProg === 'BOTH') queryPrograms.push('TOKEN_2022');
+
+                    const rawResults = await Promise.allSettled(queryPrograms.map(prog =>
                         withRetry(
-                            () => connection.getProgramAccounts(PROGRAMS.TOKEN, {
-                                filters: [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: token.mint } }],
+                            () => connection.getProgramAccounts(prog === 'TOKEN' ? PROGRAMS.TOKEN : PROGRAMS.TOKEN_2022, {
+                                filters: prog === 'TOKEN'
+                                    ? [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: token.mint } }]
+                                    : [{ memcmp: { offset: 0, bytes: token.mint } }],
                                 encoding: 'base64'
                             }),
-                            `getProgramAccounts(TOKEN) for ${token.mint.slice(0, 8)}`
-                        ),
-                        withRetry(
-                            () => connection.getProgramAccounts(PROGRAMS.TOKEN_2022, {
-                                filters: [{ memcmp: { offset: 0, bytes: token.mint } }],
-                                encoding: 'base64'
-                            }),
-                            `getProgramAccounts(TOKEN_2022) for ${token.mint.slice(0, 8)}`
+                            `getProgramAccounts(${prog}) for ${token.mint.slice(0, 8)}`
                         )
-                    ]);
+                    ));
 
-                    let tokenAccounts = results[0].status === 'fulfilled' ? results[0].value : [];
-                    let token2022Accounts = results[1].status === 'fulfilled' ? results[1].value : [];
-                    if (results[0].status === 'rejected') logger.debug(`[HolderScanner] TOKEN query failed for ${token.mint.slice(0, 8)}: ${results[0].reason?.message}`);
-                    if (results[1].status === 'rejected') logger.debug(`[HolderScanner] TOKEN_2022 query failed for ${token.mint.slice(0, 8)}: ${results[1].reason?.message}`);
+                    const getProgResult = (prog) => {
+                        const idx = queryPrograms.indexOf(prog);
+                        if (idx === -1) return { accounts: [], rejected: false, reason: null };
+                        const r = rawResults[idx];
+                        return { accounts: r.status === 'fulfilled' ? r.value : [], rejected: r.status === 'rejected', reason: r.reason };
+                    };
+                    const tokenRes = getProgResult('TOKEN');
+                    const t2022Res = getProgResult('TOKEN_2022');
+                    let tokenAccounts = tokenRes.accounts;
+                    let token2022Accounts = t2022Res.accounts;
 
-                    // v25.115: Detect "too many accounts" from settled results to trigger DAS fallback
-                    // Promise.allSettled never throws, so the outer catch block can't detect this
-                    const tooManyToken = results[0].status === 'rejected' && (results[0].reason?.message?.includes('Too many accounts') || results[0].reason?.message?.includes('too many'));
-                    const tooManyToken2022 = results[1].status === 'rejected' && (results[1].reason?.message?.includes('Too many accounts') || results[1].reason?.message?.includes('too many'));
+                    if (tokenRes.rejected) logger.debug(`[HolderScanner] TOKEN query failed for ${token.mint.slice(0, 8)}: ${tokenRes.reason?.message}`);
+                    if (t2022Res.rejected) logger.debug(`[HolderScanner] TOKEN_2022 query failed for ${token.mint.slice(0, 8)}: ${t2022Res.reason?.message}`);
+
+                    // Detect "too many accounts" from settled results to trigger DAS fallback
+                    const isTooMany = (r) => r.rejected && (r.reason?.message?.includes('Too many accounts') || r.reason?.message?.includes('too many'));
+                    const tooManyToken = isTooMany(tokenRes);
+                    const tooManyToken2022 = isTooMany(t2022Res);
                     if (tooManyToken || tooManyToken2022) {
                         logger.debug(`[HolderScanner] ${token.ticker || token.mint.slice(0, 8)} has too many holders, using Helius DAS API`);
                         usedFallback = true;
                         tokenAccounts = [];
                         token2022Accounts = [];
+                    }
+
+                    // Update program cache only when querying both programs AND both returned without error.
+                    // Transient RPC failures must not poison the cache (e.g. TOKEN fails → wrongly cached as TOKEN_2022-only).
+                    if (queryPrograms.length === 2 && !tokenRes.rejected && !t2022Res.rejected && !tooManyToken && !tooManyToken2022) {
+                        const hasToken = tokenAccounts.length > 0;
+                        const hasT2022 = token2022Accounts.length > 0;
+                        if (hasToken || hasT2022) {
+                            tokenProgramCache.set(token.mint, hasToken && hasT2022 ? 'BOTH' : hasToken ? 'TOKEN' : 'TOKEN_2022');
+                            tokenProgramConfirmedAt.set(token.mint, Date.now());
+                        }
                     }
 
                     const accounts = [...tokenAccounts, ...token2022Accounts];
@@ -241,7 +280,7 @@ async function updateGlobalState(deps) {
                         if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
                         if (acc.amount.lte(threshold)) continue;
 
-                        if (acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr) {
+                        if (acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr && acc.owner !== ammPoolStr) {
                             holdersToInsert.push({
                                 mint: token.mint,
                                 owner: acc.owner,
@@ -268,7 +307,7 @@ async function updateGlobalState(deps) {
                         const sortedAccounts = dasAccounts
                             .filter(acc => {
                                 const bal = new BN(acc.balance);
-                                return bal.gt(threshold) && acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr;
+                                return bal.gt(threshold) && acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr && acc.owner !== ammPoolStr;
                             })
                             .sort((a, b) => {
                                 const balA = new BN(a.balance);

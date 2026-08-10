@@ -46,7 +46,10 @@
       "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\routes\\\\health.js\" 2>&1)",
       "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\tasks\\\\holderScanner.js\" 2>&1)",
       "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\services\\\\postgres.js\" 2>&1)",
-      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\routes\\\\tokens.js\" 2>&1)"
+      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\routes\\\\tokens.js\" 2>&1)",
+      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\tasks\\\\robinhoodScanner.js\" 2>&1)",
+      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\tasks\\\\asdfSync.js\" 2>&1)",
+      "PowerShell(node --check \"c:\\\\VSCode\\\\ASDev\\\\src\\\\tasks\\\\workers.js\" 2>&1)"
     ]
   }
 }

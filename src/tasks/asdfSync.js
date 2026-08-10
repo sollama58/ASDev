@@ -6,9 +6,17 @@ const { PublicKey } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
 const { TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const config = require('../config/env');
-const { TOKENS, WALLETS } = require('../config/constants');
+const { TOKENS, WALLETS, PROGRAMS } = require('../config/constants');
 const ASDF_SYNC_INTERVAL = config.ASDF_UPDATE_INTERVAL || 5 * 60 * 1000;
-const { logger } = require('../services');
+const { logger, pump } = require('../services');
+
+// Pre-compute LP exclusion addresses for ASDF (fixed mint, compute once at module load)
+const [_asdfBondingCurve] = PublicKey.findProgramAddressSync(
+    [Buffer.from("bonding-curve"), TOKENS.ASDF.toBuffer()],
+    PROGRAMS.PUMP
+);
+const ASDF_BONDING_CURVE_STR = _asdfBondingCurve.toString();
+const ASDF_AMM_POOL_STR = pump.getPumpAmmPDAs(TOKENS.ASDF).pool.toString();
 
 /**
  * Fetch and update Top 100 ASDF Holders
@@ -25,13 +33,10 @@ async function updateAsdfHolders(deps) {
         // We use getProgramAccounts to bypass the 20-account limit of getTokenLargestAccounts
         // Assuming ASDF is a standard SPL Token (TOKEN_PROGRAM_ID)
         // If ASDF is Token-2022, switch programId to PROGRAMS.TOKEN_2022
-        const programId = TOKEN_PROGRAM_ID; 
-        const mintPubkey = new PublicKey(TOKENS.ASDF);
-
-        const accounts = await connection.getProgramAccounts(programId, {
+        const accounts = await connection.getProgramAccounts(TOKEN_PROGRAM_ID, {
             filters: [
                 { dataSize: 165 }, // Standard SPL Token Account size
-                { memcmp: { offset: 0, bytes: mintPubkey.toBase58() } }
+                { memcmp: { offset: 0, bytes: TOKENS.ASDF.toBase58() } }
             ],
             encoding: 'base64'
         });
@@ -59,21 +64,20 @@ async function updateAsdfHolders(deps) {
         .filter(acc => acc !== null) // BUG FIX: Filter out failed parses
         .sort((a, b) => b.amount.cmp(a.amount)); // Descending sort
 
-        // Extract Top 100
+        // Extract Top 100, excluding LP/pool accounts
         const top100 = [];
         for (const acc of parsedAccounts) {
             if (top100.length >= 100) break;
-            
-            // Exclude LP pools or specific ignored wallets if necessary
-            // (e.g. if Raydium pool holds tokens, we might want to skip it, 
-            // but for now we count all non-zero holders)
+            if (acc.owner === WALLETS.PUMP_LIQUIDITY) continue;
+            if (acc.owner === ASDF_BONDING_CURVE_STR) continue;
+            if (acc.owner === ASDF_AMM_POOL_STR) continue;
             if (acc.amount.gt(new BN(0))) {
                 top100.push(acc.owner);
             }
         }
 
         // Update Global State
-        // We keep the property name 'asdfTop50Holders' to maintain compatibility 
+        // We keep the property name 'asdfTop50Holders' to maintain compatibility
         // with other modules, but it now contains 100 items.
         globalState.asdfTop50Holders = new Set(top100);
 
@@ -90,7 +94,7 @@ async function updateAsdfHolders(deps) {
 function start(deps) {
     // Run immediately
     updateAsdfHolders(deps);
-    
+
     setInterval(() => updateAsdfHolders(deps), ASDF_SYNC_INTERVAL);
     logger.info(`ASDF Sync started (${ASDF_SYNC_INTERVAL / 1000}s interval)`);
 }
