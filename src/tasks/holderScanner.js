@@ -80,10 +80,17 @@ const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // v18.0: Minimum 2
 const PUMP_FUN_TOTAL_SUPPLY = BigInt('1000000000000000'); // 1B tokens * 10^6 decimals
 
 // Token program cache: avoids querying the wrong SPL program after first successful scan
-// Saves ~50% of getProgramAccounts RPC calls once warmed up. Expires every 2h for recheck.
+// Saves ~50% of getProgramAccounts RPC calls once warmed up.
+// v27.5 EFFICIENCY: A mint's SPL program (Token vs Token-2022) is fixed permanently at
+// creation — Solana has no mechanism to migrate a mint between programs after the fact.
+// The old 2h TTL was re-querying BOTH programs for EVERY eligible token every 2 hours
+// forever, doubling that scan's getProgramAccounts calls (the most expensive Helius call
+// type) for an answer that can never change. Use a long TTL purely as a self-healing
+// safety net (e.g. recovering from a bad cache entry), not as a real "recheck" — 30 days
+// effectively eliminates the recurring cost while still bounding staleness.
 const tokenProgramCache = new Map(); // mint -> 'TOKEN' | 'TOKEN_2022' | 'BOTH'
 const tokenProgramConfirmedAt = new Map(); // mint -> timestamp
-const PROGRAM_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
+const PROGRAM_CACHE_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days (safety net only — this never actually changes)
 
 // Periodic cleanup to prevent unbounded growth if tokens churn
 setInterval(() => {

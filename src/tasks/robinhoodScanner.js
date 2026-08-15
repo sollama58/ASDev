@@ -28,9 +28,13 @@ const ZERO_PENDING_COOLDOWN_MS = 30 * 60 * 1000;
 const lastZeroPendingAt = new Map(); // mint -> timestamp
 
 // Token program cache: avoids querying the wrong SPL program after first successful scan
+// v27.5 EFFICIENCY: A mint's SPL program (Token vs Token-2022) is fixed permanently at
+// creation and can never change, so the old 2h TTL was needlessly re-querying both
+// programs for every active Robinhood token every 2 hours forever. Long TTL here is a
+// self-healing safety net, not a real "recheck" — see matching fix in holderScanner.js.
 const rhTokenProgramCache = new Map(); // mint -> 'TOKEN' | 'TOKEN_2022' | 'BOTH'
 const rhTokenProgramConfirmedAt = new Map(); // mint -> timestamp
-const RH_PROGRAM_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
+const RH_PROGRAM_CACHE_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days (safety net only — this never actually changes)
 
 // H-2: Periodic cleanup for cooldown Maps to prevent unbounded growth
 setInterval(() => {
