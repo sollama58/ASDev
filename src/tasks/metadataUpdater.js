@@ -130,6 +130,45 @@ function chunkArray(array, size) {
     return result;
 }
 
+// v27.5 EFFICIENCY: A mint can be registered in more than one of tokens / robinhood_tokens /
+// pags_beneficiaries (e.g. a token can be both a platform launch and PAGS-registered, or a
+// Robinhood partner token that's also PAGS-registered). updateAllMissingImages runs the three
+// per-table image passes back to back, so if an earlier pass in this same cycle (or a previous
+// cycle) already resolved an image for a mint, later passes can copy it straight from the DB
+// instead of independently re-querying DexScreener/GeckoTerminal/Helius for the same mint.
+const IMAGE_SOURCE_TABLES = ['tokens', 'robinhood_tokens', 'pags_beneficiaries'];
+
+/**
+ * Look up already-resolved images for a set of mints from the OTHER token tables.
+ * @param {Object} db - database instance
+ * @param {string[]} mints - candidate mints missing an image in the caller's own table
+ * @param {string} excludeTable - the caller's own table, skipped in the search
+ * @returns {Promise<Map<string, {image: string, name: string|null, ticker: string|null}>>}
+ */
+async function findCrossTableImages(db, mints, excludeTable) {
+    const results = new Map();
+    if (mints.length === 0) return results;
+
+    for (const table of IMAGE_SOURCE_TABLES) {
+        if (table === excludeTable) continue;
+        try {
+            const rows = await db.all(
+                `SELECT mint, image, name, ticker FROM ${table}
+                 WHERE mint = ANY($1) AND image IS NOT NULL AND image != '' AND image != 'null'`,
+                [mints]
+            );
+            for (const row of rows) {
+                if (!results.has(row.mint)) {
+                    results.set(row.mint, { image: row.image, name: row.name || null, ticker: row.ticker || null });
+                }
+            }
+        } catch (e) {
+            logger.debug(`[MetadataUpdater] Cross-table image lookup failed for ${table}: ${e.message}`);
+        }
+    }
+    return results;
+}
+
 /**
  * Fetch token metadata from GeckoTerminal API
  * Free API with 30 requests/minute rate limit
@@ -731,9 +770,30 @@ async function updateRobinhoodTokenMetadata(deps) {
 
         let imagesUpdated = 0;
 
+        // Phase 0: Copy an image already resolved for the same mint in another table, if any —
+        // no external API call needed.
+        const crossTableImages = await findCrossTableImages(db, tokensMissingImages.map(t => t.mint), 'robinhood_tokens');
+        const needsExternalLookup = [];
+        for (const token of tokensMissingImages) {
+            const cross = crossTableImages.get(token.mint);
+            if (cross) {
+                const normalizedImage = imageUtils.normalizeImageUrl(cross.image) || cross.image;
+                await db.run(
+                    `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
+                    [normalizedImage, cross.name || token.name, cross.ticker || token.ticker, token.id]
+                );
+                imagesUpdated++;
+                if (DEBUG_METADATA) {
+                    logger.debug(`[MetadataUpdater] Robinhood: Found image for ${token.ticker || token.mint.slice(0, 8)} via another table`);
+                }
+            } else {
+                needsExternalLookup.push(token);
+            }
+        }
+
         // Phase 1: DexScreener, batched 30 mints/request instead of one request per token
         const dexResults = new Map(); // mint -> { liquidity, imageUrl, name, ticker }
-        const dexChunks = chunkArray(tokensMissingImages, 30);
+        const dexChunks = chunkArray(needsExternalLookup, 30);
         for (const chunk of dexChunks) {
             try {
                 const mints = chunk.map(t => t.mint).join(',');
@@ -760,7 +820,7 @@ async function updateRobinhoodTokenMetadata(deps) {
         }
 
         const stillMissing = [];
-        for (const token of tokensMissingImages) {
+        for (const token of needsExternalLookup) {
             const dexData = dexResults.get(token.mint);
             const imageUrl = dexData?.imageUrl || null;
             const name = dexData?.name || token.name;
@@ -890,9 +950,30 @@ async function updatePagsTokenMetadata(deps) {
 
         let imagesUpdated = 0;
 
+        // Phase 0: Copy an image already resolved for the same mint in another table, if any —
+        // no external API call needed.
+        const crossTableImages = await findCrossTableImages(db, tokensMissingImages.map(t => t.mint), 'pags_beneficiaries');
+        const needsExternalLookup = [];
+        for (const token of tokensMissingImages) {
+            const cross = crossTableImages.get(token.mint);
+            if (cross) {
+                const normalizedImage = imageUtils.normalizeImageUrl(cross.image) || cross.image;
+                await db.run(
+                    `UPDATE pags_beneficiaries SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
+                    [normalizedImage, cross.name || token.name, cross.ticker || token.ticker, token.id]
+                );
+                imagesUpdated++;
+                if (DEBUG_METADATA) {
+                    logger.debug(`[MetadataUpdater] PAGS: Found image for ${token.ticker || token.mint.slice(0, 8)} via another table`);
+                }
+            } else {
+                needsExternalLookup.push(token);
+            }
+        }
+
         // Phase 1: DexScreener, batched 30 mints/request instead of one request per token
         const dexResults = new Map(); // mint -> { liquidity, imageUrl, name, ticker }
-        const dexChunks = chunkArray(tokensMissingImages, 30);
+        const dexChunks = chunkArray(needsExternalLookup, 30);
         for (const chunk of dexChunks) {
             try {
                 const mints = chunk.map(t => t.mint).join(',');
@@ -919,7 +1000,7 @@ async function updatePagsTokenMetadata(deps) {
         }
 
         const stillMissing = [];
-        for (const token of tokensMissingImages) {
+        for (const token of needsExternalLookup) {
             const dexData = dexResults.get(token.mint);
             const imageUrl = dexData?.imageUrl || null;
             const name = dexData?.name || token.name;
@@ -1023,9 +1104,30 @@ async function updatePlatformTokenImages(deps) {
 
         let imagesUpdated = 0;
 
+        // Phase 0: Copy an image already resolved for the same mint in another table, if any —
+        // no external API call needed.
+        const crossTableImages = await findCrossTableImages(db, tokens.map(t => t.mint), 'tokens');
+        const needsExternalLookup = [];
+        for (const token of tokens) {
+            const cross = crossTableImages.get(token.mint);
+            if (cross) {
+                const normalizedImage = imageUtils.normalizeImageUrl(cross.image) || cross.image;
+                await db.run(
+                    `UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = '' OR image = 'null')`,
+                    [normalizedImage, token.mint]
+                );
+                imagesUpdated++;
+                if (DEBUG_METADATA) {
+                    logger.debug(`[MetadataUpdater] Platform: Found image for ${token.ticker || token.mint.slice(0, 8)} via another table`);
+                }
+            } else {
+                needsExternalLookup.push(token);
+            }
+        }
+
         // Phase 1: DexScreener, batched 30 mints/request instead of one request per token
         const dexImages = new Map(); // mint -> { liquidity, imageUrl }
-        const dexChunks = chunkArray(tokens, 30);
+        const dexChunks = chunkArray(needsExternalLookup, 30);
         for (const chunk of dexChunks) {
             try {
                 const mints = chunk.map(t => t.mint).join(',');
@@ -1047,7 +1149,7 @@ async function updatePlatformTokenImages(deps) {
         }
 
         const stillMissing = [];
-        for (const token of tokens) {
+        for (const token of needsExternalLookup) {
             const imageUrl = dexImages.get(token.mint)?.imageUrl || null;
             if (imageUrl) {
                 const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
