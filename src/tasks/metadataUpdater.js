@@ -693,6 +693,9 @@ async function fillMissingImagesFromMetadata(deps) {
 /**
  * v25.46: Update metadata for Robinhood tokens (robinhood_tokens table)
  * Fetches images and market data from multiple sources
+ * v27.3: DexScreener and Helius lookups are now batched (30 mints/request and one
+ * getAssetBatch call respectively) instead of one HTTP request per token — this used
+ * to be O(N) individual DexScreener/Helius calls per run.
  */
 async function updateRobinhoodTokenMetadata(deps) {
     const { db } = deps;
@@ -716,78 +719,127 @@ async function updateRobinhoodTokenMetadata(deps) {
         logger.info(`[MetadataUpdater] Robinhood: ${tokensMissingImages.length}/${tokens.length} tokens missing images`);
 
         let imagesUpdated = 0;
-        for (const token of tokensMissingImages) {
+
+        // Phase 1: DexScreener, batched 30 mints/request instead of one request per token
+        const dexResults = new Map(); // mint -> { liquidity, imageUrl, name, ticker }
+        const dexChunks = chunkArray(tokensMissingImages, 30);
+        for (const chunk of dexChunks) {
             try {
-                // Try DexScreener first
-                let imageUrl = null;
-                let name = token.name;
-                let ticker = token.ticker;
-
-                const dexRes = await axios.get(
-                    `https://api.dexscreener.com/latest/dex/tokens/${token.mint}`,
-                    { timeout: 5000 }
-                );
+                const mints = chunk.map(t => t.mint).join(',');
+                const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 8000 });
                 const pairs = dexRes.data?.pairs || [];
-                if (pairs.length > 0) {
-                    const pair = pairs[0];
-                    imageUrl = pair.info?.imageUrl || null;
-                    name = pair.baseToken?.name || name;
-                    ticker = pair.baseToken?.symbol || ticker;
-                }
-
-                // Try GeckoTerminal if no image
-                if (!imageUrl) {
-                    const geckoData = await fetchGeckoTerminalMetadata(token.mint);
-                    if (geckoData?.image) {
-                        imageUrl = geckoData.image;
-                        name = geckoData.name || name;
-                        ticker = geckoData.ticker || ticker;
+                for (const pair of pairs) {
+                    const mint = pair.baseToken?.address;
+                    if (!mint) continue;
+                    const liquidity = pair.liquidity?.usd || 0;
+                    const existing = dexResults.get(mint);
+                    if (!existing || liquidity > existing.liquidity) {
+                        dexResults.set(mint, {
+                            liquidity,
+                            imageUrl: pair.info?.imageUrl || null,
+                            name: pair.baseToken?.name || null,
+                            ticker: pair.baseToken?.symbol || null
+                        });
                     }
                 }
+            } catch (e) {
+                logger.debug(`[MetadataUpdater] Robinhood: DexScreener batch error: ${e.message}`);
+            }
+            if (dexChunks.length > 1) await delay(300);
+        }
 
-                // Try Helius if still no image
-                if (!imageUrl && config.HELIUS_API_KEY) {
-                    const heliusData = await fetchHeliusMarketDataBatch([token.mint]);
-                    const data = heliusData.get(token.mint);
-                    if (data?.image) {
-                        imageUrl = data.image;
-                        name = data.name || name;
-                        ticker = data.ticker || ticker;
-                    }
+        const stillMissing = [];
+        for (const token of tokensMissingImages) {
+            const dexData = dexResults.get(token.mint);
+            const imageUrl = dexData?.imageUrl || null;
+            const name = dexData?.name || token.name;
+            const ticker = dexData?.ticker || token.ticker;
+
+            if (imageUrl) {
+                const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+                await db.run(
+                    `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
+                    [normalizedImage, name, ticker, token.id]
+                );
+                imagesUpdated++;
+                if (DEBUG_METADATA) {
+                    logger.debug(`[MetadataUpdater] Robinhood: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
                 }
+            } else {
+                // Carry forward any name/ticker DexScreener did resolve, even without an image
+                stillMissing.push({ ...token, name, ticker });
+            }
+        }
 
-                // Try Pump.fun API as last resort
-                if (!imageUrl) {
-                    try {
-                        const pumpRes = await axios.get(
-                            `https://frontend-api.pump.fun/coins/${token.mint}`,
-                            { timeout: 5000 }
-                        );
-                        if (pumpRes.data) {
-                            imageUrl = pumpRes.data.image_uri || pumpRes.data.image || null;
-                            name = pumpRes.data.name || name;
-                            ticker = pumpRes.data.symbol || ticker;
-                        }
-                    } catch (e) { /* Silent */ }
-                }
+        // Phase 2: GeckoTerminal — rate-limited API, fetchGeckoTerminalBatch already batches
+        // with an internal 500ms delay and a 25-item cap per run.
+        const geckoResults = stillMissing.length > 0
+            ? await fetchGeckoTerminalBatch(stillMissing.map(t => t.mint))
+            : new Map();
 
-                // Update if we found an image
+        const stillMissingAfterGecko = [];
+        for (const token of stillMissing) {
+            const geckoData = geckoResults.get(token.mint);
+            if (geckoData?.image) {
+                const normalizedImage = imageUtils.normalizeImageUrl(geckoData.image) || geckoData.image;
+                const name = geckoData.name || token.name;
+                const ticker = geckoData.ticker || token.ticker;
+                await db.run(
+                    `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
+                    [normalizedImage, name, ticker, token.id]
+                );
+                imagesUpdated++;
+            } else {
+                stillMissingAfterGecko.push(token);
+            }
+        }
+
+        // Phase 3: Helius, batched into a single getAssetBatch call instead of one
+        // single-mint call per token.
+        const heliusResults = (stillMissingAfterGecko.length > 0 && config.HELIUS_API_KEY)
+            ? await fetchHeliusMarketDataBatch(stillMissingAfterGecko.map(t => t.mint))
+            : new Map();
+
+        const stillMissingAfterHelius = [];
+        for (const token of stillMissingAfterGecko) {
+            const heliusData = heliusResults.get(token.mint);
+            if (heliusData?.image) {
+                const normalizedImage = imageUtils.normalizeImageUrl(heliusData.image) || heliusData.image;
+                const name = heliusData.name || token.name;
+                const ticker = heliusData.ticker || token.ticker;
+                await db.run(
+                    `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
+                    [normalizedImage, name, ticker, token.id]
+                );
+                imagesUpdated++;
+            } else {
+                stillMissingAfterHelius.push(token);
+            }
+        }
+
+        // Phase 4: Pump.fun API as last resort — no batch endpoint, so this stays per-token,
+        // but only runs for tokens still missing after every batched source above.
+        for (const token of stillMissingAfterHelius) {
+            try {
+                const pumpRes = await axios.get(`https://frontend-api.pump.fun/coins/${token.mint}`, { timeout: 5000 });
+                const imageUrl = pumpRes.data?.image_uri || pumpRes.data?.image || null;
                 if (imageUrl) {
                     const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+                    const name = pumpRes.data.name || token.name;
+                    const ticker = pumpRes.data.symbol || token.ticker;
                     await db.run(
                         `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
                         [normalizedImage, name, ticker, token.id]
                     );
                     imagesUpdated++;
                     if (DEBUG_METADATA) {
-                        logger.debug(`[MetadataUpdater] Robinhood: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
+                        logger.debug(`[MetadataUpdater] Robinhood: Found image for ${token.ticker || token.mint.slice(0, 8)} via Pump.fun`);
                     }
                 }
-
-                await delay(500); // Rate limiting
             } catch (e) {
                 // Silent fail for individual tokens
             }
+            await delay(500); // Rate limiting for the one remaining unbatched API
         }
 
         if (imagesUpdated > 0) {
@@ -801,6 +853,8 @@ async function updateRobinhoodTokenMetadata(deps) {
 /**
  * v25.46: Update metadata for PAGS beneficiary tokens (pags_beneficiaries table)
  * Fetches images and metadata from multiple sources
+ * v27.3: DexScreener lookups are now batched (30 mints/request) instead of one HTTP
+ * request per token.
  */
 async function updatePagsTokenMetadata(deps) {
     const { db } = deps;
@@ -824,67 +878,104 @@ async function updatePagsTokenMetadata(deps) {
         logger.info(`[MetadataUpdater] PAGS: ${tokensMissingImages.length}/${tokens.length} tokens missing images`);
 
         let imagesUpdated = 0;
-        for (const token of tokensMissingImages) {
+
+        // Phase 1: DexScreener, batched 30 mints/request instead of one request per token
+        const dexResults = new Map(); // mint -> { liquidity, imageUrl, name, ticker }
+        const dexChunks = chunkArray(tokensMissingImages, 30);
+        for (const chunk of dexChunks) {
             try {
-                let imageUrl = null;
-                let name = token.name;
-                let ticker = token.ticker;
-
-                // Try DexScreener first
-                const dexRes = await axios.get(
-                    `https://api.dexscreener.com/latest/dex/tokens/${token.mint}`,
-                    { timeout: 5000 }
-                );
+                const mints = chunk.map(t => t.mint).join(',');
+                const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 8000 });
                 const pairs = dexRes.data?.pairs || [];
-                if (pairs.length > 0) {
-                    const pair = pairs[0];
-                    imageUrl = pair.info?.imageUrl || null;
-                    name = pair.baseToken?.name || name;
-                    ticker = pair.baseToken?.symbol || ticker;
-                }
-
-                // Try GeckoTerminal if no image
-                if (!imageUrl) {
-                    const geckoData = await fetchGeckoTerminalMetadata(token.mint);
-                    if (geckoData?.image) {
-                        imageUrl = geckoData.image;
-                        name = geckoData.name || name;
-                        ticker = geckoData.ticker || ticker;
+                for (const pair of pairs) {
+                    const mint = pair.baseToken?.address;
+                    if (!mint) continue;
+                    const liquidity = pair.liquidity?.usd || 0;
+                    const existing = dexResults.get(mint);
+                    if (!existing || liquidity > existing.liquidity) {
+                        dexResults.set(mint, {
+                            liquidity,
+                            imageUrl: pair.info?.imageUrl || null,
+                            name: pair.baseToken?.name || null,
+                            ticker: pair.baseToken?.symbol || null
+                        });
                     }
                 }
+            } catch (e) {
+                logger.debug(`[MetadataUpdater] PAGS: DexScreener batch error: ${e.message}`);
+            }
+            if (dexChunks.length > 1) await delay(300);
+        }
 
-                // Try Pump.fun API
-                if (!imageUrl) {
-                    try {
-                        const pumpRes = await axios.get(
-                            `https://frontend-api.pump.fun/coins/${token.mint}`,
-                            { timeout: 5000 }
-                        );
-                        if (pumpRes.data) {
-                            imageUrl = pumpRes.data.image_uri || pumpRes.data.image || null;
-                            name = pumpRes.data.name || name;
-                            ticker = pumpRes.data.symbol || ticker;
-                        }
-                    } catch (e) { /* Silent */ }
+        const stillMissing = [];
+        for (const token of tokensMissingImages) {
+            const dexData = dexResults.get(token.mint);
+            const imageUrl = dexData?.imageUrl || null;
+            const name = dexData?.name || token.name;
+            const ticker = dexData?.ticker || token.ticker;
+
+            if (imageUrl) {
+                const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+                await db.run(
+                    `UPDATE pags_beneficiaries SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
+                    [normalizedImage, name, ticker, token.id]
+                );
+                imagesUpdated++;
+                if (DEBUG_METADATA) {
+                    logger.debug(`[MetadataUpdater] PAGS: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
                 }
+            } else {
+                // Carry forward any name/ticker DexScreener did resolve, even without an image
+                stillMissing.push({ ...token, name, ticker });
+            }
+        }
 
-                // Update if we found an image
+        // Phase 2: GeckoTerminal — rate-limited API, fetchGeckoTerminalBatch already batches
+        // with an internal 500ms delay and a 25-item cap per run.
+        const geckoResults = stillMissing.length > 0
+            ? await fetchGeckoTerminalBatch(stillMissing.map(t => t.mint))
+            : new Map();
+
+        const stillMissingAfterGecko = [];
+        for (const token of stillMissing) {
+            const geckoData = geckoResults.get(token.mint);
+            if (geckoData?.image) {
+                const normalizedImage = imageUtils.normalizeImageUrl(geckoData.image) || geckoData.image;
+                const name = geckoData.name || token.name;
+                const ticker = geckoData.ticker || token.ticker;
+                await db.run(
+                    `UPDATE pags_beneficiaries SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
+                    [normalizedImage, name, ticker, token.id]
+                );
+                imagesUpdated++;
+            } else {
+                stillMissingAfterGecko.push(token);
+            }
+        }
+
+        // Phase 3: Pump.fun API — no batch endpoint, stays per-token, only for tokens still
+        // missing after both batched sources above.
+        for (const token of stillMissingAfterGecko) {
+            try {
+                const pumpRes = await axios.get(`https://frontend-api.pump.fun/coins/${token.mint}`, { timeout: 5000 });
+                const imageUrl = pumpRes.data?.image_uri || pumpRes.data?.image || null;
                 if (imageUrl) {
                     const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+                    const name = pumpRes.data.name || token.name;
+                    const ticker = pumpRes.data.symbol || token.ticker;
                     await db.run(
                         `UPDATE pags_beneficiaries SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
                         [normalizedImage, name, ticker, token.id]
                     );
                     imagesUpdated++;
                     if (DEBUG_METADATA) {
-                        logger.debug(`[MetadataUpdater] PAGS: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
+                        logger.debug(`[MetadataUpdater] PAGS: Found image for ${token.ticker || token.mint.slice(0, 8)} via Pump.fun`);
                     }
                 }
-
-                await delay(500); // Rate limiting
             } catch (e) {
                 // Silent fail for individual tokens
             }
+            await delay(500); // Rate limiting for the one remaining unbatched API
         }
 
         if (imagesUpdated > 0) {
@@ -898,6 +989,8 @@ async function updatePagsTokenMetadata(deps) {
 /**
  * v25.46: Update metadata for platform tokens missing images (tokens table)
  * Specifically targets tokens that have metadataUri but no image
+ * v27.3: DexScreener and Helius lookups are now batched (30 mints/request and one
+ * getAssetBatch call respectively) instead of one HTTP request per token.
  */
 async function updatePlatformTokenImages(deps) {
     const { db } = deps;
@@ -918,58 +1011,113 @@ async function updatePlatformTokenImages(deps) {
         logger.info(`[MetadataUpdater] Platform: ${tokens.length} tokens missing images`);
 
         let imagesUpdated = 0;
-        for (const token of tokens) {
+
+        // Phase 1: DexScreener, batched 30 mints/request instead of one request per token
+        const dexImages = new Map(); // mint -> { liquidity, imageUrl }
+        const dexChunks = chunkArray(tokens, 30);
+        for (const chunk of dexChunks) {
             try {
-                let imageUrl = null;
-
-                // Try DexScreener first
-                const dexRes = await axios.get(
-                    `https://api.dexscreener.com/latest/dex/tokens/${token.mint}`,
-                    { timeout: 5000 }
-                );
+                const mints = chunk.map(t => t.mint).join(',');
+                const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 8000 });
                 const pairs = dexRes.data?.pairs || [];
-                if (pairs.length > 0) {
-                    imageUrl = pairs[0].info?.imageUrl || null;
+                for (const pair of pairs) {
+                    const mint = pair.baseToken?.address;
+                    if (!mint || !pair.info?.imageUrl) continue;
+                    const liquidity = pair.liquidity?.usd || 0;
+                    const existing = dexImages.get(mint);
+                    if (!existing || liquidity > existing.liquidity) {
+                        dexImages.set(mint, { liquidity, imageUrl: pair.info.imageUrl });
+                    }
                 }
+            } catch (e) {
+                logger.debug(`[MetadataUpdater] Platform: DexScreener batch error: ${e.message}`);
+            }
+            if (dexChunks.length > 1) await delay(300);
+        }
 
-                // Try metadataUri if available and no image from DexScreener
-                if (!imageUrl && token.metadataUri) {
+        const stillMissing = [];
+        for (const token of tokens) {
+            const imageUrl = dexImages.get(token.mint)?.imageUrl || null;
+            if (imageUrl) {
+                const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+                await db.run(
+                    `UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = '' OR image = 'null')`,
+                    [normalizedImage, token.mint]
+                );
+                imagesUpdated++;
+                if (DEBUG_METADATA) {
+                    logger.debug(`[MetadataUpdater] Platform: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
+                }
+            } else {
+                stillMissing.push(token);
+            }
+        }
+
+        // Phase 2: metadataUri — inherently per-token (each token has its own IPFS/HTTP URI)
+        const stillMissingAfterMetadataUri = [];
+        for (const token of stillMissing) {
+            let imageUrl = null;
+            if (token.metadataUri) {
+                try {
                     imageUrl = await imageUtils.fetchImageFromMetadataUri(token.metadataUri, 5000);
+                } catch (e) { /* Silent */ }
+            }
+            if (imageUrl) {
+                const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+                await db.run(
+                    `UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = '' OR image = 'null')`,
+                    [normalizedImage, token.mint]
+                );
+                imagesUpdated++;
+                if (DEBUG_METADATA) {
+                    logger.debug(`[MetadataUpdater] Platform: Found image for ${token.ticker || token.mint.slice(0, 8)} via metadataUri`);
                 }
+            } else {
+                stillMissingAfterMetadataUri.push(token);
+            }
+        }
 
-                // Try GeckoTerminal
-                if (!imageUrl) {
-                    const geckoData = await fetchGeckoTerminalMetadata(token.mint);
-                    if (geckoData?.image) {
-                        imageUrl = geckoData.image;
-                    }
+        // Phase 3: GeckoTerminal — rate-limited API, fetchGeckoTerminalBatch already batches
+        // with an internal 500ms delay and a 25-item cap per run.
+        const geckoResults = stillMissingAfterMetadataUri.length > 0
+            ? await fetchGeckoTerminalBatch(stillMissingAfterMetadataUri.map(t => t.mint))
+            : new Map();
+
+        const stillMissingAfterGecko = [];
+        for (const token of stillMissingAfterMetadataUri) {
+            const geckoData = geckoResults.get(token.mint);
+            if (geckoData?.image) {
+                const normalizedImage = imageUtils.normalizeImageUrl(geckoData.image) || geckoData.image;
+                await db.run(
+                    `UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = '' OR image = 'null')`,
+                    [normalizedImage, token.mint]
+                );
+                imagesUpdated++;
+                if (DEBUG_METADATA) {
+                    logger.debug(`[MetadataUpdater] Platform: Found image for ${token.ticker || token.mint.slice(0, 8)} via GeckoTerminal`);
                 }
+            } else {
+                stillMissingAfterGecko.push(token);
+            }
+        }
 
-                // Try Helius
-                if (!imageUrl && config.HELIUS_API_KEY) {
-                    const heliusData = await fetchHeliusMarketDataBatch([token.mint]);
-                    const data = heliusData.get(token.mint);
-                    if (data?.image) {
-                        imageUrl = data.image;
-                    }
-                }
-
-                // Update if we found an image
-                if (imageUrl) {
-                    const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+        // Phase 4: Helius, batched into a single getAssetBatch call instead of one
+        // single-mint call per token.
+        if (stillMissingAfterGecko.length > 0 && config.HELIUS_API_KEY) {
+            const heliusResults = await fetchHeliusMarketDataBatch(stillMissingAfterGecko.map(t => t.mint));
+            for (const token of stillMissingAfterGecko) {
+                const data = heliusResults.get(token.mint);
+                if (data?.image) {
+                    const normalizedImage = imageUtils.normalizeImageUrl(data.image) || data.image;
                     await db.run(
                         `UPDATE tokens SET image = $1 WHERE mint = $2 AND (image IS NULL OR image = '' OR image = 'null')`,
                         [normalizedImage, token.mint]
                     );
                     imagesUpdated++;
                     if (DEBUG_METADATA) {
-                        logger.debug(`[MetadataUpdater] Platform: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
+                        logger.debug(`[MetadataUpdater] Platform: Found image for ${token.ticker || token.mint.slice(0, 8)} via Helius`);
                     }
                 }
-
-                await delay(500); // Rate limiting
-            } catch (e) {
-                // Silent fail for individual tokens
             }
         }
 

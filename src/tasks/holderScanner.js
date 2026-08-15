@@ -34,15 +34,30 @@ const RPC_BASE_DELAY_MS = 1000;
 const RPC_PARALLEL_BATCH_SIZE = 5; // Process 5 tokens in parallel
 
 /**
- * v25.20: Execute RPC call with exponential backoff retry
+ * v27.3: Detect the "too many accounts" getProgramAccounts error, which is deterministic
+ * (retrying without narrowing the query will fail identically every time) and should
+ * fall straight through to the Helius DAS fallback instead of being retried.
  */
-async function withRetry(fn, context = 'RPC call') {
+function isTooManyAccountsError(e) {
+    return !!(e?.message?.includes('Too many accounts') || e?.message?.includes('too many'));
+}
+
+/**
+ * v25.20: Execute RPC call with exponential backoff retry
+ * v27.3: Accepts an optional shouldRetry predicate so callers can opt out of retrying
+ * errors that are known to be non-transient (e.g. "Too many accounts").
+ */
+async function withRetry(fn, context = 'RPC call', shouldRetry = () => true) {
     let lastError;
     for (let attempt = 0; attempt < RPC_MAX_RETRIES; attempt++) {
         try {
             return await fn();
         } catch (e) {
             lastError = e;
+            if (!shouldRetry(e)) {
+                logger.debug(`[HolderScanner] ${context} failed with non-retryable error, skipping remaining retries`, { error: e.message });
+                throw e;
+            }
             const delay = RPC_BASE_DELAY_MS * Math.pow(2, attempt) + Math.random() * 500;
             logger.debug(`[HolderScanner] ${context} failed (attempt ${attempt + 1}/${RPC_MAX_RETRIES}), retrying in ${delay.toFixed(0)}ms`, { error: e.message });
             if (attempt < RPC_MAX_RETRIES - 1) {
@@ -138,6 +153,19 @@ async function updateGlobalState(deps) {
             globalState.devSolBalance = 0;
         }
 
+        // v27.3: Cache dev wallet PUMP holdings in Redis for the stats API.
+        // This used to live in workers.js's now-removed duplicate holder scanner.
+        try {
+            const devPumpAta = await getAssociatedTokenAddress(
+                TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
+            );
+            const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
+            await redis.setDevPumpHoldings(tokenBal.value.uiAmount || 0);
+        } catch (e) {
+            // Non-critical — leave the last cached value in Redis (it has its own TTL)
+            logger.debug('[HolderScanner] Failed to fetch dev PUMP holdings', { error: e.message });
+        }
+
         // 2. Identify KOTH Token (for expected airdrop calculation)
         // v25.112: Read AI-selected KOTH from Redis (set by flywheel) to match actual distribution
         // Falls back to highest market cap if Redis data unavailable
@@ -216,7 +244,10 @@ async function updateGlobalState(deps) {
                                     : [{ memcmp: { offset: 0, bytes: token.mint } }],
                                 encoding: 'base64'
                             }),
-                            `getProgramAccounts(${prog}) for ${token.mint.slice(0, 8)}`
+                            `getProgramAccounts(${prog}) for ${token.mint.slice(0, 8)}`,
+                            // v27.3: "Too many accounts" is deterministic — don't burn retries on it,
+                            // fall straight through to the Helius DAS fallback below.
+                            (e) => !isTooManyAccountsError(e)
                         )
                     ));
 
@@ -235,7 +266,7 @@ async function updateGlobalState(deps) {
                     if (t2022Res.rejected) logger.debug(`[HolderScanner] TOKEN_2022 query failed for ${token.mint.slice(0, 8)}: ${t2022Res.reason?.message}`);
 
                     // Detect "too many accounts" from settled results to trigger DAS fallback
-                    const isTooMany = (r) => r.rejected && (r.reason?.message?.includes('Too many accounts') || r.reason?.message?.includes('too many'));
+                    const isTooMany = (r) => r.rejected && isTooManyAccountsError(r.reason);
                     const tooManyToken = isTooMany(tokenRes);
                     const tooManyToken2022 = isTooMany(t2022Res);
                     if (tooManyToken || tooManyToken2022) {

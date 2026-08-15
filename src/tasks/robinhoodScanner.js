@@ -290,46 +290,59 @@ async function reverifyRobinhoodTokens(deps) {
         });
         logger.info(`[Robinhood] Re-verifying ${tokensNeedingReverify.length}/${tokens.length} tokens (${tokens.length - tokensNeedingReverify.length} skipped, verified within 2h)...`);
 
-        for (const token of tokensNeedingReverify) {
-            try {
-                // Re-verify on-chain fee recipient status
-                const result = await mintExtractor.verifyFeeRecipient(
-                    token.mint,
-                    devKeypair.publicKey.toString(),
-                    connection
-                );
+        // v27.3: Process re-verifications in parallel batches instead of one sequential
+        // RPC round trip at a time — verifyFeeRecipient() does 1-3 getAccountInfo calls
+        // per token, so serializing hundreds of tokens made this scan take far longer
+        // than it needed to.
+        const REVERIFY_BATCH_SIZE = 10;
+        for (let i = 0; i < tokensNeedingReverify.length; i += REVERIFY_BATCH_SIZE) {
+            const batch = tokensNeedingReverify.slice(i, i + REVERIFY_BATCH_SIZE);
 
-                if (!result.isRecipient) {
-                    // v25.115: Check if verification actually succeeded or failed due to RPC error
-                    // Previously, RPC errors returned isRecipient: false which incorrectly deactivated tokens
-                    if (result.error) {
-                        logger.debug(`[Robinhood] Skipping deactivation of ${token.ticker} (${token.mint.slice(0, 8)}...) - verification failed due to RPC error: ${result.error}`);
+            await Promise.allSettled(batch.map(async (token) => {
+                try {
+                    // Re-verify on-chain fee recipient status
+                    const result = await mintExtractor.verifyFeeRecipient(
+                        token.mint,
+                        devKeypair.publicKey.toString(),
+                        connection
+                    );
+
+                    if (!result.isRecipient) {
+                        // v25.115: Check if verification actually succeeded or failed due to RPC error
+                        // Previously, RPC errors returned isRecipient: false which incorrectly deactivated tokens
+                        if (result.error) {
+                            logger.debug(`[Robinhood] Skipping deactivation of ${token.ticker} (${token.mint.slice(0, 8)}...) - verification failed due to RPC error: ${result.error}`);
+                        } else {
+                            // Verification succeeded and we're genuinely no longer a fee recipient
+                            logger.warn(`[Robinhood] ${token.ticker} (${token.mint.slice(0, 8)}...) - No longer a fee recipient, deactivating`);
+                            await db.run('UPDATE robinhood_tokens SET "isActive" = 0 WHERE id = $1', [token.id]);
+                            lastReverifiedAt.set(token.mint, Date.now());
+                        }
                     } else {
-                        // Verification succeeded and we're genuinely no longer a fee recipient
-                        logger.warn(`[Robinhood] ${token.ticker} (${token.mint.slice(0, 8)}...) - No longer a fee recipient, deactivating`);
-                        await db.run('UPDATE robinhood_tokens SET "isActive" = 0 WHERE id = $1', [token.id]);
+                        if (result.feeShareBps !== token.feeShareBps) {
+                            // Fee share changed - update it
+                            logger.info(`[Robinhood] ${token.ticker} - Fee share changed: ${token.feeShareBps} -> ${result.feeShareBps} bps`);
+                            await db.run('UPDATE robinhood_tokens SET "feeShareBps" = $1 WHERE id = $2', [result.feeShareBps, token.id]);
+                        }
+                        // Mark as verified — won't be re-checked for 2 hours
                         lastReverifiedAt.set(token.mint, Date.now());
                     }
-                } else {
-                    if (result.feeShareBps !== token.feeShareBps) {
-                        // Fee share changed - update it
-                        logger.info(`[Robinhood] ${token.ticker} - Fee share changed: ${token.feeShareBps} -> ${result.feeShareBps} bps`);
-                        await db.run('UPDATE robinhood_tokens SET "feeShareBps" = $1 WHERE id = $2', [result.feeShareBps, token.id]);
-                    }
-                    // Mark as verified — won't be re-checked for 2 hours
-                    lastReverifiedAt.set(token.mint, Date.now());
+                } catch (e) {
+                    logger.debug(`[Robinhood] Reverify error for ${token.mint}`, { error: e.message });
                 }
+            }));
 
-                // Rate limit
-                await new Promise(r => setTimeout(r, 100));
-
-            } catch (e) {
-                logger.debug(`[Robinhood] Reverify error for ${token.mint}`, { error: e.message });
+            // Rate limit between batches (previously between every single token)
+            if (i + REVERIFY_BATCH_SIZE < tokensNeedingReverify.length) {
+                await new Promise(r => setTimeout(r, 150));
             }
         }
 
-        // Update metadata for active tokens
-        await updateRobinhoodTokenMetadata(deps);
+        // v27.3: Metadata/image updates for Robinhood tokens are now owned solely by
+        // metadataUpdater.updateAllMissingImages() (runs every METADATA_IMAGE_INTERVAL,
+        // default 10 min) — this scanner used to run its own independent copy of the same
+        // DexScreener/GeckoTerminal/Helius/Pump.fun fallback chain on the same ~10-minute
+        // cadence, roughly doubling external API calls for identical data.
 
     } catch (e) {
         logger.error('[Robinhood] Reverify error', { error: e.message });
@@ -362,110 +375,14 @@ async function fetchPumpFunMetadata(mint) {
     return null;
 }
 
-/**
- * Update metadata for Robinhood tokens (ticker, name, market data)
- * Fetches from multiple sources with fallback chain:
- * DexScreener -> GeckoTerminal -> Helius -> Pump.fun API
- * v25.64: Added better logging for debugging, always fetch market data
- */
-async function updateRobinhoodTokenMetadata(deps) {
-    const { db } = deps;
-
-    try {
-        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL LIMIT 500');
-
-        if (tokens.length === 0) {
-            logger.debug('[Robinhood] No active tokens to update metadata for');
-            return;
-        }
-
-        // Market data (volume24h, marketCap, priceUsd) is handled by updateAllTokenPrices every 5 min.
-        // This function only fills missing ticker/name/image — skip tokens that already have all three.
-        logger.info(`[Robinhood] Updating metadata for ${tokens.length} tokens...`);
-        let tokensUpdated = 0;
-
-        for (const token of tokens) {
-            try {
-                const needsMetadata = !token.ticker || token.ticker === 'UNKNOWN' || !token.name || token.name === 'Unknown Token';
-                const needsImage = !token.image || token.image === '';
-
-                if (!needsMetadata && !needsImage) {
-                    continue; // Already has complete metadata
-                }
-
-                // Try DexScreener first — has ticker/name/image for most listed tokens
-                const dexMeta = await fetchDexScreenerMetadata(token.mint);
-
-                let geckoMeta = null;
-                let heliusMeta = null;
-                let pumpMeta = null;
-
-                // Try GeckoTerminal if still need image after DexScreener
-                if (needsImage && !dexMeta?.image) {
-                    geckoMeta = await fetchGeckoTerminalMetadata(token.mint);
-                    if (!geckoMeta?.image) {
-                        const geckoInfo = await fetchGeckoTerminalTokenInfo(token.mint);
-                        if (geckoInfo?.image) {
-                            geckoMeta = geckoMeta || {};
-                            geckoMeta.image = geckoInfo.image;
-                        }
-                    }
-                }
-
-                // Try Helius and Pump.fun if still need metadata or image.
-                // Treat DexScreener's sentinel values ('UNKNOWN' ticker, 'Unknown' name) as "still missing".
-                const hasRealTicker = (t) => t && t !== 'UNKNOWN';
-                const hasRealName = (n) => n && n !== 'Unknown' && n !== 'Unknown Token';
-                const stillNeedsMetadata = needsMetadata && !hasRealTicker(dexMeta?.ticker) && !hasRealTicker(geckoMeta?.ticker);
-                const stillNeedsImage = needsImage && !dexMeta?.image && !geckoMeta?.image;
-                if (stillNeedsMetadata || stillNeedsImage) {
-                    heliusMeta = await fetchHeliusMetadata(token.mint);
-                    if (stillNeedsImage && !heliusMeta?.image) {
-                        pumpMeta = await fetchPumpFunMetadata(token.mint);
-                    }
-                }
-
-                // Use first real (non-sentinel) value from each source
-                const ticker = [dexMeta, geckoMeta, heliusMeta, pumpMeta].map(m => m?.ticker).find(hasRealTicker) || null;
-                const name = [dexMeta, geckoMeta, heliusMeta, pumpMeta].map(m => m?.name).find(hasRealName) || null;
-                const image = dexMeta?.image || geckoMeta?.image || heliusMeta?.image || pumpMeta?.image || null;
-
-                const hasMetadataUpdate = (ticker && ticker !== token.ticker) ||
-                                          (name && name !== token.name);
-                const hasImageUpdate = image && image !== '' && image !== token.image;
-
-                if (hasMetadataUpdate || hasImageUpdate) {
-                    await db.run(
-                        `UPDATE robinhood_tokens SET
-                            ticker = CASE WHEN $1 IS NOT NULL AND $1 != 'UNKNOWN' THEN $1 ELSE ticker END,
-                            name = CASE WHEN $2 IS NOT NULL AND $2 != 'Unknown Token' AND $2 != 'Unknown' THEN $2 ELSE name END,
-                            image = COALESCE(NULLIF($3, ''), image)
-                        WHERE id = $4`,
-                        [ticker, name, image, token.id]
-                    );
-                    tokensUpdated++;
-
-                    if (hasImageUpdate && !token.image) {
-                        const source = dexMeta?.image ? 'DexScreener' :
-                                      geckoMeta?.image ? 'GeckoTerminal' :
-                                      heliusMeta?.image ? 'Helius' :
-                                      pumpMeta?.image ? 'Pump.fun' : 'unknown';
-                        logger.info(`[Robinhood] Updated image for ${token.ticker || token.mint.slice(0, 8)} from ${source}`);
-                    }
-                }
-
-                await new Promise(r => setTimeout(r, 350));
-
-            } catch (e) {
-                logger.debug(`[Robinhood] Failed to update metadata for ${token.mint}`, { error: e.message });
-            }
-        }
-
-        logger.info(`[Robinhood] Metadata update complete: ${tokensUpdated} updated (${tokens.length} total, skipped tokens with complete metadata)`);
-    } catch (e) {
-        logger.error('[Robinhood] Metadata update error', { error: e.message });
-    }
-}
+// v27.3: The Robinhood-specific updateRobinhoodTokenMetadata() that used to live here was
+// removed — it duplicated metadataUpdater.updateRobinhoodTokenMetadata() (same
+// DexScreener -> GeckoTerminal -> Helius -> Pump.fun fallback chain, same table, same
+// ~10-minute cadence). metadataUpdater.updateAllMissingImages() is now the single owner
+// of Robinhood token image/metadata backfill. The single-mint fetchHeliusMetadata,
+// fetchDexScreenerMetadata, fetchGeckoTerminalMetadata, fetchGeckoTerminalTokenInfo, and
+// fetchPumpFunMetadata helpers below have no remaining internal callers in this file — kept
+// only because they're part of this module's exported surface.
 
 // fetchTokenAccountsHeliusDAS is imported from ../services/heliusDAS
 
@@ -916,21 +833,52 @@ async function updatePendingFeesInDb(deps) {
 /**
  * Update market data for all registered tokens
  * v15.0 - Fetches fresh market data from DexScreener for existing tokens
+ * v27.3: Batch DexScreener requests (30 mints/call, same pattern used in metadataUpdater.js)
+ *        instead of one HTTP request per token, and cap the token set (LIMIT 500, matching
+ *        every other query in this file) so this scales with the token count instead of
+ *        growing unbounded.
  */
 async function updateRegisteredTokensMarketData(deps) {
     const { db } = deps;
 
     try {
-        // Get all registered tokens
-        const tokens = await db.all('SELECT mint, ticker FROM tokens WHERE mint IS NOT NULL');
+        // Get all registered tokens (bounded, matches the LIMIT used elsewhere in this file)
+        const tokens = await db.all('SELECT mint, ticker FROM tokens WHERE mint IS NOT NULL LIMIT 500');
 
         if (tokens.length === 0) return;
 
         let tokensUpdated = 0;
-        for (const token of tokens) {
+        const CHUNK_SIZE = 30; // DexScreener's /tokens/{mints} endpoint accepts up to 30 comma-separated mints
+
+        for (let i = 0; i < tokens.length; i += CHUNK_SIZE) {
+            const chunk = tokens.slice(i, i + CHUNK_SIZE);
+            const mints = chunk.map(t => t.mint).join(',');
+
             try {
-                const dexMeta = await fetchDexScreenerMetadata(token.mint);
-                if (dexMeta && (dexMeta.marketCap > 0 || dexMeta.volume24h > 0)) {
+                const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, {
+                    timeout: 8000
+                });
+                const pairs = dexRes.data?.pairs || [];
+
+                // Pick the highest-liquidity pair per mint (same "best pair" logic used elsewhere)
+                const bestByMint = new Map();
+                for (const pair of pairs) {
+                    const mint = pair.baseToken?.address;
+                    if (!mint) continue;
+                    const existing = bestByMint.get(mint);
+                    if (!existing || (pair.liquidity?.usd || 0) > (existing.liquidity?.usd || 0)) {
+                        bestByMint.set(mint, pair);
+                    }
+                }
+
+                for (const token of chunk) {
+                    const pair = bestByMint.get(token.mint);
+                    if (!pair) continue;
+
+                    const marketCap = pair.fdv || pair.marketCap || 0;
+                    const volume24h = pair.volume?.h24 || 0;
+                    if (marketCap <= 0 && volume24h <= 0) continue;
+
                     await db.run(`
                         UPDATE tokens SET
                             ticker = COALESCE(NULLIF($1, 'UNKNOWN'), ticker),
@@ -940,20 +888,22 @@ async function updateRegisteredTokensMarketData(deps) {
                             "marketCap" = CASE WHEN $5 > 0 THEN $5 ELSE "marketCap" END
                         WHERE mint = $6
                     `, [
-                        dexMeta.ticker || 'UNKNOWN',
-                        dexMeta.name || 'Unknown',
-                        dexMeta.image || null,  // FIX: Pass null instead of empty string to let NULLIF work correctly
-                        dexMeta.volume24h || 0,
-                        dexMeta.marketCap || 0,
+                        pair.baseToken?.symbol || 'UNKNOWN',
+                        pair.baseToken?.name || 'Unknown',
+                        pair.info?.imageUrl || null,  // FIX: Pass null instead of empty string to let NULLIF work correctly
+                        volume24h,
+                        marketCap,
                         token.mint
                     ]);
                     tokensUpdated++;
                 }
-
-                // Rate limit API calls
-                await new Promise(r => setTimeout(r, 300));
             } catch (e) {
-                logger.debug(`[Robinhood] Failed to update market data for ${token.mint}`, { error: e.message });
+                logger.debug(`[Robinhood] Failed to fetch market data batch (${chunk.length} tokens)`, { error: e.message });
+            }
+
+            // Rate limit between chunks (previously between every single token)
+            if (i + CHUNK_SIZE < tokens.length) {
+                await new Promise(r => setTimeout(r, 300));
             }
         }
 
