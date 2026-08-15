@@ -347,6 +347,15 @@ async function updateAllTokenPrices(deps) {
     let totalUpdated = 0;
     let totalWithZeroVolume = 0;
 
+    // v27.5 EFFICIENCY: Collect DexScreener misses across ALL chunks and resolve them with a
+    // single Helius getAssetBatch call at the end, instead of one Helius HTTP call per 30-mint
+    // DexScreener chunk. getAssetBatch accepts up to 1000 ids, so for the typical token count
+    // this turns what was previously ceil(allTokens.length / 30) Helius calls every 5 minutes
+    // into a small, bounded number (1 per 1000 misses) — the same batching pattern already used
+    // elsewhere in this file (updateAllMissingImages / updatePagsTokenMetadata etc.).
+    const missTable = new Map(); // mint -> table, so results can be applied after the loop
+    const allMisses = [];
+
     for (const chunk of chunks) {
         const mints = chunk.map(t => t.mint).join(',');
 
@@ -377,7 +386,6 @@ async function updateAllTokenPrices(deps) {
 
             // v25.65: Update BOTH platform tokens AND robinhood_tokens
             // IMPORTANT: Also update tokens with 0 volume (not just those with data)
-            const misses = [];
             for (const t of chunk) {
                 const data = updates.get(t.mint);
                 const table = t.table;
@@ -399,45 +407,8 @@ async function updateAllTokenPrices(deps) {
                     );
                     totalUpdated++;
                     totalWithZeroVolume++;
-                    misses.push(t.mint);
-                }
-            }
-
-            // Fallback to Helius for DexScreener misses — throttle chronic misses (dead/delisted tokens)
-            // to avoid burning Helius credits every 5 min for tokens that will never have DexScreener data.
-            if (misses.length > 0) {
-                const fallbackNow = Date.now();
-                const freshMisses = misses.filter(mint => {
-                    const missCount = dexMissCount.get(mint) || 0;
-                    if (missCount > CHRONIC_MISS_THRESHOLD) {
-                        const lastCall = lastHeliusFallbackAt.get(mint) || 0;
-                        return (fallbackNow - lastCall) > CHRONIC_MISS_RECHECK_MS;
-                    }
-                    return true;
-                });
-
-                if (freshMisses.length > 0) {
-                    const heliusData = await fetchHeliusMarketDataBatch(freshMisses);
-                    for (const mint of freshMisses) {
-                        lastHeliusFallbackAt.set(mint, fallbackNow);
-                    }
-                    for (const t of chunk) {
-                        if (!updates.has(t.mint) && freshMisses.includes(t.mint)) {
-                            const data = heliusData.get(t.mint);
-                            if (data) {
-                                if (data.marketCap > 0) {
-                                    await db.run(
-                                        `UPDATE ${t.table} SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
-                                        [data.marketCap, Date.now(), t.mint]
-                                    );
-                                }
-                                // Helius has data — reset miss count so token gets normal treatment
-                                if (data.marketCap > 0 || data.image) {
-                                    dexMissCount.delete(t.mint);
-                                }
-                            }
-                        }
-                    }
+                    missTable.set(t.mint, table);
+                    allMisses.push(t.mint);
                 }
             }
 
@@ -449,6 +420,46 @@ async function updateAllTokenPrices(deps) {
                 await delay(30000);
             } else {
                 logger.warn(`[MetadataUpdater] DexScreener Batch Error: ${e.message}`);
+            }
+        }
+    }
+
+    // Fallback to Helius for all DexScreener misses across the whole run — throttle chronic
+    // misses (dead/delisted tokens) to avoid burning Helius credits every 5 min for tokens that
+    // will never have DexScreener data.
+    if (allMisses.length > 0) {
+        const fallbackNow = Date.now();
+        const freshMisses = allMisses.filter(mint => {
+            const missCount = dexMissCount.get(mint) || 0;
+            if (missCount > CHRONIC_MISS_THRESHOLD) {
+                const lastCall = lastHeliusFallbackAt.get(mint) || 0;
+                return (fallbackNow - lastCall) > CHRONIC_MISS_RECHECK_MS;
+            }
+            return true;
+        });
+
+        if (freshMisses.length > 0) {
+            // getAssetBatch caps at 1000 ids per call
+            const heliusChunks = chunkArray(freshMisses, 1000);
+            for (const heliusChunk of heliusChunks) {
+                const heliusData = await fetchHeliusMarketDataBatch(heliusChunk);
+                for (const mint of heliusChunk) {
+                    lastHeliusFallbackAt.set(mint, fallbackNow);
+                    const data = heliusData.get(mint);
+                    if (data) {
+                        if (data.marketCap > 0) {
+                            await db.run(
+                                `UPDATE ${missTable.get(mint)} SET "marketCap" = $1, "lastUpdated" = $2 WHERE mint = $3`,
+                                [data.marketCap, Date.now(), mint]
+                            );
+                        }
+                        // Helius has data — reset miss count so token gets normal treatment
+                        if (data.marketCap > 0 || data.image) {
+                            dexMissCount.delete(mint);
+                        }
+                    }
+                }
+                if (heliusChunks.length > 1) await delay(200);
             }
         }
     }
