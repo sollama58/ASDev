@@ -51,7 +51,7 @@ const config = {
     DEPLOYMENT_FEE_SOL: 0.02,
     FEE_THRESHOLD_SOL: 0.05,  // v17.0: Lowered to 0.05 SOL for fee collection
     AIRDROP_THRESHOLD_SOL: 1.0, // v17.0: Minimum 1 SOL to trigger airdrop distribution
-    AIRDROP_MIN_VOLUME_USD: 100, // v18.0: Minimum 24hr volume for airdrop eligibility
+    AIRDROP_MIN_VOLUME_USD: 250, // v18.0: Minimum 24hr volume for airdrop eligibility (v27.5: raised from 100 to shrink the RPC-scanned token set)
 
     // =====================================================
     // UPDATE INTERVALS (ms) - v25.64: Timing Reference
