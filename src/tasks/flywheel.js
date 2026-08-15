@@ -1654,8 +1654,15 @@ async function refreshAllFeeShares(deps) {
         let deactivated = 0;
         let errors = 0;
 
-        for (const token of tokens) {
-            try {
+        // v27.3: Process tokens in parallel batches instead of one sequential RPC round trip
+        // at a time. verifyFeeRecipient() does 1-3 getAccountInfo calls per token, and this
+        // function runs before every airdrop distribution (processAirdrop), so serializing
+        // hundreds of tokens could add minutes of latency to the critical path.
+        const FEE_SHARE_REFRESH_BATCH_SIZE = 10;
+        for (let i = 0; i < tokens.length; i += FEE_SHARE_REFRESH_BATCH_SIZE) {
+            const batch = tokens.slice(i, i + FEE_SHARE_REFRESH_BATCH_SIZE);
+
+            const results = await Promise.allSettled(batch.map(async (token) => {
                 const verification = await mintExtractor.verifyFeeRecipient(
                     token.mint,
                     platformWallet,
@@ -1665,9 +1672,8 @@ async function refreshAllFeeShares(deps) {
                 // v25.37: Check for error flag - don't deactivate on RPC errors
                 // This prevents incorrectly removing tokens due to network issues
                 if (verification.error) {
-                    errors++;
                     logger.warn(`[FeeShareRefresh] ${token.ticker} (${token.mint.slice(0, 8)}...) - Verification error, keeping current state: ${verification.error}`);
-                    continue;
+                    return 'error';
                 }
 
                 if (!verification.isRecipient) {
@@ -1676,25 +1682,38 @@ async function refreshAllFeeShares(deps) {
                         'UPDATE robinhood_tokens SET "isActive" = 0 WHERE mint = $1',
                         [token.mint]
                     );
-                    deactivated++;
                     logger.warn(`[FeeShareRefresh] ${token.ticker} (${token.mint.slice(0, 8)}...) - No longer a fee recipient, deactivated`);
+                    return 'deactivated';
                 } else if (verification.feeShareBps !== token.feeShareBps) {
                     // Fee share changed - update
                     await db.run(
                         'UPDATE robinhood_tokens SET "feeShareBps" = $1 WHERE mint = $2',
                         [verification.feeShareBps, token.mint]
                     );
-                    updated++;
                     logger.info(`[FeeShareRefresh] ${token.ticker} - Fee share updated: ${token.feeShareBps} -> ${verification.feeShareBps} bps`);
+                    return 'updated';
                 }
 
-                // Rate limit
-                await new Promise(r => setTimeout(r, 50));
+                return 'unchanged';
+            }));
 
-            } catch (e) {
-                // v25.37: Count errors but don't deactivate - could be temporary issue
-                errors++;
-                logger.warn(`[FeeShareRefresh] Error for ${token.ticker} (${token.mint.slice(0, 8)}...): ${e.message}`);
+            for (let j = 0; j < results.length; j++) {
+                const result = results[j];
+                if (result.status === 'fulfilled') {
+                    if (result.value === 'updated') updated++;
+                    else if (result.value === 'deactivated') deactivated++;
+                    else if (result.value === 'error') errors++;
+                } else {
+                    // v25.37: Count errors but don't deactivate - could be temporary issue
+                    errors++;
+                    const token = batch[j];
+                    logger.warn(`[FeeShareRefresh] Error for ${token.ticker} (${token.mint.slice(0, 8)}...): ${result.reason?.message}`);
+                }
+            }
+
+            // Rate limit between batches (previously between every single token)
+            if (i + FEE_SHARE_REFRESH_BATCH_SIZE < tokens.length) {
+                await new Promise(r => setTimeout(r, 150));
             }
         }
 
@@ -2353,13 +2372,21 @@ async function processAirdrop(deps) {
 async function sendSolAirdropBatch(batch, deps) {
     const { connection, devKeypair } = deps;
 
+    // v27.4 BUGFIX: Hoisted out of the try block. It was declared with `const` inside
+    // try{}, which made it inaccessible in catch{} (separate block scope) — every
+    // reference to it below (`validItems?.length`, `validItems.map(...)`) threw a
+    // ReferenceError the moment any batch actually failed, before the dead-letter
+    // Redis logging (L-6) ever ran. Since sendSolAirdropBatch is async, that thrown
+    // error just became a rejected promise that Promise.allSettled swallowed upstream —
+    // so failed batches were still retried correctly, but the audit trail of exactly
+    // which recipients failed was silently never written.
+    let validItems = [];
+
     try {
         const tx = new Transaction();
         solana.addPriorityFee(tx);
 
         // Filter valid items and add SOL transfer instructions
-        const validItems = [];
-
         for (const item of batch) {
             try {
                 // Validate the pubkey
@@ -2789,7 +2816,14 @@ async function runFeeCollection(deps) {
                 const pagsResult = await pagsFeeScanner.collectAllFees();
                 if (pagsResult.totalClaimed > 0) {
                     logger.info(`[FeeCollection] Claimed ${pagsResult.totalClaimed.toFixed(4)} SOL from ${pagsResult.claimedCount} PAGS tokens`);
-                    await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [pagsResult.totalClaimed * LAMPORTS_PER_SOL, 'lifetimePagsFeesLamports']);
+                    // v27.4 BUGFIX: 'lifetimePagsFeesLamports' is never seeded in the stats table's
+                    // init list (see postgres.js createSchema), so a plain UPDATE matched zero rows
+                    // and this counter silently never got created. Upsert instead.
+                    await db.run(
+                        `INSERT INTO stats (key, value) VALUES ($2, $1)
+                         ON CONFLICT (key) DO UPDATE SET value = stats.value + $1`,
+                        [pagsResult.totalClaimed * LAMPORTS_PER_SOL, 'lifetimePagsFeesLamports']
+                    );
                 }
             } catch (e) {
                 logger.debug('[FeeCollection] PAGS fee collection skipped', { error: e.message });

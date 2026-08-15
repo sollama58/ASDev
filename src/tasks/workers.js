@@ -6,7 +6,7 @@
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
-const { getAssociatedTokenAddress, createCloseAccountInstruction, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { createCloseAccountInstruction, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const axios = require('axios');
 const config = require('../config/env');
 const { PROGRAMS, WALLETS, TOKENS } = require('../config/constants');
@@ -330,410 +330,44 @@ function chunkArray(array, size) {
     return result;
 }
 
-const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // Minimum 24hr volume for eligibility
-const TOP_HOLDERS_LIMIT = 250;  // Track top 250 holders per token
-
 /**
  * Initialize Holder Scanner Worker
- * v25.27: MAJOR FIX - Now uses volume-weighted proportional points (same as holderScanner.js and /check-holder API)
- * - All tokens >$100 volume are eligible (not just top 10)
- * - Points are proportional to holdings (not just position count)
- * - Volume weighting: 0.5x to 2.0x multiplier based on token volume
+ * v27.3: Delegates to holderScanner.updateGlobalState() instead of running its own
+ * independent copy of the holder scan + points/airdrop calculation.
+ *
+ * Previously this worker duplicated the entire holder-scanning pipeline (its own
+ * getProgramAccounts loop, its own points/expected-airdrop math, its own user_points
+ * writes) on a 5-minute interval, while flywheel.js separately triggered
+ * holderScanner.updateGlobalState() on every 15-minute airdrop cycle. Both wrote to the
+ * same token_holders/user_points tables independently, roughly quadrupling RPC volume
+ * for the same scan. The worker's copy was also missing the AMM-pool-holder exclusion
+ * that holderScanner.js has (see the ammPoolStr check there) — meaning a graduated
+ * token's AMM pool address could be recorded as a top holder and receive a real SOL
+ * airdrop share whenever the worker's (stale) scan was the freshest data.
+ *
+ * holderScanner.updateGlobalState() already has its own mutex (holder_scanner), so
+ * calling it from both this worker and flywheel.js is safe — a call that arrives while
+ * a scan is already in flight simply returns { scanCompleted: false, skipped: true }
+ * instead of running a second concurrent scan.
  */
 function initHolderScannerWorker(deps) {
-    const { connection, devKeypair, db } = deps;
+    const holderScanner = require('./holderScanner');
 
     const worker = redis.createWorker('holderScannerQueue', async (job) => {
-        logger.info('[Worker] Starting holder scanner job (v25.27 - volume-weighted proportional points)...');
+        logger.info('[Worker] Starting holder scanner job...');
 
         try {
-            // 1. Get all tokens with >$100 volume (not just top 10)
-            const eligibleTokens = await db.all(
-                'SELECT mint, "userPubkey", volume24h, ticker FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
-                [MIN_VOLUME_USD]
-            );
-            const eligibleMints = eligibleTokens.map(t => t.mint);
+            const result = await holderScanner.updateGlobalState(deps);
 
-            logger.info(`[Worker] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume`);
-
-            // 2. Cache dev wallet PUMP holdings (legacy)
-            let devPumpHoldings = 0;
-            try {
-                const devPumpAta = await getAssociatedTokenAddress(
-                    TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
-                );
-                const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
-                devPumpHoldings = tokenBal.value.uiAmount || 0;
-            } catch (e) {
-                devPumpHoldings = 0;
-            }
-            await redis.setDevPumpHoldings(devPumpHoldings);
-
-            // 3. Calculate distribution pots based on SOL balance
-            // v25.78: Safety reserve is 0.1 SOL for operations
-            const SAFETY_RESERVE = 0.1;
-            let solBalance = 0;
-            try {
-                const balanceLamports = await connection.getBalance(devKeypair.publicKey);
-                solBalance = balanceLamports / 1e9;
-            } catch (e) {
-                logger.error('[Worker] Failed to fetch SOL balance', { error: e.message });
+            if (result?.skipped) {
+                logger.info('[Worker] Holder scanner job skipped — a scan was already in progress');
+            } else if (result?.scanCompleted) {
+                logger.info('[Worker] Holder scanner job complete');
+            } else if (result?.error) {
+                logger.warn('[Worker] Holder scanner job finished with an error', { error: result.error });
             }
 
-            // v26.0: Per-token pool system — no global communityPot/kothPot
-            // Expected airdrops are computed from each token's pending_airdrop_lamports below
-
-            // 4. Identify KOTH Token and holders (not just creator)
-            // v25.112: Read AI-selected KOTH from Redis (set by flywheel) to match actual distribution
-            let kothToken = null;
-            let kothSource = 'platform';
-            try {
-                const redisConn = redis.getConnection();
-                if (redisConn) {
-                    const kothData = await redisConn.get('koth_ai_selection');
-                    if (kothData) {
-                        const parsed = JSON.parse(kothData);
-                        if (parsed.mint) {
-                            // v25.113: Check both platform and robinhood token tables
-                            kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens WHERE mint = $1', [parsed.mint]);
-                            if (!kothToken) {
-                                const rhToken = await db.get('SELECT mint, "creatorPubkey" as "userPubkey" FROM robinhood_tokens WHERE mint = $1', [parsed.mint]);
-                                if (rhToken) {
-                                    kothToken = rhToken;
-                                    kothSource = 'robinhood';
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (e) {
-                logger.debug('[Worker] Failed to read KOTH from Redis, using fallback', { error: e.message });
-            }
-            if (!kothToken) {
-                kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens ORDER BY "marketCap" DESC LIMIT 1');
-            }
-
-            // 5. Update holders for ALL eligible tokens (not just top 10)
-            for (const token of eligibleTokens) {
-                try {
-                    if (!token.mint) continue;
-
-                    const tokenMintPublicKey = new PublicKey(token.mint);
-                    const [bondingCurvePDA] = PublicKey.findProgramAddressSync(
-                        [Buffer.from("bonding-curve"), tokenMintPublicKey.toBuffer()],
-                        PROGRAMS.PUMP
-                    );
-
-                    const holdersToInsert = [];
-
-                    try {
-                        // v25.114: Query BOTH Token and Token-2022 programs
-                        // Previously only queried TOKEN_2022 which missed standard Token holders
-                        // v25.115: Use Promise.allSettled so one failing query doesn't discard the other's results
-                        // v25.115: Added basic retry (2 attempts) for RPC resilience
-                        async function queryWithRetry(program, label) {
-                            // v25.115: dataSize: 165 for TOKEN program (standard SPL token accounts)
-                            // Token-2022 accounts can be > 165 bytes due to extensions, so no dataSize filter
-                            const isStandardToken = program.equals(PROGRAMS.TOKEN);
-                            const filters = isStandardToken
-                                ? [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: token.mint } }]
-                                : [{ memcmp: { offset: 0, bytes: token.mint } }];
-                            for (let attempt = 0; attempt < 2; attempt++) {
-                                try {
-                                    return await connection.getProgramAccounts(program, {
-                                        filters,
-                                        encoding: 'base64'
-                                    });
-                                } catch (e) {
-                                    if (attempt === 0) {
-                                        await delay(1000);
-                                    } else {
-                                        throw e;
-                                    }
-                                }
-                            }
-                        }
-
-                        const results = await Promise.allSettled([
-                            queryWithRetry(PROGRAMS.TOKEN, 'TOKEN'),
-                            queryWithRetry(PROGRAMS.TOKEN_2022, 'TOKEN_2022')
-                        ]);
-
-                        const tokenAccounts = results[0].status === 'fulfilled' ? results[0].value : [];
-                        const token2022Accounts = results[1].status === 'fulfilled' ? results[1].value : [];
-
-                        const accounts = [...tokenAccounts, ...token2022Accounts];
-
-                        const parsedAccounts = accounts.map(acc => {
-                            try {
-                                const data = Array.isArray(acc.account.data)
-                                    ? Buffer.from(acc.account.data[0], 'base64')
-                                    : Buffer.from(acc.account.data);
-                                if (data.length < 72) return null;
-                                const owner = new PublicKey(data.slice(32, 64)).toString();
-                                const amount = new BN(data.slice(64, 72), 'le');
-                                return { owner, amount };
-                            } catch (parseErr) {
-                                return null;
-                            }
-                        })
-                        .filter(a => a !== null)
-                        .sort((a, b) => b.amount.cmp(a.amount));
-
-                        const bondingCurvePDAStr = bondingCurvePDA.toString();
-                        const threshold = new BN(1000000);
-
-                        for (const acc of parsedAccounts) {
-                            if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
-                            if (acc.amount.lte(threshold)) continue;
-                            if (acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr) {
-                                holdersToInsert.push({
-                                    mint: token.mint,
-                                    owner: acc.owner,
-                                    balance: acc.amount.toString()
-                                });
-                            }
-                        }
-                    } catch (scanErr) {
-                        logger.debug(`[Worker] Failed to scan holders for ${token.mint.slice(0, 8)}`, { error: scanErr.message });
-                    }
-
-                    // v25.115: Only delete+insert if scan found holders (matches holderScanner.js safeguard)
-                    // Previously deleted unconditionally, which wiped existing holders when RPC failed
-                    if (holdersToInsert.length > 0) {
-                        await db.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
-                        const BATCH_SIZE = 50;
-                        const now = Date.now();
-                        for (let i = 0; i < holdersToInsert.length; i += BATCH_SIZE) {
-                            const batch = holdersToInsert.slice(i, i + BATCH_SIZE);
-                            const placeholders = batch.map((_, idx) => {
-                                const baseIdx = idx * 5;
-                                return `($${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5})`;
-                            }).join(', ');
-                            const params = batch.flatMap((h, idx) => [h.mint, h.owner, i + idx + 1, h.balance || '0', now]);
-                            await db.run(`
-                                INSERT INTO token_holders (mint, "holderPubkey", rank, balance, "lastUpdated")
-                                VALUES ${placeholders}
-                                ON CONFLICT (mint, "holderPubkey") DO UPDATE SET rank = EXCLUDED.rank, balance = EXCLUDED.balance, "lastUpdated" = EXCLUDED."lastUpdated"
-                            `, params);
-                        }
-                    } else {
-                        logger.debug(`[Worker] No holders found for ${token.mint.slice(0, 8)} - preserving existing`);
-                    }
-                } catch (e) {
-                    logger.error(`[Worker] Holder update error for ${token.mint?.slice(0, 8)}: ${e.message}`);
-                }
-                await delay(500);
-            }
-
-            // 6. Fetch ASDF Top 100 holders from Redis
-            const asdfTop100Holders = await redis.getAsdfTop100Holders();
-
-            // 7. Compute positionsCount per user (number of eligible tokens held, for "Active Positions" display)
-            const positionsCountMap = new Map(); // pubkey -> positionsCount
-
-            if (eligibleMints.length > 0) {
-                const allPlatformHolderRows = await db.all(
-                    `SELECT "holderPubkey", balance FROM token_holders WHERE mint = ANY($1)`,
-                    [eligibleMints]
-                );
-                for (const row of allPlatformHolderRows) {
-                    if (BigInt(row.balance || '0') === 0n) continue;
-                    positionsCountMap.set(row.holderPubkey, (positionsCountMap.get(row.holderPubkey) || 0) + 1);
-                }
-            }
-
-            // 8. Include Robinhood token holders for positionsCount
-            try {
-                const robinhoodTokens = await db.all(
-                    'SELECT mint, ticker FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1',
-                    [MIN_VOLUME_USD]
-                );
-                logger.info(`[Worker] Robinhood: ${robinhoodTokens.length} tokens with volume >= $${MIN_VOLUME_USD}`);
-
-                const robinhoodMintsList = robinhoodTokens.map(t => t.mint).filter(Boolean);
-                const allRhHolderRows = robinhoodMintsList.length > 0
-                    ? await db.all(
-                        `SELECT "holderPubkey", balance FROM robinhood_token_holders WHERE mint = ANY($1)`,
-                        [robinhoodMintsList]
-                      )
-                    : [];
-                for (const row of allRhHolderRows) {
-                    if (BigInt(row.balance || '0') === 0n) continue;
-                    positionsCountMap.set(row.holderPubkey, (positionsCountMap.get(row.holderPubkey) || 0) + 1);
-                }
-            } catch (e) {
-                logger.error('[Worker] Robinhood holder positionsCount error', { error: e.message });
-            }
-
-            // 10. Build per-user expected airdrop using tracked holder totals (not 1B supply)
-            // Consistent with flywheel.js and holderScanner.js: ASDF Top 100 get 2× effective balance
-            const userExpectedAirdropMapW = new Map();
-            let totalPendingAirdropLamportsW = 0;
-            try {
-                const pendingRows = await db.all(`
-                    SELECT mint, pending_airdrop_lamports, 'platform' as source FROM tokens WHERE pending_airdrop_lamports > 0
-                    UNION ALL
-                    SELECT mint, pending_airdrop_lamports, 'robinhood' as source FROM robinhood_tokens WHERE pending_airdrop_lamports > 0 AND "isActive" = 1
-                `);
-
-                const platformPendingMints = pendingRows.filter(r => r.source === 'platform').map(r => r.mint);
-                const robinhoodPendingMints = pendingRows.filter(r => r.source === 'robinhood').map(r => r.mint);
-
-                // Batch-fetch all holders for pending tokens
-                const [platformHoldersW, rhHoldersW] = await Promise.all([
-                    platformPendingMints.length > 0
-                        ? db.all(`SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)`, [platformPendingMints])
-                        : [],
-                    robinhoodPendingMints.length > 0
-                        ? db.all(`SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1)`, [robinhoodPendingMints])
-                        : []
-                ]);
-
-                // Sum total pending lamports
-                for (const row of pendingRows) {
-                    totalPendingAirdropLamportsW += Number(row.pending_airdrop_lamports || 0);
-                }
-
-                // Group holders by mint for per-token weighted distribution
-                const holdersByMintW = new Map();
-                for (const h of [...platformHoldersW, ...rhHoldersW]) {
-                    if (!holdersByMintW.has(h.mint)) holdersByMintW.set(h.mint, []);
-                    holdersByMintW.get(h.mint).push(h);
-                }
-
-                // Per-token: compute ASDF-weighted share using tracked holder total as denominator
-                for (const row of pendingRows) {
-                    const pendingLamports = BigInt(row.pending_airdrop_lamports || 0);
-                    if (pendingLamports === 0n) continue;
-                    const distributable = pendingLamports * 99n / 100n;
-                    const holders = holdersByMintW.get(row.mint) || [];
-                    if (holders.length === 0) continue;
-
-                    let totalEffectiveW = 0n;
-                    const weightedW = holders.map(h => {
-                        const bal = BigInt(h.balance || '0');
-                        const weight = asdfTop100Holders.has(h.holderPubkey) ? 2n : 1n;
-                        const eff = bal * weight;
-                        totalEffectiveW += eff;
-                        return { holderPubkey: h.holderPubkey, effectiveBal: eff };
-                    });
-                    if (totalEffectiveW === 0n) continue;
-
-                    for (const wh of weightedW) {
-                        if (wh.effectiveBal === 0n) continue;
-                        const expectedLamports = Number(distributable * wh.effectiveBal / totalEffectiveW);
-                        const prev = userExpectedAirdropMapW.get(wh.holderPubkey) || 0;
-                        userExpectedAirdropMapW.set(wh.holderPubkey, prev + expectedLamports / 1e9);
-                    }
-                }
-                logger.info(`[Worker] Per-token expected airdrops: ${userExpectedAirdropMapW.size} users, total pending: ${(totalPendingAirdropLamportsW / 1e9).toFixed(4)} SOL`);
-            } catch (e) {
-                logger.error('[Worker] Failed to compute per-token expected airdrops', { error: e.message });
-            }
-
-            // 11. Update expected airdrops in Redis
-            // Note: userPoints (legacy points map) is managed solely by holderScanner.js — do not clear here
-            await redis.clearUserExpectedAirdrops();
-
-            const userExpectedAirdrops = new Map();
-            const userPointsData = []; // v25.33: For database storage
-            const devPubkeyStr = devKeypair.publicKey.toString();
-            const seenPubkeys = new Set();
-
-            // Users who hold eligible tokens (have positionsCount)
-            for (const [pubkey, positionsCount] of positionsCountMap.entries()) {
-                if (pubkey === devPubkeyStr) continue;
-                const isAsdfTop100 = asdfTop100Holders.has(pubkey);
-                const multiplier = isAsdfTop100 ? 2 : 1;
-                const expected = userExpectedAirdropMapW.get(pubkey) || 0;
-                userExpectedAirdrops.set(pubkey, expected);
-                seenPubkeys.add(pubkey);
-                userPointsData.push({
-                    pubkey,
-                    basePoints: 0,
-                    robinhoodPoints: 0,
-                    multiplier,
-                    totalPoints: 0,
-                    expectedAirdropSol: expected,
-                    positionsCount,
-                    isAsdfHolder: isAsdfTop100
-                });
-            }
-
-            // v26.0: Include users with expected airdrops who don't hold eligible-volume tokens
-            for (const [pubkey, expected] of userExpectedAirdropMapW.entries()) {
-                if (pubkey === devPubkeyStr) continue;
-                if (!seenPubkeys.has(pubkey) && expected > 0) {
-                    userExpectedAirdrops.set(pubkey, expected);
-                    const isAsdfTop100 = asdfTop100Holders.has(pubkey);
-                    userPointsData.push({
-                        pubkey,
-                        basePoints: 0,
-                        robinhoodPoints: 0,
-                        multiplier: isAsdfTop100 ? 2 : 1,
-                        totalPoints: 0,
-                        expectedAirdropSol: expected,
-                        positionsCount: 0,
-                        isAsdfHolder: isAsdfTop100
-                    });
-                }
-            }
-
-            // v25.33: Write to user_points table (single source of truth)
-            const now = Date.now();
-            try {
-                // L-7: UPSERT fresh data FIRST, then delete stale rows AFTER
-                // This eliminates the zero-data window between DELETE and INSERT
-                const BATCH_SIZE = 100;
-                for (let i = 0; i < userPointsData.length; i += BATCH_SIZE) {
-                    const batch = userPointsData.slice(i, i + BATCH_SIZE);
-                    const values = batch.map((_, idx) => {
-                        const base = idx * 9;
-                        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`;
-                    }).join(', ');
-
-                    const params = batch.flatMap(u => [
-                        u.pubkey,
-                        u.basePoints,
-                        u.robinhoodPoints,
-                        u.multiplier,
-                        u.totalPoints,
-                        u.expectedAirdropSol,
-                        u.positionsCount,
-                        u.isAsdfHolder,
-                        now
-                    ]);
-
-                    await db.run(`
-                        INSERT INTO user_points (pubkey, base_points, robinhood_points, multiplier, total_points, expected_airdrop_sol, positions_count, is_asdf_holder, updated_at)
-                        VALUES ${values}
-                        ON CONFLICT (pubkey) DO UPDATE SET
-                            base_points = EXCLUDED.base_points,
-                            robinhood_points = EXCLUDED.robinhood_points,
-                            multiplier = EXCLUDED.multiplier,
-                            total_points = EXCLUDED.total_points,
-                            expected_airdrop_sol = EXCLUDED.expected_airdrop_sol,
-                            positions_count = EXCLUDED.positions_count,
-                            is_asdf_holder = EXCLUDED.is_asdf_holder,
-                            updated_at = EXCLUDED.updated_at
-                    `, params);
-                }
-                // L-7: Delete stale rows AFTER fresh data is written — no zero-data window
-                await db.run('DELETE FROM user_points WHERE updated_at < $1 OR updated_at IS NULL', [now - 3600000]);
-                logger.info(`[Worker] Wrote ${userPointsData.length} users to user_points table`);
-            } catch (e) {
-                logger.error('[Worker] Failed to write user_points table', { error: e.message });
-                // Don't throw - Redis is still updated as fallback
-            }
-
-            // Update Redis
-            await redis.setAllUserExpectedAirdrops(userExpectedAirdrops);
-            await redis.setLastBackendUpdate(Date.now());
-
-            logger.info(`[Worker] Holder scanner complete - ${userPointsData.length} users updated`);
-            return { success: true, usersUpdated: userPointsData.length };
-
+            return result;
         } catch (e) {
             logger.error('[Worker] Holder scanner error', { error: e.message, stack: e.stack });
             throw e;

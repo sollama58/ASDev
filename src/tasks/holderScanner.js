@@ -34,15 +34,30 @@ const RPC_BASE_DELAY_MS = 1000;
 const RPC_PARALLEL_BATCH_SIZE = 5; // Process 5 tokens in parallel
 
 /**
- * v25.20: Execute RPC call with exponential backoff retry
+ * v27.3: Detect the "too many accounts" getProgramAccounts error, which is deterministic
+ * (retrying without narrowing the query will fail identically every time) and should
+ * fall straight through to the Helius DAS fallback instead of being retried.
  */
-async function withRetry(fn, context = 'RPC call') {
+function isTooManyAccountsError(e) {
+    return !!(e?.message?.includes('Too many accounts') || e?.message?.includes('too many'));
+}
+
+/**
+ * v25.20: Execute RPC call with exponential backoff retry
+ * v27.3: Accepts an optional shouldRetry predicate so callers can opt out of retrying
+ * errors that are known to be non-transient (e.g. "Too many accounts").
+ */
+async function withRetry(fn, context = 'RPC call', shouldRetry = () => true) {
     let lastError;
     for (let attempt = 0; attempt < RPC_MAX_RETRIES; attempt++) {
         try {
             return await fn();
         } catch (e) {
             lastError = e;
+            if (!shouldRetry(e)) {
+                logger.debug(`[HolderScanner] ${context} failed with non-retryable error, skipping remaining retries`, { error: e.message });
+                throw e;
+            }
             const delay = RPC_BASE_DELAY_MS * Math.pow(2, attempt) + Math.random() * 500;
             logger.debug(`[HolderScanner] ${context} failed (attempt ${attempt + 1}/${RPC_MAX_RETRIES}), retrying in ${delay.toFixed(0)}ms`, { error: e.message });
             if (attempt < RPC_MAX_RETRIES - 1) {
@@ -65,10 +80,17 @@ const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100; // v18.0: Minimum 2
 const PUMP_FUN_TOTAL_SUPPLY = BigInt('1000000000000000'); // 1B tokens * 10^6 decimals
 
 // Token program cache: avoids querying the wrong SPL program after first successful scan
-// Saves ~50% of getProgramAccounts RPC calls once warmed up. Expires every 2h for recheck.
+// Saves ~50% of getProgramAccounts RPC calls once warmed up.
+// v27.5 EFFICIENCY: A mint's SPL program (Token vs Token-2022) is fixed permanently at
+// creation — Solana has no mechanism to migrate a mint between programs after the fact.
+// The old 2h TTL was re-querying BOTH programs for EVERY eligible token every 2 hours
+// forever, doubling that scan's getProgramAccounts calls (the most expensive Helius call
+// type) for an answer that can never change. Use a long TTL purely as a self-healing
+// safety net (e.g. recovering from a bad cache entry), not as a real "recheck" — 30 days
+// effectively eliminates the recurring cost while still bounding staleness.
 const tokenProgramCache = new Map(); // mint -> 'TOKEN' | 'TOKEN_2022' | 'BOTH'
 const tokenProgramConfirmedAt = new Map(); // mint -> timestamp
-const PROGRAM_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
+const PROGRAM_CACHE_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days (safety net only — this never actually changes)
 
 // Periodic cleanup to prevent unbounded growth if tokens churn
 setInterval(() => {
@@ -80,6 +102,47 @@ setInterval(() => {
         }
     }
 }, 6 * 60 * 60 * 1000); // Run every 6 hours
+
+// v27.5 EFFICIENCY: Tiered scan cadence — the top N tokens by volume (the ones most likely
+// to actually have holder churn between cycles) get scanned every run (HOLDER_UPDATE_INTERVAL,
+// default 5min). Everything else is still recalculated into points/airdrops every run using
+// whatever holder data is already in the DB, but its on-chain getProgramAccounts rescan is
+// throttled to once per SLOW_TIER_RESCAN_MS — cutting RPC volume for the long tail of
+// low-volume eligible tokens without staling out the tokens that matter most.
+const FAST_TIER_SIZE = 10; // top N tokens by 24h volume scanned every cycle
+const SLOW_TIER_RESCAN_MS = 20 * 60 * 1000; // 20 minutes
+
+// v27.5 EFFICIENCY: On top of the tier cadence, skip the rescan entirely (regardless of tier)
+// when a token's 24h volume hasn't moved at all since its last scan — zero volume change means
+// no swaps happened, so a rescan can only return the same holder balances already on file.
+// INACTIVE_TOKEN_FORCE_RESCAN_MS is a safety net that forces a rescan periodically anyway, in
+// case holders moved via a non-swap transfer or volume tracking itself lagged.
+const INACTIVE_TOKEN_FORCE_RESCAN_MS = 2 * 60 * 60 * 1000; // 2 hours
+const lastScannedAt = new Map(); // mint -> timestamp of last actual on-chain holder rescan
+const lastScannedVolume = new Map(); // mint -> volume24h at time of last on-chain holder rescan
+
+// v27.5 EFFICIENCY: Once a token is confirmed to have too many holders for getProgramAccounts
+// (a deterministic, response-size-limit failure — see isTooManyAccountsError), skip straight to
+// the Helius DAS fallback on future scans instead of re-attempting a call that's certain to fail
+// identically every time. Rechecked periodically in case the holder count ever drops back under
+// the limit (and self-heals immediately the moment a real attempt succeeds — see processToken).
+const knownTooManyAccounts = new Map(); // mint -> timestamp of last confirmed "too many accounts"
+const TOO_MANY_ACCOUNTS_RECHECK_MS = 24 * 60 * 60 * 1000; // 1 day
+
+// Periodic cleanup so tokens that drop out of eligibility don't leak memory forever
+setInterval(() => {
+    const cutoff = Date.now() - SLOW_TIER_RESCAN_MS * 6;
+    for (const [mint, ts] of lastScannedAt) {
+        if (ts < cutoff) {
+            lastScannedAt.delete(mint);
+            lastScannedVolume.delete(mint);
+        }
+    }
+    const tooManyCutoff = Date.now() - TOO_MANY_ACCOUNTS_RECHECK_MS * 3;
+    for (const [mint, ts] of knownTooManyAccounts) {
+        if (ts < tooManyCutoff) knownTooManyAccounts.delete(mint);
+    }
+}, 60 * 60 * 1000); // Run hourly
 
 /**
  * Update global state (holders, points, expected airdrops)
@@ -128,6 +191,9 @@ async function updateGlobalState(deps) {
         );
         const eligibleMints = eligibleTokens.map(t => t.mint);
 
+        // v27.5 EFFICIENCY: Fast tier = top N by volume (already sorted DESC by the query above)
+        const fastTierMints = new Set(eligibleTokens.slice(0, FAST_TIER_SIZE).map(t => t.mint));
+
         logger.info(`[HolderScanner] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume`);
 
         // v17.0: Get actual SOL balance (for wallet monitoring)
@@ -136,6 +202,19 @@ async function updateGlobalState(deps) {
             globalState.devSolBalance = solBalance / LAMPORTS_PER_SOL;
         } catch (e) {
             globalState.devSolBalance = 0;
+        }
+
+        // v27.3: Cache dev wallet PUMP holdings in Redis for the stats API.
+        // This used to live in workers.js's now-removed duplicate holder scanner.
+        try {
+            const devPumpAta = await getAssociatedTokenAddress(
+                TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
+            );
+            const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
+            await redis.setDevPumpHoldings(tokenBal.value.uiAmount || 0);
+        } catch (e) {
+            // Non-critical — leave the last cached value in Redis (it has its own TTL)
+            logger.debug('[HolderScanner] Failed to fetch dev PUMP holdings', { error: e.message });
         }
 
         // 2. Identify KOTH Token (for expected airdrop calculation)
@@ -184,6 +263,30 @@ async function updateGlobalState(deps) {
             try {
                 if (!token.mint) return;
 
+                // v27.5 EFFICIENCY: Two independent throttles on the on-chain rescan, both just
+                // skip the RPC call and leave existing token_holders rows in place — the
+                // points/airdrop calculation below reads whatever's in the DB regardless of how
+                // recently it was refreshed, so this only trades a bit of staleness on
+                // low-volume/inactive tokens for a real cut in RPC volume:
+                //  1. Slow-tier tokens (everything outside the top FAST_TIER_SIZE by volume)
+                //     only rescan once per SLOW_TIER_RESCAN_MS.
+                //  2. Any token (regardless of tier) whose 24h volume hasn't changed since its
+                //     last scan is skipped until INACTIVE_TOKEN_FORCE_RESCAN_MS has passed —
+                //     zero volume change means no swaps, so holder balances can't have moved.
+                const lastScan = lastScannedAt.get(token.mint) || 0;
+                const timeSinceLastScan = Date.now() - lastScan;
+                const isFastTier = fastTierMints.has(token.mint);
+
+                if (!isFastTier && timeSinceLastScan < SLOW_TIER_RESCAN_MS) {
+                    return;
+                }
+
+                const lastVolume = lastScannedVolume.get(token.mint);
+                const volumeUnchanged = lastScan > 0 && lastVolume === token.volume24h;
+                if (volumeUnchanged && timeSinceLastScan < INACTIVE_TOKEN_FORCE_RESCAN_MS) {
+                    return;
+                }
+
                 const tokenMintPublicKey = new PublicKey(token.mint);
                 const [bondingCurvePDA] = PublicKey.findProgramAddressSync(
                     [Buffer.from("bonding-curve"), tokenMintPublicKey.toBuffer()],
@@ -199,60 +302,84 @@ async function updateGlobalState(deps) {
                 let usedFallback = false;
 
                 try {
-                    // Use program cache to skip querying the wrong SPL program (~50% RPC savings once warmed)
-                    // Cache expires every 2h so program changes are eventually detected
-                    const cachedProg = tokenProgramCache.get(token.mint);
-                    const cacheAge = Date.now() - (tokenProgramConfirmedAt.get(token.mint) || 0);
-                    const validCache = cachedProg && cacheAge < PROGRAM_CACHE_TTL;
-                    const queryPrograms = [];
-                    if (!validCache || cachedProg === 'TOKEN' || cachedProg === 'BOTH') queryPrograms.push('TOKEN');
-                    if (!validCache || cachedProg === 'TOKEN_2022' || cachedProg === 'BOTH') queryPrograms.push('TOKEN_2022');
+                    // v27.5 EFFICIENCY: If a previous scan already confirmed this token has too
+                    // many holders for getProgramAccounts to return, skip straight to the DAS
+                    // fallback instead of re-attempting (and re-paying for) a call that's
+                    // deterministically certain to fail identically. Rechecked periodically in
+                    // case the holder count ever drops back under the RPC response-size limit.
+                    const knownTooManyTs = knownTooManyAccounts.get(token.mint);
+                    const skipToFallback = knownTooManyTs && (Date.now() - knownTooManyTs) < TOO_MANY_ACCOUNTS_RECHECK_MS;
 
-                    const rawResults = await Promise.allSettled(queryPrograms.map(prog =>
-                        withRetry(
-                            () => connection.getProgramAccounts(prog === 'TOKEN' ? PROGRAMS.TOKEN : PROGRAMS.TOKEN_2022, {
-                                filters: prog === 'TOKEN'
-                                    ? [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: token.mint } }]
-                                    : [{ memcmp: { offset: 0, bytes: token.mint } }],
-                                encoding: 'base64'
-                            }),
-                            `getProgramAccounts(${prog}) for ${token.mint.slice(0, 8)}`
-                        )
-                    ));
+                    let tokenAccounts = [];
+                    let token2022Accounts = [];
 
-                    const getProgResult = (prog) => {
-                        const idx = queryPrograms.indexOf(prog);
-                        if (idx === -1) return { accounts: [], rejected: false, reason: null };
-                        const r = rawResults[idx];
-                        return { accounts: r.status === 'fulfilled' ? r.value : [], rejected: r.status === 'rejected', reason: r.reason };
-                    };
-                    const tokenRes = getProgResult('TOKEN');
-                    const t2022Res = getProgResult('TOKEN_2022');
-                    let tokenAccounts = tokenRes.accounts;
-                    let token2022Accounts = t2022Res.accounts;
-
-                    if (tokenRes.rejected) logger.debug(`[HolderScanner] TOKEN query failed for ${token.mint.slice(0, 8)}: ${tokenRes.reason?.message}`);
-                    if (t2022Res.rejected) logger.debug(`[HolderScanner] TOKEN_2022 query failed for ${token.mint.slice(0, 8)}: ${t2022Res.reason?.message}`);
-
-                    // Detect "too many accounts" from settled results to trigger DAS fallback
-                    const isTooMany = (r) => r.rejected && (r.reason?.message?.includes('Too many accounts') || r.reason?.message?.includes('too many'));
-                    const tooManyToken = isTooMany(tokenRes);
-                    const tooManyToken2022 = isTooMany(t2022Res);
-                    if (tooManyToken || tooManyToken2022) {
-                        logger.debug(`[HolderScanner] ${token.ticker || token.mint.slice(0, 8)} has too many holders, using Helius DAS API`);
+                    if (skipToFallback) {
+                        logger.debug(`[HolderScanner] ${token.ticker || token.mint.slice(0, 8)} known to have too many holders (cached), skipping getProgramAccounts`);
                         usedFallback = true;
-                        tokenAccounts = [];
-                        token2022Accounts = [];
-                    }
+                    } else {
+                        // Use program cache to skip querying the wrong SPL program (~50% RPC savings once warmed)
+                        const cachedProg = tokenProgramCache.get(token.mint);
+                        const cacheAge = Date.now() - (tokenProgramConfirmedAt.get(token.mint) || 0);
+                        const validCache = cachedProg && cacheAge < PROGRAM_CACHE_TTL;
+                        const queryPrograms = [];
+                        if (!validCache || cachedProg === 'TOKEN' || cachedProg === 'BOTH') queryPrograms.push('TOKEN');
+                        if (!validCache || cachedProg === 'TOKEN_2022' || cachedProg === 'BOTH') queryPrograms.push('TOKEN_2022');
 
-                    // Update program cache only when querying both programs AND both returned without error.
-                    // Transient RPC failures must not poison the cache (e.g. TOKEN fails → wrongly cached as TOKEN_2022-only).
-                    if (queryPrograms.length === 2 && !tokenRes.rejected && !t2022Res.rejected && !tooManyToken && !tooManyToken2022) {
-                        const hasToken = tokenAccounts.length > 0;
-                        const hasT2022 = token2022Accounts.length > 0;
-                        if (hasToken || hasT2022) {
-                            tokenProgramCache.set(token.mint, hasToken && hasT2022 ? 'BOTH' : hasToken ? 'TOKEN' : 'TOKEN_2022');
-                            tokenProgramConfirmedAt.set(token.mint, Date.now());
+                        const rawResults = await Promise.allSettled(queryPrograms.map(prog =>
+                            withRetry(
+                                () => connection.getProgramAccounts(prog === 'TOKEN' ? PROGRAMS.TOKEN : PROGRAMS.TOKEN_2022, {
+                                    filters: prog === 'TOKEN'
+                                        ? [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: token.mint } }]
+                                        : [{ memcmp: { offset: 0, bytes: token.mint } }],
+                                    encoding: 'base64'
+                                }),
+                                `getProgramAccounts(${prog}) for ${token.mint.slice(0, 8)}`,
+                                // v27.3: "Too many accounts" is deterministic — don't burn retries on it,
+                                // fall straight through to the Helius DAS fallback below.
+                                (e) => !isTooManyAccountsError(e)
+                            )
+                        ));
+
+                        const getProgResult = (prog) => {
+                            const idx = queryPrograms.indexOf(prog);
+                            if (idx === -1) return { accounts: [], rejected: false, reason: null };
+                            const r = rawResults[idx];
+                            return { accounts: r.status === 'fulfilled' ? r.value : [], rejected: r.status === 'rejected', reason: r.reason };
+                        };
+                        const tokenRes = getProgResult('TOKEN');
+                        const t2022Res = getProgResult('TOKEN_2022');
+                        tokenAccounts = tokenRes.accounts;
+                        token2022Accounts = t2022Res.accounts;
+
+                        if (tokenRes.rejected) logger.debug(`[HolderScanner] TOKEN query failed for ${token.mint.slice(0, 8)}: ${tokenRes.reason?.message}`);
+                        if (t2022Res.rejected) logger.debug(`[HolderScanner] TOKEN_2022 query failed for ${token.mint.slice(0, 8)}: ${t2022Res.reason?.message}`);
+
+                        // Detect "too many accounts" from settled results to trigger DAS fallback
+                        const isTooMany = (r) => r.rejected && isTooManyAccountsError(r.reason);
+                        const tooManyToken = isTooMany(tokenRes);
+                        const tooManyToken2022 = isTooMany(t2022Res);
+                        if (tooManyToken || tooManyToken2022) {
+                            logger.debug(`[HolderScanner] ${token.ticker || token.mint.slice(0, 8)} has too many holders, using Helius DAS API`);
+                            usedFallback = true;
+                            tokenAccounts = [];
+                            token2022Accounts = [];
+                            knownTooManyAccounts.set(token.mint, Date.now());
+                        } else if (queryPrograms.length === 2 && !tokenRes.rejected && !t2022Res.rejected) {
+                            // Real attempt succeeded without hitting the limit — holder count is
+                            // back under it, so clear any stale "too many accounts" cache entry
+                            // immediately instead of waiting for TOO_MANY_ACCOUNTS_RECHECK_MS.
+                            knownTooManyAccounts.delete(token.mint);
+                        }
+
+                        // Update program cache only when querying both programs AND both returned without error.
+                        // Transient RPC failures must not poison the cache (e.g. TOKEN fails → wrongly cached as TOKEN_2022-only).
+                        if (queryPrograms.length === 2 && !tokenRes.rejected && !t2022Res.rejected && !tooManyToken && !tooManyToken2022) {
+                            const hasToken = tokenAccounts.length > 0;
+                            const hasT2022 = token2022Accounts.length > 0;
+                            if (hasToken || hasT2022) {
+                                tokenProgramCache.set(token.mint, hasToken && hasT2022 ? 'BOTH' : hasToken ? 'TOKEN' : 'TOKEN_2022');
+                                tokenProgramConfirmedAt.set(token.mint, Date.now());
+                            }
                         }
                     }
 
@@ -335,6 +462,12 @@ async function updateGlobalState(deps) {
                     await new Promise(r => setTimeout(r, 500)); // Shorter delay after failure
                     return;
                 }
+
+                // v27.5: Record a successful on-chain rescan so the throttles above measure
+                // from the last time we actually fetched fresh holder data, not just the last
+                // time this function ran.
+                lastScannedAt.set(token.mint, Date.now());
+                lastScannedVolume.set(token.mint, token.volume24h);
 
                 // v25.65: Check if we have existing holders before potentially clearing them
                 const existingHolders = await db.get(

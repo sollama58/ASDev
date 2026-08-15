@@ -3268,10 +3268,22 @@ function init(deps) {
 
             // v26.0: Per-token simulation — each token has its own pending_airdrop_lamports pool
             const TOKEN_THRESHOLD_LAMPORTS = Math.floor((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 0.05) * LAMPORTS_PER_SOL);
-            const PUMP_FUN_TOTAL_SUPPLY_SIM = BigInt('1000000000000000'); // 1B * 10^6
 
             // Get KOTH info (informational only in v26.0 — no fee allocation)
             const kothResult = await flywheel.getAiSelectedKoth(db);
+
+            // v27.4 BUGFIX: This simulation previously divided each holder's share by the fixed
+            // 1B-token PUMP_FUN_TOTAL_SUPPLY, while the real distributor (flywheel.js
+            // processTokenAirdrops) divides by the sum of *tracked* holder balances (99% of pool,
+            // weighted 2x for ASDF Top 100 / ANSEM Top 1000 holders). Since tracked holder supply
+            // is almost always far less than the full 1B supply, this made every simulated payout
+            // look much smaller than what actually gets sent, and never reflected the bonus
+            // weighting at all — defeating the endpoint's purpose of previewing real payouts.
+            // Mirror the real formula here instead.
+            const [asdfTop100Sim, ansemTop1000Sim] = await Promise.all([
+                redis.getAsdfTop100Holders().catch(() => new Set()),
+                redis.getAnsemTop1000Holders().catch(() => new Set()),
+            ]);
 
             // Query all tokens with pending airdrop pools
             const pendingRows = await db.all(`
@@ -3298,20 +3310,33 @@ function init(deps) {
                     [row.mint]
                 );
 
-                const pendingBig = BigInt(pendingLamports);
-                const distribution = [];
-                for (const h of holders) {
+                // Match flywheel.js processTokenAirdrops: 99% distributed (1% dust buffer),
+                // weighted by effective balance (2x for ASDF Top 100 / ANSEM Top 1000, stacking to 4x)
+                const distributableBig = BigInt(Math.floor(pendingLamports * 0.99));
+                const weightedHolders = holders.map(h => {
                     const bal = BigInt(h.balance || '0');
-                    if (bal === BigInt(0)) continue;
-                    const share = Number(pendingBig * bal / PUMP_FUN_TOTAL_SUPPLY_SIM);
-                    if (share > 0) {
-                        distribution.push({
-                            wallet: h.holderPubkey,
-                            walletShort: h.holderPubkey.slice(0, 8) + '...',
-                            amountLamports: share,
-                            amountSOL: (share / LAMPORTS_PER_SOL).toFixed(6),
-                            supplyPercent: (Number(bal * BigInt(10000) / PUMP_FUN_TOTAL_SUPPLY_SIM) / 100).toFixed(4) + '%'
-                        });
+                    const asdfMult = asdfTop100Sim.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
+                    const ansemMult = ansemTop1000Sim.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
+                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * asdfMult * ansemMult };
+                });
+                const totalEffectiveBal = weightedHolders.reduce((sum, h) => sum + h.effectiveBal, BigInt(0));
+
+                const distribution = [];
+                if (totalEffectiveBal > BigInt(0)) {
+                    for (const h of weightedHolders) {
+                        if (h.balance === BigInt(0)) continue;
+                        const shareBig = distributableBig * h.effectiveBal / totalEffectiveBal;
+                        const share = Number(shareBig);
+                        if (share > 0) {
+                            distribution.push({
+                                wallet: h.holderPubkey,
+                                walletShort: h.holderPubkey.slice(0, 8) + '...',
+                                amountLamports: share,
+                                amountSOL: (share / LAMPORTS_PER_SOL).toFixed(6),
+                                bonusWeighted: h.effectiveBal !== h.balance,
+                                supplyPercent: (Number(h.effectiveBal * BigInt(10000) / totalEffectiveBal) / 100).toFixed(4) + '%'
+                            });
+                        }
                     }
                 }
                 distribution.sort((a, b) => b.amountLamports - a.amountLamports);
