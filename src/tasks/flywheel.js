@@ -2372,13 +2372,21 @@ async function processAirdrop(deps) {
 async function sendSolAirdropBatch(batch, deps) {
     const { connection, devKeypair } = deps;
 
+    // v27.4 BUGFIX: Hoisted out of the try block. It was declared with `const` inside
+    // try{}, which made it inaccessible in catch{} (separate block scope) — every
+    // reference to it below (`validItems?.length`, `validItems.map(...)`) threw a
+    // ReferenceError the moment any batch actually failed, before the dead-letter
+    // Redis logging (L-6) ever ran. Since sendSolAirdropBatch is async, that thrown
+    // error just became a rejected promise that Promise.allSettled swallowed upstream —
+    // so failed batches were still retried correctly, but the audit trail of exactly
+    // which recipients failed was silently never written.
+    let validItems = [];
+
     try {
         const tx = new Transaction();
         solana.addPriorityFee(tx);
 
         // Filter valid items and add SOL transfer instructions
-        const validItems = [];
-
         for (const item of batch) {
             try {
                 // Validate the pubkey
@@ -2808,7 +2816,14 @@ async function runFeeCollection(deps) {
                 const pagsResult = await pagsFeeScanner.collectAllFees();
                 if (pagsResult.totalClaimed > 0) {
                     logger.info(`[FeeCollection] Claimed ${pagsResult.totalClaimed.toFixed(4)} SOL from ${pagsResult.claimedCount} PAGS tokens`);
-                    await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [pagsResult.totalClaimed * LAMPORTS_PER_SOL, 'lifetimePagsFeesLamports']);
+                    // v27.4 BUGFIX: 'lifetimePagsFeesLamports' is never seeded in the stats table's
+                    // init list (see postgres.js createSchema), so a plain UPDATE matched zero rows
+                    // and this counter silently never got created. Upsert instead.
+                    await db.run(
+                        `INSERT INTO stats (key, value) VALUES ($2, $1)
+                         ON CONFLICT (key) DO UPDATE SET value = stats.value + $1`,
+                        [pagsResult.totalClaimed * LAMPORTS_PER_SOL, 'lifetimePagsFeesLamports']
+                    );
                 }
             } catch (e) {
                 logger.debug('[FeeCollection] PAGS fee collection skipped', { error: e.message });

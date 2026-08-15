@@ -466,16 +466,6 @@ async function createSchema() {
         INSERT INTO stats (key, value) VALUES ('lifetimeCentralPoolLamports', 0) ON CONFLICT (key) DO NOTHING;
     `);
 
-    // v27.0: Track central pool expected airdrop separately per user for frontend breakdown
-    await pool.query(`
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_points' AND column_name = 'central_pool_expected_sol') THEN
-                ALTER TABLE user_points ADD COLUMN central_pool_expected_sol REAL DEFAULT 0;
-            END IF;
-        END $$;
-    `);
-
     // v25.24: Migration - Fix null balance values that cause BigInt conversion errors
     // Set default for balance column and fix any existing null values
     await pool.query(`
@@ -565,6 +555,20 @@ async function createSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_points_updated ON user_points(updated_at DESC)`);
     // v26.1: ASDF holder filter index for fast airdrop queries
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_points_asdf ON user_points(is_asdf_holder) WHERE is_asdf_holder = TRUE`);
+
+    // v27.0: Track central pool expected airdrop separately per user for frontend breakdown
+    // v27.4 BUGFIX: This migration must run AFTER user_points is created above — it previously
+    // ran before the CREATE TABLE, so on a brand-new database (table doesn't exist yet) the
+    // ALTER TABLE would fail with "relation \"user_points\" does not exist" and crash server
+    // startup entirely (initDB() rethrows, main()/startWorker() has no catch, process.exit(1)).
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_points' AND column_name = 'central_pool_expected_sol') THEN
+                ALTER TABLE user_points ADD COLUMN central_pool_expected_sol REAL DEFAULT 0;
+            END IF;
+        END $$;
+    `);
 
     // v26.1: Missing performance indexes
     // Composite (mint, timestamp) for per-token airdrop history queries

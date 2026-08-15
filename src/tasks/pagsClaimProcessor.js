@@ -104,11 +104,15 @@ async function acquireDistributedLock() {
         }
 
         // SET NX with TTL - atomic operation
+        // v27.4 BUGFIX: This client is ioredis (see services/redis.js), which takes variadic
+        // string/number args (SET key value NX EX seconds) — not a node-redis v4 style options
+        // object. The options object was silently coerced to a string and sent as a malformed
+        // SET argument, so this lock never actually acquired (every cycle either threw and was
+        // caught, or Redis returned a syntax error), meaning claim processing would never run
+        // at all once this task is re-enabled. Matches the ioredis call pattern already used in
+        // services/mutex.js (`redis.set(key, value, 'NX', 'PX', ms)`).
         const lockValue = `${process.pid}-${Date.now()}`;
-        const result = await client.set(LOCK_KEY, lockValue, {
-            NX: true,
-            EX: LOCK_TTL_SECONDS
-        });
+        const result = await client.set(LOCK_KEY, lockValue, 'NX', 'EX', LOCK_TTL_SECONDS);
 
         if (result === 'OK') {
             isRunning = true;
