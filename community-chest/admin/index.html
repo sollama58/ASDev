@@ -533,7 +533,7 @@
                 <div class="action-header"><span class="action-icon">📋</span><span class="action-name">Reset Points</span></div>
                 <div class="action-desc">Wipe and fully recalculate all user point values from scratch. Takes a few minutes.</div>
                 <div class="action-status" id="as-reset-pts"></div>
-                <button class="btn btn-danger btn-sm" onclick="runAction('reset-points','as-reset-pts')">Run</button>
+                <button class="btn btn-danger btn-sm" onclick="if(confirm('Wipe and fully recalculate all user points from scratch? This clears cached point/airdrop data until the recalculation finishes.'))runAction('reset-points','as-reset-pts')">Run</button>
             </div>
 
             <div class="action-cell">
@@ -649,7 +649,7 @@ function fmtCountdown(ts) {
     return m + 'm ' + s + 's';
 }
 function esc(s) {
-    return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 // ── Login ──────────────────────────────────────────────────────────────────────

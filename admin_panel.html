@@ -1985,6 +1985,23 @@
         let refreshInterval = null;
 
         // ===== UTILITIES =====
+        // SECURITY: This admin panel had no HTML-escaping helper at all — table/list rows built
+        // with template literals embedded fields like token ticker/name directly into innerHTML.
+        // Those fields originate from external/on-chain token metadata that any user can set when
+        // creating or registering a token, so an unescaped ticker containing e.g.
+        // <img src=x onerror=...> executes in the ADMIN's browser (which holds the admin API key
+        // in sessionStorage) the moment the table renders — a zero-click stored XSS that
+        // privilege-escalates from "anyone who can register a token" to "admin session". esc()
+        // escapes for safe use as HTML text content; escAttr() also escapes quotes for safe use
+        // inside a quoted HTML attribute or a single-quoted inline-JS string within one.
+        function esc(s) {
+            return String(s ?? '')
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        function escAttr(s) {
+            return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
         // v25.65: Toast notification system
         function notify(message, type = 'info', duration = 5000) {
             const container = document.getElementById('notification-container');
@@ -1999,7 +2016,8 @@
             if (type === 'error') icon = '✕';
             if (type === 'warning') icon = '⚠';
 
-            notification.innerHTML = `<span>${icon}</span><span>${message}</span>`;
+            // SECURITY: message may include backend error/data text — escape before innerHTML
+            notification.innerHTML = `<span>${icon}</span><span>${esc(message)}</span>`;
             container.appendChild(notification);
 
             // Auto-dismiss after duration
@@ -2268,8 +2286,8 @@
                 if (data.recentTokens && data.recentTokens.length > 0) {
                     tbody.innerHTML = data.recentTokens.map(t => `
                         <tr>
-                            <td class="text-orange-300">${t.ticker || '???'}</td>
-                            <td class="text-gray-300">${t.name || 'Unknown'}</td>
+                            <td class="text-orange-300">${esc(t.ticker) || '???'}</td>
+                            <td class="text-gray-300">${esc(t.name) || 'Unknown'}</td>
                             <td class="text-gray-500">${t.createdAt ? new Date(t.createdAt).toLocaleString() : '--'}</td>
                         </tr>
                     `).join('');
@@ -2287,9 +2305,9 @@
 
                 if (data.tokens && data.tokens.length > 0) {
                     tbody.innerHTML = data.tokens.slice(0, 50).map((t, i) => `
-                        <tr onclick="document.getElementById('token-lookup-mint').value='${t.mint}'; lookupToken();" style="cursor: pointer;">
+                        <tr onclick="document.getElementById('token-lookup-mint').value='${escAttr(t.mint)}'; lookupToken();" style="cursor: pointer;">
                             <td class="text-orange-500">${i + 1}</td>
-                            <td class="text-white font-bold">${t.ticker || '???'}</td>
+                            <td class="text-white font-bold">${esc(t.ticker) || '???'}</td>
                             <td class="text-green-400">$${formatNumber(t.volume || 0)}</td>
                             <td class="text-blue-400">$${formatNumber(t.marketCap || 0)}</td>
                             <td>
@@ -2508,12 +2526,12 @@
                     platformList.innerHTML = data.platformTokens.map(t => `
                         <div class="flex justify-between items-center p-2 hover:bg-gray-800 rounded text-xs border-b border-gray-700">
                             <div class="flex-1">
-                                <span class="text-white font-bold">${t.ticker || '???'}</span>
+                                <span class="text-white font-bold">${esc(t.ticker) || '???'}</span>
                                 <span class="text-gray-500 ml-1">${shortenPubkey(t.mint)}</span>
                             </div>
                             <div class="flex gap-1">
-                                <button onclick="selectTokenForRemoval('${t.mint}', 'platform')" class="text-blue-400 hover:text-blue-300">Select</button>
-                                <button onclick="quickDeleteToken('${t.mint}', 'platform', '${t.ticker}')" class="text-red-400 hover:text-red-300 ml-2">🗑️</button>
+                                <button onclick="selectTokenForRemoval('${escAttr(t.mint)}', 'platform')" class="text-blue-400 hover:text-blue-300">Select</button>
+                                <button onclick="quickDeleteToken('${escAttr(t.mint)}', 'platform', '${escAttr(t.ticker)}')" class="text-red-400 hover:text-red-300 ml-2">🗑️</button>
                             </div>
                         </div>
                     `).join('');
@@ -2526,14 +2544,14 @@
                     robinhoodList.innerHTML = data.robinhoodTokens.map(t => `
                         <div class="flex justify-between items-center p-2 hover:bg-gray-800 rounded text-xs border-b border-gray-700">
                             <div class="flex-1">
-                                <span class="text-white font-bold">${t.ticker || '???'}</span>
+                                <span class="text-white font-bold">${esc(t.ticker) || '???'}</span>
                                 <span class="text-gray-500 ml-1">${shortenPubkey(t.mint)}</span>
                                 <span class="text-pink-400 ml-1">${t.feeShareBps ? (t.feeShareBps / 100) + '%' : ''}</span>
                             </div>
                             <div class="flex gap-1">
-                                <button onclick="selectTokenForRemoval('${t.mint}', 'robinhood')" class="text-blue-400 hover:text-blue-300">Select</button>
-                                <button onclick="quickDeactivateToken('${t.mint}', '${t.ticker}')" class="text-yellow-400 hover:text-yellow-300 ml-1">⏸️</button>
-                                <button onclick="quickDeleteToken('${t.mint}', 'robinhood', '${t.ticker}')" class="text-red-400 hover:text-red-300 ml-1">🗑️</button>
+                                <button onclick="selectTokenForRemoval('${escAttr(t.mint)}', 'robinhood')" class="text-blue-400 hover:text-blue-300">Select</button>
+                                <button onclick="quickDeactivateToken('${escAttr(t.mint)}', '${escAttr(t.ticker)}')" class="text-yellow-400 hover:text-yellow-300 ml-1">⏸️</button>
+                                <button onclick="quickDeleteToken('${escAttr(t.mint)}', 'robinhood', '${escAttr(t.ticker)}')" class="text-red-400 hover:text-red-300 ml-1">🗑️</button>
                             </div>
                         </div>
                     `).join('');
@@ -2571,7 +2589,7 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    resultEl.innerHTML = `<span class="text-green-400">✓ Token "${data.ticker}" deleted successfully!</span>\n\n` + formatJson(data.deleted);
+                    resultEl.innerHTML = `<span class="text-green-400">✓ Token "${esc(data.ticker)}" deleted successfully!</span>\n\n` + formatJson(data.deleted);
                     log(`Token ${ticker} deleted successfully`, 'success');
                     loadAllTokensForRemoval(); // Refresh the list
                 } else {
@@ -2600,7 +2618,7 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    resultEl.innerHTML = `<span class="text-yellow-400">✓ Token "${data.ticker}" deactivated!</span>\n\n${data.message}`;
+                    resultEl.innerHTML = `<span class="text-yellow-400">✓ Token "${esc(data.ticker)}" deactivated!</span>\n\n${esc(data.message)}`;
                     log(`Token ${ticker} deactivated`, 'success');
                     loadAllTokensForRemoval(); // Refresh the list
                 } else {
@@ -3493,7 +3511,7 @@
                 const kothStatsEl = document.getElementById('sim-koth-stats');
                 if (kothStatsEl && data.kothPot) {
                     const kp = data.kothPot;
-                    const tokenInfo = kp.token ? `${kp.token.ticker} | ` : '';
+                    const tokenInfo = kp.token ? `${esc(kp.token.ticker)} | ` : '';
                     kothStatsEl.innerHTML = `${tokenInfo}${kp.amountSOL} SOL | ${kp.holderCount} holders`;
                 }
 
@@ -3608,7 +3626,7 @@
                 let html = '<div class="space-y-2">';
 
                 // Token info
-                html += `<div class="text-pink-400 font-bold">${data.token.ticker} (${data.token.name})</div>`;
+                html += `<div class="text-pink-400 font-bold">${esc(data.token.ticker)} (${esc(data.token.name)})</div>`;
                 html += `<div class="text-gray-400">Mint: <span class="text-white">${data.token.mint}</span></div>`;
                 html += `<div class="text-gray-400">Creator: <span class="${data.token.creatorPubkey && data.token.creatorPubkey !== 'unknown' ? 'text-green-400' : 'text-red-400'}">${data.token.creatorPubkey || 'MISSING'}</span></div>`;
                 html += `<div class="text-gray-400">Fee Share: <span class="text-cyan-400">${(data.token.feeShareBps / 100).toFixed(1)}%</span></div>`;
@@ -3735,7 +3753,7 @@
                         html += `<div class="mt-2 text-xs max-h-32 overflow-y-auto">`;
                         for (const d of data.details) {
                             const color = d.status === 'fixed' ? 'text-green-400' : 'text-red-400';
-                            html += `<div class="${color}">${d.ticker}: ${d.status}${d.reason ? ` (${d.reason})` : ''}</div>`;
+                            html += `<div class="${color}">${esc(d.ticker)}: ${esc(d.status)}${d.reason ? ` (${esc(d.reason)})` : ''}</div>`;
                         }
                         html += `</div>`;
                     }
@@ -3790,7 +3808,7 @@
                             const totalFloat = parseFloat(t.totalPendingSol);
                             const rowClass = totalFloat >= 0.1 ? 'text-green-400' : totalFloat >= 0.01 ? 'text-yellow-400' : 'text-gray-300';
                             html += `<tr class="${rowClass} border-b border-gray-800 hover:bg-white/5">`;
-                            html += `<td class="py-1 font-mono">${t.ticker}</td>`;
+                            html += `<td class="py-1 font-mono">${esc(t.ticker)}</td>`;
                             html += `<td class="text-right text-cyan-400">${t.feeSharePct}</td>`;
                             html += `<td class="text-right">${parseFloat(t.bcPendingSol).toFixed(4)}</td>`;
                             html += `<td class="text-right">${parseFloat(t.ammPendingSol).toFixed(4)}</td>`;
@@ -3859,7 +3877,7 @@
                 html += '<div class="bg-blue-900/20 p-2 rounded">';
                 html += '<div class="text-blue-400 font-bold mb-1">📋 Token Info</div>';
                 html += `<div class="grid grid-cols-2 gap-1 text-gray-300">`;
-                html += `<div>Ticker: <span class="text-white font-bold">${data.token.ticker}</span></div>`;
+                html += `<div>Ticker: <span class="text-white font-bold">${esc(data.token.ticker)}</span></div>`;
                 html += `<div>Fee Share: <span class="text-cyan-400">${data.token.feeSharePercent}%</span></div>`;
                 html += `<div class="col-span-2">Mint: <span class="text-gray-400 font-mono text-xs">${data.token.mint}</span></div>`;
                 html += `<div class="col-span-2">Creator: <span class="text-gray-400 font-mono text-xs">${data.token.creatorPubkey}</span></div>`;
@@ -4008,7 +4026,7 @@
                 // Token Info
                 html += '<div class="bg-blue-900/20 p-2 rounded">';
                 html += '<div class="text-blue-400 font-bold mb-1">📋 Token</div>';
-                html += `<div>${data.results.token.ticker} - ${data.results.token.mint.slice(0, 8)}...${data.results.token.mint.slice(-4)}</div>`;
+                html += `<div>${esc(data.results.token.ticker)} - ${data.results.token.mint.slice(0, 8)}...${data.results.token.mint.slice(-4)}</div>`;
                 html += '</div>';
 
                 // BC Result
@@ -4401,7 +4419,7 @@
                     html += `<div class="text-xs text-orange-400 font-bold mb-1">Platform Tokens (${platformTokens.length}): ${formatNumber(checkData.basePoints || 0)} pts</div>`;
                     html += `<div class="text-xs text-gray-400 max-h-32 overflow-y-auto">`;
                     for (const t of platformTokens.slice(0, 10)) {
-                        html += `<div class="py-1 border-b border-gray-700/50">${t.ticker || shortenPubkey(t.mint, 4)} - ${formatNumber(t.basePoints || 0)} pts (${(t.volumeWeight || 1).toFixed(2)}x)</div>`;
+                        html += `<div class="py-1 border-b border-gray-700/50">${esc(t.ticker) || shortenPubkey(t.mint, 4)} - ${formatNumber(t.basePoints || 0)} pts (${(t.volumeWeight || 1).toFixed(2)}x)</div>`;
                     }
                     if (platformTokens.length > 10) {
                         html += `<div class="text-gray-500">... and ${platformTokens.length - 10} more</div>`;
@@ -4416,7 +4434,7 @@
                     html += `<div class="text-xs text-pink-400 font-bold mb-1">Robinhood Tokens (${robinhoodTokens.length}): ${formatNumber(checkData.robinhoodPoints || 0)} pts</div>`;
                     html += `<div class="text-xs text-gray-400 max-h-32 overflow-y-auto">`;
                     for (const t of robinhoodTokens.slice(0, 10)) {
-                        html += `<div class="py-1 border-b border-gray-700/50">${t.ticker || shortenPubkey(t.mint, 4)} - ${formatNumber(t.basePoints || 0)} pts (${(t.volumeWeight || 1).toFixed(2)}x, ${t.feeSharePercent || 100}% share)</div>`;
+                        html += `<div class="py-1 border-b border-gray-700/50">${esc(t.ticker) || shortenPubkey(t.mint, 4)} - ${formatNumber(t.basePoints || 0)} pts (${(t.volumeWeight || 1).toFixed(2)}x, ${t.feeSharePercent || 100}% share)</div>`;
                     }
                     if (robinhoodTokens.length > 10) {
                         html += `<div class="text-gray-500">... and ${robinhoodTokens.length - 10} more</div>`;
@@ -4511,7 +4529,7 @@
             tbody.innerHTML = filtered.map((t, i) => `
                 <tr onclick="fetchTokenHolderDetail('${t.mint}', '${t.source}')" style="cursor: pointer;" title="Click to see holders">
                     <td class="text-orange-500">${i + 1}</td>
-                    <td class="text-white font-bold">${t.ticker || shortenPubkey(t.mint, 4)}</td>
+                    <td class="text-white font-bold">${esc(t.ticker) || shortenPubkey(t.mint, 4)}</td>
                     <td><span class="text-xs px-1 py-0.5 rounded ${t.source === 'platform' ? 'bg-orange-900/50 text-orange-400' : 'bg-pink-900/50 text-pink-400'}">${t.source}${t.source === 'robinhood' ? ' (' + t.feeSharePercent + '%)' : ''}</span></td>
                     <td class="text-right text-green-400">$${formatNumber(t.volume24h)}</td>
                     <td class="text-right text-cyan-400">${t.volumeWeight.toFixed(2)}x</td>
@@ -5012,7 +5030,7 @@
                     if (beneficiaries.length > 0) {
                         tbody.innerHTML = beneficiaries.map(b => {
                             const pending = (b.totalFeesAccumulated || 0) - (b.totalFeesClaimed || 0);
-                            const tokenDisplay = b.ticker ? `${b.ticker}` : shortenPubkey(b.mint);
+                            const tokenDisplay = b.ticker ? esc(b.ticker) : shortenPubkey(b.mint);
                             const hasMultiRecipients = b.hasMultipleRecipients ? '<span class="text-yellow-500 text-xs ml-1" title="Multiple on-chain fee recipients">(on-chain multi)</span>' : '';
                             const hasCreatorPubkey = b.creatorPubkey && b.creatorPubkey !== 'unknown';
                             const creatorWarning = !hasCreatorPubkey ? '<span class="text-red-400 text-xs ml-1" title="Missing creatorPubkey - vault derivation will fail">⚠️</span>' : '';
@@ -5022,20 +5040,20 @@
                             if (b.isMultiBeneficiary && b.shares && b.shares.length > 1) {
                                 beneficiaryDisplay = b.shares.map(s =>
                                     `<div class="flex justify-between text-xs">
-                                        <span class="text-purple-400">@${s.twitterUsername}</span>
+                                        <span class="text-purple-400">@${esc(s.twitterUsername)}</span>
                                         <span class="text-cyan-400 ml-2">${s.sharePercent.toFixed(0)}%</span>
                                     </div>`
                                 ).join('');
                                 beneficiaryDisplay = `<div class="space-y-0.5">${beneficiaryDisplay}</div>`;
                             } else {
-                                beneficiaryDisplay = `<span class="text-purple-400">@${b.twitterUsername}</span>`;
+                                beneficiaryDisplay = `<span class="text-purple-400">@${esc(b.twitterUsername)}</span>`;
                             }
 
                             const multiBeneficiaryBadge = b.isMultiBeneficiary ? '<span class="text-cyan-500 text-xs ml-1" title="Multiple Twitter beneficiaries">(multi-user)</span>' : '';
 
                             return `
                                 <tr style="cursor: pointer;" title="Click to debug vault">
-                                    <td class="text-gray-300" title="${b.mint}" onclick="document.getElementById('pags-debug-mint').value='${b.mint}'; debugRewardVault();">${tokenDisplay}${hasMultiRecipients}${multiBeneficiaryBadge}${creatorWarning}</td>
+                                    <td class="text-gray-300" title="${escAttr(b.mint)}" onclick="document.getElementById('pags-debug-mint').value='${escAttr(b.mint)}'; debugRewardVault();">${tokenDisplay}${hasMultiRecipients}${multiBeneficiaryBadge}${creatorWarning}</td>
                                     <td>${beneficiaryDisplay}</td>
                                     <td class="text-orange-400">${(b.feeSharePercent || 100).toFixed(1)}%</td>
                                     <td class="text-green-400">${(b.totalFeesAccumulated || 0).toFixed(6)}</td>
@@ -5291,8 +5309,8 @@
                             const verifiedDate = u.lastVerified ? new Date(u.lastVerified).toLocaleDateString() : 'Never';
                             return `
                                 <tr>
-                                    <td class="text-purple-400">@${u.twitterUsername}</td>
-                                    <td class="text-gray-300">${u.displayName || '--'}</td>
+                                    <td class="text-purple-400">@${esc(u.twitterUsername)}</td>
+                                    <td class="text-gray-300">${esc(u.displayName) || '--'}</td>
                                     <td class="text-orange-300 text-xs">${u.linkedWallet ? shortenPubkey(u.linkedWallet) : '<span class="text-gray-500">Not linked</span>'}</td>
                                     <td class="text-gray-400">${verifiedDate}</td>
                                     <td>${u.isActive ? '<span class="text-green-400">Active</span>' : '<span class="text-red-400">Inactive</span>'}</td>
@@ -5533,7 +5551,7 @@
                         if (data.tokensFound === 0) {
                             resultEl.innerHTML = '<span class="text-green-400">✓ No PAGS-only tokens found in tokens table - leaderboard is clean!</span>';
                         } else {
-                            const tokenList = (data.tokensToRemove || []).map(t => `<div class="ml-2">• ${t.ticker || t.mint.slice(0,8)} → @${t.pagsUser}</div>`).join('');
+                            const tokenList = (data.tokensToRemove || []).map(t => `<div class="ml-2">• ${esc(t.ticker) || t.mint.slice(0,8)} → @${esc(t.pagsUser)}</div>`).join('');
                             resultEl.innerHTML = `
                                 <div class="text-yellow-400 font-bold mb-1">Found ${data.tokensFound} PAGS-only tokens:</div>
                                 <div class="text-gray-300 text-[10px] max-h-20 overflow-y-auto">${tokenList}</div>

@@ -1971,9 +1971,12 @@ const fmt = {
 function pad(n) { return String(n).padStart(2, '0'); }
 
 function esc(s) {
+    // Also escapes single quotes: some call sites embed esc()'d text inside a
+    // single-quoted JS string within an HTML attribute (e.g. the onerror image
+    // fallback below) — an unescaped ' there could break out of that string.
     return String(s ?? '')
         .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Escape a URL for safe use in single-quoted HTML attribute JS strings (e.g. onerror='...')
@@ -2799,7 +2802,9 @@ function connectWS() {
                     setTimeout(loadLeaderboard, 2500);
                 } else if (msg.type === 'launch') {
                     const d = msg.data || {};
-                    if (d.ticker) toast(`🚀 New token: $${esc(d.ticker)}`, 'success');
+                    // toast() assigns via .textContent (auto-escaping), so esc() here would
+                    // double-escape and show literal "&amp;" etc. for tickers containing those chars.
+                    if (d.ticker) toast(`🚀 New token: $${d.ticker}`, 'success');
                 }
             } catch {}
         };
