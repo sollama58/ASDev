@@ -1,273 +1,222 @@
-# ASDev
+# ASDev (Ignition)
 
-Token launcher for Solana. Ships tokens that end with `ASDF`. That's it.
+A Solana token launcher built around Pump.fun, wrapped in a self-sustaining
+fee-sharing ecosystem: every registered token routes a share of its trading
+fees back to a platform pool, which is redistributed as SOL airdrops to that
+token's holders on a fixed schedule — no claiming, no staking, just holding.
 
-## Quick Start (for the impatient)
+Beyond launching tokens, the platform runs three fee-sharing programs on top
+of the same holder-tracking/airdrop engine:
 
-```bash
-# Clone
-git clone https://github.com/zeyxx/ASDev.git
-cd ASDev
+- **Robinhood** — external Pump.fun tokens that opt into fee sharing without
+  being launched here. Verified entirely on-chain at registration time.
+- **PAGS** ("Pay-to-Twitter/X") — token creators split fees with Twitter/X
+  accounts, who link a wallet via OAuth and claim their share.
+- **Community Chest** — a standalone airdrop-pool sub-site/brand (own static
+  page and admin panel) built on the same backend.
 
-# Install Node stuff
-npm install
+Two tracked tokens (`ASDF`, `ANSEM`) give their top holders a 2× multiplier
+on airdrop weight, stacking to 4× if you hold both.
 
-# Install Rust (say yes to everything, it's fine)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source ~/.cargo/env
+> Note: the vanity address grinder (mint addresses ending in `ASDF`) referenced
+> in older docs has been decommissioned — `services/vanity.js` now just
+> generates a random keypair. Mints are no longer vanity-ground.
 
-# Clone and build the vanity grinder
-git clone https://github.com/zeyxx/asdf-vanity-grinder.git
-cd asdf-vanity-grinder
-cargo build --release
-cd ..
+## Architecture
 
-# Configure (edit .env with your keys)
-cp .env.example .env
+```
+src/
+├── index.js            # Main entry point — Express API + WebSocket + background tasks
+├── worker.js            # Same background tasks, no HTTP server (SERVER_MODE=worker)
+├── config/
+│   ├── env.js            # All environment variables / config, validated on boot
+│   └── constants.js       # Program IDs, wallet addresses, token mints (incl. ASDF/ANSEM)
+├── services/             # Integrations & shared logic used by routes and tasks
+│   ├── postgres.js         # The only live database (services/database.js is dead SQLite code)
+│   ├── redis.js            # Caching, BullMQ queues, cross-process state, distributed locks
+│   ├── solana.js / pump.js / mintExtractor.js   # RPC, Pump.fun program calls, fee-vault discovery
+│   ├── pags.js / pagsTwitterAuth.js             # PAGS Twitter fee-sharing subsystem
+│   ├── twitter.js, pinata.js, imageUtils.js, moderation.js, claudeKoth.js, ...
+│   └── mutex.js, circuitBreaker.js, sanitizer.js, signatureVerifier.js, logger.js
+├── routes/               # Express API (mounted under /api — see API section below)
+│   ├── tokens.js           # Listing, leaderboard, registration, holder lookups, token admin
+│   ├── health.js           # /api/health + a large set of admin debug/diagnostic endpoints
+│   ├── pags.js             # PAGS OAuth, registration, claims, admin
+│   ├── deploy.js            # Token deployment queue
+│   └── solana.js            # Address validation, blockhash, balance
+├── tasks/                # Background jobs, orchestrated by tasks/index.js
+│   ├── holderScanner.js     # Core points/airdrop-eligibility engine (on-chain holder scans)
+│   ├── flywheel.js          # Fee collection + SOL airdrop distribution (central + per-token pools)
+│   ├── robinhoodScanner.js  # Partner-token discovery, verification, holder tracking
+│   ├── metadataUpdater.js   # Price/image refresh (DexScreener → GeckoTerminal → Helius)
+│   ├── asdfSync.js          # Top 100 ASDF holder sync (2× multiplier)
+│   ├── pagsFeeScanner.js    # PAGS on-chain fee scanning
+│   ├── pagsClaimProcessor.js# PAGS claim processing (currently disabled in tasks/index.js)
+│   └── workers.js           # BullMQ worker wrappers around the above
+└── utils/                # Small shared helpers (bigint math, etc.)
 
-# Run
-npm start
+scripts/                 # One-off/maintenance scripts (see Scripts section)
+
+# Frontend — static HTML, no build step, each file is self-contained
+asdev_frontend.html       # Main platform UI (launches, leaderboard, Robinhood, PAGS, wallet connect)
+admin_panel.html          # Main platform admin console
+community-chest/          # Standalone airdrop-pool sub-site (own render.yaml Blueprint)
+├── index.html
+├── admin/index.html
+└── render.yaml
+asdev_intro_modal.html    # Small promo modal snippet, meant to be pasted into other pages
 ```
 
-That's it. You're done. Go touch grass.
+All frontend pages talk to the backend via a hardcoded `BACKEND_URL` constant
+near the top of each file's `<script>` — update that if you point them at a
+different deployment.
+
+## Data & background jobs
+
+- **PostgreSQL** is the system of record (tokens, holders, points, PAGS
+  data, logs). `DATABASE_URL` is required — the server will not start
+  without it.
+- **Redis** backs BullMQ job queues, response caching, distributed mutexes,
+  and cross-process global state (so the API process and worker process(es)
+  agree on the same numbers).
+- Background tasks run on independent intervals — holder scans and price
+  updates every few minutes, fee collection every 2.5 minutes, airdrop
+  distribution every 15 minutes, Robinhood/metadata sweeps every 10 minutes.
+  They run inline in `index.js` (default) or can be split onto a dedicated
+  process via `src/worker.js` (`SERVER_MODE=worker`) so heavy scanning
+  doesn't compete with API traffic.
 
 ## Requirements
 
 - Node.js 18+
+- PostgreSQL (a `DATABASE_URL` connection string)
 - Redis
-- A Solana wallet with some SOL
-- Coffee (optional but recommended)
+- A funded Solana wallet (base58 private key) for the platform/deployment wallet
 
-## Installation
+## Setup
 
 ```bash
-# Clone the thing
-git clone https://github.com/zeyxx/ASDev.git
+git clone <this-repo>
 cd ASDev
 
-# Install dependencies
 npm install
-
-# Copy the env file and fill it in
 cp .env.example .env
+# edit .env — at minimum set DEV_WALLET_PRIVATE_KEY, DATABASE_URL, REDIS_URL
+
+npm start
 ```
 
 ## Configuration
 
-Create a `.env` file (see `.env.example` for all options):
+See `.env.example` for the full list with comments. The essentials:
 
 ```env
 # Required
-DEV_WALLET_PRIVATE_KEY=your_base58_private_key
+DEV_WALLET_PRIVATE_KEY=your-base58-private-key   # Platform wallet
+DATABASE_URL=postgres://user:pass@host:5432/db    # PostgreSQL connection string
+REDIS_URL=redis://127.0.0.1:6379
 
-# Network (mainnet or devnet)
+# Solana RPC (mainnet by default; set HELIUS_API_KEY to route through Helius)
 SOLANA_NETWORK=mainnet
-# Or use a custom RPC URL:
-# RPC_URL=https://api.mainnet-beta.solana.com
-
-# Optional but nice to have
-HELIUS_API_KEY=your_helius_key
-PORT=3000
+HELIUS_API_KEY=your-helius-api-key
+# Or override the RPC endpoint entirely:
+# RPC_URL=https://your-custom-rpc.com
 
 # Security
-CORS_ORIGINS=*                    # Comma-separated origins
-ADMIN_API_KEY=your_admin_key      # For debug endpoints
+CORS_ORIGINS=*                # Comma-separated allowed origins
+ADMIN_API_KEY=your-admin-key  # Required to use any /api/admin/* or /api/debug/* endpoint
 
-# Vanity grinder (for ASDF addresses)
-VANITY_GRINDER_ENABLED=true
-VANITY_GRINDER_URL=http://localhost:8080
-VANITY_GRINDER_API_KEY=your_api_key
+# IPFS metadata storage
+PINATA_JWT=your-pinata-jwt
 
-# IPFS (Pinata)
-PINATA_JWT=your_jwt
-
-# Twitter (if you want social features)
-TWITTER_API_KEY=...
-TWITTER_API_SECRET=...
-TWITTER_ACCESS_TOKEN=...
-TWITTER_ACCESS_SECRET=...
+# Optional feature areas — see .env.example for the full set
+# Twitter posting: TWITTER_API_KEY / TWITTER_API_SECRET / TWITTER_ACCESS_TOKEN / TWITTER_ACCESS_SECRET
+# PAGS (Twitter fee-sharing): PAGS_WALLET, PAGS_WALLET_PRIVATE_KEY, TWITTER_OAUTH2_CLIENT_ID/SECRET, PAGS_SESSION_SECRET
+# Content moderation: CLARIFAI_API_KEY
+# AI-selected "King of the Hill": ANTHROPIC_API_KEY
 ```
-
-## Security Features
-
-- **Rate limiting**: 100 requests/15min on API routes, 3/min on deploy
-- **Helmet**: Security headers enabled
-- **CORS**: Configurable allowed origins
-- **XSS Protection**: DOMPurify sanitization on frontend
-- **Input validation**: Solana address validation on all pubkey inputs
-- **Admin auth**: Debug endpoints require API key in production
 
 ## Running
 
-### The easy way
-
 ```bash
-npm start
+npm start              # API server + WebSocket + background tasks in one process
+npm run dev             # Same, with --watch for local development
+
+# Split background tasks onto a separate process (e.g. a second Render service)
+SERVER_MODE=worker node src/worker.js
+SERVER_MODE=worker WORKER_TASKS=holders,metadata node src/worker.js   # subset of tasks
 ```
 
-### The fancy way (with vanity grinder)
+## Scripts
 
-```bash
-# Start Redis first
-redis-server --daemonize yes
+| Script | What it does |
+|---|---|
+| `npm run migrate` | One-time SQLite → PostgreSQL data migration |
+| `npm run backfill` | Discover tokens the platform receives fees from, by scanning on-chain vault transaction history (`--dry-run` supported) |
+| `node scripts/show-points.js` | Dump current point distribution and eligibility |
+| `node scripts/test-airdrop.js` | Simulate/test the point → airdrop distribution flow |
+| `node scripts/debugVaultScan.js` | Diagnostic: inspect raw vault transactions and mint extraction |
 
-# Start the vanity grinder (in asdf-vanity-grinder folder)
-cd asdf-vanity-grinder
-./target/release/asdf-vanity-grinder pool \
-  --file vanity_pool.json \
-  --port 8080 \
-  --api-key your_api_key \
-  --min-pool 10 \
-  --threads 2
+## API
 
-# Back to main folder, start the server
-cd ..
-VANITY_GRINDER_ENABLED=true npm start
-```
-
-### The lazy way
-
-```bash
-# Start the grinder first (in background)
-cd asdf-vanity-grinder && ./start_grinder.sh &
-cd ..
-
-# Then start the server
-VANITY_GRINDER_ENABLED=true npm start
-```
-
-## API Endpoints
+The full API lives under `/api` (see `src/routes/*.js`) — there are 100+
+endpoints in total, including a large admin/debug surface gated behind
+`ADMIN_API_KEY`. Highlights:
 
 | Endpoint | What it does |
-|----------|--------------|
-| `GET /api/health` | Is it alive? |
-| `GET /api/version` | What version? |
-| `GET /api/services-status` | Check all external services (DB, Redis, RPC, Vanity) |
-| `GET /api/blockhash` | Fresh blockhash |
-| `GET /api/balance?pubkey=...` | Get wallet balance |
-| `GET /api/leaderboard` | Top 10 tokens by volume |
-| `GET /api/all-launches` | All launched tokens |
-| `GET /api/recent-launches` | Ticker feed |
-| `GET /api/token-holders/:mint` | Top 50 holders for a token |
-| `GET /api/check-holder?userPubkey=...` | Check airdrop eligibility |
-| `GET /api/all-eligible-users` | All users eligible for airdrop |
-| `POST /api/prepare-metadata` | Upload metadata to IPFS |
-| `POST /api/deploy` | Queue token deployment |
-| `GET /api/job-status/:id` | Check deployment job status |
-| `GET /api/debug/logs` | Debug logs (requires admin key) |
+|---|---|
+| `GET /api/health` | Wallet balance, pending fees, pool sizes, lifetime stats |
+| `GET /api/version` | Server version string |
+| `GET /api/services-status` | Live check of DB / Redis / Solana RPC |
+| `GET /api/all-launches` | All launched tokens (paginated) |
+| `GET /api/leaderboard` | Registered/Robinhood token leaderboard |
+| `GET /api/recent-launches` | Recent-launches ticker feed |
+| `GET /api/token-holders/:mint` | Top holders for a token |
+| `GET /api/check-holder?userPubkey=…` | A wallet's points + expected airdrop |
+| `GET /api/user-holdings?userPubkey=…` | Per-token holdings breakdown for a wallet |
+| `GET /api/all-eligible-users` | All wallets with a pending airdrop |
+| `POST /api/prepare-metadata` | Upload token metadata/image to IPFS |
+| `POST /api/deploy` | Queue a token deployment |
+| `GET /api/job-status/:id` | Poll a deployment job |
+| `POST /api/register-token` / `POST /api/reregister-token` | Register a Robinhood partner token (verified on-chain) |
+| `GET /api/robinhood/*` | Robinhood token/holder endpoints |
+| `POST /api/pags/register`, `GET /api/pags/lookup/:username`, `POST /api/pags/claim` | PAGS registration, lookup, claiming |
+| `GET /api/auth/twitter`, `GET /api/auth/twitter/callback` | PAGS Twitter OAuth |
+| `GET /api/admin/*`, `GET /api/debug/*` | Operational/admin endpoints (trigger scans, view logs, manage tokens/announcements, simulate airdrops, etc.) — requires `x-admin-key` header |
 
-## Project Structure
+## Security
 
-```
-src/
-├── index.js          # Entry point
-├── config/           # Configuration
-├── services/         # Core services (solana, redis, etc.)
-├── routes/           # API endpoints
-└── tasks/            # Background jobs
-```
+- Rate limiting: 120 req/min globally on `/api`, 5/min on `/api/deploy`
+- `helmet` security headers + configurable CORS allowlist (`CORS_ORIGINS`)
+- All admin/debug endpoints require a timing-safe-compared `ADMIN_API_KEY`
+  (disabled entirely — returns 403 — if the key isn't set)
+- Solana address validation on all pubkey inputs; signature verification on
+  wallet-authenticated actions (PAGS link/claim, Robinhood re-registration)
+- Frontend output escaping (`esc()`/`escAttr()` helpers and/or DOMPurify,
+  depending on the page) on any field that originates from user-settable
+  token metadata (ticker, name), to prevent stored XSS
 
-## Vanity Grinder
+## Deployment
 
-The Rust vanity grinder generates Solana keypairs ending with `ASDF`. It runs separately and the Node.js server fetches keypairs from it via HTTP.
-
-### Installing Rust
-
-If you don't have Rust installed:
-
-```bash
-# Install Rust (just say yes to everything)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Reload your shell
-source ~/.cargo/env
-
-# Verify it works
-rustc --version
-```
-
-### Building the grinder
-
-```bash
-cd asdf-vanity-grinder
-
-# Build in release mode (important for performance)
-cargo build --release
-
-# Binary will be at ./target/release/asdf-vanity-grinder
-```
-
-### Running the grinder
-
-```bash
-# Basic usage - starts HTTP server with keypair pool
-./target/release/asdf-vanity-grinder pool \
-  --file vanity_pool.json \
-  --port 8080 \
-  --api-key your_secret_key \
-  --min-pool 10 \
-  --threads 2
-
-# Low priority mode (recommended for production)
-nice -n 19 ionice -c 3 ./target/release/asdf-vanity-grinder pool \
-  --file vanity_pool.json \
-  --port 8080 \
-  --api-key your_secret_key \
-  --min-pool 10 \
-  --threads 1
-```
-
-### Grinder options
-
-| Option | Description |
-|--------|-------------|
-| `--file` | JSON file to store the keypair pool |
-| `--port` | HTTP server port (default: 8080) |
-| `--api-key` | API key for authentication |
-| `--min-pool` | Minimum pool size before warning |
-| `--threads` | Number of grinding threads |
-
-### Grinder endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /health` | Health check (no auth) |
-| `GET /stats` | Pool statistics |
-| `GET /mint` | Get next available keypair |
-| `POST /refill?count=N` | Generate N new keypairs |
-
-### Pre-generating keypairs
-
-If you want to pre-generate some keypairs before starting:
-
-```bash
-# Generate 50 keypairs and save to pool file
-./target/release/asdf-vanity-grinder pool \
-  --file vanity_pool.json \
-  --min-pool 50 \
-  --threads 4
-
-# Then start the server with the pre-filled pool
-./target/release/asdf-vanity-grinder pool \
-  --file vanity_pool.json \
-  --port 8080 \
-  --api-key your_secret_key
-```
+Runs on Render.com as multiple services from this one repo:
+- The API/worker process (`src/index.js` / `src/worker.js`)
+- Separate static-site Blueprints for the frontends — see
+  `community-chest/render.yaml` for that sub-site's Blueprint
 
 ## Troubleshooting
 
 **Server won't start?**
-- Check if Redis is running: `redis-cli ping`
-- Check your `.env` file
-- Check if port 3000 is free
+- Check `DATABASE_URL` — the server exits immediately without a working Postgres connection
+- Check `DEV_WALLET_PRIVATE_KEY` is set and valid base58
+- Check Redis is reachable: `redis-cli -u "$REDIS_URL" ping`
+- Check the port isn't already in use
 
-**Vanity grinder not working?**
-- Is it running? `pgrep -f asdf-vanity-grinder`
-- Is the API key correct?
-- Check `http://localhost:8080/health`
+**Admin endpoints all return 403/401?**
+- `ADMIN_API_KEY` isn't set, or the `x-admin-key` header doesn't match it
 
-**Everything is on fire?**
-- This is fine.
+**Background tasks not running / stale data?**
+- Confirm you're not running with `SERVER_MODE=worker` on the API instance
+  (and vice versa) without a worker instance actually running the tasks
 
 ## License
 
