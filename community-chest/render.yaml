@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: bullpad
+    name: community-chest
     env: static
     staticPublishPath: .
     buildCommand: ""

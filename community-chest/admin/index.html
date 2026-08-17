@@ -1,12 +1,11 @@
-<!-- ============================================================================
-     Community Chest Admin — embeddable widget
-     Paste this whole snippet into the <body> of your existing page.
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Community Chest Admin</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
 
-     Optional — add these to your page's own <head> for matching browser-tab
-     branding (a fragment can't inject its own <head> elements):
-
-       <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
-   ============================================================================ -->
     <style>
         :root {
             --bg:           #080808;
@@ -415,6 +414,8 @@
             .import-row { flex-direction: column; }
         }
     </style>
+</head>
+<body>
 
 <!-- ── Header ── -->
 <header>
@@ -1056,3 +1057,6 @@ if (adminKey) {
         .catch(() => {});
 }
 </script>
+
+</body>
+</html>
