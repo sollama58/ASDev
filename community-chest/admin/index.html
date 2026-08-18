@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bullpad Admin</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐂</text></svg>">
+    <title>Community Chest Admin</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
 
     <style>
         :root {
@@ -420,8 +420,8 @@
 <!-- ── Header ── -->
 <header>
     <div class="logo">
-        <span>🐂</span>
-        <span>Bullpad</span>
+        <span>💰</span>
+        <span>Community Chest</span>
         <span class="logo-tag">Admin</span>
     </div>
     <div class="header-right">
@@ -533,7 +533,7 @@
                 <div class="action-header"><span class="action-icon">📋</span><span class="action-name">Reset Points</span></div>
                 <div class="action-desc">Wipe and fully recalculate all user point values from scratch. Takes a few minutes.</div>
                 <div class="action-status" id="as-reset-pts"></div>
-                <button class="btn btn-danger btn-sm" onclick="runAction('reset-points','as-reset-pts')">Run</button>
+                <button class="btn btn-danger btn-sm" onclick="if(confirm('Wipe and fully recalculate all user points from scratch? This clears cached point/airdrop data until the recalculation finishes.'))runAction('reset-points','as-reset-pts')">Run</button>
             </div>
 
             <div class="action-cell">
@@ -613,7 +613,7 @@ const BACKEND_URL = 'https://asdev-1kvy.onrender.com';
 const WS_URL      = BACKEND_URL.replace(/^https/, 'wss') + '/ws';
 
 // ── Auth state ─────────────────────────────────────────────────────────────────
-let adminKey = sessionStorage.getItem('bullpad_admin_key') || '';
+let adminKey = sessionStorage.getItem('community_chest_admin_key') || '';
 
 function apiHeaders() {
     return { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey };
@@ -649,7 +649,7 @@ function fmtCountdown(ts) {
     return m + 'm ' + s + 's';
 }
 function esc(s) {
-    return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 // ── Login ──────────────────────────────────────────────────────────────────────
@@ -678,7 +678,7 @@ async function doLogin() {
 
         if (r.ok && d.valid) {
             adminKey = pw;
-            sessionStorage.setItem('bullpad_admin_key', pw);
+            sessionStorage.setItem('community_chest_admin_key', pw);
             showDashboard();
         } else {
             msg.innerHTML = `<div class="msg msg-error">${esc(d.error || 'Invalid key.')}</div>`;
@@ -704,7 +704,7 @@ function showDashboard() {
 }
 
 function logout() {
-    sessionStorage.removeItem('bullpad_admin_key');
+    sessionStorage.removeItem('community_chest_admin_key');
     adminKey = '';
     location.reload();
 }
@@ -1052,7 +1052,7 @@ if (adminKey) {
     fetch(`${BACKEND_URL}/api/admin/airdrop-logs?limit=1`, { headers: { 'X-Admin-Key': adminKey } })
         .then(r => {
             if (r.ok) showDashboard();
-            else { sessionStorage.removeItem('bullpad_admin_key'); adminKey = ''; }
+            else { sessionStorage.removeItem('community_chest_admin_key'); adminKey = ''; }
         })
         .catch(() => {});
 }

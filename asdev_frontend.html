@@ -3126,7 +3126,13 @@
     const escapeHtml = (text) => {
         const div = document.createElement('div');
         div.textContent = text;
-        return div.innerHTML;
+        // SECURITY: div.innerHTML round-tripping only escapes &, <, > (all that's needed for
+        // plain text-node content) — it leaves ' and " untouched. Several call sites embed
+        // escapeHtml(...) results inside single-quoted onclick="fn('...')" attribute values
+        // (e.g. token ticker/name in the leaderboard rows), where an unescaped ' or " lets a
+        // malicious token ticker break out of the attribute and inject arbitrary onclick/HTML —
+        // a real stored XSS via attacker-controlled token metadata. Escape both explicitly.
+        return div.innerHTML.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
     };
 
     // v25.47 SECURITY: Cryptographically secure nonce generation
