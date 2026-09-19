@@ -35,6 +35,10 @@ const { logger, database, redis, twitter, solana, websocket, claudeKoth } = requ
 const routes = require('./routes');
 const tasks = require('./tasks');
 
+// v27.6: the HTTP server, assigned in main() and read by shutdown() so the process can stop
+// accepting connections and drain in-flight requests before tearing down its dependencies.
+let server = null;
+
 // v13.0: Global state is now stored in Redis for cross-process sharing
 // This local object serves as a proxy/fallback for compatibility
 // BUG FIX: Added proper error logging instead of silent catch blocks
@@ -316,7 +320,8 @@ async function main() {
     }
 
     // v25.4: Create HTTP server for WebSocket support
-    const server = http.createServer(app);
+    // v27.6: assigned to the module-scoped `server` so shutdown() can close it.
+    server = http.createServer(app);
 
     // Initialize WebSocket server
     websocket.init(server);
@@ -335,9 +340,35 @@ async function main() {
 
 // v25.14 ROBUSTNESS: Graceful shutdown with task cleanup
 // v25.20: Added WebSocket cleanup
+// v27.6: how long cleanup gets before we exit anyway. Render sends SIGKILL after its own
+// grace period, so a shutdown that hangs on a stuck query must not eat the whole window.
+const SHUTDOWN_TIMEOUT_MS = 15000;
+
+let shuttingDown = false;
 const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info(`${signal} received, shutting down gracefully...`);
+
+    const forceExit = setTimeout(() => {
+        logger.error(`Shutdown exceeded ${SHUTDOWN_TIMEOUT_MS}ms, forcing exit`);
+        process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    forceExit.unref();
+
     try {
+        // v27.6: stop accepting new connections and let in-flight requests finish before
+        // anything they depend on is torn down. Previously the process went straight to
+        // process.exit(0), severing responses mid-write.
+        if (server) {
+            await new Promise((resolve) => {
+                server.close(() => resolve());
+                // closeAllConnections exists on Node 18.2+; without it a keep-alive socket
+                // can hold server.close() open until the force-exit timer fires.
+                if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+            });
+        }
+
         // Stop all background tasks first
         await tasks.stopAll();
 
@@ -359,11 +390,32 @@ const shutdown = async (signal) => {
     } catch (e) {
         logger.error('Shutdown error', { error: e.message });
     }
+    clearTimeout(forceExit);
     process.exit(0);
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// v27.6: the API process had neither of these while worker.js had both, so an unhandled
+// rejection anywhere in a route or a background timer killed the web service on Node 18+
+// with no log line explaining why.
+process.on('uncaughtException', (err) => {
+    logger.error('UNCAUGHT EXCEPTION - API server crashing', {
+        error: err.message,
+        stack: err.stack
+    });
+    const mem = process.memoryUsage();
+    logger.error(`Memory at crash: RSS=${Math.round(mem.rss / 1024 / 1024)}MB, Heap=${Math.round(mem.heapUsed / 1024 / 1024)}MB`);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+    logger.error('UNHANDLED REJECTION - Potential crash', {
+        reason: reason?.message || String(reason),
+        stack: reason?.stack
+    });
+});
 
 // Run main
 main().catch(err => {

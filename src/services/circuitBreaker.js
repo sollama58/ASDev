@@ -39,8 +39,21 @@ function getCircuit(name, options = {}) {
             lastAttemptTime: null,
             options: { ...DEFAULT_OPTIONS, ...options }
         });
+        return circuits.get(name);
     }
-    return circuits.get(name);
+
+    const circuit = circuits.get(name);
+
+    // v27.6: options used to be applied only on the very first call for a name, so whichever
+    // call site happened to run first silently decided the thresholds for every other one.
+    // health.js passes {failureThreshold: 10, timeout: 60000} for 'solana-rpc-health' while
+    // canRequest/recordSuccess/recordFailure all call getCircuit(name) with no options -- if
+    // one of those ran first, the tuned values were discarded for the lifetime of the process.
+    if (Object.keys(options).length > 0) {
+        Object.assign(circuit.options, options);
+    }
+
+    return circuit;
 }
 
 /**
@@ -104,6 +117,14 @@ function recordSuccess(name) {
 function recordFailure(name, error) {
     const circuit = getCircuit(name);
     const now = Date.now();
+
+    // v27.6: decay stale failures here too, not only in recordSuccess. A circuit that fails
+    // intermittently and never records a success accumulated failures forever across
+    // arbitrarily long gaps, so unrelated failures hours apart could trip the threshold.
+    if (circuit.lastFailureTime &&
+        now - circuit.lastFailureTime >= circuit.options.resetTimeout) {
+        circuit.failures = 0;
+    }
 
     circuit.failures++;
     circuit.lastFailureTime = now;

@@ -679,26 +679,86 @@ async function processTokenAirdrops(deps) {
                 const allSignatures = [];
                 let actualSentLamports = 0;
 
+                // v27.6 CRASH SAFETY: reserve the planned amount out of the pool *before*
+                // sending anything. Previously every batch was sent first and the pool was
+                // decremented afterwards, so a crash or redeploy between the final send and
+                // that UPDATE replayed the whole pool next run and paid every holder twice.
+                //
+                // The reservation and the ledger row are written in one transaction, and the
+                // conditional WHERE makes the reservation atomic against a concurrent worker:
+                // whoever decrements first wins, the loser reserves nothing and skips.
+                let reserved = false;
+                try {
+                    await db.transaction(async (tx) => {
+                        const res = await tx.run(
+                            `UPDATE ${tables.tokens} SET pending_airdrop_lamports = pending_airdrop_lamports - $1
+                             WHERE mint = $2 AND pending_airdrop_lamports >= $1`,
+                            [totalPlanned, token.mint]
+                        );
+                        if (res.changes === 0) {
+                            throw new Error('pool no longer holds the planned amount');
+                        }
+                        await tx.run(
+                            `INSERT INTO airdrop_reservations
+                                (airdrop_id, mint, token_source, planned_lamports, sent_lamports, status, created_at, updated_at)
+                             VALUES ($1, $2, $3, $4, 0, 'sending', $5, $5)`,
+                            [airdropId, token.mint, token.source, totalPlanned, Date.now()]
+                        );
+                        reserved = true;
+                    });
+                } catch (reserveErr) {
+                    logger.warn(`[TokenAirdrop] ${token.ticker}: could not reserve pool, skipping`, { error: reserveErr.message });
+                    continue;
+                }
+                if (!reserved) continue;
+
                 for (let i = 0; i < recipients.length; i += AIRDROP_BATCH_SIZE) {
                     const batch = recipients.slice(i, i + AIRDROP_BATCH_SIZE);
                     const result = await sendSolAirdropBatch(batch, deps);
                     if (result?.signature) {
                         allSignatures.push(result.signature);
                         actualSentLamports += result.actualLamports;
+                        // Record progress after each batch so a crash leaves an accurate
+                        // account of what actually went out.
+                        await db.run(
+                            `UPDATE airdrop_reservations SET sent_lamports = $1, updated_at = $2 WHERE airdrop_id = $3`,
+                            [actualSentLamports, Date.now(), airdropId]
+                        ).catch(() => {});
                     }
                     if (i + AIRDROP_BATCH_SIZE < recipients.length) {
                         await new Promise(r => setTimeout(r, 300));
                     }
                 }
 
+                // Settle the reservation: bank what was sent, return the unsent remainder to
+                // the pool. Done in one transaction so the ledger and the pool cannot diverge.
+                const unsentLamports = totalPlanned - actualSentLamports;
+                try {
+                    await db.transaction(async (tx) => {
+                        if (actualSentLamports > 0) {
+                            await tx.run(
+                                `UPDATE ${tables.tokens} SET lifetime_airdrop_lamports = lifetime_airdrop_lamports + $1 WHERE mint = $2`,
+                                [actualSentLamports, token.mint]
+                            );
+                        }
+                        if (unsentLamports > 0) {
+                            await tx.run(
+                                `UPDATE ${tables.tokens} SET pending_airdrop_lamports = pending_airdrop_lamports + $1 WHERE mint = $2`,
+                                [unsentLamports, token.mint]
+                            );
+                        }
+                        await tx.run(
+                            `UPDATE airdrop_reservations SET sent_lamports = $1, status = $2, updated_at = $3 WHERE airdrop_id = $4`,
+                            [actualSentLamports, actualSentLamports > 0 ? 'completed' : 'aborted', Date.now(), airdropId]
+                        );
+                    });
+                } catch (settleErr) {
+                    // The reservation row stays 'sending' and is reported at startup.
+                    logger.error(`[TokenAirdrop] ${token.ticker}: failed to settle reservation ${airdropId}`, { error: settleErr.message });
+                }
+
                 if (actualSentLamports > 0) {
                     availableBalance -= actualSentLamports;
-
-                    // Decrement pending pool, accumulate lifetime
-                    await db.run(
-                        `UPDATE ${tables.tokens} SET pending_airdrop_lamports = GREATEST(0, pending_airdrop_lamports - $1), lifetime_airdrop_lamports = lifetime_airdrop_lamports + $1 WHERE mint = $2`,
-                        [actualSentLamports, token.mint]
-                    );
 
                     const actualSolSent = actualSentLamports / LAMPORTS_PER_SOL;
 
@@ -893,28 +953,73 @@ async function processCentralPoolAirdrop(deps) {
     const allSignatures = [];
     let actualSentLamports = 0;
 
+    // v27.6 CRASH SAFETY: same reserve-before-send ordering as the per-token pools above.
+    let reserved = false;
+    try {
+        await db.transaction(async (tx) => {
+            const res = await tx.run(
+                `UPDATE stats SET value = value - $1 WHERE key = 'centralPoolLamports' AND value >= $1`,
+                [totalPlanned]
+            );
+            if (res.changes === 0) {
+                throw new Error('central pool no longer holds the planned amount');
+            }
+            await tx.run(
+                `INSERT INTO airdrop_reservations
+                    (airdrop_id, mint, token_source, planned_lamports, sent_lamports, status, created_at, updated_at)
+                 VALUES ($1, NULL, 'central_pool', $2, 0, 'sending', $3, $3)`,
+                [airdropId, totalPlanned, Date.now()]
+            );
+            reserved = true;
+        });
+    } catch (reserveErr) {
+        logger.warn('[CentralPool] Could not reserve central pool, skipping', { error: reserveErr.message });
+        return;
+    }
+    if (!reserved) return;
+
     for (let i = 0; i < recipients.length; i += AIRDROP_BATCH_SIZE) {
         const batch = recipients.slice(i, i + AIRDROP_BATCH_SIZE);
         const result = await sendSolAirdropBatch(batch, deps);
         if (result?.signature) {
             allSignatures.push(result.signature);
             actualSentLamports += result.actualLamports;
+            await db.run(
+                `UPDATE airdrop_reservations SET sent_lamports = $1, updated_at = $2 WHERE airdrop_id = $3`,
+                [actualSentLamports, Date.now(), airdropId]
+            ).catch(() => {});
         }
         if (i + AIRDROP_BATCH_SIZE < recipients.length) {
             await new Promise(r => setTimeout(r, 300));
         }
     }
 
+    // Settle: bank what was sent, return the unsent remainder to the pool.
+    const unsentLamports = totalPlanned - actualSentLamports;
+    try {
+        await db.transaction(async (tx) => {
+            if (actualSentLamports > 0) {
+                await tx.run(
+                    "UPDATE stats SET value = value + $1 WHERE key = 'lifetimeCentralPoolLamports'",
+                    [actualSentLamports]
+                );
+            }
+            if (unsentLamports > 0) {
+                await tx.run(
+                    "UPDATE stats SET value = value + $1 WHERE key = 'centralPoolLamports'",
+                    [unsentLamports]
+                );
+            }
+            await tx.run(
+                `UPDATE airdrop_reservations SET sent_lamports = $1, status = $2, updated_at = $3 WHERE airdrop_id = $4`,
+                [actualSentLamports, actualSentLamports > 0 ? 'completed' : 'aborted', Date.now(), airdropId]
+            );
+        });
+    } catch (settleErr) {
+        logger.error(`[CentralPool] Failed to settle reservation ${airdropId}`, { error: settleErr.message });
+    }
+
     if (actualSentLamports > 0) {
-        // Decrement central pool and accumulate lifetime stat
-        await db.run(
-            "UPDATE stats SET value = GREATEST(0, value - $1) WHERE key = 'centralPoolLamports'",
-            [actualSentLamports]
-        );
-        await db.run(
-            "UPDATE stats SET value = value + $1 WHERE key = 'lifetimeCentralPoolLamports'",
-            [actualSentLamports]
-        );
 
         const actualSolSent = actualSentLamports / LAMPORTS_PER_SOL;
 
@@ -1282,7 +1387,9 @@ async function claimRobinhoodFees(deps) {
                 try {
                     bcInfo = await connection.getAccountInfo(bcVault);
                     if (bcInfo) {
-                        const rentExemptMin = 5000; // Small buffer matching health.js
+                        // v27.6: the cluster's actual rent-exempt floor for this vault, not a
+                        // hardcoded 5000-lamport guess. See solana.getRentExemptMinimum.
+                        const rentExemptMin = await solana.getRentExemptMinimum(bcInfo.data?.length || 0, 5000);
                         bcPendingLamports = Math.max(0, bcInfo.lamports - rentExemptMin);
                     }
                 } catch (e) {
@@ -2699,12 +2806,15 @@ async function runFeeCollection(deps) {
                     }
 
                     // Check BOTH BC and AMM vaults
-                    const rentMin = 5000; // Small buffer for pending fee calculation
                     let tokenBcFees = 0;
                     let tokenAmmFees = 0;
 
                     // Check BC vault
                     const bcInfo = await connection.getAccountInfo(bcVaultAddr);
+                    // v27.6: cluster-derived rent-exempt floor, not a hardcoded 5000.
+                    const rentMin = bcInfo
+                        ? await solana.getRentExemptMinimum(bcInfo.data?.length || 0, 5000)
+                        : 5000;
                     if (bcInfo && bcInfo.lamports > rentMin) {
                         const pendingLamports = bcInfo.lamports - rentMin;
                         tokenBcFees = Math.floor(pendingLamports * ((token.feeShareBps ?? 10000) / 10000));

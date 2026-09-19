@@ -3,8 +3,7 @@
  * Updates the list of Top 100 ASDF holders for the 2x Multiplier
  */
 const { PublicKey } = require('@solana/web3.js');
-const { BN } = require('@coral-xyz/anchor');
-const { TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { fetchTopHoldersByBalance } = require('../services/heliusDAS');
 const config = require('../config/env');
 const { TOKENS, WALLETS, PROGRAMS } = require('../config/constants');
 const ASDF_SYNC_INTERVAL = config.ASDF_UPDATE_INTERVAL || 5 * 60 * 1000;
@@ -30,50 +29,26 @@ async function updateAsdfHolders(deps) {
             return;
         }
 
-        // We use getProgramAccounts to bypass the 20-account limit of getTokenLargestAccounts
-        // Assuming ASDF is a standard SPL Token (TOKEN_PROGRAM_ID)
-        // If ASDF is Token-2022, switch programId to PROGRAMS.TOKEN_2022
-        const accounts = await connection.getProgramAccounts(TOKEN_PROGRAM_ID, {
-            filters: [
-                { dataSize: 165 }, // Standard SPL Token Account size
-                { memcmp: { offset: 0, bytes: TOKENS.ASDF.toBase58() } }
-            ],
-            encoding: 'base64'
+        // v27.6: use the shared, program-agnostic holder scan. This previously queried
+        // TOKEN_PROGRAM_ID only, with an unresolved "if ASDF is Token-2022, switch programId"
+        // caveat -- meaning that if ASDF is Token-2022 the 2x multiplier applied to nobody.
+        const top100 = await fetchTopHoldersByBalance(TOKENS.ASDF.toBase58(), {
+            topN: 100,
+            exclude: [WALLETS.PUMP_LIQUIDITY, ASDF_BONDING_CURVE_STR, ASDF_AMM_POOL_STR],
+            caller: 'ASDF Sync',
+            connection
         });
 
-        const parsedAccounts = accounts.map(acc => {
-            try {
-                // Handle base64 array tuple format from encoding: 'base64'
-                // acc.account.data is ['base64string', 'base64'], not a raw Buffer
-                const data = Array.isArray(acc.account.data)
-                    ? Buffer.from(acc.account.data[0], 'base64')
-                    : Buffer.from(acc.account.data);
-                if (data.length < 72) {
-                    logger.debug('ASDF Sync: Skipping malformed account data', { length: data.length });
-                    return null;
-                }
-                // SPL Layout: Mint(0-32), Owner(32-64), Amount(64-72)
-                const owner = new PublicKey(data.slice(32, 64)).toString();
-                const amount = new BN(data.slice(64, 72), 'le');
-                return { owner, amount };
-            } catch (e) {
-                logger.debug('ASDF Sync: Failed to parse account', { error: e.message });
-                return null;
-            }
-        })
-        .filter(acc => acc !== null) // BUG FIX: Filter out failed parses
-        .sort((a, b) => b.amount.cmp(a.amount)); // Descending sort
-
-        // Extract Top 100, excluding LP/pool accounts
-        const top100 = [];
-        for (const acc of parsedAccounts) {
-            if (top100.length >= 100) break;
-            if (acc.owner === WALLETS.PUMP_LIQUIDITY) continue;
-            if (acc.owner === ASDF_BONDING_CURVE_STR) continue;
-            if (acc.owner === ASDF_AMM_POOL_STR) continue;
-            if (acc.amount.gt(new BN(0))) {
-                top100.push(acc.owner);
-            }
+        // v27.6: never overwrite a good list with a bad scan. Previously a failed or
+        // zero-result scan still wrote its empty array, wiping the multiplier for everyone
+        // until the next successful run.
+        if (top100 === null) {
+            logger.warn('ASDF Sync: holder scan failed, keeping previous Top 100 list');
+            return;
+        }
+        if (top100.length === 0) {
+            logger.warn('ASDF Sync: holder scan returned no holders, keeping previous Top 100 list');
+            return;
         }
 
         // Update Global State
@@ -81,7 +56,7 @@ async function updateAsdfHolders(deps) {
         // with other modules, but it now contains 100 items.
         globalState.asdfTop50Holders = new Set(top100);
 
-        logger.info(`ASDF Sync: Updated Top 100 Holders. Found ${accounts.length} total, tracking top ${top100.length}.`);
+        logger.info(`ASDF Sync: Updated Top 100 Holders. Tracking ${top100.length}.`);
 
     } catch (e) {
         logger.error("ASDF Sync Failed", { error: e.message });

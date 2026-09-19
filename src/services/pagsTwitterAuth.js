@@ -234,8 +234,17 @@ function validateRedirectUrl(url, baseUrl) {
 
     // Handle relative paths starting with /
     if (url.startsWith('/') && !url.startsWith('//')) {
-        // Block any URL encoding tricks
-        const decoded = decodeURIComponent(url);
+        // Block any URL encoding tricks.
+        // v27.6: decodeURIComponent throws URIError on malformed input (e.g. "/%"), which
+        // previously escaped this function and 500'd the whole auth route. A redirect we
+        // cannot decode is one we cannot vet, so it falls back to the default.
+        let decoded;
+        try {
+            decoded = decodeURIComponent(url);
+        } catch (e) {
+            logger.warn('[PAGS Twitter Auth] Malformed redirect URL blocked', { url: url.slice(0, 100) });
+            return defaultRedirect;
+        }
         if (decoded.startsWith('/') && !decoded.startsWith('//') && !decoded.includes('://')) {
             // For cross-origin setups with FRONTEND_URL configured as full URL,
             // just use FRONTEND_URL directly (it already contains the path)

@@ -424,8 +424,13 @@ async function getPendingRewardsByUsername(twitterUsername) {
                 let bcFeesLamports = 0;
                 try {
                     const bcInfo = await connection.getAccountInfo(bcVault);
-                    if (bcInfo && bcInfo.lamports > 5000) {
-                        bcFeesLamports = bcInfo.lamports - 5000; // Subtract rent-exempt minimum
+                    if (bcInfo) {
+                        // v27.6: cluster-derived rent-exempt floor, not a hardcoded 5000.
+                        const { getRentExemptMinimum } = require('./solana');
+                        const rentFloor = await getRentExemptMinimum(bcInfo.data?.length || 0, 5000);
+                        if (bcInfo.lamports > rentFloor) {
+                            bcFeesLamports = bcInfo.lamports - rentFloor;
+                        }
                     }
                 } catch (e) {
                     // Vault doesn't exist or error - that's ok

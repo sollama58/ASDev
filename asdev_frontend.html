@@ -5876,8 +5876,12 @@
         const urlParams = new URLSearchParams(window.location.search);
 
         if (urlParams.get('auth_success') === 'true') {
-            // Check if we got a token in the URL (cross-origin flow)
-            const urlToken = urlParams.get('pags_token');
+            // Check if we got a token in the URL (cross-origin flow).
+            // v27.6: the backend now returns it in the fragment, which never reaches a server
+            // or a Referer header. The query-string read stays as a fallback so a cached copy
+            // of this page keeps working while the change rolls out.
+            const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+            const urlToken = hashParams.get('pags_token') || urlParams.get('pags_token');
             console.log('PAGS: OAuth callback received', {
                 hasToken: !!urlToken,
                 tokenLength: urlToken ? urlToken.length : 0
