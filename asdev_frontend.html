@@ -985,7 +985,6 @@
                 checkAsdfStatus()
             ]);
         } catch (e) { console.error("Auto-Refresh Error", e); }
-        checkHealth(); 
         if (ui.refreshBtn) ui.refreshBtn.classList.remove('opacity-50', 'cursor-wait');
     };
     window.refreshAllData = refreshAllData;

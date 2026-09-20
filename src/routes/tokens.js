@@ -10,13 +10,18 @@ const router = express.Router();
 /**
  * Initialize routes with dependencies
  */
+// Every open tab calls these once a minute; the underlying data changes at most as often
+// as the background loops run, so a short shared cache removes the per-tab SQL.
+const LIST_CACHE_SECONDS = 20;
+
 function init(deps) {
-    const { db, globalState, devKeypair } = deps;
+    const { db, globalState, devKeypair, redis } = deps;
+    const cached = (key, fetchFn) => redis.smartCache(key, LIST_CACHE_SECONDS, fetchFn);
 
     // Get all launches
     router.get('/all-launches', async (req, res) => {
         try {
-            const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC');
+            const rows = await cached('tokens:all-launches', () => db.all('SELECT * FROM tokens ORDER BY volume24h DESC'));
             const allLaunches = rows.map(r => ({
                 mint: r.mint,
                 userPubkey: r.userPubkey,
@@ -39,13 +44,13 @@ function init(deps) {
         try {
             // Select token with highest market cap
             // Ensure we only select valid tokens (non-null marketCap)
-            const koth = await db.get(`
+            const koth = await cached('tokens:koth', async () => (await db.get(`
                 SELECT mint, userPubkey, name, ticker, image, marketCap, volume24h 
                 FROM tokens 
                 WHERE marketCap > 0 
                 ORDER BY marketCap DESC 
                 LIMIT 1
-            `);
+            `)) || false);
             
             if (koth) {
                 res.json({ 
@@ -77,9 +82,9 @@ function init(deps) {
             return res.status(400).json({ error: "Invalid Solana address" });
         }
         try {
-            const rows = await db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10');
+            const rows = await cached('tokens:leaderboard', () => db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10'));
 
-            // Batch query for user holder status (avoid N+1)
+            // Batch query for user holder status (avoid N+1); per-user, so not cached
             let userHoldings = new Set();
             if (userPubkey && rows.length > 0) {
                 const mints = rows.map(r => r.mint);
@@ -113,7 +118,7 @@ function init(deps) {
     // Recent launches
     router.get('/recent-launches', async (req, res) => {
         try {
-            const rows = await db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10');
+            const rows = await cached('tokens:recent-launches', () => db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10'));
             res.json(rows.map(r => ({
                 userSnippet: r.userPubkey.slice(0, 5),
                 ticker: r.ticker,
@@ -128,10 +133,11 @@ function init(deps) {
     router.get('/token-holders/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
-            const holders = await db.all(
+            if (!isValidPubkey(mint)) return res.status(400).json({ error: "Invalid mint" });
+            const holders = await cached(`tokens:holders:${mint}`, () => db.all(
                 'SELECT rank, holderPubkey, balance FROM token_holders WHERE mint = ? ORDER BY rank ASC LIMIT 50',
                 [mint]
-            );
+            ));
             res.json(holders);
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
@@ -191,13 +197,12 @@ function init(deps) {
     });
 
     // Eligible users for airdrop
-    router.get('/all-eligible-users', async (req, res) => {
-        try {
+    const computeEligibleUsers = async () => {
             const top10 = await db.all('SELECT mint, userPubkey FROM tokens ORDER BY volume24h DESC LIMIT 10');
             const top10Mints = top10.map(t => t.mint);
 
             if (top10Mints.length === 0) {
-                return res.json({ users: [], totalPoints: 0 });
+                return { users: [], totalPoints: 0 };
             }
 
             const placeholders = top10Mints.map(() => '?').join(',');
@@ -255,7 +260,12 @@ function init(deps) {
                 }
             }
 
-            res.json({ users: eligibleUsers, totalPoints: calculatedTotalPoints });
+            return { users: eligibleUsers, totalPoints: calculatedTotalPoints };
+    };
+
+    router.get('/all-eligible-users', async (req, res) => {
+        try {
+            res.json(await cached('tokens:eligible-users', computeEligibleUsers));
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
         }
@@ -264,7 +274,7 @@ function init(deps) {
     // Airdrop logs
     router.get('/airdrop-logs', async (req, res) => {
         try {
-            const logs = await db.all('SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT 20');
+            const logs = await cached('tokens:airdrop-logs', () => db.all('SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT 20'));
             res.json(logs);
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
