@@ -111,8 +111,9 @@ async function initDB() {
         `);
 
         // Databases created by the legacy server.js have a `lastUpdated` column here
-        // instead of `updatedAt`; add the column holderScanner.js writes to.
+        // instead of `updatedAt` and no `balance`; add the columns holderScanner.js writes to.
         await runMigration('token_holders', 'updatedAt', 'INTEGER');
+        await runMigration('token_holders', 'balance', 'TEXT');
 
         await db.exec(`
             CREATE TABLE IF NOT EXISTS stats (
