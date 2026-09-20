@@ -4,11 +4,45 @@
  */
 const express = require('express');
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const bs58 = require('bs58');
 const config = require('../config/env');
 const { pinata, moderation, vanity, redis, logger } = require('../services');
 const { isValidPubkey } = require('./solana');
 
 const router = express.Router();
+
+const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+const PAYMENT_POLL_ATTEMPTS = 15;
+const PAYMENT_POLL_DELAY_MS = 2000;
+
+/**
+ * A transaction signature is 64 bytes, base58 encoded.
+ */
+function isValidSignature(sig) {
+    if (typeof sig !== 'string' || sig.length < 80 || sig.length > 90) return false;
+    try {
+        return bs58.decode(sig).length === 64;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * True when the parsed transaction succeeded on-chain and contains a
+ * System Program transfer from `payer` to `recipient` of at least `minLamports`.
+ */
+function hasFeePayment(txInfo, payer, recipient, minLamports) {
+    if (!txInfo || !txInfo.meta || txInfo.meta.err) return false;
+    const instructions = txInfo.transaction?.message?.instructions || [];
+    return instructions.some(ix => {
+        if (ix.programId?.toString() !== SYSTEM_PROGRAM_ID) return false;
+        if (!ix.parsed || ix.parsed.type !== 'transfer') return false;
+        const info = ix.parsed.info || {};
+        return info.source === payer &&
+               info.destination === recipient &&
+               Number(info.lamports) >= minLamports;
+    });
+}
 
 /**
  * Initialize routes with dependencies
@@ -58,18 +92,54 @@ function init(deps) {
 
             if (!metadataUri) return res.status(400).json({ error: "Missing metadata URI" });
             if (!userPubkey || !isValidPubkey(userPubkey)) return res.status(400).json({ error: "Invalid Address" });
-            
-            // Transaction verification logic (simplified for brevity, keep your existing logic)
-            // ... (keep existing payment verification loop) ...
-            
-            // Assume payment verified for this file replacement context:
-            // In real file, keep the verification loop here.
-            
-            // Add job with explicit imageUrl
+            if (!isValidSignature(userTx)) return res.status(400).json({ error: "Invalid transaction signature" });
+
+            const feeLamports = Math.round(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL);
+            const devWallet = devKeypair.publicKey.toString();
+
+            // Reserve the signature first so the same payment cannot be submitted twice,
+            // even by concurrent requests. UNIQUE(signature) rejects the second insert.
+            try {
+                await db.run(
+                    'INSERT INTO transactions (signature, userPubkey, type, amount, timestamp) VALUES (?, ?, ?, ?, ?)',
+                    [userTx, userPubkey, 'deployment', feeLamports, Date.now()]
+                );
+            } catch (dbErr) {
+                if (dbErr.message.includes('UNIQUE')) {
+                    return res.status(400).json({ error: "Tx already used." });
+                }
+                throw dbErr;
+            }
+
+            // Wait for the payment to confirm, then check that it is a successful
+            // System transfer FROM userPubkey TO the dev wallet for at least the fee.
+            let validPayment = false;
+            for (let i = 0; i < PAYMENT_POLL_ATTEMPTS; i++) {
+                const txInfo = await connection.getParsedTransaction(userTx, {
+                    commitment: "confirmed",
+                    maxSupportedTransactionVersion: 0
+                });
+                if (txInfo) {
+                    validPayment = hasFeePayment(txInfo, userPubkey, devWallet, feeLamports);
+                    break;
+                }
+                await new Promise(r => setTimeout(r, PAYMENT_POLL_DELAY_MS));
+            }
+
+            if (!validPayment) {
+                // Release the reservation so a not-yet-confirmed payment can be retried.
+                await db.run('DELETE FROM transactions WHERE signature = ?', [userTx]);
+                return res.status(400).json({ error: "Payment verification failed or timed out." });
+            }
+
+            await addFees(feeLamports);
+
+            // Add job with explicit imageUrl. userTx travels with the job so the
+            // worker can refund only the verified payer if the launch fails.
             const job = await redis.addDeployJob({
                 name, ticker, description, twitter, website, 
                 image: imageUrl, // Pass the direct URL, not base64
-                userPubkey, isMayhemMode, metadataUri
+                userPubkey, userTx, isMayhemMode, metadataUri
             });
 
             res.json({ success: true, jobId: job.id, message: "Queued" });
