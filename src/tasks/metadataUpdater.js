@@ -102,7 +102,8 @@ async function updateMetadata(deps) {
                             volume24h: pair.volume?.h24 || 0,
                             priceUsd: pair.priceUsd || 0,
                             liquidity: pair.liquidity?.usd || 0,
-                            // Still on the pump.fun bonding curve until its best pair is on a real DEX
+                            // A pair on any DEX other than the pump.fun bonding curve means the
+                            // token has graduated. Once set, `complete` is never cleared.
                             complete: pair.dexId && pair.dexId !== 'pumpfun' ? 1 : 0,
                             // OPPORTUNISTIC IMAGE UPDATE
                             // If DexScreener has an image, and we might need it, take it.
@@ -118,12 +119,12 @@ async function updateMetadata(deps) {
                         // Update market data. If DexScreener has an image, use it to ensure we have *something*
                         if (data.imageUrl) {
                             await db.run(
-                                `UPDATE tokens SET volume24h = ?, marketCap = ?, priceUsd = ?, complete = ?, lastUpdated = ?, image = ? WHERE mint = ?`,
+                                `UPDATE tokens SET volume24h = ?, marketCap = ?, priceUsd = ?, complete = MAX(COALESCE(complete, 0), ?), lastUpdated = ?, image = ? WHERE mint = ?`,
                                 [data.volume24h, data.marketCap, data.priceUsd, data.complete, Date.now(), data.imageUrl, t.mint]
                             );
                         } else {
                             await db.run(
-                                `UPDATE tokens SET volume24h = ?, marketCap = ?, priceUsd = ?, complete = ?, lastUpdated = ? WHERE mint = ?`,
+                                `UPDATE tokens SET volume24h = ?, marketCap = ?, priceUsd = ?, complete = MAX(COALESCE(complete, 0), ?), lastUpdated = ? WHERE mint = ?`,
                                 [data.volume24h, data.marketCap, data.priceUsd, data.complete, Date.now(), t.mint]
                             );
                         }
@@ -147,7 +148,7 @@ async function updateMetadata(deps) {
 
                         if (mcap !== null) {
                             await db.run(
-                                `UPDATE tokens SET marketCap = ?, complete = ?, lastUpdated = ? WHERE mint = ?`,
+                                `UPDATE tokens SET marketCap = ?, complete = MAX(COALESCE(complete, 0), ?), lastUpdated = ? WHERE mint = ?`,
                                 [mcap, complete, Date.now(), t.mint]
                             );
                         } else {

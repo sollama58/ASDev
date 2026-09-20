@@ -4,24 +4,26 @@
  */
 const express = require('express');
 const { isValidPubkey } = require('./solana');
+const { redis } = require('../services');
 
 const router = express.Router();
+
+// The list endpoints only change when a background task runs (metadata every 60 s,
+// holders every 2 min), but every open tab requests them once a minute. A short
+// Redis cache turns that into one query per interval; without Redis it is a no-op.
+const LIST_CACHE_TTL = 15;
 
 /**
  * Initialize routes with dependencies
  */
-// Every open tab calls these once a minute; the underlying data changes at most as often
-// as the background loops run, so a short shared cache removes the per-tab SQL.
-const LIST_CACHE_SECONDS = 20;
-
 function init(deps) {
-    const { db, globalState, devKeypair, redis } = deps;
-    const cached = (key, fetchFn) => redis.smartCache(key, LIST_CACHE_SECONDS, fetchFn);
+    const { db, globalState, devKeypair } = deps;
 
     // Get all launches
     router.get('/all-launches', async (req, res) => {
         try {
-            const rows = await cached('tokens:all-launches', () => db.all('SELECT * FROM tokens ORDER BY volume24h DESC'));
+            const rows = await redis.smartCache('tokens:all-launches', LIST_CACHE_TTL,
+                () => db.all('SELECT * FROM tokens ORDER BY volume24h DESC'));
             const allLaunches = rows.map(r => ({
                 mint: r.mint,
                 userPubkey: r.userPubkey,
@@ -44,13 +46,16 @@ function init(deps) {
         try {
             // Select token with highest market cap
             // Ensure we only select valid tokens (non-null marketCap)
-            const koth = await cached('tokens:koth', async () => (await db.get(`
-                SELECT mint, userPubkey, name, ticker, image, marketCap, volume24h 
-                FROM tokens 
-                WHERE marketCap > 0 
-                ORDER BY marketCap DESC 
-                LIMIT 1
-            `)) || false);
+            // smartCache skips caching null results, so wrap the row in an object.
+            const { koth } = await redis.smartCache('tokens:koth', LIST_CACHE_TTL, async () => ({
+                koth: (await db.get(`
+                    SELECT mint, userPubkey, name, ticker, image, marketCap, volume24h 
+                    FROM tokens 
+                    WHERE marketCap > 0 
+                    ORDER BY marketCap DESC 
+                    LIMIT 1
+                `)) || null
+            }));
             
             if (koth) {
                 res.json({ 
@@ -82,9 +87,11 @@ function init(deps) {
             return res.status(400).json({ error: "Invalid Solana address" });
         }
         try {
-            const rows = await cached('tokens:leaderboard', () => db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10'));
+            // The top-10 list is shared by every viewer; only the holder flags are per user.
+            const rows = await redis.smartCache('tokens:leaderboard', LIST_CACHE_TTL,
+                () => db.all('SELECT * FROM tokens ORDER BY volume24h DESC LIMIT 10'));
 
-            // Batch query for user holder status (avoid N+1); per-user, so not cached
+            // Batch query for user holder status (avoid N+1)
             let userHoldings = new Set();
             if (userPubkey && rows.length > 0) {
                 const mints = rows.map(r => r.mint);
@@ -118,7 +125,8 @@ function init(deps) {
     // Recent launches
     router.get('/recent-launches', async (req, res) => {
         try {
-            const rows = await cached('tokens:recent-launches', () => db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10'));
+            const rows = await redis.smartCache('tokens:recent-launches', LIST_CACHE_TTL,
+                () => db.all('SELECT userPubkey, ticker, mint, timestamp FROM tokens ORDER BY timestamp DESC LIMIT 10'));
             res.json(rows.map(r => ({
                 userSnippet: r.userPubkey.slice(0, 5),
                 ticker: r.ticker,
@@ -134,7 +142,7 @@ function init(deps) {
         try {
             const { mint } = req.params;
             if (!isValidPubkey(mint)) return res.status(400).json({ error: "Invalid mint" });
-            const holders = await cached(`tokens:holders:${mint}`, () => db.all(
+            const holders = await redis.smartCache(`tokens:holders:${mint}`, LIST_CACHE_TTL, () => db.all(
                 'SELECT rank, holderPubkey, balance FROM token_holders WHERE mint = ? ORDER BY rank ASC LIMIT 50',
                 [mint]
             ));
@@ -197,84 +205,86 @@ function init(deps) {
     });
 
     // Eligible users for airdrop
-    const computeEligibleUsers = async () => {
-            const top10 = await db.all('SELECT mint, userPubkey FROM tokens ORDER BY volume24h DESC LIMIT 10');
-            const top10Mints = top10.map(t => t.mint);
-
-            if (top10Mints.length === 0) {
-                return { users: [], totalPoints: 0 };
-            }
-
-            const placeholders = top10Mints.map(() => '?').join(',');
-            const rows = await db.all(`
-                SELECT holderPubkey, COUNT(*) as positionCount
-                FROM token_holders
-                WHERE mint IN (${placeholders})
-                GROUP BY holderPubkey
-            `, top10Mints);
-
-            let userPointsMap = new Map();
-
-            rows.forEach(row => {
-                userPointsMap.set(row.holderPubkey, {
-                    pubkey: row.holderPubkey,
-                    holderPositions: row.positionCount,
-                    createdPositions: 0
-                });
-            });
-
-            top10.forEach(token => {
-                if (token.userPubkey) {
-                    const user = userPointsMap.get(token.userPubkey) || {
-                        pubkey: token.userPubkey,
-                        holderPositions: 0,
-                        createdPositions: 0
-                    };
-                    user.createdPositions += 1;
-                    userPointsMap.set(token.userPubkey, user);
-                }
-            });
-
-            const eligibleUsers = [];
-            let calculatedTotalPoints = 0;
-
-            for (const user of userPointsMap.values()) {
-                if (user.pubkey === devKeypair.publicKey.toString()) continue;
-
-                const isAsdfTop50 = globalState.asdfTop50Holders.has(user.pubkey);
-                const multiplier = isAsdfTop50 ? 2 : 1;
-                const totalBasePoints = user.holderPositions + (user.createdPositions * 2);
-                const points = totalBasePoints * multiplier;
-                const expectedAirdrop = globalState.userExpectedAirdrops.get(user.pubkey) || 0;
-
-                if (points > 0) {
-                    eligibleUsers.push({
-                        pubkey: user.pubkey,
-                        points,
-                        positions: user.holderPositions,
-                        created: user.createdPositions,
-                        isAsdfTop50,
-                        expectedAirdrop
-                    });
-                    calculatedTotalPoints += points;
-                }
-            }
-
-            return { users: eligibleUsers, totalPoints: calculatedTotalPoints };
-    };
-
     router.get('/all-eligible-users', async (req, res) => {
         try {
-            res.json(await cached('tokens:eligible-users', computeEligibleUsers));
+            const payload = await redis.smartCache('tokens:all-eligible-users', LIST_CACHE_TTL, () => buildEligibleUsers());
+            res.json(payload);
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
         }
     });
 
+    async function buildEligibleUsers() {
+        const top10 = await db.all('SELECT mint, userPubkey FROM tokens ORDER BY volume24h DESC LIMIT 10');
+        const top10Mints = top10.map(t => t.mint);
+
+        if (top10Mints.length === 0) {
+            return { users: [], totalPoints: 0 };
+        }
+
+        const placeholders = top10Mints.map(() => '?').join(',');
+        const rows = await db.all(`
+            SELECT holderPubkey, COUNT(*) as positionCount
+            FROM token_holders
+            WHERE mint IN (${placeholders})
+            GROUP BY holderPubkey
+        `, top10Mints);
+
+        let userPointsMap = new Map();
+
+        rows.forEach(row => {
+            userPointsMap.set(row.holderPubkey, {
+                pubkey: row.holderPubkey,
+                holderPositions: row.positionCount,
+                createdPositions: 0
+            });
+        });
+
+        top10.forEach(token => {
+            if (token.userPubkey) {
+                const user = userPointsMap.get(token.userPubkey) || {
+                    pubkey: token.userPubkey,
+                    holderPositions: 0,
+                    createdPositions: 0
+                };
+                user.createdPositions += 1;
+                userPointsMap.set(token.userPubkey, user);
+            }
+        });
+
+        const eligibleUsers = [];
+        let calculatedTotalPoints = 0;
+
+        for (const user of userPointsMap.values()) {
+            if (user.pubkey === devKeypair.publicKey.toString()) continue;
+
+            const isAsdfTop50 = globalState.asdfTop50Holders.has(user.pubkey);
+            const multiplier = isAsdfTop50 ? 2 : 1;
+            const totalBasePoints = user.holderPositions + (user.createdPositions * 2);
+            const points = totalBasePoints * multiplier;
+            const expectedAirdrop = globalState.userExpectedAirdrops.get(user.pubkey) || 0;
+
+            if (points > 0) {
+                eligibleUsers.push({
+                    pubkey: user.pubkey,
+                    points,
+                    positions: user.holderPositions,
+                    created: user.createdPositions,
+                    isAsdfTop50,
+                    expectedAirdrop
+                });
+                calculatedTotalPoints += points;
+            }
+        }
+
+        return { users: eligibleUsers, totalPoints: calculatedTotalPoints };
+    }
+
     // Airdrop logs
     router.get('/airdrop-logs', async (req, res) => {
         try {
-            const logs = await cached('tokens:airdrop-logs', () => db.all('SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT 20'));
+            const logs = await redis.smartCache('tokens:airdrop-logs', LIST_CACHE_TTL,
+                () => db.all('SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT 20'));
             res.json(logs);
         } catch (e) {
             res.status(500).json({ error: "DB Error" });

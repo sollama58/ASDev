@@ -183,10 +183,16 @@ async function processAirdrop(deps, knownSolBalance = null) {
         const devPumpAta = await getAssociatedTokenAddress(
             TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
         );
+        // Keep the raw base-unit amount as a BN: every split below is done in integers
+        // so nothing is lost to floating point before the transfers are built.
         let balance = 0;
+        let balanceRaw = new BN(0);
+        let unitsPerToken = new BN(1000000); // 6 decimals
         try {
             const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
             balance = tokenBal.value.uiAmount || 0;
+            balanceRaw = new BN(tokenBal.value.amount || '0');
+            unitsPerToken = new BN(10).pow(new BN(tokenBal.value.decimals ?? 6));
         } catch (e) {
             logger.warn(`Airdrop Skipped: could not read PUMP balance (${e.message})`);
             return;
@@ -210,11 +216,12 @@ async function processAirdrop(deps, knownSolBalance = null) {
 
         logger.info(`AIRDROP TRIGGERED: Balance ${balance} PUMP > 50,000`);
 
-        // Total Amount to be distributed (99% of holdings)
-        const totalDistributable = balance * 0.99;
-        let kothAmount = 0;
-        let communityAmount = totalDistributable;
+        // Total Amount to be distributed (99% of holdings), in base units
+        const totalDistributableInt = balanceRaw.muln(99).divn(100);
+        let kothAmountInt = new BN(0);
+        let communityAmountInt = totalDistributableInt;
         let kothTxSignature = null;
+        const toUi = (bn) => Number(bn.toString()) / Number(unitsPerToken.toString());
 
         // 1. Identify King of the Hill (Highest MCAP). Same rule as /koth and the holder
         //    scanner: with no market data there is no king, rather than an arbitrary row.
@@ -222,14 +229,14 @@ async function processAirdrop(deps, knownSolBalance = null) {
 
         // 2. Process KOTH Payout (10%)
         if (kothToken && kothToken.userPubkey) {
-            kothAmount = totalDistributable * 0.10;
-            communityAmount = totalDistributable * 0.90;
+            kothAmountInt = totalDistributableInt.divn(10);
+            communityAmountInt = totalDistributableInt.sub(kothAmountInt);
 
-            logger.info(`👑 King of the Hill found: ${kothToken.ticker} ($${kothAmount.toFixed(2)} PUMP prize)`);
+            logger.info(`👑 King of the Hill found: ${kothToken.ticker} (${toUi(kothAmountInt).toFixed(2)} PUMP prize)`);
 
             try {
                 // Send specific transaction for KOTH
-                const kothBatch = [{ user: new PublicKey(kothToken.userPubkey), amount: new BN(kothAmount * 1000000) }];
+                const kothBatch = [{ user: new PublicKey(kothToken.userPubkey), amount: kothAmountInt }];
                 kothTxSignature = await sendAirdropBatch(kothBatch, devPumpAta, deps);
                 
                 if (kothTxSignature) {
@@ -237,25 +244,24 @@ async function processAirdrop(deps, knownSolBalance = null) {
                 } else {
                     logger.error("❌ KOTH Payout Failed - returning funds to community pool");
                     // If fails, put money back in community pot
-                    communityAmount += kothAmount;
-                    kothAmount = 0;
+                    communityAmountInt = communityAmountInt.add(kothAmountInt);
+                    kothAmountInt = new BN(0);
                 }
             } catch (e) {
                 logger.error(`KOTH Logic Error: ${e.message}`);
-                communityAmount += kothAmount;
-                kothAmount = 0;
+                communityAmountInt = communityAmountInt.add(kothAmountInt);
+                kothAmountInt = new BN(0);
             }
         }
 
         // 3. Process Community Distribution (Remaining 90%)
-        const communityAmountInt = new BN(communityAmount * 1000000); // 6 decimals
         const userPoints = Array.from(globalState.userPointsMap.entries())
             .map(([pubkey, points]) => ({ pubkey: new PublicKey(pubkey), points }))
             .filter(user => user.points > 0);
 
         if (globalState.totalPoints === 0 || userPoints.length === 0) return;
 
-        logger.info(`Distributing ${communityAmount} PUMP to ${userPoints.length} users (Community Pool)`);
+        logger.info(`Distributing ${toUi(communityAmountInt)} PUMP to ${userPoints.length} users (Community Pool)`);
 
         const BATCH_SIZE = 8;
         let currentBatch = [];
@@ -298,10 +304,11 @@ async function processAirdrop(deps, knownSolBalance = null) {
 
         logger.info(`Airdrop Complete. Success: ${successfulBatches}, Failed: ${failedBatches}`);
 
+        const kothAmount = toUi(kothAmountInt);
         const details = JSON.stringify({ success: successfulBatches, failed: failedBatches, kothWinner: kothToken?.ticker || 'None', kothAmount: kothAmount });
         await db.run(
             'INSERT INTO airdrop_logs (amount, recipients, totalPoints, signatures, details, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-            [totalDistributable, userPoints.length + (kothAmount > 0 ? 1 : 0), globalState.totalPoints, allSignatures.join(','), details, new Date().toISOString()]
+            [toUi(totalDistributableInt), userPoints.length + (kothAmount > 0 ? 1 : 0), globalState.totalPoints, allSignatures.join(','), details, new Date().toISOString()]
         );
         
         // Clear status after run and refresh the cached PUMP holdings for /health
