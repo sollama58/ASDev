@@ -4,8 +4,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "start:legacy": "node server.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "test": "node scripts/smoke-test.js"
   },
   "overrides": {
     "bigint-buffer": "^1.1.5"

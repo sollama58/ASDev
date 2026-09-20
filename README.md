@@ -72,6 +72,10 @@ PORT=3000
 # Security
 CORS_ORIGINS=*                    # Comma-separated origins
 ADMIN_API_KEY=your_admin_key      # For debug endpoints
+TRUST_PROXY_HOPS=1                # Reverse-proxy hops in front of the app (Render = 1)
+
+# Optional tuning
+RPC_TIMEOUT_MS=60000              # Hard timeout on every RPC request
 
 # Vanity grinder (for ASDF addresses)
 VANITY_GRINDER_ENABLED=true
@@ -84,11 +88,13 @@ PINATA_JWT=your_jwt
 
 ## Security Features
 
-- **Rate limiting**: 100 requests/15min on API routes, 3/min on deploy
+- **Rate limiting**: 2000 requests/15min on API routes, 10/min on deploy, keyed by the visitor's address (Cloudflare's `CF-Connecting-IP` when present, otherwise the address seen through `TRUST_PROXY_HOPS` proxies)
+- **Payment verification**: `/api/deploy` confirms the 0.02 SOL fee on chain before queuing, and refunds go only to the verified payer
+- **Metadata binding**: `/api/deploy` accepts only metadata URIs that `/api/prepare-metadata` produced (and moderated) in the last hour
 - **Helmet**: Security headers enabled
 - **CORS**: Configurable allowed origins
 - **XSS Protection**: DOMPurify sanitization on frontend
-- **Input validation**: Solana address validation on all pubkey inputs
+- **Input validation**: Solana address validation on all pubkey inputs; name, ticker and URI length checks matching the on-chain limits
 - **Admin auth**: Debug endpoints require API key in production
 
 ## Running
@@ -98,6 +104,14 @@ PINATA_JWT=your_jwt
 ```bash
 npm start
 ```
+
+### Tests
+
+```bash
+npm test
+```
+
+Runs a syntax check on every file plus an offline smoke test (module loading, validation helpers, the SQLite layer and the RPC timeout). The same command runs in GitHub Actions on every pull request.
 
 ### The fancy way (with vanity grinder)
 
