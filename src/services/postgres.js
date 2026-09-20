@@ -286,7 +286,14 @@ async function createSchema() {
         'nextAirdropTimestamp', // v25.7: Track next airdrop time for frontend countdown
         'lifetimeCreatorFeesLamports',
         'lifetimeRobinhoodFeesLamports',
-        'pendingAmmFeesLamports' // v25.23: Track pending AMM fees that can't be claimed yet
+        'pendingAmmFeesLamports', // v25.23: Track pending AMM fees that can't be claimed yet
+        // v28.0: the platform's 25% cut accrues here between on-chain sweeps, so the amount
+        // owed to the buyback/burn and upkeep wallets is auditable rather than implicit in
+        // the dev wallet's balance.
+        'pendingBuybackBurnLamports',
+        'pendingUpkeepLamports',
+        'lifetimeBuybackBurnLamports',
+        'lifetimeUpkeepLamports'
     ];
 
     for (const key of statsKeys) {

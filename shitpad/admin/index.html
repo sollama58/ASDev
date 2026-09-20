@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Community Chest Admin</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
+    <title>ShitPad Admin</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💩</text></svg>">
 
     <style>
         :root {
@@ -17,9 +17,9 @@
             --text:         #e8e8e8;
             --text2:        #a0a0a0;
             --muted:        #555;
-            --accent:       #f59e0b;
-            --accent-glow:  rgba(245,158,11,0.12);
-            --accent-dim:   rgba(245,158,11,0.08);
+            --accent:       #c68a56;
+            --accent-glow:  rgba(198,138,86,0.12);
+            --accent-dim:   rgba(198,138,86,0.08);
             --green:        #22c55e;
             --green-dim:    rgba(34,197,94,0.1);
             --red:          #ef4444;
@@ -74,7 +74,7 @@
             text-transform: uppercase;
             color: var(--accent);
             background: var(--accent-dim);
-            border: 1px solid rgba(245,158,11,0.2);
+            border: 1px solid rgba(198,138,86,0.2);
             padding: 2px 7px;
             border-radius: 4px;
         }
@@ -327,7 +327,7 @@
 
         .msg-error   { background: var(--red-dim);   border: 1px solid rgba(239,68,68,0.25);  color: #fca5a5; }
         .msg-success { background: var(--green-dim);  border: 1px solid rgba(34,197,94,0.25);  color: #86efac; }
-        .msg-info    { background: var(--accent-dim); border: 1px solid rgba(245,158,11,0.2);  color: #fcd34d; }
+        .msg-info    { background: var(--accent-dim); border: 1px solid rgba(198,138,86,0.2);  color: #e0b283; }
 
         /* ── Log tables ── */
         .log-table {
@@ -397,7 +397,7 @@
         #toast.visible { opacity: 1; transform: translateY(0); }
         #toast.toast-success { background: var(--green-dim); border: 1px solid rgba(34,197,94,0.3); color: #86efac; }
         #toast.toast-error   { background: var(--red-dim);   border: 1px solid rgba(239,68,68,0.3);  color: #fca5a5; }
-        #toast.toast-info    { background: var(--accent-dim); border: 1px solid rgba(245,158,11,0.25); color: #fcd34d; }
+        #toast.toast-info    { background: var(--accent-dim); border: 1px solid rgba(198,138,86,0.25); color: #e0b283; }
 
         /* ── Skeleton ── */
         @keyframes shimmer { 0%,100% { opacity:.3; } 50% { opacity:.6; } }
@@ -420,8 +420,8 @@
 <!-- ── Header ── -->
 <header>
     <div class="logo">
-        <span>💰</span>
-        <span>Community Chest</span>
+        <span>💩</span>
+        <span>ShitPad</span>
         <span class="logo-tag">Admin</span>
     </div>
     <div class="header-right">
@@ -488,7 +488,7 @@
             </div>
 
             <div class="action-cell">
-                <div class="action-header"><span class="action-icon">💰</span><span class="action-name">Trigger Fee Claim</span></div>
+                <div class="action-header"><span class="action-icon">💩</span><span class="action-name">Trigger Fee Claim</span></div>
                 <div class="action-desc">Collect pending fees from creator vaults and Robinhood token pools into the airdrop pool.</div>
                 <div class="action-status" id="as-fee-claim"></div>
                 <button class="btn btn-primary btn-sm" onclick="runAction('trigger-fee-claim','as-fee-claim')">Run</button>
@@ -613,7 +613,7 @@ const BACKEND_URL = 'https://asdev-1kvy.onrender.com';
 const WS_URL      = BACKEND_URL.replace(/^https/, 'wss') + '/ws';
 
 // ── Auth state ─────────────────────────────────────────────────────────────────
-let adminKey = sessionStorage.getItem('community_chest_admin_key') || '';
+let adminKey = sessionStorage.getItem('shitpad_admin_key') || '';
 
 function apiHeaders() {
     return { 'Content-Type': 'application/json', 'X-Admin-Key': adminKey };
@@ -678,7 +678,7 @@ async function doLogin() {
 
         if (r.ok && d.valid) {
             adminKey = pw;
-            sessionStorage.setItem('community_chest_admin_key', pw);
+            sessionStorage.setItem('shitpad_admin_key', pw);
             showDashboard();
         } else {
             msg.innerHTML = `<div class="msg msg-error">${esc(d.error || 'Invalid key.')}</div>`;
@@ -704,7 +704,7 @@ function showDashboard() {
 }
 
 function logout() {
-    sessionStorage.removeItem('community_chest_admin_key');
+    sessionStorage.removeItem('shitpad_admin_key');
     adminKey = '';
     location.reload();
 }
@@ -1052,7 +1052,7 @@ if (adminKey) {
     fetch(`${BACKEND_URL}/api/admin/airdrop-logs?limit=1`, { headers: { 'X-Admin-Key': adminKey } })
         .then(r => {
             if (r.ok) showDashboard();
-            else { sessionStorage.removeItem('community_chest_admin_key'); adminKey = ''; }
+            else { sessionStorage.removeItem('shitpad_admin_key'); adminKey = ''; }
         })
         .catch(() => {});
 }

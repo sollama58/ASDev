@@ -12,8 +12,8 @@ of the same holder-tracking/airdrop engine:
   being launched here. Verified entirely on-chain at registration time.
 - **PAGS** ("Pay-to-Twitter/X") — token creators split fees with Twitter/X
   accounts, who link a wallet via OAuth and claim their share.
-- **Community Chest** — a standalone airdrop-pool sub-site/brand (own static
-  page and admin panel) built on the same backend.
+- **ShitPad** — a standalone airdrop-pool sub-site/brand (own static page and
+  admin panel) built on the same backend. Tagline: "Token launchpads are shit."
 
 Two tracked tokens (`ASDF`, `ANSEM`) give their top holders a 2× multiplier
 on airdrop weight, stacking to 4× if you hold both.
@@ -60,7 +60,7 @@ scripts/                 # One-off/maintenance scripts (see Scripts section)
 # Frontend — static HTML, no build step, each file is self-contained
 asdev_frontend.html       # Main platform UI (launches, leaderboard, Robinhood, PAGS, wallet connect)
 admin_panel.html          # Main platform admin console
-community-chest/          # Standalone airdrop-pool sub-site (own render.yaml Blueprint)
+shitpad/                  # Standalone airdrop-pool sub-site (own render.yaml Blueprint)
 ├── index.html
 ├── admin/index.html
 └── render.yaml
@@ -201,7 +201,7 @@ endpoints in total, including a large admin/debug surface gated behind
 Runs on Render.com as multiple services from this one repo:
 - The API/worker process (`src/index.js` / `src/worker.js`)
 - Separate static-site Blueprints for the frontends — see
-  `community-chest/render.yaml` for that sub-site's Blueprint
+  `shitpad/render.yaml` for that sub-site's Blueprint
 
 ## Troubleshooting
 
