@@ -40,7 +40,9 @@ const config = {
     // Update Intervals (ms)
     HOLDER_UPDATE_INTERVAL: parseInt(process.env.HOLDER_UPDATE_INTERVAL) || 120000,
     METADATA_UPDATE_INTERVAL: parseInt(process.env.METADATA_UPDATE_INTERVAL) || 60000,
-    ASDF_UPDATE_INTERVAL: 300000,
+    // Tokens that are neither recently launched nor on the leaderboard refresh at this slower cadence
+    METADATA_SLOW_REFRESH_INTERVAL: parseInt(process.env.METADATA_SLOW_REFRESH_INTERVAL) || 600000,
+    ASDF_UPDATE_INTERVAL: parseInt(process.env.ASDF_UPDATE_INTERVAL) || 300000,
 
     // Pinata (IPFS)
     PINATA_JWT: process.env.PINATA_JWT?.trim() || null,

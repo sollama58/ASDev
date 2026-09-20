@@ -5,7 +5,7 @@
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
 const {
-    getAssociatedTokenAddress, getAccount, createAssociatedTokenAccountInstruction,
+    getAssociatedTokenAddress,
     createAssociatedTokenAccountIdempotentInstruction, createTransferCheckedInstruction,
     createCloseAccountInstruction, TOKEN_PROGRAM_ID
 } = require('@solana/spl-token');
@@ -16,12 +16,75 @@ const { logger, pump, solana, jupiter } = require('../services');
 let isBuybackRunning = false;
 let isAirdropping = false;
 
+// Re-scan eligible users' ATAs at most this often while the eligible set is unchanged.
+const ATA_SCAN_MAX_AGE_MS = 30 * 60 * 1000;
+
 /**
- * Claim creator fees from bonding curve and AMM
+ * Read the dev wallet's pending creator fees (bonding curve + AMM vault).
+ * Returns lamports for each source; a failed read counts as 0.
  */
-async function claimCreatorFees(deps) {
+async function readPendingFees(deps) {
     const { connection, devKeypair } = deps;
+    const { bcVault, ammVaultAta } = pump.getCreatorFeeVaults(devKeypair.publicKey);
+    let bcLamports = 0;
+    let ammLamports = 0;
+
+    try {
+        const bcInfo = await connection.getAccountInfo(bcVault);
+        if (bcInfo) bcLamports = bcInfo.lamports;
+    } catch (e) {
+        logger.debug('Failed to fetch BC fees', { error: e.message });
+    }
+
+    try {
+        const ammVaultAtaKey = await ammVaultAta;
+        const bal = await connection.getTokenAccountBalance(ammVaultAtaKey);
+        if (bal.value.amount) ammLamports = Number(bal.value.amount);
+    } catch (e) {
+        logger.debug('Failed to fetch AMM fees', { error: e.message });
+    }
+
+    return { bcLamports, ammLamports };
+}
+
+/**
+ * Refresh the wallet readings the /health endpoint shows (SOL balance, pending fees, PUMP holdings)
+ * and cache them on globalState so the route does not have to hit the RPC itself.
+ */
+async function refreshWalletState(deps) {
+    const { connection, devKeypair, globalState } = deps;
+
+    const pending = await readPendingFees(deps);
+    globalState.pendingFeesLamports = pending.bcLamports + pending.ammLamports;
+
+    try {
+        globalState.devSolBalanceLamports = await connection.getBalance(devKeypair.publicKey);
+    } catch (e) {
+        logger.debug('Failed to fetch SOL balance', { error: e.message });
+    }
+
+    try {
+        const devPumpAta = await getAssociatedTokenAddress(TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022);
+        const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
+        globalState.devPumpHoldings = tokenBal.value.uiAmount || 0;
+    } catch (e) {
+        globalState.devPumpHoldings = 0;
+    }
+
+    globalState.walletStateUpdatedAt = Date.now();
+    return pending;
+}
+
+/**
+ * Claim creator fees from bonding curve and AMM.
+ * `pending` is the { bcLamports, ammLamports } reading the caller already made, so the
+ * vaults are not read a second time.
+ */
+async function claimCreatorFees(deps, pending) {
+    const { devKeypair } = deps;
     const { bcVault, ammVaultAuth, ammVaultAta } = pump.getCreatorFeeVaults(devKeypair.publicKey);
+
+    if (!pending) pending = await readPendingFees(deps);
 
     const tx = new Transaction();
     solana.addPriorityFee(tx);
@@ -31,8 +94,7 @@ async function claimCreatorFees(deps) {
 
     // Claim Bonding Curve Fees
     try {
-        const bcInfo = await connection.getAccountInfo(bcVault);
-        if (bcInfo && bcInfo.lamports > 0) {
+        if (pending.bcLamports > 0) {
             const discriminator = pump.buildClaimFeesData();
             const [eventAuthority] = PublicKey.findProgramAddressSync(
                 [Buffer.from("__event_authority")], PROGRAMS.PUMP
@@ -48,7 +110,7 @@ async function claimCreatorFees(deps) {
 
             tx.add(new TransactionInstruction({ keys, programId: PROGRAMS.PUMP, data: discriminator }));
             claimedSomething = true;
-            totalClaimed += bcInfo.lamports;
+            totalClaimed += pending.bcLamports;
         }
     } catch (e) {
         logger.debug('Failed to claim BC fees', { error: e.message });
@@ -57,18 +119,14 @@ async function claimCreatorFees(deps) {
     // Claim AMM Fees
     try {
         const myWsolAta = await getAssociatedTokenAddress(TOKENS.WSOL, devKeypair.publicKey);
-        try {
-            await getAccount(connection, myWsolAta);
-        } catch {
-            tx.add(createAssociatedTokenAccountInstruction(
+        const ammVaultAtaKey = await ammVaultAta;
+
+        if (pending.ammLamports > 0) {
+            // Idempotent create replaces a getAccount read: it is a no-op if the ATA already exists.
+            tx.add(createAssociatedTokenAccountIdempotentInstruction(
                 devKeypair.publicKey, myWsolAta, devKeypair.publicKey, TOKENS.WSOL
             ));
-        }
 
-        const ammVaultAtaKey = await ammVaultAta;
-        const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-
-        if (new BN(bal.value.amount).gt(new BN(0))) {
             const ammDiscriminator = Buffer.from([160, 57, 89, 42, 181, 139, 43, 66]);
             const [eventAuthority] = PublicKey.findProgramAddressSync(
                 [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
@@ -88,7 +146,7 @@ async function claimCreatorFees(deps) {
             tx.add(new TransactionInstruction({ keys, programId: PROGRAMS.PUMP_AMM, data: ammDiscriminator }));
             tx.add(createCloseAccountInstruction(myWsolAta, devKeypair.publicKey, devKeypair.publicKey));
             claimedSomething = true;
-            totalClaimed += Number(bal.value.amount);
+            totalClaimed += pending.ammLamports;
         }
     } catch (e) {
         logger.debug('Failed to claim AMM fees', { error: e.message });
@@ -106,22 +164,44 @@ async function claimCreatorFees(deps) {
  * Process airdrop distribution
  * Updated with "King of the Hill" (KOTH) Logic and Dynamic Cost Check
  */
-async function processAirdrop(deps) {
+async function processAirdrop(deps, knownSolBalance = null) {
     const { connection, devKeypair, db, globalState } = deps;
 
     if (isAirdropping) return;
     isAirdropping = true;
 
     try {
-        const balance = globalState.devPumpHoldings;
-        // Basic Threshold Check
+        // Basic Threshold Check on the cached reading (refreshed by the holder scanner)
+        if ((globalState.devPumpHoldings || 0) <= 50000) {
+            isAirdropping = false;
+            return;
+        }
+
+        // Re-read the real PUMP balance: the cached number predates this cycle's buyback and
+        // any previous airdrop, and distributing a stale amount fails every batch.
+        const devPumpAta = await getAssociatedTokenAddress(
+            TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
+        );
+        let balance = 0;
+        try {
+            const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
+            balance = tokenBal.value.uiAmount || 0;
+        } catch (e) {
+            logger.warn(`Airdrop Skipped: could not read PUMP balance (${e.message})`);
+            isAirdropping = false;
+            return;
+        }
+        globalState.devPumpHoldings = balance;
         if (balance <= 50000) {
             isAirdropping = false;
             return;
         }
 
         // --- FINAL SAFETY CHECK ---
-        const solBalance = await connection.getBalance(devKeypair.publicKey);
+        // The SOL balance read by runPurchaseAndFees is reused unless it spent SOL since.
+        const solBalance = knownSolBalance !== null
+            ? knownSolBalance
+            : await connection.getBalance(devKeypair.publicKey);
         // Use the cached calculation from flywheel if available, otherwise safe fallback
         const cachedCost = globalState.conservationStatus?.estimatedCost || (0.05 * LAMPORTS_PER_SOL);
         
@@ -142,10 +222,6 @@ async function processAirdrop(deps) {
 
         // 1. Identify King of the Hill (Highest MCAP)
         const kothToken = await db.get('SELECT userPubkey, ticker, mint FROM tokens ORDER BY marketCap DESC LIMIT 1');
-        
-        const devPumpAta = await getAssociatedTokenAddress(
-            TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
-        );
 
         // 2. Process KOTH Payout (10%)
         if (kothToken && kothToken.userPubkey) {
@@ -234,8 +310,15 @@ async function processAirdrop(deps) {
             [totalDistributable, userPoints.length + (kothAmount > 0 ? 1 : 0), globalState.totalPoints, allSignatures.join(','), details, new Date().toISOString()]
         );
         
-        // Clear status after run
+        // Clear status after run and refresh the cached PUMP holdings for /health
         globalState.conservationStatus = null;
+        globalState.ataScan = null;
+        try {
+            const after = await connection.getTokenAccountBalance(devPumpAta);
+            globalState.devPumpHoldings = after.value.uiAmount || 0;
+        } catch (e) {
+            globalState.devPumpHoldings = 0;
+        }
         
     } catch (e) {
         logger.error("Airdrop Failed", { error: e.message });
@@ -249,11 +332,12 @@ async function processAirdrop(deps) {
  * Enhanced: Skips invalid ATAs instead of failing the whole batch
  */
 async function sendAirdropBatch(batch, sourceAta, deps) {
-    const { connection, devKeypair } = deps;
+    const { connection, devKeypair, globalState } = deps;
 
     try {
         const tx = new Transaction();
-        solana.addPriorityFee(tx);
+        // 8 transfers plus up to 8 Token-2022 ATA creations can exceed 300k CU
+        solana.addPriorityFee(tx, 400000);
 
         // 1. Resolve ATAs safely
         const validItems = [];
@@ -272,25 +356,31 @@ async function sendAirdropBatch(batch, sourceAta, deps) {
 
         if (validItems.length === 0) return null;
 
-        // 2. Fetch Infos for valid items only
-        let infos = null;
-        let retries = 3;
-        while (retries > 0) {
-            try {
-                infos = await connection.getMultipleAccountsInfo(atas);
-                break;
-            } catch (err) {
-                retries--;
-                if (retries === 0) throw new Error(`Failed to fetch account infos`);
-                await new Promise(r => setTimeout(r, 1500));
+        // 2. Find out which ATAs exist. The conservation check in runPurchaseAndFees already
+        //    fetched this for every eligible user, so only fetch what that cache lacks.
+        const ataExists = globalState.ataScan?.exists || new Map();
+        const unknown = atas.filter(a => !ataExists.has(a.toBase58()));
+
+        if (unknown.length > 0) {
+            let retries = 3;
+            while (retries > 0) {
+                try {
+                    const infos = await connection.getMultipleAccountsInfo(unknown);
+                    unknown.forEach((a, idx) => ataExists.set(a.toBase58(), !!infos[idx]));
+                    break;
+                } catch (err) {
+                    retries--;
+                    if (retries === 0) throw new Error(`Failed to fetch account infos`);
+                    await new Promise(r => setTimeout(r, 1500));
+                }
             }
         }
 
         // 3. Build TX with valid items only
         validItems.forEach((item, idx) => {
             const ata = atas[idx];
-            // If info is null, it means account doesn't exist -> Create it (Idempotent)
-            if (!infos[idx]) {
+            // If the account doesn't exist -> Create it (Idempotent)
+            if (!ataExists.get(ata.toBase58())) {
                 tx.add(createAssociatedTokenAccountIdempotentInstruction(
                     devKeypair.publicKey, ata, item.user, TOKENS.PUMP, PROGRAMS.TOKEN_2022
                 ));
@@ -302,9 +392,13 @@ async function sendAirdropBatch(batch, sourceAta, deps) {
         });
 
         const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
+        // Every ATA in a landed batch now exists
+        atas.forEach(a => ataExists.set(a.toBase58(), true));
         return sig;
     } catch (e) {
         logger.error(`Airdrop batch failed`, { error: e.message });
+        // A cached "exists" may have gone stale (closed account); force a fresh scan next cycle.
+        globalState.ataScan = null;
         return null;
     }
 }
@@ -330,23 +424,10 @@ async function runPurchaseAndFees(deps) {
     };
 
     try {
-        const { bcVault, ammVaultAta } = pump.getCreatorFeeVaults(devKeypair.publicKey);
-        let totalPendingFees = new BN(0);
-
-        try {
-            const bcInfo = await connection.getAccountInfo(bcVault);
-            if (bcInfo) totalPendingFees = totalPendingFees.add(new BN(bcInfo.lamports));
-        } catch (e) {
-            logger.debug('Failed to fetch BC fees', { error: e.message });
-        }
-
-        try {
-            const ammVaultAtaKey = await ammVaultAta;
-            const bal = await connection.getTokenAccountBalance(ammVaultAtaKey);
-            if (bal.value.amount) totalPendingFees = totalPendingFees.add(new BN(bal.value.amount));
-        } catch (e) {
-            logger.debug('Failed to fetch AMM fees', { error: e.message });
-        }
+        // One read of the fee vaults per cycle; the result feeds the claim and the /health cache.
+        const pending = await readPendingFees(deps);
+        const totalPendingFees = new BN(pending.bcLamports + pending.ammLamports);
+        globalState.pendingFeesLamports = totalPendingFees.toNumber();
 
         logData.feesCollected = totalPendingFees.toNumber() / LAMPORTS_PER_SOL;
 
@@ -355,11 +436,12 @@ async function runPurchaseAndFees(deps) {
 
         if (totalPendingFees.gte(threshold)) {
             logger.info("Claiming fees...");
-            claimedAmount = await claimCreatorFees(deps);
+            claimedAmount = await claimCreatorFees(deps, pending);
 
             if (claimedAmount > 0) {
                 await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [claimedAmount, 'lifetimeCreatorFeesLamports']);
                 await recordClaim(claimedAmount);
+                globalState.pendingFeesLamports = 0;
             }
             await new Promise(r => setTimeout(r, 2000));
         } else {
@@ -367,6 +449,9 @@ async function runPurchaseAndFees(deps) {
         }
 
         const realBalance = await connection.getBalance(devKeypair.publicKey);
+        globalState.devSolBalanceLamports = realBalance;
+        globalState.walletStateUpdatedAt = Date.now();
+        let solSpentThisCycle = false;
         // Default buffer for normal operations
         let dynamicSafetyBuffer = 0.05 * LAMPORTS_PER_SOL; 
 
@@ -383,8 +468,21 @@ async function runPurchaseAndFees(deps) {
             
             const eligibleUsers = Array.from(globalState.userPointsMap.keys());
             let missingAtaCount = 0;
-            
-            if (eligibleUsers.length > 0) {
+
+            // The eligible set only changes when the holder scanner runs, and ATAs are only ever
+            // created, so reuse the last scan while the set is unchanged and the scan is recent.
+            const scanKey = eligibleUsers.slice().sort().join(',');
+            const cachedScan = globalState.ataScan;
+            const scanIsFresh = cachedScan
+                && cachedScan.key === scanKey
+                && (Date.now() - cachedScan.at) < ATA_SCAN_MAX_AGE_MS;
+
+            if (scanIsFresh) {
+                missingAtaCount = cachedScan.missingAtaCount;
+                logger.debug(`Conservation Check: reusing ATA scan (${missingAtaCount} missing)`);
+            } else if (eligibleUsers.length > 0) {
+                const exists = new Map();
+
                 // Batch check ATAs to be precise
                 const BATCH_SIZE = 100;
                 for (let i = 0; i < eligibleUsers.length; i += BATCH_SIZE) {
@@ -406,9 +504,10 @@ async function runPurchaseAndFees(deps) {
 
                     if (validAtas.length === 0) continue;
 
-                    // Step 2: Check on-chain
+                    // Step 2: Check on-chain, remembering the answer for sendAirdropBatch
                     try {
                         const infos = await connection.getMultipleAccountsInfo(validAtas);
+                        validAtas.forEach((ata, idx) => exists.set(ata.toBase58(), !!infos[idx]));
                         // Count null accounts (they need creation)
                         missingAtaCount += infos.filter(info => !info).length;
                     } catch (err) {
@@ -417,6 +516,8 @@ async function runPurchaseAndFees(deps) {
                         missingAtaCount += validAtas.length;
                     }
                 }
+
+                globalState.ataScan = { key: scanKey, at: Date.now(), missingAtaCount, exists };
             }
             
             // Base Cost = Rent for new accounts + standard transaction fee buffer
@@ -491,12 +592,13 @@ async function runPurchaseAndFees(deps) {
                     logData.transfer9_5 = transfer9_5 / LAMPORTS_PER_SOL;
                     logData.transfer0_5 = transfer0_5 / LAMPORTS_PER_SOL;
 
-                    // Fee distribution
+                    // Fee distribution: two system transfers need a few hundred CU, not 300k
                     const feeTx = new Transaction();
-                    solana.addPriorityFee(feeTx);
+                    solana.addPriorityFee(feeTx, 20000);
                     feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_95, lamports: transfer9_5 }));
                     feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_05, lamports: transfer0_5 }));
                     await solana.sendTxWithRetry(feeTx, [devKeypair]);
+                    solSpentThisCycle = true;
                     logger.info("Fees Distributed");
 
                     // DIRECT BUY: Swap SOL -> PUMP using Jupiter
@@ -523,8 +625,9 @@ async function runPurchaseAndFees(deps) {
             }
         }
 
-        // Try to airdrop (internally checks balance & threshold)
-        await processAirdrop(deps);
+        // Try to airdrop (internally checks balance & threshold).
+        // Reuse this cycle's SOL reading unless a transfer or swap changed it.
+        await processAirdrop(deps, solSpentThisCycle ? null : realBalance);
         await logPurchase('FLYWHEEL_CYCLE', logData);
 
     } catch (e) {
@@ -542,8 +645,10 @@ async function runPurchaseAndFees(deps) {
  * Start the flywheel interval
  */
 function start(deps) {
+    // Prime the wallet readings for /health once at startup; the cycle keeps them fresh after that.
+    setTimeout(() => refreshWalletState(deps).catch(e => logger.debug('Initial wallet read failed', { error: e.message })), 3000);
     setInterval(() => runPurchaseAndFees(deps), 5 * 60 * 1000);
     logger.info("Flywheel started (5 min interval)");
 }
 
-module.exports = { claimCreatorFees, processAirdrop, runPurchaseAndFees, start };
+module.exports = { claimCreatorFees, processAirdrop, runPurchaseAndFees, readPendingFees, refreshWalletState, start };

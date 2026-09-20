@@ -103,7 +103,8 @@ function initDeployWorker(deps) {
             tx.feePayer = creator;
 
             logger.info(`Sending Transaction...`);
-            const sig = await solana.sendTxWithRetry(tx, [devKeypair, mintKeypair]);
+            // Preflight is skipped here only: the create must land fast and a failed simulation costs a retry cycle
+            const sig = await solana.sendTxWithRetry(tx, [devKeypair, mintKeypair], 5, { skipPreflight: true });
             logger.info(`Transaction Confirmed: ${sig}`);
 
             // CRITICAL: Save data with the explicit Image URL we got from Pinata

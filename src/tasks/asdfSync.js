@@ -9,11 +9,23 @@ const config = require('../config/env');
 const { TOKENS, WALLETS } = require('../config/constants');
 const { logger } = require('../services');
 
+let isSyncing = false;
+
+// SPL token account layout: mint(0-32) owner(32-64) amount(64-72). Only owner and amount are
+// used, so ask the RPC for just those 40 bytes instead of the whole 165-byte account.
+const HOLDER_DATA_SLICE = { offset: 32, length: 40 };
+
 /**
  * Fetch and update Top 100 ASDF Holders
  */
 async function updateAsdfHolders(deps) {
     const { connection, globalState } = deps;
+
+    if (isSyncing) {
+        logger.warn("ASDF Sync: previous run still in progress, skipping this tick");
+        return;
+    }
+    isSyncing = true;
 
     try {
         if (!TOKENS.ASDF) {
@@ -32,16 +44,19 @@ async function updateAsdfHolders(deps) {
                 { dataSize: 165 }, // Standard SPL Token Account size
                 { memcmp: { offset: 0, bytes: mintPubkey.toBase58() } }
             ],
+            dataSlice: HOLDER_DATA_SLICE,
             encoding: 'base64'
         });
 
         const parsedAccounts = accounts.map(acc => {
             const data = Buffer.from(acc.account.data);
-            // SPL Layout: Mint(0-32), Owner(32-64), Amount(64-72)
-            const owner = new PublicKey(data.slice(32, 64)).toString();
-            const amount = new BN(data.slice(64, 72), 'le');
+            if (data.length < HOLDER_DATA_SLICE.length) return null;
+            // Sliced layout: Owner(0-32), Amount(32-40)
+            const owner = new PublicKey(data.slice(0, 32)).toString();
+            const amount = new BN(data.slice(32, 40), 'le');
             return { owner, amount };
         })
+        .filter(a => a !== null)
         .sort((a, b) => b.amount.cmp(a.amount)); // Descending sort
 
         // Extract Top 100
@@ -66,19 +81,22 @@ async function updateAsdfHolders(deps) {
 
     } catch (e) {
         logger.error("ASDF Sync Failed", { error: e.message });
+    } finally {
+        isSyncing = false;
     }
 }
 
 /**
- * Start the ASDF sync interval
+ * Start the ASDF sync loop.
+ * Runs immediately, then re-arms after each run using ASDF_UPDATE_INTERVAL.
  */
 function start(deps) {
-    // Run immediately
-    updateAsdfHolders(deps);
-    
-    // Then run every 2 minutes
-    setInterval(() => updateAsdfHolders(deps), 2 * 60 * 1000);
-    logger.info("ASDF Sync started (2 min interval)");
+    const loop = async () => {
+        await updateAsdfHolders(deps);
+        setTimeout(loop, config.ASDF_UPDATE_INTERVAL);
+    };
+    loop();
+    logger.info(`ASDF Sync started (${config.ASDF_UPDATE_INTERVAL / 1000}s interval)`);
 }
 
 module.exports = { updateAsdfHolders, start };

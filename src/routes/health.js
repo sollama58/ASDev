@@ -4,10 +4,9 @@
  */
 const express = require('express');
 const { LAMPORTS_PER_SOL } = require('@solana/web3.js');
-const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const config = require('../config/env');
-const { TOKENS, PROGRAMS } = require('../config/constants');
-const { pump, logger } = require('../services');
+const { logger } = require('../services');
+const flywheel = require('../tasks/flywheel');
 
 const router = express.Router();
 
@@ -55,35 +54,17 @@ function init(deps) {
                 const airdropRes = await db.get('SELECT SUM(CAST(amount AS REAL)) as total FROM airdrop_logs');
                 const totalAirdropped = airdropRes?.total || 0;
 
-                const currentBalance = await connection.getBalance(devKeypair.publicKey);
+                // Wallet readings come from the background tasks (flywheel every 5 min, holder
+                // scanner every 2 min). Hit the RPC only until the flywheel has primed them.
+                let currentBalance = globalState.devSolBalanceLamports;
+                let totalPendingFees = globalState.pendingFeesLamports;
+                let pumpHoldings = globalState.devPumpHoldings || 0;
 
-                const { bcVault, ammVaultAta } = pump.getCreatorFeeVaults(devKeypair.publicKey);
-                let totalPendingFees = 0;
-
-                try {
-                    const bcInfo = await connection.getAccountInfo(bcVault);
-                    if (bcInfo) totalPendingFees += bcInfo.lamports;
-                } catch (e) {
-                    logger.debug('Failed to fetch bonding curve info', { error: e.message });
-                }
-
-                try {
-                    const ammVaultAtaKey = await ammVaultAta;
-                    const wsolBal = await connection.getTokenAccountBalance(ammVaultAtaKey);
-                    if (wsolBal.value.amount) totalPendingFees += Number(wsolBal.value.amount);
-                } catch (e) {
-                    logger.debug('Failed to fetch AMM vault balance', { error: e.message });
-                }
-
-                let pumpHoldings = 0;
-                try {
-                    const devPumpAta = await getAssociatedTokenAddress(
-                        TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
-                    );
-                    const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
-                    if (tokenBal.value.uiAmount) pumpHoldings = tokenBal.value.uiAmount;
-                } catch (e) {
-                    logger.debug('Failed to fetch PUMP holdings', { error: e.message });
+                if (currentBalance === undefined || totalPendingFees === undefined) {
+                    const pending = await flywheel.refreshWalletState({ connection, devKeypair, globalState });
+                    currentBalance = globalState.devSolBalanceLamports || 0;
+                    totalPendingFees = pending.bcLamports + pending.ammLamports;
+                    pumpHoldings = globalState.devPumpHoldings || 0;
                 }
 
                 return { stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped };
