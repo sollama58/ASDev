@@ -129,7 +129,7 @@ function init(deps) {
         try {
             const { mint } = req.params;
             const holders = await db.all(
-                'SELECT rank, holderPubkey FROM token_holders WHERE mint = ? ORDER BY rank ASC LIMIT 50',
+                'SELECT rank, holderPubkey, balance FROM token_holders WHERE mint = ? ORDER BY rank ASC LIMIT 50',
                 [mint]
             );
             res.json(holders);

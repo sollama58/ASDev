@@ -104,7 +104,8 @@ async function updateGlobalState(deps) {
                         if (acc.amount.lte(threshold)) continue;
     
                         if (acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr) {
-                            holdersToInsert.push({ mint: token.mint, owner: acc.owner });
+                            // Raw token amount (u64 base units) as a string; it can exceed Number's safe range.
+                            holdersToInsert.push({ mint: token.mint, owner: acc.owner, balance: acc.amount.toString() });
                         }
                     }
                 } catch (scanErr) {
@@ -119,8 +120,8 @@ async function updateGlobalState(deps) {
                         let rank = 1;
                         for (const h of holdersToInsert) {
                             await db.run(
-                                'INSERT OR IGNORE INTO token_holders (mint, holderPubkey, rank, updatedAt) VALUES (?, ?, ?, ?)',
-                                [h.mint, h.owner, rank, Date.now()]
+                                'INSERT OR IGNORE INTO token_holders (mint, holderPubkey, balance, rank, updatedAt) VALUES (?, ?, ?, ?, ?)',
+                                [h.mint, h.owner, h.balance, rank, Date.now()]
                             );
                             rank++;
                         }
