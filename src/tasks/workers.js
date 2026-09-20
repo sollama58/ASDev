@@ -19,7 +19,7 @@ function initDeployWorker(deps) {
         logger.info(`STARTING JOB ${job.id}: ${job.data.ticker}`);
         
         // Image here is now the URL passed from deploy route, NOT base64
-        const { name, ticker, description, twitter: twitterHandle, website, image, userPubkey, isMayhemMode, metadataUri } = job.data;
+        const { name, ticker, description, twitter: twitterHandle, website, image, userPubkey, userTx, isMayhemMode, metadataUri } = job.data;
 
         try {
             if (!metadataUri) throw new Error("Metadata URI missing");
@@ -154,7 +154,16 @@ function initDeployWorker(deps) {
 
         } catch (jobError) {
             logger.error(`Job Failed: ${jobError.message}`);
-            if (userPubkey) await refundUser(userPubkey, "Deployment Failed: " + jobError.message);
+            // Refund only the wallet that the deploy route verified as the payer of
+            // this signature. Never trust job.data.userPubkey on its own.
+            const payment = userTx && db
+                ? await db.get('SELECT userPubkey FROM transactions WHERE signature = ? AND type = ?', [userTx, 'deployment'])
+                : null;
+            if (payment?.userPubkey) {
+                await refundUser(payment.userPubkey, "Deployment Failed: " + jobError.message);
+            } else {
+                logger.warn(`No verified payment for job ${job.id}; skipping refund`, { userTx, userPubkey });
+            }
             throw jobError;
         }
     }, { concurrency: 1 });
