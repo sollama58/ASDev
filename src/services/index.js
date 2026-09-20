@@ -9,7 +9,6 @@ const vanity = require('./vanity');
 const pinata = require('./pinata');
 const redis = require('./redis');
 const pump = require('./pump');
-const twitter = require('./twitter');
 const moderation = require('./moderation');
 const jupiter = require('./jupiter');
 
@@ -21,7 +20,6 @@ module.exports = {
     pinata,
     redis,
     pump,
-    twitter,
     moderation,
     jupiter,
 };

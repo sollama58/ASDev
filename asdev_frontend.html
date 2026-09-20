@@ -498,10 +498,6 @@
         <div class="flex flex-col gap-3">
             <a id="modal-pump-link" href="#" target="_blank" class="block w-full text-center text-base font-mono text-black bg-yellow-400 hover:bg-yellow-300 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-yellow-500/20">TRADE ON PUMP.FUN</a>
             <a id="modal-tx-link" href="#" target="_blank" class="block w-full text-center text-base font-mono text-white bg-indigo-500 hover:bg-indigo-400 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-indigo-500/20">VIEW TRANSACTION ON SOLSCAN</a>
-            <div id="social-share-container" class="mt-2">
-                <p id="social-loading" class="text-xs text-blue-400 animate-pulse font-mono mb-2">Broadcasting to X...</p>
-                <a id="modal-tweet-link" href="#" target="_blank" class="hidden block w-full text-center text-base font-mono text-white bg-black border border-gray-700 hover:bg-gray-900 py-3 rounded-lg font-bold transition shadow-lg hover:shadow-blue-500/20">🐦 VIEW LAUNCH POST ON X</a>
-            </div>
             <button onclick="closeSuccessModal()" class="block w-full text-center text-sm font-mono text-green-400 border border-green-800 hover:bg-green-900/50 py-2 rounded-lg transition mt-2">CLOSE & LAUNCH ANOTHER</button>
         </div>
     </div>
@@ -607,8 +603,6 @@
         airdropInfoModal: document.getElementById('airdrop-info-modal'),
         statusModal: document.getElementById('status-modal'),
         statusDetailsList: document.getElementById('status-details-list'),
-        socialLoading: document.getElementById('social-loading'),
-        modalTweetLink: document.getElementById('modal-tweet-link'),
         walletModal: document.getElementById('wallet-modal'),
         kothPanel: document.getElementById('koth-panel'),
         kothTicker: document.getElementById('koth-ticker'),
@@ -1496,9 +1490,6 @@
                     ui.successModal.style.display = 'block';
                     ui.deployBtn.innerText = "LAUNCH COMPLETE"; ui.deployBtn.disabled = false;
                     isDeploying = false;
-                    ui.socialLoading.style.display = 'block';
-                    ui.modalTweetLink.classList.add('hidden');
-                    pollSocialStatus(mintAddr);
                     refreshAllData();
                 } else if (job.state === 'failed') {
                     clearInterval(interval);
@@ -1509,33 +1500,6 @@
                     showStatus(`STATUS: ${job.state.toUpperCase()} (Please Wait...)`, 'normal');
                 }
             } catch (e) { console.error("Polling error", e); }
-        }, 2000);
-    };
-    
-    const pollSocialStatus = async (mint) => {
-        let attempts = 0;
-        const maxAttempts = 30; 
-        const socialInterval = setInterval(async () => {
-            attempts++;
-            if (attempts > maxAttempts) {
-                clearInterval(socialInterval);
-                ui.socialLoading.innerText = "Social Post Delayed (Check X Later)";
-                ui.socialLoading.classList.remove('animate-pulse');
-                ui.socialLoading.classList.add('text-gray-500');
-                return;
-            }
-            try {
-                const res = await fetch(`${BACKEND_URL}/api/token/${mint}`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.tweetUrl) {
-                        clearInterval(socialInterval);
-                        ui.socialLoading.style.display = 'none';
-                        ui.modalTweetLink.href = data.tweetUrl;
-                        ui.modalTweetLink.classList.remove('hidden');
-                    }
-                }
-            } catch (e) { /* silent fail */ }
         }, 2000);
     };
     

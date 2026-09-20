@@ -61,12 +61,6 @@ const config = {
     VANITY_POOL_REFILL_COUNT: 20,
     VANITY_POOL_CHECK_INTERVAL: 30000,
 
-    // Twitter
-    TWITTER_API_KEY: process.env.TWITTER_API_KEY,
-    TWITTER_API_SECRET: process.env.TWITTER_API_SECRET,
-    TWITTER_ACCESS_TOKEN: process.env.TWITTER_ACCESS_TOKEN,
-    TWITTER_ACCESS_SECRET: process.env.TWITTER_ACCESS_SECRET,
-
     // UI
     HEADER_IMAGE_URL: process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO",
 

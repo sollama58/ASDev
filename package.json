@@ -31,7 +31,6 @@
     "node-addon-api": "^7.1.0",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.6",
-    "twitter-api-v2": "^1.15.0",
     "typescript": "^5.0.0"
   },
   "engines": {

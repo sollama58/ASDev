@@ -33,7 +33,6 @@ function startAll(deps) {
 
     // Initialize workers
     workers.initDeployWorker(deps);
-    workers.initSocialWorker(deps);
 
     logger.info("All background tasks started");
 }

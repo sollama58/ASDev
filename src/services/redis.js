@@ -9,7 +9,6 @@ const logger = require('./logger');
 
 let redisConnection = null;
 let deployQueue = null;
-let socialQueue = null;
 
 /**
  * Initialize Redis connection and queues
@@ -22,10 +21,8 @@ function init() {
         });
 
         deployQueue = new Queue('deployQueue', { connection: redisConnection });
-        socialQueue = new Queue('socialQueue', { connection: redisConnection });
 
         deployQueue.resume();
-        socialQueue.resume();
 
         logger.info("Redis Queues Initialized");
         return true;
@@ -86,20 +83,6 @@ async function addDeployJob(data) {
 }
 
 /**
- * Add job to social queue
- */
-async function addSocialJob(data, options = {}) {
-    if (!socialQueue) {
-        throw new Error("Social queue not initialized");
-    }
-    return socialQueue.add('postTweet', data, {
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 10000 },
-        ...options
-    });
-}
-
-/**
  * Get job by ID
  */
 async function getJob(jobId) {
@@ -112,9 +95,7 @@ module.exports = {
     smartCache,
     createWorker,
     addDeployJob,
-    addSocialJob,
     getJob,
     getConnection: () => redisConnection,
     getDeployQueue: () => deployQueue,
-    getSocialQueue: () => socialQueue,
 };
