@@ -541,7 +541,9 @@ async function addToCentralPool(db, lamports) {
             "UPDATE stats SET value = value + $1 WHERE key = 'centralPoolLamports'",
             [lamports]
         );
-        if (result?.rowCount === 0) {
+        // v28.2: db.run returns { changes, lastID }, never rowCount — so this guard compared
+        // undefined === 0 and could not fire. A missing stats row silently dropped the credit.
+        if (result?.changes === 0) {
             logger.error(`[CentralPool] addToCentralPool: stats row not found — ${lamports} lamports NOT credited`);
         }
     } catch (e) {
@@ -1641,18 +1643,23 @@ async function claimRobinhoodFees(deps) {
                             });
 
                             // v28.0: 50% holders / 25% central pool / 24.5% buyback-burn / 0.5% upkeep
+                            // v28.2: all four credits in ONE transaction. As three separate
+                            // statements, a failure after the first left the split partially
+                            // applied — holders credited, the platform's share never accrued.
                             const bcSplit = splitClaimedFees(ourShare);
-                            await db.run(
-                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
-                                [Date.now(), ourShare / LAMPORTS_PER_SOL, bcSplit.holders, token.id]
-                            );
-                            if (bcSplit.centralPool > 0) {
-                                await addToCentralPool(db, bcSplit.centralPool);
-                            }
-                            // v28.0: Robinhood claims previously contributed nothing to the
-                            // platform cut -- the 5% transfer only ran on platform claims -- so
-                            // that share silently pooled in the dev wallet. Now accrued here too.
-                            await accruePlatformFees(db, bcSplit);
+                            await db.transaction(async (tx) => {
+                                await tx.run(
+                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
+                                    [Date.now(), ourShare / LAMPORTS_PER_SOL, bcSplit.holders, token.id]
+                                );
+                                if (bcSplit.centralPool > 0) {
+                                    await addToCentralPool(tx, bcSplit.centralPool);
+                                }
+                                // v28.0: Robinhood claims previously contributed nothing to the
+                                // platform cut -- the 5% transfer only ran on platform claims -- so
+                                // that share silently pooled in the dev wallet. Now accrued here too.
+                                await accruePlatformFees(tx, bcSplit);
+                            });
 
                             logger.info(`[Robinhood] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL, ${(bcSplit.holders / LAMPORTS_PER_SOL).toFixed(6)} to token pool, ${(bcSplit.centralPool / LAMPORTS_PER_SOL).toFixed(6)} to central pool, ${((bcSplit.buybackBurn + bcSplit.upkeep) / LAMPORTS_PER_SOL).toFixed(6)} to platform)`);
 
@@ -1818,15 +1825,18 @@ async function claimRobinhoodFees(deps) {
                             });
 
                             // v28.0: 50% holders / 25% central pool / 24.5% buyback-burn / 0.5% upkeep
+                            // v28.2: atomic — see the BC path above.
                             const ammSplit = splitClaimedFees(ourShareLamports);
-                            await db.run(
-                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingAmmFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
-                                [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, ammSplit.holders, token.id]
-                            );
-                            if (ammSplit.centralPool > 0) {
-                                await addToCentralPool(db, ammSplit.centralPool);
-                            }
-                            await accruePlatformFees(db, ammSplit);
+                            await db.transaction(async (tx) => {
+                                await tx.run(
+                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingAmmFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
+                                    [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, ammSplit.holders, token.id]
+                                );
+                                if (ammSplit.centralPool > 0) {
+                                    await addToCentralPool(tx, ammSplit.centralPool);
+                                }
+                                await accruePlatformFees(tx, ammSplit);
+                            });
 
                             logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL (our share: ${ourShare.toFixed(6)} SOL, ${(ammSplit.holders / LAMPORTS_PER_SOL).toFixed(6)} to token pool, ${(ammSplit.centralPool / LAMPORTS_PER_SOL).toFixed(6)} to central pool, ${((ammSplit.buybackBurn + ammSplit.upkeep) / LAMPORTS_PER_SOL).toFixed(6)} to platform)`);
 
@@ -2803,6 +2813,11 @@ async function runPurchaseAndFees(deps) {
                         [MIN_VOLUME_USD]
                     );
                     const totalPlatformVol = eligiblePlatformTokens.reduce((s, t) => s + (parseFloat(t.volume24h) || 0), 0);
+                    // v28.2: every credit of this split in ONE transaction. Written as separate
+                    // statements, a failure part-way (say after the per-token loop) left holders
+                    // credited but the central pool and the platform's share never applied —
+                    // lamports claimed on-chain with no ledger entry anywhere.
+                    await db.transaction(async (tx) => {
                     if (totalPlatformVol > 0 && eligiblePlatformTokens.length > 0) {
                         let totalAttributed = 0;
                         const shares = eligiblePlatformTokens.map(tok => {
@@ -2817,7 +2832,7 @@ async function runPurchaseAndFees(deps) {
                         }
                         for (const { tok, share } of shares) {
                             if (share > 0) {
-                                await db.run(
+                                await tx.run(
                                     'UPDATE tokens SET pending_airdrop_lamports = pending_airdrop_lamports + $1 WHERE mint = $2',
                                     [share, tok.mint]
                                 );
@@ -2825,13 +2840,14 @@ async function runPurchaseAndFees(deps) {
                         }
                     } else if (perTokenCredit > 0) {
                         // No eligible platform tokens to distribute to — redirect to central pool to avoid losing funds
-                        await addToCentralPool(db, perTokenCredit);
+                        await addToCentralPool(tx, perTokenCredit);
                         logger.info(`[FeeCollection] No eligible platform tokens — redirected ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL per-token credit to central pool`);
                     }
                     if (centralCredit > 0) {
-                        await addToCentralPool(db, centralCredit);
+                        await addToCentralPool(tx, centralCredit);
                     }
-                    await accruePlatformFees(db, platformSplit);
+                    await accruePlatformFees(tx, platformSplit);
+                    });
                     logger.info(`[FeeCollection] Attributed ${(totalRewardCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees: ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} to per-token pools, ${(centralCredit / LAMPORTS_PER_SOL).toFixed(4)} to central pool, ${((platformSplit.buybackBurn + platformSplit.upkeep) / LAMPORTS_PER_SOL).toFixed(4)} to platform`);
                 } catch (attrErr) {
                     logger.warn('[FeeCollection] Platform fee attribution failed', { error: attrErr.message });
@@ -3059,6 +3075,8 @@ async function runFeeCollection(deps) {
                         [MIN_VOLUME_USD]
                     );
                     const totalPlatformVol = eligiblePlatformTokens.reduce((s, t) => s + (parseFloat(t.volume24h) || 0), 0);
+                    // v28.2: atomic — see runPurchaseAndFees above for why.
+                    await db.transaction(async (tx) => {
                     if (totalPlatformVol > 0 && eligiblePlatformTokens.length > 0) {
                         let totalAttributed = 0;
                         const shares = eligiblePlatformTokens.map(tok => {
@@ -3072,7 +3090,7 @@ async function runFeeCollection(deps) {
                         }
                         for (const { tok, share } of shares) {
                             if (share > 0) {
-                                await db.run(
+                                await tx.run(
                                     'UPDATE tokens SET pending_airdrop_lamports = pending_airdrop_lamports + $1 WHERE mint = $2',
                                     [share, tok.mint]
                                 );
@@ -3080,13 +3098,14 @@ async function runFeeCollection(deps) {
                         }
                     } else if (perTokenCredit > 0) {
                         // No eligible platform tokens to distribute to — redirect to central pool to avoid losing funds
-                        await addToCentralPool(db, perTokenCredit);
+                        await addToCentralPool(tx, perTokenCredit);
                         logger.info(`[FeeCollection] No eligible platform tokens — redirected ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL per-token credit to central pool`);
                     }
                     if (centralCredit > 0) {
-                        await addToCentralPool(db, centralCredit);
+                        await addToCentralPool(tx, centralCredit);
                     }
-                    await accruePlatformFees(db, platformSplit);
+                    await accruePlatformFees(tx, platformSplit);
+                    });
                     logger.info(`[FeeCollection] Attributed ${(totalRewardCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees: ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} to per-token pools, ${(centralCredit / LAMPORTS_PER_SOL).toFixed(4)} to central pool, ${((platformSplit.buybackBurn + platformSplit.upkeep) / LAMPORTS_PER_SOL).toFixed(4)} to platform`);
                 } catch (attrErr) {
                     logger.warn('[FeeCollection] Platform fee attribution failed', { error: attrErr.message });

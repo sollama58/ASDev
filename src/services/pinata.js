@@ -48,7 +48,9 @@ async function uploadImage(base64Data) {
         const response = await axios.post(
             'https://api.pinata.cloud/pinning/pinFileToIPFS',
             formData,
-            { headers: getPinataHeaders(formData), maxBodyLength: Infinity }
+            // v28.2: a timeout. This runs inside a user's HTTP request; without one, a stalled
+            // Pinata connection held that request — and the rate-limit slot — open indefinitely.
+            { headers: getPinataHeaders(formData), maxBodyLength: Infinity, timeout: 30000 }
         );
 
         return response.data.IpfsHash;
@@ -92,7 +94,7 @@ async function uploadMetadata(name, symbol, description, twitter, website, image
         const response = await axios.post(
             'https://api.pinata.cloud/pinning/pinJSONToIPFS',
             metadata,
-            { headers: getPinataJSONHeaders() }
+            { headers: getPinataJSONHeaders(), timeout: 20000 } // v28.2: see pinFileToIPFS
         );
 
         const metadataHash = response.data.IpfsHash;
@@ -145,7 +147,7 @@ async function uploadMetadataWithBase64(name, symbol, description, twitter, webs
         const response = await axios.post(
             'https://api.pinata.cloud/pinning/pinJSONToIPFS',
             metadata,
-            { headers: getPinataJSONHeaders() }
+            { headers: getPinataJSONHeaders(), timeout: 20000 } // v28.2: see pinFileToIPFS
         );
 
         const metadataHash = response.data.IpfsHash;

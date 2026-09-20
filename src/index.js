@@ -149,6 +149,17 @@ async function main() {
     // Create Express app
     const app = express();
 
+    // v28.2 SECURITY: trust exactly one proxy hop (Render's edge). Without this, req.ip is
+    // the proxy's address for every client, so the default-keyed rate limiters (apiLimiter,
+    // deployLimiter) put ALL users in one 120/min bucket and one 5/min deploy bucket — one
+    // busy client 429s everyone. The custom keyGenerators that worked around that took the
+    // LEFTMOST X-Forwarded-For entry, which is the one the client writes, so every limiter
+    // using them (health, token registration, admin login brute-force) could be bypassed by
+    // sending a random X-Forwarded-For per request. With trust proxy set, Express derives
+    // req.ip from the rightmost untrusted hop — the address Render actually saw — and the
+    // library's default key generator handles IPv6 subnetting on top of it.
+    app.set('trust proxy', 1);
+
     // Security middleware - SECURITY FIX: Re-enable CSP with reasonable defaults
     app.use(helmet({
         contentSecurityPolicy: {
@@ -219,7 +230,10 @@ async function main() {
 
     // PAGS middleware disabled
     app.use(cookieParser());
-    app.use(express.json({ limit: '10mb' })); // SECURITY FIX: Reduced from 50mb to 10mb
+    // v28.2: 1mb. Images go to Imgur client-side; the largest JSON body this API accepts is
+    // launch metadata (a few hundred bytes). 10mb was a memory-amplification surface for no
+    // legitimate request.
+    app.use(express.json({ limit: '1mb' }));
 
     // v25.4: Rate limiting - More permissive for frontend polling, strict for deployments
     // With WebSocket, polling should be reduced but we still allow reasonable API access

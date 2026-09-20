@@ -19,8 +19,11 @@ const healthRateLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
     max: 60, // 60 requests/min per IP
     standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown'
+    legacyHeaders: false
+    // v28.2 SECURITY: custom keyGenerator removed. It keyed on the leftmost X-Forwarded-For
+    // entry — the client-controlled one — so any caller could dodge this limiter with a
+    // random header value per request. index.js now sets trust proxy, so the library's
+    // default (req.ip, IPv6-subnet-aware) is both correct and unspoofable.
 });
 
 // v24.0 SECURITY FIX: Rate limiter using Redis for multi-instance support
@@ -2272,7 +2275,10 @@ function init(deps) {
     // Uses ADMIN_API_KEY environment variable as the password
     // v24.0: Updated to async for Redis-based rate limiting
     router.post('/admin/verify', async (req, res) => {
-        const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+        // v28.2 SECURITY: req.ip, not the client-writable leftmost X-Forwarded-For entry.
+        // This is the brute-force limiter's key; keyed the old way it was defeated by
+        // sending a different header value with each guess.
+        const clientIp = req.ip || 'unknown';
         const { password } = req.body;
         const expectedKey = config.ADMIN_API_KEY;
 

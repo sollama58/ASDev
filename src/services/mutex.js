@@ -9,6 +9,23 @@ const logger = require('./logger');
 // v25.21: Default lock timeout (5 minutes) - prevents deadlocks if process crashes while holding lock
 const DEFAULT_LOCK_TIMEOUT_MS = 300000;
 
+// v28.2 CORRECTNESS: compare-and-delete as a single Redis operation.
+//
+// Release used to be GET then DEL as two round-trips. Between them the lock can expire and
+// be re-acquired by another process, at which point the DEL removes *that* process's lock —
+// and two holders of e.g. the flywheel mutex proceed concurrently. A Lua script runs
+// atomically on the server, so the ownership check and the delete cannot be interleaved.
+const RELEASE_SCRIPT = `
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+`;
+
+async function releaseIfOwner(redis, lockKey, lockId) {
+    return redis.eval(RELEASE_SCRIPT, 1, lockKey, lockId);
+}
+
 /**
  * Simple async mutex implementation using Redis for distributed locking
  * Falls back to in-memory locks if Redis is unavailable
@@ -26,7 +43,7 @@ class AsyncMutex {
      * Acquire the lock - returns a release function
      * If lock is already held, waits until it's released
      */
-    async acquire(timeoutMs = 60000) {
+    async acquire(timeoutMs = 60000, lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS) {
         const lockKey = `mutex:${this.name}`;
         const startTime = Date.now();
 
@@ -35,16 +52,15 @@ class AsyncMutex {
             const lockId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
             while (Date.now() - startTime < timeoutMs) {
-                // Try to set lock with NX (only if not exists) and EX (expiry)
-                const result = await this.redis.set(lockKey, lockId, 'NX', 'PX', timeoutMs);
+                // v28.2: the lock's TTL is how long it may be HELD, not how long we were
+                // willing to WAIT for it. Previously PX was set to timeoutMs (the wait),
+                // so a holder doing more than 60s of work lost its lock mid-run.
+                const result = await this.redis.set(lockKey, lockId, 'NX', 'PX', lockTimeoutMs);
 
                 if (result === 'OK') {
                     logger.debug(`[Mutex] Acquired lock: ${this.name}`);
                     return async () => {
-                        // Only release if we still own the lock
-                        const currentValue = await this.redis.get(lockKey);
-                        if (currentValue === lockId) {
-                            await this.redis.del(lockKey);
+                        if (await releaseIfOwner(this.redis, lockKey, lockId)) {
                             logger.debug(`[Mutex] Released lock: ${this.name}`);
                         }
                     };
@@ -91,9 +107,7 @@ class AsyncMutex {
             if (result === 'OK') {
                 logger.debug(`[Mutex] Acquired Redis lock: ${this.name} (timeout: ${lockTimeoutMs}ms)`);
                 return async () => {
-                    const currentValue = await this.redis.get(lockKey);
-                    if (currentValue === lockId) {
-                        await this.redis.del(lockKey);
+                    if (await releaseIfOwner(this.redis, lockKey, lockId)) {
                         logger.debug(`[Mutex] Released Redis lock: ${this.name}`);
                     }
                 };

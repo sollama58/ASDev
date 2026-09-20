@@ -15,7 +15,7 @@ async function getQuote(inputMint, outputMint, amountIn, slippageBps = 100) {
     const url = `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountIn}&slippageBps=${slippageBps}`;
 
     try {
-        const response = await axios.get(url);
+        const response = await axios.get(url, { timeout: 15000 }); // v28.2: no more open-ended hangs
         return response.data;
     } catch (e) {
         logger.error("Jupiter Quote API Error", { error: e.message });
@@ -32,7 +32,7 @@ async function getSwapTransaction(quoteResponse, userPublicKey, wrapAndUnwrapSol
         quoteResponse,
         userPublicKey: userPublicKey.toString(),
         wrapAndUnwrapSol
-    });
+    }, { timeout: 15000 }); // v28.2
 
     return response.data.swapTransaction;
 }

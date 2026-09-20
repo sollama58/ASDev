@@ -55,10 +55,9 @@ const tokenRegistrationLimiter = rateLimit({
     max: 10, // 10 registrations per hour per IP
     message: { error: 'Too many token registration attempts. Please try again later.' },
     standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (req) => {
-        return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
-    }
+    legacyHeaders: false
+    // v28.2 SECURITY: custom keyGenerator removed — it keyed on the client-controlled
+    // leftmost X-Forwarded-For entry and was bypassable. See index.js trust proxy.
 });
 
 /**

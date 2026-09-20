@@ -23,8 +23,9 @@ let redis = null;
 const CLAIM_LOCK_TIMEOUT_MS = 120000;
 
 // Retry configuration for blockchain operations
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 2000;
+// v28.2: MAX_RETRIES / RETRY_DELAY_MS removed — payout retries now live in
+// solana.sendTxWithRetry, which retries safely (same signed bytes, never a fresh blockhash
+// until the old one has provably expired).
 
 /**
  * Initialize PAGS service with dependencies
@@ -743,37 +744,37 @@ async function executeClaimTransfer(claimId, recipientWallet, amount) {
     const recipientPubkey = new PublicKey(recipientWallet);
     const lamports = Math.floor(amount * 1e9);
 
-    let lastError = null;
+    // v28.2 MONEY: this used to be a 3-attempt loop that caught EVERY error — including a
+    // confirmation timeout — and retried with a fresh blockhash. A fresh blockhash is a
+    // different transaction, so a payout that had landed but timed out at 'confirmed' was
+    // sent again as a brand-new transfer: the user was paid up to three times. The same
+    // defect was fixed in solana.sendTxWithRetry in v27.6; PAGS payouts now go through it.
+    // It re-broadcasts the identical signed bytes until they confirm or provably expire, and
+    // only re-signs once the old blockhash can no longer land.
+    //
+    // The former loop's body is kept at its original indentation below rather than
+    // reflowed, to keep this diff reviewable.
+    const { sendTxWithRetry } = require('./solana');
+    const tx = new Transaction().add(
+        SystemProgram.transfer({
+            fromPubkey: pagsKeypair.publicKey,
+            toPubkey: recipientPubkey,
+            lamports
+        })
+    );
+    tx.feePayer = pagsKeypair.publicKey;
+    const attempt = 1; // retained for the log line below
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        try {
-            // Create transfer transaction
-            const tx = new Transaction().add(
-                SystemProgram.transfer({
-                    fromPubkey: pagsKeypair.publicKey,
-                    toPubkey: recipientPubkey,
-                    lamports
-                })
-            );
+    let signature;
+    try {
+        signature = await sendTxWithRetry(tx, [pagsKeypair]);
+    } catch (e) {
+        logger.warn('[PAGS] Claim transfer failed', { claimId, error: e.message });
+        throw new Error(`Transfer failed: ${e.message}`);
+    }
 
-            // Get recent blockhash with lastValidBlockHeight for proper confirmation
-            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-            tx.recentBlockhash = blockhash;
-            tx.feePayer = pagsKeypair.publicKey;
-
-            // Sign and send
-            tx.sign(pagsKeypair);
-            const signature = await connection.sendRawTransaction(tx.serialize(), {
-                skipPreflight: false,
-                preflightCommitment: 'confirmed'
-            });
-
-            // Wait for confirmation with proper parameters
-            await connection.confirmTransaction({
-                signature,
-                blockhash,
-                lastValidBlockHeight
-            }, 'confirmed');
+    {
+        {
 
             // Update claim record
             await db.run(`
@@ -847,23 +848,8 @@ async function executeClaimTransfer(claimId, recipientWallet, amount) {
             });
 
             return signature;
-
-        } catch (e) {
-            lastError = e;
-            logger.warn('[PAGS] Claim transfer attempt failed', {
-                claimId,
-                attempt,
-                maxRetries: MAX_RETRIES,
-                error: e.message
-            });
-
-            if (attempt < MAX_RETRIES) {
-                await sleep(RETRY_DELAY_MS * attempt); // Exponential backoff
-            }
         }
     }
-
-    throw new Error(`Transfer failed after ${MAX_RETRIES} attempts: ${lastError?.message}`);
 }
 
 /**

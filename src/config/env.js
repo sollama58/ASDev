@@ -80,8 +80,11 @@ const config = {
     // Grinding restarts once the pool falls to this depth. The gap between this and the
     // target is what stops the workers flapping on every single launch.
     VANITY_POOL_LOW_WATER: parseInt(process.env.VANITY_POOL_LOW_WATER) || 40,
-    // Defaults to every core on the grinder instance, since that instance does nothing else.
-    VANITY_GRINDER_THREADS: parseInt(process.env.VANITY_GRINDER_THREADS) || require('os').cpus().length,
+    // Defaults to the instance's cores, capped at 4. Inside a container os.cpus() reports the
+    // HOST's cores, not the container's allotment — on a 0.5-CPU Render plan it can say 32 —
+    // and spawning that many threads would just thrash. Set the env var explicitly to go
+    // higher on a plan that really has the cores.
+    VANITY_GRINDER_THREADS: parseInt(process.env.VANITY_GRINDER_THREADS) || Math.min(require('os').cpus().length, 4),
     // Fraction of wall-clock each worker spends grinding; 1 = flat out. Lower it only if the
     // grinder shares an instance with something latency-sensitive.
     VANITY_DUTY_CYCLE: parseFloat(process.env.VANITY_DUTY_CYCLE) || 1,
