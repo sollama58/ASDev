@@ -96,6 +96,8 @@ async function initDB() {
 
         await runMigration('tokens', 'priceUsd', 'REAL DEFAULT 0');
         await runMigration('tokens', 'lastUpdated', 'INTEGER');
+        // Set by metadataUpdater once the bonding curve completes (token graduated to PumpSwap).
+        await runMigration('tokens', 'complete', 'INTEGER DEFAULT 0');
 
         // Continue creating other tables...
         await db.exec(`
@@ -276,9 +278,22 @@ async function saveTokenData(pubkey, mint, metadata) {
     const path = require('path');
 
     try {
+        // Upsert on the mint so a re-save (for example a retried deploy job) refreshes the
+        // launch metadata without resetting volume24h, marketCap, priceUsd, holderCount or
+        // the original launch timestamp, which INSERT OR REPLACE would wipe.
         await db.run(`
-            INSERT OR REPLACE INTO tokens (userPubkey, mint, ticker, name, description, twitter, website, metadataUri, image, isMayhemMode, timestamp)
+            INSERT INTO tokens (userPubkey, mint, ticker, name, description, twitter, website, metadataUri, image, isMayhemMode, timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(mint) DO UPDATE SET
+                userPubkey = excluded.userPubkey,
+                ticker = excluded.ticker,
+                name = excluded.name,
+                description = excluded.description,
+                twitter = excluded.twitter,
+                website = excluded.website,
+                metadataUri = excluded.metadataUri,
+                image = excluded.image,
+                isMayhemMode = excluded.isMayhemMode
         `, [pubkey, mint, metadata.ticker, metadata.name, metadata.description,
             metadata.twitter, metadata.website, metadata.metadataUri,
             metadata.image, metadata.isMayhemMode ? 1 : 0, Date.now()]);
