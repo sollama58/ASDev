@@ -7,6 +7,9 @@ const { VersionedTransaction } = require('@solana/web3.js');
 const { TOKENS } = require('../config/constants');
 const logger = require('./logger');
 
+// Jupiter answers in well under a second; a hung request must not stall the flywheel cycle.
+const HTTP_TIMEOUT_MS = 15000;
+
 /**
  * Get quote for token swap
  * Updated: Using new Jupiter lite-api endpoint (Dec 2025)
@@ -15,7 +18,7 @@ async function getQuote(inputMint, outputMint, amountIn, slippageBps = 100) {
     const url = `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountIn}&slippageBps=${slippageBps}`;
 
     try {
-        const response = await axios.get(url);
+        const response = await axios.get(url, { timeout: HTTP_TIMEOUT_MS });
         return response.data;
     } catch (e) {
         logger.error("Jupiter Quote API Error", { error: e.message });
@@ -32,7 +35,7 @@ async function getSwapTransaction(quoteResponse, userPublicKey, wrapAndUnwrapSol
         quoteResponse,
         userPublicKey: userPublicKey.toString(),
         wrapAndUnwrapSol
-    });
+    }, { timeout: HTTP_TIMEOUT_MS });
 
     return {
         swapTransaction: response.data.swapTransaction,

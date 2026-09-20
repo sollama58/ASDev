@@ -8,13 +8,32 @@ const { BN } = require('@coral-xyz/anchor');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
 const { logger } = require('../services');
+const { createRunGuard, maxRunAge } = require('./runGuard');
 
-// Overlap guard: a run that outlasts the interval must not be stacked on by the next one.
-let isScanning = false;
+// Overlap guard: a run that outlasts the interval must not be stacked on by the next one,
+// but a run that hangs must not block the scanner forever either.
+const guard = createRunGuard('Holder scanner', maxRunAge(config.HOLDER_UPDATE_INTERVAL));
 
 // Token account layout: mint(0-32) owner(32-64) amount(64-72). Only owner and amount are used,
 // so ask the RPC for just those 40 bytes instead of the whole account.
 const HOLDER_DATA_SLICE = { offset: 32, length: 40 };
+
+/**
+ * Holders that must not earn points. Program-owned accounts (the bonding curve, the
+ * PumpSwap pool after graduation, the Mayhem vault, LP vaults) are program-derived
+ * addresses and therefore off the ed25519 curve, so one local check excludes all of
+ * them without knowing each program's layout. They cannot receive an airdrop anyway
+ * (the ATA derivation refuses off-curve owners), so counting them only diluted
+ * everyone else's share.
+ */
+function isExcludedHolder(owner, excludedOwners) {
+    if (excludedOwners.has(owner)) return true;
+    try {
+        return !PublicKey.isOnCurve(new PublicKey(owner).toBytes());
+    } catch {
+        return true;
+    }
+}
 
 /**
  * Update global state (holders, points, expected airdrops)
@@ -22,11 +41,8 @@ const HOLDER_DATA_SLICE = { offset: 32, length: 40 };
 async function updateGlobalState(deps) {
     const { connection, devKeypair, db, globalState } = deps;
 
-    if (isScanning) {
-        logger.warn("Holder scanner: previous run still in progress, skipping this tick");
-        return;
-    }
-    isScanning = true;
+    const runToken = guard.tryAcquire();
+    if (!runToken) return;
 
     try {
         const topTokens = await db.all('SELECT mint, userPubkey FROM tokens ORDER BY volume24h DESC LIMIT 10');
@@ -55,8 +71,8 @@ async function updateGlobalState(deps) {
         // Community gets the remaining 90%
         const communityPot = totalDistributable * 0.90;
 
-        // 2. Identify KOTH Creator
-        const kothToken = await db.get('SELECT userPubkey FROM tokens ORDER BY marketCap DESC LIMIT 1');
+        // 2. Identify KOTH Creator. Same rule as /koth and the flywheel: no market cap, no king.
+        const kothToken = await db.get('SELECT userPubkey FROM tokens WHERE marketCap > 0 ORDER BY marketCap DESC LIMIT 1');
         const kothCreator = kothToken ? kothToken.userPubkey : null;
 
         // --- END CALCULATION PREP ---
@@ -94,7 +110,11 @@ async function updateGlobalState(deps) {
                     .filter(a => a !== null)
                     .sort((a, b) => b.amount.cmp(a.amount)); 
     
-                    const bondingCurvePDAStr = bondingCurvePDA.toString();
+                    const excludedOwners = new Set([
+                        WALLETS.PUMP_LIQUIDITY,
+                        bondingCurvePDA.toString(),
+                        WALLETS.SOL_VAULT.toString(), // Mayhem token vault owner
+                    ]);
                     const threshold = new BN(1000000);
     
                     for (const acc of parsedAccounts) {
@@ -103,7 +123,7 @@ async function updateGlobalState(deps) {
     
                         if (acc.amount.lte(threshold)) continue;
     
-                        if (acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr) {
+                        if (!isExcludedHolder(acc.owner, excludedOwners)) {
                             // Raw token amount (u64 base units) as a string; it can exceed Number's safe range.
                             holdersToInsert.push({ mint: token.mint, owner: acc.owner, balance: acc.amount.toString() });
                         }
@@ -215,7 +235,7 @@ async function updateGlobalState(deps) {
     } catch (e) {
         logger.error("Holder scanner error", { error: e.message });
     } finally {
-        isScanning = false;
+        guard.release(runToken);
     }
 }
 
@@ -233,4 +253,4 @@ function start(deps) {
     logger.info(`Holder scanner started (${config.HOLDER_UPDATE_INTERVAL / 1000}s interval)`);
 }
 
-module.exports = { updateGlobalState, start };
+module.exports = { updateGlobalState, isExcludedHolder, start };

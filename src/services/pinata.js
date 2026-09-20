@@ -7,6 +7,9 @@ const FormData = require('form-data');
 const config = require('../config/env');
 const logger = require('./logger');
 
+// Uploads carry the image, so allow a generous but finite time.
+const UPLOAD_TIMEOUT_MS = 60000;
+
 /**
  * Get headers for Pinata file upload
  */
@@ -46,7 +49,7 @@ async function uploadImage(base64Data) {
         const response = await axios.post(
             'https://api.pinata.cloud/pinning/pinFileToIPFS',
             formData,
-            { headers: getPinataHeaders(formData), maxBodyLength: Infinity }
+            { headers: getPinataHeaders(formData), maxBodyLength: Infinity, timeout: UPLOAD_TIMEOUT_MS }
         );
 
         return response.data.IpfsHash;
@@ -88,7 +91,7 @@ async function uploadMetadata(name, symbol, description, twitter, website, image
         const response = await axios.post(
             'https://api.pinata.cloud/pinning/pinJSONToIPFS',
             metadata,
-            { headers: getPinataJSONHeaders() }
+            { headers: getPinataJSONHeaders(), timeout: UPLOAD_TIMEOUT_MS }
         );
         
         const metadataHash = response.data.IpfsHash;

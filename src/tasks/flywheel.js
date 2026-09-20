@@ -12,9 +12,13 @@ const {
 const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
 const { logger, pump, solana, jupiter } = require('../services');
+const { createRunGuard, maxRunAge } = require('./runGuard');
 
-let isBuybackRunning = false;
-let isAirdropping = false;
+const FLYWHEEL_INTERVAL_MS = 5 * 60 * 1000;
+
+// Overlap guards that recover if a run hangs on a call that never returns.
+const cycleGuard = createRunGuard('Flywheel', maxRunAge(FLYWHEEL_INTERVAL_MS));
+const airdropGuard = createRunGuard('Airdrop', maxRunAge(FLYWHEEL_INTERVAL_MS));
 
 // Re-scan eligible users' ATAs at most this often while the eligible set is unchanged.
 const ATA_SCAN_MAX_AGE_MS = 30 * 60 * 1000;
@@ -167,15 +171,12 @@ async function claimCreatorFees(deps, pending) {
 async function processAirdrop(deps, knownSolBalance = null) {
     const { connection, devKeypair, db, globalState } = deps;
 
-    if (isAirdropping) return;
-    isAirdropping = true;
+    const runToken = airdropGuard.tryAcquire();
+    if (!runToken) return;
 
     try {
         // Basic Threshold Check on the cached reading (refreshed by the holder scanner)
-        if ((globalState.devPumpHoldings || 0) <= 50000) {
-            isAirdropping = false;
-            return;
-        }
+        if ((globalState.devPumpHoldings || 0) <= 50000) return;
 
         // Re-read the real PUMP balance: the cached number predates this cycle's buyback and
         // any previous airdrop, and distributing a stale amount fails every batch.
@@ -188,14 +189,10 @@ async function processAirdrop(deps, knownSolBalance = null) {
             balance = tokenBal.value.uiAmount || 0;
         } catch (e) {
             logger.warn(`Airdrop Skipped: could not read PUMP balance (${e.message})`);
-            isAirdropping = false;
             return;
         }
         globalState.devPumpHoldings = balance;
-        if (balance <= 50000) {
-            isAirdropping = false;
-            return;
-        }
+        if (balance <= 50000) return;
 
         // --- FINAL SAFETY CHECK ---
         // The SOL balance read by runPurchaseAndFees is reused unless it spent SOL since.
@@ -207,7 +204,6 @@ async function processAirdrop(deps, knownSolBalance = null) {
         
         if (solBalance < cachedCost) {
             logger.warn(`Airdrop Skipped: Insufficient SOL (Final Check). Need ${(cachedCost/LAMPORTS_PER_SOL).toFixed(4)}, Have ${(solBalance/LAMPORTS_PER_SOL).toFixed(4)}`);
-            isAirdropping = false;
             return;
         }
         // --------------------------------
@@ -220,8 +216,9 @@ async function processAirdrop(deps, knownSolBalance = null) {
         let communityAmount = totalDistributable;
         let kothTxSignature = null;
 
-        // 1. Identify King of the Hill (Highest MCAP)
-        const kothToken = await db.get('SELECT userPubkey, ticker, mint FROM tokens ORDER BY marketCap DESC LIMIT 1');
+        // 1. Identify King of the Hill (Highest MCAP). Same rule as /koth and the holder
+        //    scanner: with no market data there is no king, rather than an arbitrary row.
+        const kothToken = await db.get('SELECT userPubkey, ticker, mint FROM tokens WHERE marketCap > 0 ORDER BY marketCap DESC LIMIT 1');
 
         // 2. Process KOTH Payout (10%)
         if (kothToken && kothToken.userPubkey) {
@@ -256,10 +253,7 @@ async function processAirdrop(deps, knownSolBalance = null) {
             .map(([pubkey, points]) => ({ pubkey: new PublicKey(pubkey), points }))
             .filter(user => user.points > 0);
 
-        if (globalState.totalPoints === 0 || userPoints.length === 0) {
-             isAirdropping = false;
-             return;
-        }
+        if (globalState.totalPoints === 0 || userPoints.length === 0) return;
 
         logger.info(`Distributing ${communityAmount} PUMP to ${userPoints.length} users (Community Pool)`);
 
@@ -323,7 +317,7 @@ async function processAirdrop(deps, knownSolBalance = null) {
     } catch (e) {
         logger.error("Airdrop Failed", { error: e.message });
     } finally {
-        isAirdropping = false;
+        airdropGuard.release(runToken);
     }
 }
 
@@ -409,8 +403,8 @@ async function sendAirdropBatch(batch, sourceAta, deps) {
 async function runPurchaseAndFees(deps) {
     const { connection, devKeypair, db, globalState, recordClaim, updateNextCheckTime, logPurchase } = deps;
 
-    if (isBuybackRunning) return;
-    isBuybackRunning = true;
+    const runToken = cycleGuard.tryAcquire();
+    if (!runToken) return;
 
     let logData = {
         status: 'SKIPPED',
@@ -636,7 +630,7 @@ async function runPurchaseAndFees(deps) {
         await logPurchase('FLYWHEEL_CYCLE', logData);
         logger.error("CRITICAL FLYWHEEL ERROR", { message: e.message });
     } finally {
-        isBuybackRunning = false;
+        cycleGuard.release(runToken);
         await updateNextCheckTime();
     }
 }
@@ -647,7 +641,7 @@ async function runPurchaseAndFees(deps) {
 function start(deps) {
     // Prime the wallet readings for /health once at startup; the cycle keeps them fresh after that.
     setTimeout(() => refreshWalletState(deps).catch(e => logger.debug('Initial wallet read failed', { error: e.message })), 3000);
-    setInterval(() => runPurchaseAndFees(deps), 5 * 60 * 1000);
+    setInterval(() => runPurchaseAndFees(deps), FLYWHEEL_INTERVAL_MS);
     logger.info("Flywheel started (5 min interval)");
 }
 

@@ -11,6 +11,7 @@
 const axios = require('axios');
 const config = require('../config/env');
 const { logger } = require('../services');
+const { createRunGuard, maxRunAge } = require('./runGuard');
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -19,7 +20,7 @@ const HOT_WINDOW_MS = 24 * 60 * 60 * 1000;   // tokens launched in the last 24h
 const HOT_TOP_N = 10;                        // plus the volume leaderboard the scanner uses
 const MAX_SLOW_PER_RUN = 3 * DEXSCREENER_BATCH;
 
-let isUpdating = false;
+const guard = createRunGuard('Metadata updater', maxRunAge(config.METADATA_UPDATE_INTERVAL));
 
 function chunkArray(array, size) {
     const result = [];
@@ -60,11 +61,8 @@ function selectDueTokens(tokens, now) {
 async function updateMetadata(deps) {
     const { db, globalState } = deps;
 
-    if (isUpdating) {
-        logger.warn("Metadata updater: previous run still in progress, skipping this tick");
-        return;
-    }
-    isUpdating = true;
+    const runToken = guard.tryAcquire();
+    if (!runToken) return;
 
     try {
         const now = Date.now();
@@ -104,6 +102,8 @@ async function updateMetadata(deps) {
                             volume24h: pair.volume?.h24 || 0,
                             priceUsd: pair.priceUsd || 0,
                             liquidity: pair.liquidity?.usd || 0,
+                            // Still on the pump.fun bonding curve until its best pair is on a real DEX
+                            complete: pair.dexId && pair.dexId !== 'pumpfun' ? 1 : 0,
                             // OPPORTUNISTIC IMAGE UPDATE
                             // If DexScreener has an image, and we might need it, take it.
                             imageUrl: pair.info?.imageUrl
@@ -118,13 +118,13 @@ async function updateMetadata(deps) {
                         // Update market data. If DexScreener has an image, use it to ensure we have *something*
                         if (data.imageUrl) {
                             await db.run(
-                                `UPDATE tokens SET volume24h = ?, marketCap = ?, priceUsd = ?, lastUpdated = ?, image = ? WHERE mint = ?`,
-                                [data.volume24h, data.marketCap, data.priceUsd, Date.now(), data.imageUrl, t.mint]
+                                `UPDATE tokens SET volume24h = ?, marketCap = ?, priceUsd = ?, complete = ?, lastUpdated = ?, image = ? WHERE mint = ?`,
+                                [data.volume24h, data.marketCap, data.priceUsd, data.complete, Date.now(), data.imageUrl, t.mint]
                             );
                         } else {
                             await db.run(
-                                `UPDATE tokens SET volume24h = ?, marketCap = ?, priceUsd = ?, lastUpdated = ? WHERE mint = ?`,
-                                [data.volume24h, data.marketCap, data.priceUsd, Date.now(), t.mint]
+                                `UPDATE tokens SET volume24h = ?, marketCap = ?, priceUsd = ?, complete = ?, lastUpdated = ? WHERE mint = ?`,
+                                [data.volume24h, data.marketCap, data.priceUsd, data.complete, Date.now(), t.mint]
                             );
                         }
                     } else {
@@ -132,6 +132,7 @@ async function updateMetadata(deps) {
                         // Stamp lastUpdated either way so a token DexScreener never indexes
                         // drops into the slow tier instead of being retried every run.
                         let mcap = null;
+                        let complete = 0;
                         try {
                             await delay(300);
                             const pumpRes = await axios.get(
@@ -140,13 +141,14 @@ async function updateMetadata(deps) {
                             );
                             if (pumpRes.data) {
                                 mcap = pumpRes.data.usd_market_cap || 0;
+                                complete = pumpRes.data.complete ? 1 : 0;
                             }
                         } catch (pumpErr) { /* Silent fail */ }
 
                         if (mcap !== null) {
                             await db.run(
-                                `UPDATE tokens SET marketCap = ?, lastUpdated = ? WHERE mint = ?`,
-                                [mcap, Date.now(), t.mint]
+                                `UPDATE tokens SET marketCap = ?, complete = ?, lastUpdated = ? WHERE mint = ?`,
+                                [mcap, complete, Date.now(), t.mint]
                             );
                         } else {
                             await db.run(`UPDATE tokens SET lastUpdated = ? WHERE mint = ?`, [Date.now(), t.mint]);
@@ -170,7 +172,7 @@ async function updateMetadata(deps) {
     } catch (e) {
         logger.error("Metadata updater error", { error: e.message });
     } finally {
-        isUpdating = false;
+        guard.release(runToken);
     }
 }
 

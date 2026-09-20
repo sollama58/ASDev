@@ -4,10 +4,68 @@
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
-const { getAssociatedTokenAddress, createCloseAccountInstruction, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+const { createCloseAccountInstruction, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const config = require('../config/env');
 const { PROGRAMS, WALLETS } = require('../config/constants');
 const { logger, redis, pump, vanity, solana } = require('../services');
+
+const SELL_DELAY_MS = 1500;
+const SELL_ATTEMPTS = 3;
+const SELL_RETRY_DELAY_MS = 3000;
+
+/**
+ * Sell whatever the dev wallet holds of a freshly launched token and close the account.
+ * Up to SELL_ATTEMPTS tries; the balance is re-read each time so a sell that landed
+ * without a confirmation is not repeated.
+ */
+async function sellLaunchTokens(ctx) {
+    const { connection, devKeypair, mint, ticker, associatedUser, bondingCurve, associatedBondingCurve,
+            feeRecipient, creatorVault, global, eventAuthority, feeConfig } = ctx;
+    const creator = devKeypair.publicKey;
+
+    for (let attempt = 1; attempt <= SELL_ATTEMPTS; attempt++) {
+        try {
+            const bal = await connection.getTokenAccountBalance(associatedUser);
+            if (!(bal.value?.uiAmount > 0)) {
+                if (attempt > 1) logger.info(`Launch tokens for ${ticker} already sold`);
+                return;
+            }
+            const sellData = pump.buildSellInstructionData(new BN(bal.value.amount));
+            const sellKeys = [
+                { pubkey: global, isSigner: false, isWritable: false },
+                { pubkey: feeRecipient, isSigner: false, isWritable: true },
+                { pubkey: mint, isSigner: false, isWritable: false },
+                { pubkey: bondingCurve, isSigner: false, isWritable: true },
+                { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+                { pubkey: associatedUser, isSigner: false, isWritable: true },
+                { pubkey: creator, isSigner: true, isWritable: true },
+                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                { pubkey: creatorVault, isSigner: false, isWritable: true },
+                { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
+                { pubkey: eventAuthority, isSigner: false, isWritable: false },
+                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
+                { pubkey: feeConfig, isSigner: false, isWritable: false },
+                { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
+            ];
+            const sellIx = new TransactionInstruction({ keys: sellKeys, programId: PROGRAMS.PUMP, data: sellData });
+            const closeIx = createCloseAccountInstruction(associatedUser, creator, creator, [], PROGRAMS.TOKEN_2022);
+            const sellTx = new Transaction();
+            solana.addPriorityFee(sellTx);
+            sellTx.add(sellIx).add(closeIx);
+            sellTx.feePayer = creator;
+            await solana.sendTxWithRetry(sellTx, [devKeypair]);
+            logger.info(`Sold & Closed Account for ${ticker}`);
+            return;
+        } catch (e) {
+            if (attempt < SELL_ATTEMPTS) {
+                logger.warn(`Sell attempt ${attempt}/${SELL_ATTEMPTS} failed for ${ticker}, retrying`, { error: e.message });
+                await new Promise(r => setTimeout(r, SELL_RETRY_DELAY_MS));
+            } else {
+                logger.error(`Sell failed for ${ticker}; launch tokens remain in the dev wallet`, { mint: mint.toString(), error: e.message });
+            }
+        }
+    }
+}
 
 /**
  * Initialize deploy worker
@@ -114,39 +172,13 @@ function initDeployWorker(deps) {
                 isMayhemMode, metadataUri 
             });
 
-            // Sell tokens logic (Keep existing)
-            setTimeout(async () => {
-                try {
-                    const bal = await connection.getTokenAccountBalance(associatedUser);
-                    if (bal.value?.uiAmount > 0) {
-                        const sellData = pump.buildSellInstructionData(new BN(bal.value.amount));
-                        // ... (Keep sell keys) ...
-                        const sellKeys = [
-                            { pubkey: global, isSigner: false, isWritable: false },
-                            { pubkey: feeRecipient, isSigner: false, isWritable: true },
-                            { pubkey: mint, isSigner: false, isWritable: false },
-                            { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                            { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-                            { pubkey: associatedUser, isSigner: false, isWritable: true },
-                            { pubkey: creator, isSigner: true, isWritable: true },
-                            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                            { pubkey: creatorVault, isSigner: false, isWritable: true },
-                            { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-                            { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                            { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-                            { pubkey: feeConfig, isSigner: false, isWritable: false },
-                            { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false }
-                        ];
-                        const sellIx = new TransactionInstruction({ keys: sellKeys, programId: PROGRAMS.PUMP, data: sellData });
-                        const closeIx = createCloseAccountInstruction(associatedUser, creator, creator, [], PROGRAMS.TOKEN_2022);
-                        const sellTx = new Transaction();
-                        solana.addPriorityFee(sellTx);
-                        sellTx.add(sellIx).add(closeIx);
-                        await solana.sendTxWithRetry(sellTx, [devKeypair]);
-                        logger.info(`Sold & Closed Account for ${ticker}`);
-                    }
-                } catch (e) { logger.error("Sell error", { msg: e.message }); }
-            }, 1500);
+            // Sell the initial buy back once the create has settled. Retried, because a
+            // failed sell would otherwise leave the tokens (and the SOL in them) in the
+            // dev wallet with nothing to try again.
+            setTimeout(() => sellLaunchTokens({
+                connection, devKeypair, mint, ticker, associatedUser, bondingCurve,
+                associatedBondingCurve, feeRecipient, creatorVault, global, eventAuthority, feeConfig
+            }), SELL_DELAY_MS);
 
             return { mint: mint.toString(), signature: sig };
 
@@ -170,4 +202,4 @@ function initDeployWorker(deps) {
     return worker;
 }
 
-module.exports = { initDeployWorker };
+module.exports = { initDeployWorker, sellLaunchTokens };

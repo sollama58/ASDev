@@ -7,11 +7,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const { Connection, Keypair, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
-const { Wallet } = require('@coral-xyz/anchor');
-const bs58 = require('bs58');
-const fs = require('fs');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
+const { LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
 const path = require('path');
 
 // Internal imports
@@ -43,16 +40,24 @@ async function main() {
     // Initialize Redis
     redis.init();
 
-    // Initialize Solana connection
-    const connection = new Connection(config.RPC_URL, "confirmed");
-    const devKeypair = Keypair.fromSecretKey(bs58.decode(config.DEV_WALLET_PRIVATE_KEY));
-    const wallet = new Wallet(devKeypair);
+    // The Solana connection and dev wallet live in the solana service; everything shares them.
+    const { connection, devKeypair, wallet } = solana;
+    if (!devKeypair) throw new Error("DEV_WALLET_PRIVATE_KEY is not a valid base58 secret key");
 
     logger.info(`Network: ${config.SOLANA_NETWORK.toUpperCase()} | RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : (config.HELIUS_API_KEY ? 'Helius' : 'Public Mainnet')}`);
     logger.info(`Wallet: ${devKeypair.publicKey.toString()}`);
 
     // Create Express app
     const app = express();
+
+    // The service runs behind Render's proxy (with Cloudflare in front of the domain), so
+    // the client address arrives in headers. Trust exactly one proxy hop so req.ip is the
+    // address Render saw rather than Render's own; without this every visitor shares one
+    // rate-limit bucket.
+    app.set('trust proxy', config.TRUST_PROXY_HOPS);
+
+    // Cloudflare forwards the real visitor address in CF-Connecting-IP; prefer it when present.
+    const clientKey = (req) => ipKeyGenerator(req.headers['cf-connecting-ip'] || req.ip);
 
     // Security middleware
     app.use(helmet({
@@ -78,7 +83,8 @@ async function main() {
         max: 2000, 
         message: { error: 'Too many requests, please try again later' },
         standardHeaders: true,
-        legacyHeaders: false
+        legacyHeaders: false,
+        keyGenerator: clientKey
     });
 
     const deployLimiter = rateLimit({
@@ -86,7 +92,8 @@ async function main() {
         max: 10,
         message: { error: 'Too many deployment requests, please wait' },
         standardHeaders: true,
-        legacyHeaders: false
+        legacyHeaders: false,
+        keyGenerator: clientKey
     });
 
     app.use('/api/', apiLimiter);
@@ -103,7 +110,7 @@ async function main() {
             const { PublicKey } = require('@solana/web3.js');
             const userPubkey = new PublicKey(userPubkeyStr);
             const tx = new Transaction();
-            solana.addPriorityFee(tx);
+            solana.addPriorityFee(tx, 20000); // a single transfer needs a few hundred CU
             tx.add(SystemProgram.transfer({
                 fromPubkey: devKeypair.publicKey,
                 toPubkey: userPubkey,

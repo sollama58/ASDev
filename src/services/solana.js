@@ -2,14 +2,22 @@
  * Solana Service
  * Connection, transaction helpers, and wallet management
  */
-const { Connection, Keypair, ComputeBudgetProgram, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { Connection, Keypair, ComputeBudgetProgram, PublicKey } = require('@solana/web3.js');
 const { Wallet } = require('@coral-xyz/anchor');
 const bs58 = require('bs58');
 const config = require('../config/env');
 const logger = require('./logger');
 
-// Initialize connection
-const connection = new Connection(config.RPC_URL, "confirmed");
+// Every RPC request gets a hard timeout. web3.js has none by default, and a request that
+// never returns would otherwise leave a background loop's overlap guard set forever.
+const fetchWithTimeout = (url, options = {}) =>
+    fetch(url, { ...options, signal: AbortSignal.timeout(config.RPC_TIMEOUT_MS) });
+
+// The single RPC connection shared by the routes, tasks and this module's helpers.
+const connection = new Connection(config.RPC_URL, {
+    commitment: 'confirmed',
+    fetch: fetchWithTimeout,
+});
 
 // Initialize dev wallet
 let devKeypair = null;
@@ -143,28 +151,6 @@ async function sendTxWithRetry(tx, signers, retries = 5, options = {}) {
 }
 
 /**
- * Refund user on error
- */
-async function refundUser(userPubkeyStr, reason) {
-    try {
-        const userPubkey = new PublicKey(userPubkeyStr);
-        const refundAmount = config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL;
-        const tx = new Transaction().add(
-            SystemProgram.transfer({
-                fromPubkey: devKeypair.publicKey,
-                toPubkey: userPubkey,
-                lamports: refundAmount
-            })
-        );
-        addPriorityFee(tx);
-        await sendTxWithRetry(tx, [devKeypair]);
-        logger.info(`Refunded ${config.DEPLOYMENT_FEE_SOL} SOL to ${userPubkeyStr}`, { reason });
-    } catch (e) {
-        logger.error('Refund failed', { error: e.message, user: userPubkeyStr });
-    }
-}
-
-/**
  * Get wallet balance
  */
 async function getBalance(pubkey) {
@@ -185,7 +171,6 @@ module.exports = {
     addPriorityFee,
     sendTxWithRetry,
     isPermanentError,
-    refundUser,
     getBalance,
     getLatestBlockhash,
 };

@@ -79,7 +79,33 @@ async function addDeployJob(data) {
     if (!deployQueue) {
         throw new Error("Deploy queue not initialized");
     }
-    return deployQueue.add('deployToken', data);
+    // Finished jobs are kept long enough for the frontend's status polling (up to five
+    // minutes) and a bit of debugging, then dropped so Redis does not grow forever.
+    return deployQueue.add('deployToken', data, {
+        removeOnComplete: { age: 60 * 60, count: 500 },
+        removeOnFail: { age: 24 * 60 * 60, count: 500 },
+    });
+}
+
+const PREPARED_METADATA_TTL_SECONDS = 60 * 60;
+
+/**
+ * Remember a metadata URI produced by /prepare-metadata so /deploy can require it.
+ * Without this, a caller could skip the moderation check by supplying their own URI.
+ */
+async function rememberPreparedMetadata(metadataUri, data) {
+    if (!redisConnection) throw new Error("Redis not initialized");
+    await redisConnection.set(`prepared:${metadataUri}`, JSON.stringify(data), 'EX', PREPARED_METADATA_TTL_SECONDS);
+}
+
+/**
+ * Returns what /prepare-metadata stored for this URI, or null if it was never prepared
+ * (or has expired).
+ */
+async function getPreparedMetadata(metadataUri) {
+    if (!redisConnection) return null;
+    const raw = await redisConnection.get(`prepared:${metadataUri}`);
+    return raw ? JSON.parse(raw) : null;
 }
 
 /**
@@ -96,6 +122,8 @@ module.exports = {
     createWorker,
     addDeployJob,
     getJob,
+    rememberPreparedMetadata,
+    getPreparedMetadata,
     getConnection: () => redisConnection,
     getDeployQueue: () => deployQueue,
 };

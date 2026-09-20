@@ -29,6 +29,9 @@ const config = {
             : "https://api.mainnet-beta.solana.com";
     },
 
+    // Hard timeout for every RPC request (ms); a hung request must not stall a background loop
+    RPC_TIMEOUT_MS: parseInt(process.env.RPC_TIMEOUT_MS) || 60000,
+
     // Wallet
     DEV_WALLET_PRIVATE_KEY: process.env.DEV_WALLET_PRIVATE_KEY,
 
@@ -68,6 +71,8 @@ const config = {
 
     // Security
     CORS_ORIGINS: process.env.CORS_ORIGINS?.split(',').map(s => s.trim()) || ['*'],
+    // Reverse-proxy hops in front of the app (Render = 1). Used for req.ip and rate limiting.
+    TRUST_PROXY_HOPS: parseInt(process.env.TRUST_PROXY_HOPS) || 1,
     ADMIN_API_KEY: process.env.ADMIN_API_KEY,
 
     // Data Storage
