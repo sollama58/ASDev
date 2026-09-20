@@ -124,17 +124,6 @@ function init(deps) {
         }
     });
 
-    // Get single token
-    router.get('/token/:mint', async (req, res) => {
-        try {
-            const { mint } = req.params;
-            const token = await db.get('SELECT tweetUrl FROM tokens WHERE mint = ?', [mint]);
-            res.json(token || {});
-        } catch (e) {
-            res.status(500).json({ error: "DB Error" });
-        }
-    });
-
     // Token holders
     router.get('/token-holders/:mint', async (req, res) => {
         try {

@@ -1,13 +1,13 @@
 /**
  * Workers Module
- * Deploy and social queue workers
+ * Deploy queue worker
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
 const { getAssociatedTokenAddress, createCloseAccountInstruction, ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const config = require('../config/env');
 const { PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, redis, pump, vanity, solana, twitter } = require('../services');
+const { logger, redis, pump, vanity, solana } = require('../services');
 
 /**
  * Initialize deploy worker
@@ -114,9 +114,6 @@ function initDeployWorker(deps) {
                 isMayhemMode, metadataUri 
             });
 
-            // Queue social post
-            await redis.addSocialJob({ name, ticker, mint: mint.toString() });
-
             // Sell tokens logic (Keep existing)
             setTimeout(async () => {
                 try {
@@ -164,17 +161,4 @@ function initDeployWorker(deps) {
     return worker;
 }
 
-function initSocialWorker(deps) {
-    const { db } = deps;
-    const worker = redis.createWorker('socialQueue', async (job) => {
-        const { name, ticker, mint } = job.data;
-        const tweetUrl = await twitter.postLaunchTweet(name, ticker, mint);
-        if (tweetUrl && db) {
-            await db.run('UPDATE tokens SET tweetUrl = ? WHERE mint = ?', [tweetUrl, mint]);
-        }
-        return tweetUrl;
-    });
-    return worker;
-}
-
-module.exports = { initDeployWorker, initSocialWorker };
+module.exports = { initDeployWorker };

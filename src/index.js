@@ -16,7 +16,7 @@ const path = require('path');
 
 // Internal imports
 const config = require('./config/env');
-const { logger, database, redis, twitter, solana } = require('./services');
+const { logger, database, redis, solana } = require('./services');
 const routes = require('./routes');
 const tasks = require('./tasks');
 
@@ -42,9 +42,6 @@ async function main() {
 
     // Initialize Redis
     redis.init();
-
-    // Initialize Twitter
-    twitter.init();
 
     // Initialize Solana connection
     const connection = new Connection(config.RPC_URL, "confirmed");
