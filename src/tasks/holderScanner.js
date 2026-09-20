@@ -105,7 +105,7 @@ async function updateGlobalState(deps) {
                         let rank = 1;
                         for (const h of holdersToInsert) {
                             await db.run(
-                                'INSERT OR IGNORE INTO token_holders (mint, holderPubkey, rank, lastUpdated) VALUES (?, ?, ?, ?)',
+                                'INSERT OR IGNORE INTO token_holders (mint, holderPubkey, rank, updatedAt) VALUES (?, ?, ?, ?)',
                                 [h.mint, h.owner, rank, Date.now()]
                             );
                             rank++;

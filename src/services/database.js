@@ -80,23 +80,22 @@ async function initDB() {
         `);
 
         // 2. Perform Migration Checks to ensure all columns exist in old DB files
-        // This handles older schema versions that are missing the fields used by metadataUpdater.js
-        const runMigration = async (columnName, columnType) => {
+        // This handles older schema versions that are missing fields used by the tasks
+        const runMigration = async (tableName, columnName, columnType) => {
             try {
                 // Attempt to add the column
-                // FIX: Removed invalid backslashes before backticks and template vars
-                await db.exec(`ALTER TABLE tokens ADD COLUMN ${columnName} ${columnType}`);
-                logger.info(`[DB MIGRATION] Added column '${columnName}' to tokens table.`);
+                await db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
+                logger.info(`[DB MIGRATION] Added column '${columnName}' to ${tableName} table.`);
             } catch (e) {
                 // Safely ignore the error if the column already exists
                 if (!e.message.includes("duplicate column name") && !e.message.includes("column already exists")) {
-                    logger.error(`[DB MIGRATION] Failed to add column ${columnName}`, { error: e.message });
+                    logger.error(`[DB MIGRATION] Failed to add column ${columnName} to ${tableName}`, { error: e.message });
                 }
             }
         };
 
-        await runMigration('priceUsd', 'REAL DEFAULT 0');
-        await runMigration('lastUpdated', 'INTEGER');
+        await runMigration('tokens', 'priceUsd', 'REAL DEFAULT 0');
+        await runMigration('tokens', 'lastUpdated', 'INTEGER');
 
         // Continue creating other tables...
         await db.exec(`
@@ -110,6 +109,10 @@ async function initDB() {
                 UNIQUE(mint, holderPubkey)
             )
         `);
+
+        // Databases created by the legacy server.js have a `lastUpdated` column here
+        // instead of `updatedAt`; add the column holderScanner.js writes to.
+        await runMigration('token_holders', 'updatedAt', 'INTEGER');
 
         await db.exec(`
             CREATE TABLE IF NOT EXISTS stats (
