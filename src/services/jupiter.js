@@ -34,7 +34,10 @@ async function getSwapTransaction(quoteResponse, userPublicKey, wrapAndUnwrapSol
         wrapAndUnwrapSol
     });
 
-    return response.data.swapTransaction;
+    return {
+        swapTransaction: response.data.swapTransaction,
+        lastValidBlockHeight: response.data.lastValidBlockHeight
+    };
 }
 
 /**
@@ -53,7 +56,7 @@ async function swapSolToToken(amountLamports, outputMint, wallet, connection) {
         if (!quoteResponse) throw new Error("Failed to get Jupiter quote");
 
         // 2. Get Transaction
-        const swapTransactionBase64 = await getSwapTransaction(
+        const { swapTransaction: swapTransactionBase64, lastValidBlockHeight } = await getSwapTransaction(
             quoteResponse,
             wallet.publicKey
         );
@@ -68,7 +71,15 @@ async function swapSolToToken(amountLamports, outputMint, wallet, connection) {
             maxRetries: 2
         });
 
-        await connection.confirmTransaction(sig, 'confirmed');
+        // Confirm against the blockhash's validity window so polling stops when it expires,
+        // instead of the deprecated signature-only path with its fixed timeout.
+        const blockhash = transaction.message.recentBlockhash;
+        const confirmation = lastValidBlockHeight
+            ? await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed')
+            : await connection.confirmTransaction(sig, 'confirmed');
+        if (confirmation.value.err) {
+            throw new Error(`Swap ${sig} failed on chain: ${JSON.stringify(confirmation.value.err)}`);
+        }
         
         logger.info(`Jupiter swap completed: SOL -> ${outputMint.toString().slice(0, 5)}...`, { signature: sig, outAmount: quoteResponse.outAmount });
         

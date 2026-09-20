@@ -9,11 +9,24 @@ const config = require('../config/env');
 const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
 const { logger } = require('../services');
 
+// Overlap guard: a run that outlasts the interval must not be stacked on by the next one.
+let isScanning = false;
+
+// Token account layout: mint(0-32) owner(32-64) amount(64-72). Only owner and amount are used,
+// so ask the RPC for just those 40 bytes instead of the whole account.
+const HOLDER_DATA_SLICE = { offset: 32, length: 40 };
+
 /**
  * Update global state (holders, points, expected airdrops)
  */
 async function updateGlobalState(deps) {
     const { connection, devKeypair, db, globalState } = deps;
+
+    if (isScanning) {
+        logger.warn("Holder scanner: previous run still in progress, skipping this tick");
+        return;
+    }
+    isScanning = true;
 
     try {
         const topTokens = await db.all('SELECT mint, userPubkey FROM tokens ORDER BY volume24h DESC LIMIT 10');
@@ -66,15 +79,16 @@ async function updateGlobalState(deps) {
                         filters: [
                             { memcmp: { offset: 0, bytes: token.mint } }
                         ],
+                        dataSlice: HOLDER_DATA_SLICE,
                         encoding: 'base64'
                     });
     
                     const parsedAccounts = accounts.map(acc => {
                         const data = Buffer.from(acc.account.data);
-                        if (data.length < 72) return null;
+                        if (data.length < HOLDER_DATA_SLICE.length) return null;
                         
-                        const owner = new PublicKey(data.slice(32, 64)).toString();
-                        const amount = new BN(data.slice(64, 72), 'le');
+                        const owner = new PublicKey(data.slice(0, 32)).toString();
+                        const amount = new BN(data.slice(32, 40), 'le');
                         return { owner, amount };
                     })
                     .filter(a => a !== null)
@@ -199,16 +213,23 @@ async function updateGlobalState(deps) {
 
     } catch (e) {
         logger.error("Holder scanner error", { error: e.message });
+    } finally {
+        isScanning = false;
     }
 }
 
 /**
- * Start the holder scanner interval
+ * Start the holder scanner loop.
+ * The next run is scheduled after the current one finishes, so the interval is
+ * measured between runs rather than between starts.
  */
 function start(deps) {
-    setInterval(() => updateGlobalState(deps), config.HOLDER_UPDATE_INTERVAL);
-    setTimeout(() => updateGlobalState(deps), 5000);
-    logger.info("Holder scanner started");
+    const loop = async () => {
+        await updateGlobalState(deps);
+        setTimeout(loop, config.HOLDER_UPDATE_INTERVAL);
+    };
+    setTimeout(loop, 5000);
+    logger.info(`Holder scanner started (${config.HOLDER_UPDATE_INTERVAL / 1000}s interval)`);
 }
 
 module.exports = { updateGlobalState, start };
