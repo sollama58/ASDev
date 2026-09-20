@@ -937,11 +937,17 @@ function init(deps) {
                 !redirectUrl.startsWith(config.BASE_URL);
 
             if (isCrossOrigin) {
-                // Cross-origin: pass token in URL (frontend will store in localStorage)
+                // Cross-origin: pass token to the frontend, which stores it in localStorage.
+                //
+                // v27.6 SECURITY: the token travels in the URL *fragment*, not the query
+                // string. A query parameter is sent to the destination server, so a 24-hour
+                // session token ended up in its access logs and in the Referer header of any
+                // subresource the page loaded before its history.replaceState() scrub ran.
+                // Fragments are never transmitted to a server and never appear in Referer.
                 logger.info('[PAGS API] Cross-origin OAuth redirect', {
                     redirectUrl: redirectUrl.slice(0, 50) + '...'
                 });
-                res.redirect(`${redirectUrl}${separator}auth_success=true&pags_token=${encodeURIComponent(result.sessionToken)}`);
+                res.redirect(`${redirectUrl}${separator}auth_success=true#pags_token=${encodeURIComponent(result.sessionToken)}`);
             } else {
                 // Same-origin: use httpOnly cookie (more secure)
                 pagsTwitterAuth.setSessionCookie(res, result.sessionToken);
@@ -2010,9 +2016,13 @@ function init(deps) {
                         debug.onChainBalances.bcVault.exists = true;
                         debug.onChainBalances.bcVault.balance = bcInfo.lamports;
                         debug.onChainBalances.bcVault.balanceSol = bcInfo.lamports / LAMPORTS_PER_SOL;
-                        debug.onChainBalances.bcVault.rentExemptMin = 5000;
-                        debug.onChainBalances.bcVault.claimableBalance = Math.max(0, bcInfo.lamports - 5000);
-                        debug.onChainBalances.bcVault.claimableSol = Math.max(0, bcInfo.lamports - 5000) / LAMPORTS_PER_SOL;
+                        // v27.6: report the cluster's real rent-exempt floor for this vault so
+                        // this debug view agrees with what the scanner actually claims.
+                        const { getRentExemptMinimum } = require('../services/solana');
+                        const rentExemptMin = await getRentExemptMinimum(bcInfo.data?.length || 0, 5000);
+                        debug.onChainBalances.bcVault.rentExemptMin = rentExemptMin;
+                        debug.onChainBalances.bcVault.claimableBalance = Math.max(0, bcInfo.lamports - rentExemptMin);
+                        debug.onChainBalances.bcVault.claimableSol = Math.max(0, bcInfo.lamports - rentExemptMin) / LAMPORTS_PER_SOL;
                     }
                 } catch (e) {
                     debug.onChainBalances.bcVault.error = e.message;

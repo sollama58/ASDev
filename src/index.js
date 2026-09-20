@@ -35,6 +35,10 @@ const { logger, database, redis, twitter, solana, websocket, claudeKoth } = requ
 const routes = require('./routes');
 const tasks = require('./tasks');
 
+// v27.6: the HTTP server, assigned in main() and read by shutdown() so the process can stop
+// accepting connections and drain in-flight requests before tearing down its dependencies.
+let server = null;
+
 // v13.0: Global state is now stored in Redis for cross-process sharing
 // This local object serves as a proxy/fallback for compatibility
 // BUG FIX: Added proper error logging instead of silent catch blocks
@@ -145,6 +149,17 @@ async function main() {
     // Create Express app
     const app = express();
 
+    // v28.2 SECURITY: trust exactly one proxy hop (Render's edge). Without this, req.ip is
+    // the proxy's address for every client, so the default-keyed rate limiters (apiLimiter,
+    // deployLimiter) put ALL users in one 120/min bucket and one 5/min deploy bucket — one
+    // busy client 429s everyone. The custom keyGenerators that worked around that took the
+    // LEFTMOST X-Forwarded-For entry, which is the one the client writes, so every limiter
+    // using them (health, token registration, admin login brute-force) could be bypassed by
+    // sending a random X-Forwarded-For per request. With trust proxy set, Express derives
+    // req.ip from the rightmost untrusted hop — the address Render actually saw — and the
+    // library's default key generator handles IPv6 subnetting on top of it.
+    app.set('trust proxy', 1);
+
     // Security middleware - SECURITY FIX: Re-enable CSP with reasonable defaults
     app.use(helmet({
         contentSecurityPolicy: {
@@ -215,7 +230,10 @@ async function main() {
 
     // PAGS middleware disabled
     app.use(cookieParser());
-    app.use(express.json({ limit: '10mb' })); // SECURITY FIX: Reduced from 50mb to 10mb
+    // v28.2: 1mb. Images go to Imgur client-side; the largest JSON body this API accepts is
+    // launch metadata (a few hundred bytes). 10mb was a memory-amplification surface for no
+    // legitimate request.
+    app.use(express.json({ limit: '1mb' }));
 
     // v25.4: Rate limiting - More permissive for frontend polling, strict for deployments
     // With WebSocket, polling should be reduced but we still allow reasonable API access
@@ -316,7 +334,8 @@ async function main() {
     }
 
     // v25.4: Create HTTP server for WebSocket support
-    const server = http.createServer(app);
+    // v27.6: assigned to the module-scoped `server` so shutdown() can close it.
+    server = http.createServer(app);
 
     // Initialize WebSocket server
     websocket.init(server);
@@ -335,9 +354,35 @@ async function main() {
 
 // v25.14 ROBUSTNESS: Graceful shutdown with task cleanup
 // v25.20: Added WebSocket cleanup
+// v27.6: how long cleanup gets before we exit anyway. Render sends SIGKILL after its own
+// grace period, so a shutdown that hangs on a stuck query must not eat the whole window.
+const SHUTDOWN_TIMEOUT_MS = 15000;
+
+let shuttingDown = false;
 const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info(`${signal} received, shutting down gracefully...`);
+
+    const forceExit = setTimeout(() => {
+        logger.error(`Shutdown exceeded ${SHUTDOWN_TIMEOUT_MS}ms, forcing exit`);
+        process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    forceExit.unref();
+
     try {
+        // v27.6: stop accepting new connections and let in-flight requests finish before
+        // anything they depend on is torn down. Previously the process went straight to
+        // process.exit(0), severing responses mid-write.
+        if (server) {
+            await new Promise((resolve) => {
+                server.close(() => resolve());
+                // closeAllConnections exists on Node 18.2+; without it a keep-alive socket
+                // can hold server.close() open until the force-exit timer fires.
+                if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+            });
+        }
+
         // Stop all background tasks first
         await tasks.stopAll();
 
@@ -359,11 +404,32 @@ const shutdown = async (signal) => {
     } catch (e) {
         logger.error('Shutdown error', { error: e.message });
     }
+    clearTimeout(forceExit);
     process.exit(0);
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// v27.6: the API process had neither of these while worker.js had both, so an unhandled
+// rejection anywhere in a route or a background timer killed the web service on Node 18+
+// with no log line explaining why.
+process.on('uncaughtException', (err) => {
+    logger.error('UNCAUGHT EXCEPTION - API server crashing', {
+        error: err.message,
+        stack: err.stack
+    });
+    const mem = process.memoryUsage();
+    logger.error(`Memory at crash: RSS=${Math.round(mem.rss / 1024 / 1024)}MB, Heap=${Math.round(mem.heapUsed / 1024 / 1024)}MB`);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+    logger.error('UNHANDLED REJECTION - Potential crash', {
+        reason: reason?.message || String(reason),
+        stack: reason?.stack
+    });
+});
 
 // Run main
 main().catch(err => {

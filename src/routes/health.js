@@ -19,8 +19,11 @@ const healthRateLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
     max: 60, // 60 requests/min per IP
     standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown'
+    legacyHeaders: false
+    // v28.2 SECURITY: custom keyGenerator removed. It keyed on the leftmost X-Forwarded-For
+    // entry — the client-controlled one — so any caller could dodge this limiter with a
+    // random header value per request. index.js now sets trust proxy, so the library's
+    // default (req.ip, IPv6-subnet-aware) is both correct and unspoofable.
 });
 
 // v24.0 SECURITY FIX: Rate limiter using Redis for multi-instance support
@@ -339,6 +342,15 @@ function init(deps) {
                     centralPoolLamports = parseInt(cpRow?.value || 0);
                 } catch (e) { /* ignore */ }
 
+                // v28.1: vanity mint pool depth. The grinder runs as a separate service with
+                // no channel back to the API, so this is how an operator sees whether it is
+                // keeping up. `available` falling to zero is not an outage — launches just
+                // fall back to random mints — but it means the grinder needs attention.
+                let vanityPool = null;
+                try {
+                    vanityPool = await require('../services/vanity').getPoolStats(db);
+                } catch (e) { /* ignore — table may not exist until migration runs */ }
+
                 return {
                     stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped, totalSolAirdropped,
                     robinhoodTokenCount: robinhoodTokenCount?.count || 0,
@@ -346,7 +358,8 @@ function init(deps) {
                     robinhoodPendingFees,
                     robinhoodPendingDetails,
                     totalPendingAirdropLamports,
-                    centralPoolLamports
+                    centralPoolLamports,
+                    vanityPool
                 };
             });
 
@@ -400,6 +413,15 @@ function init(deps) {
                 centralPoolThresholdSol: 5.0,
                 tokenPoolThresholdSol: parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0,
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
+                // v28.1: vanity mint pool. `available` is how many branded contract addresses
+                // are ready; at zero, launches fall back to random mints rather than failing.
+                vanityPool: cachedHealth.vanityPool
+                    ? {
+                        ...cachedHealth.vanityPool,
+                        target: config.VANITY_POOL_TARGET,
+                        suffix: config.VANITY_SUFFIX
+                    }
+                    : null,
                 // M-8 FIX: Expose deployment fee so frontend stays in sync with backend config
                 deploymentFee: config.DEPLOYMENT_FEE_SOL,
                 // Pass dynamic conservation status to frontend
@@ -2253,7 +2275,10 @@ function init(deps) {
     // Uses ADMIN_API_KEY environment variable as the password
     // v24.0: Updated to async for Redis-based rate limiting
     router.post('/admin/verify', async (req, res) => {
-        const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+        // v28.2 SECURITY: req.ip, not the client-writable leftmost X-Forwarded-For entry.
+        // This is the brute-force limiter's key; keyed the old way it was defeated by
+        // sending a different header value with each guess.
+        const clientIp = req.ip || 'unknown';
         const { password } = req.body;
         const expectedKey = config.ADMIN_API_KEY;
 

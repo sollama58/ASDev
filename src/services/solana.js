@@ -2,8 +2,9 @@
  * Solana Service
  * Connection, transaction helpers, and wallet management
  */
-const { Connection, ComputeBudgetProgram, sendAndConfirmTransaction, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
+const { Connection, ComputeBudgetProgram, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
 const { Wallet } = require('@coral-xyz/anchor');
+const bs58 = require('bs58');
 const config = require('../config/env');
 const logger = require('./logger');
 
@@ -36,25 +37,121 @@ function addPriorityFee(tx) {
     return tx;
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// How often we re-broadcast the same signed transaction while waiting for it to confirm.
+const REBROADCAST_INTERVAL_MS = 2500;
+// Re-broadcasting is free of correctness risk but not of RPC cost, so the authoritative
+// "has this blockhash expired yet" check runs once every Nth poll rather than every poll.
+const HEIGHT_CHECK_EVERY = 4;
+
 /**
- * Send transaction with retry logic
+ * Wait for a specific, already-signed transaction to either confirm or provably expire.
+ *
+ * Returns the signature once confirmed, or null once the blockhash has expired -- and null
+ * is a *guarantee* that the transaction did not land and never can, because a transaction is
+ * only valid while its recent blockhash is within the last 150 blocks. Throws if the
+ * transaction landed but failed on-chain, since re-sending that is pointless.
+ *
+ * Re-broadcasting the identical serialized transaction is safe: the cluster de-duplicates by
+ * signature, so a transaction that already landed is simply rejected as a duplicate.
  */
-async function sendTxWithRetry(tx, signers, retries = 5) {
-    for (let i = 0; i < retries; i++) {
+async function confirmOrExpire(signature, rawTx, lastValidBlockHeight) {
+    for (let poll = 0; ; poll++) {
+        let status = null;
         try {
-            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
-            tx.recentBlockhash = blockhash;
-            tx.lastValidBlockHeight = lastValidBlockHeight;
-            const sig = await sendAndConfirmTransaction(connection, tx, signers, {
-                commitment: 'confirmed',
-                skipPreflight: true
-            });
-            return sig;
-        } catch (err) {
-            if (i === retries - 1) throw err;
-            await new Promise(r => setTimeout(r, 2000));
+            status = (await connection.getSignatureStatus(signature)).value;
+        } catch (e) {
+            // A failed status lookup tells us nothing either way -- keep waiting.
+            logger.debug('Signature status lookup failed', { signature, error: e.message });
+        }
+
+        if (status) {
+            if (status.err) {
+                throw new Error(`Transaction ${signature} failed on-chain: ${JSON.stringify(status.err)}`);
+            }
+            if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+                return signature;
+            }
+        }
+
+        if (poll > 0 && poll % HEIGHT_CHECK_EVERY === 0) {
+            try {
+                const height = await connection.getBlockHeight('confirmed');
+                if (height > lastValidBlockHeight) return null;
+            } catch (e) {
+                logger.debug('Block height check failed', { error: e.message });
+            }
+        }
+
+        await sleep(REBROADCAST_INTERVAL_MS);
+
+        try {
+            // maxRetries: 0 because this loop owns re-broadcasting.
+            await connection.sendRawTransaction(rawTx, { skipPreflight: true, maxRetries: 0 });
+        } catch (e) {
+            // Duplicate-signature rejections and transient send failures are both expected here.
+            logger.debug('Re-broadcast failed', { signature, error: e.message });
         }
     }
+}
+
+/**
+ * Send a transaction, retrying until it lands.
+ *
+ * v27.6 CORRECTNESS: the previous implementation fetched a *fresh blockhash inside every retry
+ * iteration*, so each retry produced a different transaction with a different signature, and it
+ * caught every error -- including confirmation timeouts. A transaction that had actually landed
+ * but timed out waiting for 'confirmed' was therefore re-signed and re-sent as an independently
+ * valid transaction, up to 5 times. On the airdrop and fee-claim paths that is a real duplicate
+ * transfer of real SOL.
+ *
+ * Now: sign once per blockhash, then re-broadcast that *same* signed transaction until it either
+ * confirms or its blockhash provably expires. Only an expired blockhash -- which guarantees the
+ * signed transaction can never land -- permits re-signing with a new one.
+ */
+async function sendTxWithRetry(tx, signers, retries = 5) {
+    let lastErr = null;
+
+    for (let attempt = 0; attempt < retries; attempt++) {
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+        tx.recentBlockhash = blockhash;
+        tx.lastValidBlockHeight = lastValidBlockHeight;
+        if (!tx.feePayer) tx.feePayer = signers[0].publicKey;
+
+        // Transaction.sign() rebuilds the signature list from scratch, so this is safe to
+        // call again on a transaction that was signed under a previous (now expired) blockhash.
+        tx.sign(...signers);
+
+        const rawTx = tx.serialize();
+        const signature = bs58.encode(tx.signature);
+
+        try {
+            await connection.sendRawTransaction(rawTx, { skipPreflight: true, maxRetries: 0 });
+        } catch (e) {
+            // The send itself failing does not mean the transaction cannot land -- another
+            // broadcast may already have reached a leader. Fall through to confirmOrExpire,
+            // which decides based on chain state rather than on this RPC call's outcome.
+            logger.debug('Initial broadcast failed, falling back to confirmation polling', {
+                signature, error: e.message
+            });
+        }
+
+        try {
+            const confirmed = await confirmOrExpire(signature, rawTx, lastValidBlockHeight);
+            if (confirmed) return confirmed;
+            // null => blockhash expired, transaction definitively did not land. Safe to re-sign.
+            lastErr = new Error(`Transaction ${signature} expired without landing`);
+            logger.warn('Transaction expired without landing, retrying with a new blockhash', {
+                signature, attempt: attempt + 1, retries
+            });
+        } catch (e) {
+            // Landed and failed on-chain: deterministic, so retrying just burns fees.
+            throw e;
+        }
+    }
+
+    throw lastErr || new Error('sendTxWithRetry exhausted all attempts');
 }
 
 /**
@@ -93,6 +190,40 @@ async function getLatestBlockhash() {
     return connection.getLatestBlockhash('finalized');
 }
 
+// Rent-exempt minimums are a function of account data length only, and change no more often
+// than a cluster rent-parameter change, so one lookup per distinct size lasts the process.
+const rentExemptCache = new Map(); // dataLength -> lamports
+
+/**
+ * Minimum lamports an account of `dataLength` bytes must hold to stay rent-exempt.
+ *
+ * v27.6: the fee scanners each hardcoded a 5000-lamport "buffer matching health.js" as the
+ * floor below which a pump creator vault holds no claimable fees. That number was a guess,
+ * and if the real floor is higher -- a 0-data system account needs 890,880 -- then every
+ * vault permanently reported the difference as phantom pending fees, so the scanners built a
+ * claim transaction on every pass that moved nothing and credited users for SOL that was
+ * never claimable. Asking the cluster for the true figure, keyed on the vault's own data
+ * length, is correct whichever way that question resolves, and self-corrects if pump ever
+ * changes the account layout.
+ *
+ * Falls back to the old constant if the lookup fails, so an RPC blip degrades to today's
+ * behaviour rather than blocking fee collection entirely.
+ */
+async function getRentExemptMinimum(dataLength = 0, fallbackLamports = 5000) {
+    if (rentExemptCache.has(dataLength)) return rentExemptCache.get(dataLength);
+    try {
+        const lamports = await connection.getMinimumBalanceForRentExemption(dataLength);
+        rentExemptCache.set(dataLength, lamports);
+        logger.info('Resolved rent-exempt minimum from cluster', { dataLength, lamports });
+        return lamports;
+    } catch (e) {
+        logger.warn('Rent-exempt minimum lookup failed, using fallback', {
+            dataLength, fallbackLamports, error: e.message
+        });
+        return fallbackLamports;
+    }
+}
+
 module.exports = {
     connection,
     devKeypair,
@@ -102,4 +233,5 @@ module.exports = {
     refundUser,
     getBalance,
     getLatestBlockhash,
+    getRentExemptMinimum,
 };

@@ -30,6 +30,15 @@ const WALLETS = {
     PLATFORM_DEV: safePublicKey("FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB", "FNLWHjvjptwC7LxycdK3Knqcv5ptC19C9rynn6u2S1tB", "PLATFORM_DEV_WALLET"),
     FEE_95: safePublicKey("9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z", "11111111111111111111111111111111", "WALLET_9_5"),
     FEE_05: safePublicKey("9zT9rFzDA84K6hJJibcy9QjaFmM8Jm2LzdrvXEiBSq9g", "11111111111111111111111111111111", "WALLET_0_5"),
+    // v28.0: Destination for the platform buyback/burn share (24.5% of claimed fees).
+    // Configurable via BUYBACK_BURN_WALLET so the burn address can change without a code
+    // change. Falls back to FEE_95 -- where the platform's cut already goes today -- so an
+    // unset or malformed env var never redirects funds somewhere unexpected.
+    BUYBACK_BURN: safePublicKey(
+        process.env.BUYBACK_BURN_WALLET || "9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z",
+        "9Cx7bw3opoGJ2z9uYbMLcfb1ukJbJN4CP5uBbDvWwu7Z",
+        "BUYBACK_BURN_WALLET"
+    ),
     PUMP_LIQUIDITY: "CJXSGQnTeRRGbZE1V4rQjYDeKLExPnxceczmAbgBdTsa",
     // Mayhem
     GLOBAL_PARAMS: safePublicKey("13ec7XdrjF3h3YcqBTFDSReRcUFwbCnJaAQspM4j6DDJ", "13ec7XdrjF3h3YcqBTFDSReRcUFwbCnJaAQspM4j6DDJ", "GLOBAL_PARAMS"),

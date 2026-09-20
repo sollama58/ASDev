@@ -12,7 +12,7 @@ const { BN } = require('@coral-xyz/anchor');
 const axios = require('axios');
 const config = require('../config/env');
 const { PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, pump, mutex, mintExtractor, imageUtils } = require('../services');
+const { logger, pump, mutex, mintExtractor, imageUtils, solana } = require('../services');
 const { fetchTokenAccountsHeliusDAS } = require('../services/heliusDAS');
 
 // RACE CONDITION FIX: Use mutex instead of boolean flag
@@ -799,8 +799,14 @@ async function updatePendingFeesInDb(deps) {
                 let tokenFeeAmount = 0;
 
                 const bcInfo = bcAccountMap.get(token.mint);
-                if (bcInfo && bcInfo.lamports > 5000) {
-                    tokenFeeAmount += Math.floor((bcInfo.lamports - 5000) * (token.feeShareBps / 10000));
+                // v28.2: the fifth hardcoded 5000-lamport rent floor, missed in v27.6. Same
+                // cluster-derived value the claim paths use, so "pending" here agrees with
+                // what a claim can actually withdraw.
+                if (bcInfo) {
+                    const rentFloor = await solana.getRentExemptMinimum(bcInfo.data?.length || 0, 5000);
+                    if (bcInfo.lamports > rentFloor) {
+                        tokenFeeAmount += Math.floor((bcInfo.lamports - rentFloor) * (token.feeShareBps / 10000));
+                    }
                 }
 
                 // Parse token amount from raw SPL token account data (u64 at offset 64)

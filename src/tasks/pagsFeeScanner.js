@@ -411,15 +411,23 @@ async function checkPendingFeesForBeneficiary(beneficiary, options = {}) {
         let bcFeesLamports = 0;
         try {
             const bcInfo = await connection.getAccountInfo(bcVault);
-            if (bcInfo && bcInfo.lamports > RENT_EXEMPT_MIN) {
-                bcFeesLamports = bcInfo.lamports - RENT_EXEMPT_MIN;
+            if (bcInfo) {
+                // v27.6: ask the cluster for this vault's actual rent-exempt floor instead of
+                // assuming RENT_EXEMPT_MIN. See solana.getRentExemptMinimum for why.
+                const rentFloor = solana?.getRentExemptMinimum
+                    ? await solana.getRentExemptMinimum(bcInfo.data?.length || 0, RENT_EXEMPT_MIN)
+                    : RENT_EXEMPT_MIN;
+                if (bcInfo.lamports > rentFloor) {
+                    bcFeesLamports = bcInfo.lamports - rentFloor;
+                }
+                logger.debug('[PAGS Fee Scanner] BC vault balance', {
+                    mint: beneficiary.mint,
+                    bcVault: bcVault.toString().slice(0, 8) + '...',
+                    lamports: bcInfo.lamports,
+                    rentFloor,
+                    feesAfterRent: bcFeesLamports
+                });
             }
-            logger.debug('[PAGS Fee Scanner] BC vault balance', {
-                mint: beneficiary.mint,
-                bcVault: bcVault.toString().slice(0, 8) + '...',
-                lamports: bcInfo?.lamports || 0,
-                feesAfterRent: bcFeesLamports
-            });
         } catch (e) {
             logger.debug('[PAGS Fee Scanner] BC vault check error', {
                 mint: beneficiary.mint,
@@ -579,6 +587,47 @@ async function claimFeesForBeneficiary(pendingInfo) {
         if (pendingInfo.isDirectCreator) {
             // Scenario 1: Direct Creator - use claim_creator_fees
             // This claims fees directly from PAGS wallet's own vault
+
+            // v27.6: pull AMM fees into the BC vault first, exactly as the shareholder branch
+            // below does. Without this, a graduated token whose fees sit in the AMM vault built
+            // a claim transaction on every scan that moved nothing -- the caller's gate counts
+            // ammFeesLamports, but claim_creator_fees only ever drains the BC vault -- so those
+            // fees were never harvested and the priority fee was burned on every pass.
+            if (pendingInfo.ammFeesLamports > 0) {
+                const creatorPubkey = new PublicKey(pendingInfo.creatorPubkey);
+                const [ammVaultAuth] = PublicKey.findProgramAddressSync(
+                    [Buffer.from("creator_vault"), creatorPubkey.toBuffer()],
+                    PROGRAMS.PUMP_AMM
+                );
+                const ammVaultAta = await getAssociatedTokenAddress(TOKENS.WSOL, ammVaultAuth, true);
+                const [ammEventAuthority] = PublicKey.findProgramAddressSync(
+                    [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
+                );
+
+                tx.add(new TransactionInstruction({
+                    keys: [
+                        { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },              // 0: wsol_mint
+                        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },         // 1: token_program
+                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },  // 2: system_program
+                        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // 3: ata_program
+                        { pubkey: creatorPubkey, isSigner: false, isWritable: false },            // 4: coin_creator
+                        { pubkey: ammVaultAuth, isSigner: false, isWritable: true },              // 5: amm_vault_auth
+                        { pubkey: ammVaultAta, isSigner: false, isWritable: true },               // 6: amm_vault_ata (wSOL)
+                        { pubkey: pendingInfo.bcVault, isSigner: false, isWritable: true },       // 7: bc_vault (destination)
+                        { pubkey: ammEventAuthority, isSigner: false, isWritable: false },        // 8: event_authority
+                        { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false },        // 9: pump_amm_program
+                    ],
+                    programId: PROGRAMS.PUMP_AMM,
+                    data: pump.buildTransferFeesToPumpData()
+                }));
+
+                logger.info('[PAGS Fee Scanner] Direct creator: transferring AMM fees to BC vault first', {
+                    mint: pendingInfo.mint,
+                    ammFeesLamports: pendingInfo.ammFeesLamports,
+                    ammVaultAuth: ammVaultAuth.toString()
+                });
+            }
+
             const claimDiscriminator = pump.buildClaimFeesData();
 
             const claimKeys = [
@@ -595,11 +644,13 @@ async function claimFeesForBeneficiary(pendingInfo) {
                 data: claimDiscriminator
             }));
 
-            claimedLamports = pendingInfo.bcFeesLamports; // 100% for direct creator
+            // 100% for direct creator, across both vaults now that AMM fees are swept in first.
+            claimedLamports = (pendingInfo.bcFeesLamports || 0) + (pendingInfo.ammFeesLamports || 0);
 
             logger.info('[PAGS Fee Scanner] Claiming as direct creator', {
                 mint: pendingInfo.mint,
-                bcFeesLamports: pendingInfo.bcFeesLamports
+                bcFeesLamports: pendingInfo.bcFeesLamports,
+                ammFeesLamports: pendingInfo.ammFeesLamports
             });
 
         } else {
@@ -819,6 +870,42 @@ async function claimFeesForBeneficiary(pendingInfo) {
             blockhash,
             lastValidBlockHeight
         }, 'confirmed');
+
+        // v27.6 ACCURACY: credit what actually arrived, not what the pre-claim scan predicted.
+        // claimedLamports above is derived from vault balances read before the transaction and
+        // from shareBps, so any vault movement between scan and claim -- another shareholder
+        // distributing, an external claim, a partial sweep -- mis-credited the user. The
+        // transaction's own pre/post balances for the fee payer are authoritative; meta.fee is
+        // added back because the PAGS wallet paid it and it is not part of the claim.
+        const estimatedLamports = claimedLamports;
+        try {
+            const txDetail = await connection.getTransaction(signature, {
+                commitment: 'confirmed',
+                maxSupportedTransactionVersion: 0
+            });
+            const meta = txDetail?.meta;
+            if (meta && Array.isArray(meta.preBalances) && Array.isArray(meta.postBalances)) {
+                // The fee payer is always account index 0.
+                const measured = (meta.postBalances[0] - meta.preBalances[0]) + (meta.fee || 0);
+                if (Number.isFinite(measured) && measured >= 0) {
+                    claimedLamports = measured;
+                    if (Math.abs(measured - estimatedLamports) > 1000) {
+                        logger.warn('[PAGS Fee Scanner] Claimed amount differed from estimate', {
+                            mint: pendingInfo.mint,
+                            estimatedLamports,
+                            measuredLamports: measured,
+                            signature
+                        });
+                    }
+                }
+            }
+        } catch (e) {
+            logger.warn('[PAGS Fee Scanner] Could not measure claimed amount, falling back to estimate', {
+                mint: pendingInfo.mint,
+                signature,
+                error: e.message
+            });
+        }
 
         const claimedSol = claimedLamports / 1e9;
 
@@ -1306,8 +1393,22 @@ async function collectAllFees() {
                 totalClaimedSol += result.claimedSol;
 
                 // v25.45: Update vault balance cache after successful claim
-                // Vault should now be near-empty (just rent-exempt minimum)
-                updateVaultBalanceAfterClaim(beneficiary.mint, RENT_EXEMPT_MIN, 0);
+                // Vault should now be near-empty (just rent-exempt minimum).
+                // v27.6: read the real post-claim balance rather than assuming the hardcoded
+                // floor. With the floor now cluster-derived, a stale 5000 here would make
+                // detectExternalClaim see a phantom drop and log external claims that never
+                // happened. Falls back to the constant if the read fails.
+                let postClaimBc = RENT_EXEMPT_MIN;
+                try {
+                    const { bcVault } = pump.getCreatorFeeVaults(new PublicKey(beneficiary.creatorPubkey));
+                    const postInfo = await connection.getAccountInfo(bcVault);
+                    if (postInfo) postClaimBc = postInfo.lamports;
+                } catch (e) {
+                    logger.debug('[PAGS Fee Scanner] Post-claim vault read failed, assuming rent floor', {
+                        mint: beneficiary.mint, error: e.message
+                    });
+                }
+                updateVaultBalanceAfterClaim(beneficiary.mint, postClaimBc, 0);
 
                 // Record the fee collection in the database
                 if (pags && pags.recordFeeCollection) {

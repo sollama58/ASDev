@@ -12,15 +12,16 @@ of the same holder-tracking/airdrop engine:
   being launched here. Verified entirely on-chain at registration time.
 - **PAGS** ("Pay-to-Twitter/X") — token creators split fees with Twitter/X
   accounts, who link a wallet via OAuth and claim their share.
-- **Community Chest** — a standalone airdrop-pool sub-site/brand (own static
-  page and admin panel) built on the same backend.
+- **ShitPad** — a standalone airdrop-pool sub-site/brand (own static page and
+  admin panel) built on the same backend. Tagline: "Token launchpads are shit."
 
 Two tracked tokens (`ASDF`, `ANSEM`) give their top holders a 2× multiplier
 on airdrop weight, stacking to 4× if you hold both.
 
-> Note: the vanity address grinder (mint addresses ending in `ASDF`) referenced
-> in older docs has been decommissioned — `services/vanity.js` now just
-> generates a random keypair. Mints are no longer vanity-ground.
+> Note: the old vanity grinder (mint addresses ending in `ASDF`) was an external
+> HTTP service and was decommissioned. It has been replaced by an in-repo
+> grinder producing addresses ending in `shit` — see
+> [Vanity mint grinder](#vanity-mint-grinder).
 
 ## Architecture
 
@@ -55,12 +56,14 @@ src/
 │   └── workers.js           # BullMQ worker wrappers around the above
 └── utils/                # Small shared helpers (bigint math, etc.)
 
+grinder.js               # Vanity mint grinder service entrypoint (SERVER_MODE=grinder)
+
 scripts/                 # One-off/maintenance scripts (see Scripts section)
 
 # Frontend — static HTML, no build step, each file is self-contained
 asdev_frontend.html       # Main platform UI (launches, leaderboard, Robinhood, PAGS, wallet connect)
 admin_panel.html          # Main platform admin console
-community-chest/          # Standalone airdrop-pool sub-site (own render.yaml Blueprint)
+shitpad/                  # Standalone airdrop-pool sub-site (own render.yaml Blueprint)
 ├── index.html
 ├── admin/index.html
 └── render.yaml
@@ -200,8 +203,52 @@ endpoints in total, including a large admin/debug surface gated behind
 
 Runs on Render.com as multiple services from this one repo:
 - The API/worker process (`src/index.js` / `src/worker.js`)
+- The vanity mint grinder (`src/grinder.js`) — its own service, see `render.yaml`
 - Separate static-site Blueprints for the frontends — see
-  `community-chest/render.yaml` for that sub-site's Blueprint
+  `shitpad/render.yaml` for that sub-site's Blueprint
+
+### Vanity mint grinder
+
+Launched tokens get a contract address ending in `shit`. Addresses are ground
+ahead of time into a pool of 50 so a launch never waits on the search.
+
+The grinder is a **separate service** on purpose. Grinding is sustained
+CPU-bound work, and sharing an instance with the API would put request latency
+in competition with a hot loop. `src/services/vanityGrinder.js` and
+`vanityWorker.js` are reachable only from `src/grinder.js` — neither
+`src/index.js` nor `src/worker.js` imports them, so the API process cannot
+grind even by accident. Those processes only *claim* from the pool.
+
+How it performs, measured at ~10,500 keys/sec/core (Node's OpenSSL-backed
+ed25519 — the pure-JS tweetnacl equivalent manages ~61/sec):
+
+| match | expected attempts | per address/core | pool of 50, 4 cores |
+|---|---|---|---|
+| any case (8 forms) | ~1.41M | ~2.2 min | ~50 min |
+| exact lowercase | 58⁴ = 11.3M | ~18 min | ~7 hours |
+
+Only 8 of the 16 capitalisations of "shit" are reachable, because base58 has no
+uppercase `I` and no lowercase `l`. The suffix test never base58-encodes
+anything: in base58 the trailing characters are the least-significant digits,
+so the last four are fully determined by `pubkey mod 58⁴`.
+
+Operationally:
+- The pool lives in Postgres (`vanity_mints`), so the grinder and API share only
+  a database — no direct connection between the services.
+- Mint seeds are **encrypted at rest**. Until a token is created, whoever holds
+  a ground seed can create that mint themselves and front-run the launch.
+- `VANITY_ENCRYPTION_KEY` must be the **same value on both services**. If they
+  differ the API cannot read the pool, and every launch quietly falls back to a
+  random mint. The grinder refuses to start without it rather than producing
+  keypairs nobody can decrypt.
+- Grinding stops at `VANITY_POOL_TARGET` and restarts at `VANITY_POOL_LOW_WATER`.
+- Anti-bundling dud tokens deliberately use random mints — they never consume a
+  ground address.
+- Pool depth is exposed on `/api/health` as `vanityPool`.
+
+**If the pool is empty, launches fall back to a random mint.** That is the
+designed behaviour, not a failure: the grinder being down, misconfigured or
+still warming up never blocks a launch.
 
 ## Troubleshooting
 

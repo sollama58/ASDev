@@ -8,7 +8,13 @@ const bs58 = require('bs58');
 const crypto = require('crypto');
 
 // Environment validation
-const requiredEnvVars = ['DEV_WALLET_PRIVATE_KEY'];
+//
+// v28.1: the grinder service signs nothing and touches no wallet — it only reads and writes
+// the vanity mint pool in Postgres. Requiring the platform's hot wallet key there would mean
+// copying it onto an extra always-on instance purely to satisfy a startup check, widening
+// the blast radius of that key for no benefit. So the grinder is exempt.
+const IS_GRINDER = process.env.SERVER_MODE === 'grinder';
+const requiredEnvVars = IS_GRINDER ? [] : ['DEV_WALLET_PRIVATE_KEY'];
 const missingVars = requiredEnvVars.filter(v => !process.env[v]);
 if (missingVars.length > 0) {
     console.error(`FATAL: Missing required environment variables: ${missingVars.join(', ')}`);
@@ -52,6 +58,40 @@ const config = {
     FEE_THRESHOLD_SOL: 0.05,  // v17.0: Lowered to 0.05 SOL for fee collection
     AIRDROP_THRESHOLD_SOL: 1.0, // v17.0: Minimum 1 SOL to trigger airdrop distribution
     AIRDROP_MIN_VOLUME_USD: 250, // v18.0: Minimum 24hr volume for airdrop eligibility (v27.5: raised from 100 to shrink the RPC-scanned token set)
+
+    // =====================================================
+    // VANITY MINT GRINDER (v28.1)
+    // =====================================================
+    // Pre-grinds mint keypairs whose addresses end in VANITY_SUFFIX, so launched tokens carry
+    // a branded contract address. Runs only in the dedicated grinder service
+    // (SERVER_MODE=grinder); the API and worker processes never grind, they only consume the
+    // pool, and fall back to a random mint whenever it is empty.
+    //
+    // Cost, measured at ~10,500 keys/sec/core (Node's OpenSSL-backed ed25519):
+    //   exact-case "shit"   58^4 = 11,316,496 expected attempts  ~18 min/address/core
+    //   any case (8 forms)   ~1,414,562 expected attempts          ~2.2 min/address/core
+    // base58 has no uppercase I and no lowercase l, so only 8 of the 16 case permutations of
+    // "shit" can exist in an address at all.
+    VANITY_GRINDER_ENABLED: process.env.VANITY_GRINDER_ENABLED === 'true',
+    VANITY_SUFFIX: process.env.VANITY_SUFFIX || 'shit',
+    // Accept any representable capitalisation. Exact lowercase is 8x the work per address.
+    VANITY_CASE_INSENSITIVE: process.env.VANITY_CASE_INSENSITIVE !== 'false',
+    VANITY_POOL_TARGET: parseInt(process.env.VANITY_POOL_TARGET) || 50,
+    // Grinding restarts once the pool falls to this depth. The gap between this and the
+    // target is what stops the workers flapping on every single launch.
+    VANITY_POOL_LOW_WATER: parseInt(process.env.VANITY_POOL_LOW_WATER) || 40,
+    // Defaults to the instance's cores, capped at 4. Inside a container os.cpus() reports the
+    // HOST's cores, not the container's allotment — on a 0.5-CPU Render plan it can say 32 —
+    // and spawning that many threads would just thrash. Set the env var explicitly to go
+    // higher on a plan that really has the cores.
+    VANITY_GRINDER_THREADS: parseInt(process.env.VANITY_GRINDER_THREADS) || Math.min(require('os').cpus().length, 4),
+    // Fraction of wall-clock each worker spends grinding; 1 = flat out. Lower it only if the
+    // grinder shares an instance with something latency-sensitive.
+    VANITY_DUTY_CYCLE: parseFloat(process.env.VANITY_DUTY_CYCLE) || 1,
+    // How often the grinder re-reads pool depth. It shares no channel with the API, so this
+    // poll is how it notices addresses being consumed.
+    VANITY_POOL_CHECK_INTERVAL: parseInt(process.env.VANITY_POOL_CHECK_INTERVAL) || 30000,
+    VANITY_GRINDER_LOG_INTERVAL: parseInt(process.env.VANITY_GRINDER_LOG_INTERVAL) || 60000,
 
     // =====================================================
     // UPDATE INTERVALS (ms) - v25.64: Timing Reference
@@ -164,7 +204,10 @@ const config = {
 
 // Build keypairs directly from process.env (raw keys never stored in config object).
 // Redact env vars immediately after use so they don't survive in memory dumps.
-config.devKeypair = Keypair.fromSecretKey(bs58.decode(process.env.DEV_WALLET_PRIVATE_KEY));
+// v28.1: null in grinder mode, where no wallet key is present or needed (see above).
+config.devKeypair = process.env.DEV_WALLET_PRIVATE_KEY
+    ? Keypair.fromSecretKey(bs58.decode(process.env.DEV_WALLET_PRIVATE_KEY))
+    : null;
 process.env.DEV_WALLET_PRIVATE_KEY = '[REDACTED]';
 
 config.pagsKeypair = null;

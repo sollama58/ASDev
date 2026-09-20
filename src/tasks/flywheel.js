@@ -476,12 +476,60 @@ const PUMP_FUN_TOTAL_SUPPLY_BIG = BigInt('1000000000000000');
 // v26.0: Minimum per-recipient airdrop (0.01 SOL). Recipients below this are skipped.
 const MIN_RECIPIENT_LAMPORTS = Math.floor(0.01 * 1e9); // 10_000_000 lamports
 
-// v27.0: Pooling mechanic — 50% of token creator rewards go to per-token holders,
-// 50% go into the central pool distributed by volume-weighted cross-token holdings.
-const CREATOR_REWARD_HOLDER_SPLIT = 0.5;
-const CREATOR_REWARD_POOL_SPLIT = 0.5;
+// v28.0 FEE SPLIT: every claimed lamport is divided four ways. These are fractions of the
+// GROSS claimed amount and sum to exactly 1.0.
+//
+// Supersedes the v27.0 scheme, which took 95% as "rewards" and split that 50/50 between
+// per-token holders and the central pool (so 47.5% each), transferring the remaining 5% to
+// the platform wallets as 4.5% + 0.5%.
+//
+// Headline: 50% holders / 25% central pool / 25% platform, where the platform quarter is
+// 24.5% buyback-burn + 0.5% upkeep.
+const FEE_SPLIT = {
+    holders:     0.50,   // credited to the originating token's pending_airdrop_lamports
+    centralPool: 0.25,   // credited to the cross-token central pool
+    buybackBurn: 0.245,  // swept on-chain to WALLETS.BUYBACK_BURN
+    upkeep:      0.005,  // swept on-chain to WALLETS.FEE_05
+};
+
+/**
+ * Split a claimed fee amount four ways using exact integer arithmetic.
+ *
+ * Every share is floored and the rounding remainder is given to holders, so the four parts
+ * always sum to exactly `lamports` -- no lamport is created or destroyed by the split. This
+ * matters because the holder and central-pool shares are *accounting* credits while the
+ * buyback-burn and upkeep shares are later moved on-chain: if the parts summed to more than
+ * the input, the platform would eventually try to transfer SOL it never claimed.
+ *
+ * @param {number} lamports - Gross claimed amount
+ * @returns {{holders:number, centralPool:number, buybackBurn:number, upkeep:number}}
+ */
+function splitClaimedFees(lamports) {
+    const gross = Math.floor(Number(lamports) || 0);
+    if (gross <= 0) return { holders: 0, centralPool: 0, buybackBurn: 0, upkeep: 0 };
+
+    const centralPool = Math.floor(gross * FEE_SPLIT.centralPool);
+    const buybackBurn = Math.floor(gross * FEE_SPLIT.buybackBurn);
+    const upkeep      = Math.floor(gross * FEE_SPLIT.upkeep);
+    // Holders absorb the remainder so the four parts reconcile exactly to `gross`.
+    const holders     = gross - centralPool - buybackBurn - upkeep;
+
+    return { holders, centralPool, buybackBurn, upkeep };
+}
+
 // Minimum central pool balance before triggering a distribution
 const CENTRAL_POOL_THRESHOLD_LAMPORTS = Math.round(5.0 * 1e9); // 5 SOL
+
+// v28.0: Eligibility threshold for receiving fee attribution and central-pool shares.
+// This file previously hardcoded $100 in four queries while holderScanner used the
+// configured AIRDROP_MIN_VOLUME_USD (raised to $250 in v27.5), so tokens between the two
+// figures were credited with pool balances that the distributor would never pay out --
+// the lamports just accumulated against a token that could never clear the volume gate.
+const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
+
+// v28.0: Minimum accrued platform cut (buyback-burn + upkeep) before sweeping it on-chain.
+// Sweeping in batches keeps transaction fees from eating small claims.
+const PLATFORM_SWEEP_THRESHOLD_LAMPORTS = Math.round(0.05 * 1e9); // 0.05 SOL
 
 /**
  * v27.0: Atomically add lamports to the central pool stat.
@@ -493,12 +541,151 @@ async function addToCentralPool(db, lamports) {
             "UPDATE stats SET value = value + $1 WHERE key = 'centralPoolLamports'",
             [lamports]
         );
-        if (result?.rowCount === 0) {
+        // v28.2: db.run returns { changes, lastID }, never rowCount — so this guard compared
+        // undefined === 0 and could not fire. A missing stats row silently dropped the credit.
+        if (result?.changes === 0) {
             logger.error(`[CentralPool] addToCentralPool: stats row not found — ${lamports} lamports NOT credited`);
         }
     } catch (e) {
         logger.error(`[CentralPool] addToCentralPool failed — ${lamports} lamports NOT credited`, { error: e.message });
         throw e; // re-throw so caller can handle
+    }
+}
+
+/**
+ * v28.0: Atomically accrue the platform's cut of a claim.
+ *
+ * The buyback-burn and upkeep shares are *not* transferred at claim time. Previously the
+ * 4.5%/0.5% transfer fired once per platform claim and never fired at all on the Robinhood
+ * claim paths, so Robinhood's platform cut simply accumulated in the dev wallet with nothing
+ * tracking it. Accruing here instead means every claim path contributes identically, and a
+ * single periodic sweep moves the total out -- one transaction rather than one per claim.
+ */
+async function accruePlatformFees(db, { buybackBurn = 0, upkeep = 0 }) {
+    const credit = async (key, lamports) => {
+        if (lamports <= 0) return;
+        try {
+            // Upsert: these keys are seeded in createSchema, but an older database that
+            // predates them would otherwise silently match zero rows and lose the accrual.
+            await db.run(
+                `INSERT INTO stats (key, value) VALUES ($2, $1)
+                 ON CONFLICT (key) DO UPDATE SET value = stats.value + $1`,
+                [lamports, key]
+            );
+        } catch (e) {
+            logger.error(`[PlatformFees] Failed to accrue ${lamports} lamports to ${key}`, { error: e.message });
+            throw e;
+        }
+    };
+    await credit('pendingBuybackBurnLamports', buybackBurn);
+    await credit('pendingUpkeepLamports', upkeep);
+}
+
+/**
+ * v28.0: Sweep the accrued platform cut on-chain.
+ *
+ * Uses the same reserve-before-send ordering as the airdrop paths: the pending counters are
+ * decremented first, in one transaction, and credited back if the transfer fails. A crash
+ * between the decrement and the transfer therefore under-pays the platform -- recoverable on
+ * the next claim -- rather than paying it twice, which is not.
+ */
+async function processPlatformFeeSweep(deps) {
+    const { devKeypair, db } = deps;
+
+    let pendingBurn = 0;
+    let pendingUpkeep = 0;
+    try {
+        const rows = await db.all(
+            "SELECT key, value FROM stats WHERE key IN ('pendingBuybackBurnLamports','pendingUpkeepLamports')"
+        );
+        for (const r of rows) {
+            if (r.key === 'pendingBuybackBurnLamports') pendingBurn = Math.floor(Number(r.value) || 0);
+            if (r.key === 'pendingUpkeepLamports') pendingUpkeep = Math.floor(Number(r.value) || 0);
+        }
+    } catch (e) {
+        logger.warn('[PlatformFees] Could not read pending platform fees', { error: e.message });
+        return;
+    }
+
+    const total = pendingBurn + pendingUpkeep;
+    if (total < PLATFORM_SWEEP_THRESHOLD_LAMPORTS) return;
+
+    // Never try to send more than the wallet actually holds.
+    try {
+        const balance = await deps.connection.getBalance(devKeypair.publicKey);
+        const SAFETY_RESERVE = Math.round(0.05 * LAMPORTS_PER_SOL);
+        if (balance - SAFETY_RESERVE < total) {
+            logger.warn('[PlatformFees] Wallet balance below accrued platform cut, deferring sweep', {
+                balanceSol: balance / LAMPORTS_PER_SOL,
+                accruedSol: total / LAMPORTS_PER_SOL
+            });
+            return;
+        }
+    } catch (e) {
+        logger.warn('[PlatformFees] Balance check failed, deferring sweep', { error: e.message });
+        return;
+    }
+
+    // Reserve: zero the counters before sending anything.
+    try {
+        await db.transaction(async (tx) => {
+            const r1 = await tx.run(
+                "UPDATE stats SET value = value - $1 WHERE key = 'pendingBuybackBurnLamports' AND value >= $1",
+                [pendingBurn]
+            );
+            if (pendingBurn > 0 && r1.changes === 0) throw new Error('buyback-burn accrual changed mid-sweep');
+            const r2 = await tx.run(
+                "UPDATE stats SET value = value - $1 WHERE key = 'pendingUpkeepLamports' AND value >= $1",
+                [pendingUpkeep]
+            );
+            if (pendingUpkeep > 0 && r2.changes === 0) throw new Error('upkeep accrual changed mid-sweep');
+        });
+    } catch (e) {
+        logger.warn('[PlatformFees] Could not reserve platform cut, skipping sweep', { error: e.message });
+        return;
+    }
+
+    try {
+        const feeTx = new Transaction();
+        solana.addPriorityFee(feeTx);
+        if (pendingBurn > 0) {
+            feeTx.add(SystemProgram.transfer({
+                fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.BUYBACK_BURN, lamports: pendingBurn
+            }));
+        }
+        if (pendingUpkeep > 0) {
+            feeTx.add(SystemProgram.transfer({
+                fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_05, lamports: pendingUpkeep
+            }));
+        }
+        feeTx.feePayer = devKeypair.publicKey;
+        const sig = await solana.sendTxWithRetry(feeTx, [devKeypair]);
+
+        await db.run(
+            `INSERT INTO stats (key, value) VALUES ($2, $1)
+             ON CONFLICT (key) DO UPDATE SET value = stats.value + $1`,
+            [pendingBurn, 'lifetimeBuybackBurnLamports']
+        ).catch(() => {});
+        await db.run(
+            `INSERT INTO stats (key, value) VALUES ($2, $1)
+             ON CONFLICT (key) DO UPDATE SET value = stats.value + $1`,
+            [pendingUpkeep, 'lifetimeUpkeepLamports']
+        ).catch(() => {});
+
+        logger.info(`[PlatformFees] Swept ${(total / LAMPORTS_PER_SOL).toFixed(4)} SOL platform cut`, {
+            buybackBurnSol: pendingBurn / LAMPORTS_PER_SOL,
+            upkeepSol: pendingUpkeep / LAMPORTS_PER_SOL,
+            buybackBurnWallet: WALLETS.BUYBACK_BURN.toString(),
+            signature: sig
+        });
+    } catch (e) {
+        // Transfer failed: put the accrual back so the next sweep retries it.
+        logger.error('[PlatformFees] Sweep transfer failed, restoring accrual', { error: e.message });
+        await accruePlatformFees(db, { buybackBurn: pendingBurn, upkeep: pendingUpkeep }).catch((restoreErr) => {
+            logger.error('[PlatformFees] CRITICAL: could not restore accrual after failed sweep', {
+                buybackBurn: pendingBurn, upkeep: pendingUpkeep, error: restoreErr.message
+            });
+        });
     }
 }
 
@@ -679,26 +866,86 @@ async function processTokenAirdrops(deps) {
                 const allSignatures = [];
                 let actualSentLamports = 0;
 
+                // v27.6 CRASH SAFETY: reserve the planned amount out of the pool *before*
+                // sending anything. Previously every batch was sent first and the pool was
+                // decremented afterwards, so a crash or redeploy between the final send and
+                // that UPDATE replayed the whole pool next run and paid every holder twice.
+                //
+                // The reservation and the ledger row are written in one transaction, and the
+                // conditional WHERE makes the reservation atomic against a concurrent worker:
+                // whoever decrements first wins, the loser reserves nothing and skips.
+                let reserved = false;
+                try {
+                    await db.transaction(async (tx) => {
+                        const res = await tx.run(
+                            `UPDATE ${tables.tokens} SET pending_airdrop_lamports = pending_airdrop_lamports - $1
+                             WHERE mint = $2 AND pending_airdrop_lamports >= $1`,
+                            [totalPlanned, token.mint]
+                        );
+                        if (res.changes === 0) {
+                            throw new Error('pool no longer holds the planned amount');
+                        }
+                        await tx.run(
+                            `INSERT INTO airdrop_reservations
+                                (airdrop_id, mint, token_source, planned_lamports, sent_lamports, status, created_at, updated_at)
+                             VALUES ($1, $2, $3, $4, 0, 'sending', $5, $5)`,
+                            [airdropId, token.mint, token.source, totalPlanned, Date.now()]
+                        );
+                        reserved = true;
+                    });
+                } catch (reserveErr) {
+                    logger.warn(`[TokenAirdrop] ${token.ticker}: could not reserve pool, skipping`, { error: reserveErr.message });
+                    continue;
+                }
+                if (!reserved) continue;
+
                 for (let i = 0; i < recipients.length; i += AIRDROP_BATCH_SIZE) {
                     const batch = recipients.slice(i, i + AIRDROP_BATCH_SIZE);
                     const result = await sendSolAirdropBatch(batch, deps);
                     if (result?.signature) {
                         allSignatures.push(result.signature);
                         actualSentLamports += result.actualLamports;
+                        // Record progress after each batch so a crash leaves an accurate
+                        // account of what actually went out.
+                        await db.run(
+                            `UPDATE airdrop_reservations SET sent_lamports = $1, updated_at = $2 WHERE airdrop_id = $3`,
+                            [actualSentLamports, Date.now(), airdropId]
+                        ).catch(() => {});
                     }
                     if (i + AIRDROP_BATCH_SIZE < recipients.length) {
                         await new Promise(r => setTimeout(r, 300));
                     }
                 }
 
+                // Settle the reservation: bank what was sent, return the unsent remainder to
+                // the pool. Done in one transaction so the ledger and the pool cannot diverge.
+                const unsentLamports = totalPlanned - actualSentLamports;
+                try {
+                    await db.transaction(async (tx) => {
+                        if (actualSentLamports > 0) {
+                            await tx.run(
+                                `UPDATE ${tables.tokens} SET lifetime_airdrop_lamports = lifetime_airdrop_lamports + $1 WHERE mint = $2`,
+                                [actualSentLamports, token.mint]
+                            );
+                        }
+                        if (unsentLamports > 0) {
+                            await tx.run(
+                                `UPDATE ${tables.tokens} SET pending_airdrop_lamports = pending_airdrop_lamports + $1 WHERE mint = $2`,
+                                [unsentLamports, token.mint]
+                            );
+                        }
+                        await tx.run(
+                            `UPDATE airdrop_reservations SET sent_lamports = $1, status = $2, updated_at = $3 WHERE airdrop_id = $4`,
+                            [actualSentLamports, actualSentLamports > 0 ? 'completed' : 'aborted', Date.now(), airdropId]
+                        );
+                    });
+                } catch (settleErr) {
+                    // The reservation row stays 'sending' and is reported at startup.
+                    logger.error(`[TokenAirdrop] ${token.ticker}: failed to settle reservation ${airdropId}`, { error: settleErr.message });
+                }
+
                 if (actualSentLamports > 0) {
                     availableBalance -= actualSentLamports;
-
-                    // Decrement pending pool, accumulate lifetime
-                    await db.run(
-                        `UPDATE ${tables.tokens} SET pending_airdrop_lamports = GREATEST(0, pending_airdrop_lamports - $1), lifetime_airdrop_lamports = lifetime_airdrop_lamports + $1 WHERE mint = $2`,
-                        [actualSentLamports, token.mint]
-                    );
 
                     const actualSolSent = actualSentLamports / LAMPORTS_PER_SOL;
 
@@ -800,11 +1047,11 @@ async function processCentralPoolAirdrop(deps) {
     // Fetch all eligible tokens (platform + robinhood) with their market cap
     const eligiblePlatform = await db.all(
         'SELECT mint, "marketCap" as mcap FROM tokens WHERE volume24h >= $1',
-        [100]
+        [MIN_VOLUME_USD]
     );
     const eligibleRobinhood = await db.all(
         'SELECT mint, "marketCap" as mcap FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
-        [100]
+        [MIN_VOLUME_USD]
     );
     const allEligible = [...eligiblePlatform, ...eligibleRobinhood];
 
@@ -893,28 +1140,73 @@ async function processCentralPoolAirdrop(deps) {
     const allSignatures = [];
     let actualSentLamports = 0;
 
+    // v27.6 CRASH SAFETY: same reserve-before-send ordering as the per-token pools above.
+    let reserved = false;
+    try {
+        await db.transaction(async (tx) => {
+            const res = await tx.run(
+                `UPDATE stats SET value = value - $1 WHERE key = 'centralPoolLamports' AND value >= $1`,
+                [totalPlanned]
+            );
+            if (res.changes === 0) {
+                throw new Error('central pool no longer holds the planned amount');
+            }
+            await tx.run(
+                `INSERT INTO airdrop_reservations
+                    (airdrop_id, mint, token_source, planned_lamports, sent_lamports, status, created_at, updated_at)
+                 VALUES ($1, NULL, 'central_pool', $2, 0, 'sending', $3, $3)`,
+                [airdropId, totalPlanned, Date.now()]
+            );
+            reserved = true;
+        });
+    } catch (reserveErr) {
+        logger.warn('[CentralPool] Could not reserve central pool, skipping', { error: reserveErr.message });
+        return;
+    }
+    if (!reserved) return;
+
     for (let i = 0; i < recipients.length; i += AIRDROP_BATCH_SIZE) {
         const batch = recipients.slice(i, i + AIRDROP_BATCH_SIZE);
         const result = await sendSolAirdropBatch(batch, deps);
         if (result?.signature) {
             allSignatures.push(result.signature);
             actualSentLamports += result.actualLamports;
+            await db.run(
+                `UPDATE airdrop_reservations SET sent_lamports = $1, updated_at = $2 WHERE airdrop_id = $3`,
+                [actualSentLamports, Date.now(), airdropId]
+            ).catch(() => {});
         }
         if (i + AIRDROP_BATCH_SIZE < recipients.length) {
             await new Promise(r => setTimeout(r, 300));
         }
     }
 
+    // Settle: bank what was sent, return the unsent remainder to the pool.
+    const unsentLamports = totalPlanned - actualSentLamports;
+    try {
+        await db.transaction(async (tx) => {
+            if (actualSentLamports > 0) {
+                await tx.run(
+                    "UPDATE stats SET value = value + $1 WHERE key = 'lifetimeCentralPoolLamports'",
+                    [actualSentLamports]
+                );
+            }
+            if (unsentLamports > 0) {
+                await tx.run(
+                    "UPDATE stats SET value = value + $1 WHERE key = 'centralPoolLamports'",
+                    [unsentLamports]
+                );
+            }
+            await tx.run(
+                `UPDATE airdrop_reservations SET sent_lamports = $1, status = $2, updated_at = $3 WHERE airdrop_id = $4`,
+                [actualSentLamports, actualSentLamports > 0 ? 'completed' : 'aborted', Date.now(), airdropId]
+            );
+        });
+    } catch (settleErr) {
+        logger.error(`[CentralPool] Failed to settle reservation ${airdropId}`, { error: settleErr.message });
+    }
+
     if (actualSentLamports > 0) {
-        // Decrement central pool and accumulate lifetime stat
-        await db.run(
-            "UPDATE stats SET value = GREATEST(0, value - $1) WHERE key = 'centralPoolLamports'",
-            [actualSentLamports]
-        );
-        await db.run(
-            "UPDATE stats SET value = value + $1 WHERE key = 'lifetimeCentralPoolLamports'",
-            [actualSentLamports]
-        );
 
         const actualSolSent = actualSentLamports / LAMPORTS_PER_SOL;
 
@@ -1282,7 +1574,9 @@ async function claimRobinhoodFees(deps) {
                 try {
                     bcInfo = await connection.getAccountInfo(bcVault);
                     if (bcInfo) {
-                        const rentExemptMin = 5000; // Small buffer matching health.js
+                        // v27.6: the cluster's actual rent-exempt floor for this vault, not a
+                        // hardcoded 5000-lamport guess. See solana.getRentExemptMinimum.
+                        const rentExemptMin = await solana.getRentExemptMinimum(bcInfo.data?.length || 0, 5000);
                         bcPendingLamports = Math.max(0, bcInfo.lamports - rentExemptMin);
                     }
                 } catch (e) {
@@ -1348,19 +1642,26 @@ async function claimRobinhoodFees(deps) {
                                 source: 'BC'
                             });
 
-                            // v27.0: Split 95% of our share: 50% to per-token holders, 50% to central pool
-                            const bcTotalReward = Math.floor(ourShare * 0.95);
-                            const bcAirdropCredit = Math.floor(bcTotalReward * CREATOR_REWARD_HOLDER_SPLIT);
-                            const bcCentralCredit = bcTotalReward - bcAirdropCredit;
-                            await db.run(
-                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
-                                [Date.now(), ourShare / LAMPORTS_PER_SOL, bcAirdropCredit, token.id]
-                            );
-                            if (bcCentralCredit > 0) {
-                                await addToCentralPool(db, bcCentralCredit);
-                            }
+                            // v28.0: 50% holders / 25% central pool / 24.5% buyback-burn / 0.5% upkeep
+                            // v28.2: all four credits in ONE transaction. As three separate
+                            // statements, a failure after the first left the split partially
+                            // applied — holders credited, the platform's share never accrued.
+                            const bcSplit = splitClaimedFees(ourShare);
+                            await db.transaction(async (tx) => {
+                                await tx.run(
+                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
+                                    [Date.now(), ourShare / LAMPORTS_PER_SOL, bcSplit.holders, token.id]
+                                );
+                                if (bcSplit.centralPool > 0) {
+                                    await addToCentralPool(tx, bcSplit.centralPool);
+                                }
+                                // v28.0: Robinhood claims previously contributed nothing to the
+                                // platform cut -- the 5% transfer only ran on platform claims -- so
+                                // that share silently pooled in the dev wallet. Now accrued here too.
+                                await accruePlatformFees(tx, bcSplit);
+                            });
 
-                            logger.info(`[Robinhood] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL, ${(bcAirdropCredit / LAMPORTS_PER_SOL).toFixed(6)} to token pool, ${(bcCentralCredit / LAMPORTS_PER_SOL).toFixed(6)} to central pool)`);
+                            logger.info(`[Robinhood] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL, ${(bcSplit.holders / LAMPORTS_PER_SOL).toFixed(6)} to token pool, ${(bcSplit.centralPool / LAMPORTS_PER_SOL).toFixed(6)} to central pool, ${((bcSplit.buybackBurn + bcSplit.upkeep) / LAMPORTS_PER_SOL).toFixed(6)} to platform)`);
 
                             // v25.113: Cross-record to PAGS if this token is also a PAGS beneficiary
                             // v25.114: Use on-chain shareholder BPS for PAGS wallet, not DB value
@@ -1523,19 +1824,21 @@ async function claimRobinhoodFees(deps) {
                                 source: 'AMM'
                             });
 
-                            // v27.0: Split 95% of our AMM share: 50% to per-token holders, 50% to central pool
-                            const ammTotalReward = Math.floor(ourShareLamports * 0.95);
-                            const ammAirdropCredit = Math.floor(ammTotalReward * CREATOR_REWARD_HOLDER_SPLIT);
-                            const ammCentralCredit = ammTotalReward - ammAirdropCredit;
-                            await db.run(
-                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingAmmFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
-                                [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, ammAirdropCredit, token.id]
-                            );
-                            if (ammCentralCredit > 0) {
-                                await addToCentralPool(db, ammCentralCredit);
-                            }
+                            // v28.0: 50% holders / 25% central pool / 24.5% buyback-burn / 0.5% upkeep
+                            // v28.2: atomic — see the BC path above.
+                            const ammSplit = splitClaimedFees(ourShareLamports);
+                            await db.transaction(async (tx) => {
+                                await tx.run(
+                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingAmmFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
+                                    [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, ammSplit.holders, token.id]
+                                );
+                                if (ammSplit.centralPool > 0) {
+                                    await addToCentralPool(tx, ammSplit.centralPool);
+                                }
+                                await accruePlatformFees(tx, ammSplit);
+                            });
 
-                            logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL (our share: ${ourShare.toFixed(6)} SOL, ${(ammAirdropCredit / LAMPORTS_PER_SOL).toFixed(6)} to token pool, ${(ammCentralCredit / LAMPORTS_PER_SOL).toFixed(6)} to central pool)`);
+                            logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL (our share: ${ourShare.toFixed(6)} SOL, ${(ammSplit.holders / LAMPORTS_PER_SOL).toFixed(6)} to token pool, ${(ammSplit.centralPool / LAMPORTS_PER_SOL).toFixed(6)} to central pool, ${((ammSplit.buybackBurn + ammSplit.upkeep) / LAMPORTS_PER_SOL).toFixed(6)} to platform)`);
 
                             // v25.113: Cross-record to PAGS if this token is also a PAGS beneficiary
                             // v25.114: Use on-chain shareholder BPS for PAGS wallet, not DB value
@@ -2498,17 +2801,23 @@ async function runPurchaseAndFees(deps) {
                 await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [claimedAmount, 'lifetimeCreatorFeesLamports']);
                 await recordClaim(claimedAmount);
 
-                // v27.0: Attribute 95% of platform fees: 50% to per-token holder pools (by volume), 50% to central pool
+                // v28.0: 50% to per-token holder pools (by volume), 25% central pool, 25% platform
                 try {
-                    const totalRewardCredit = Math.floor(claimedAmount * 0.95);
-                    const perTokenCredit = Math.floor(totalRewardCredit * CREATOR_REWARD_HOLDER_SPLIT);
-                    const centralCredit = totalRewardCredit - perTokenCredit;
+                    const platformSplit = splitClaimedFees(claimedAmount);
+                    const perTokenCredit = platformSplit.holders;
+                    const centralCredit = platformSplit.centralPool;
+                    const totalRewardCredit = perTokenCredit + centralCredit;
 
                     const eligiblePlatformTokens = await db.all(
                         'SELECT mint, volume24h FROM tokens WHERE volume24h >= $1',
-                        [100]
+                        [MIN_VOLUME_USD]
                     );
                     const totalPlatformVol = eligiblePlatformTokens.reduce((s, t) => s + (parseFloat(t.volume24h) || 0), 0);
+                    // v28.2: every credit of this split in ONE transaction. Written as separate
+                    // statements, a failure part-way (say after the per-token loop) left holders
+                    // credited but the central pool and the platform's share never applied —
+                    // lamports claimed on-chain with no ledger entry anywhere.
+                    await db.transaction(async (tx) => {
                     if (totalPlatformVol > 0 && eligiblePlatformTokens.length > 0) {
                         let totalAttributed = 0;
                         const shares = eligiblePlatformTokens.map(tok => {
@@ -2523,7 +2832,7 @@ async function runPurchaseAndFees(deps) {
                         }
                         for (const { tok, share } of shares) {
                             if (share > 0) {
-                                await db.run(
+                                await tx.run(
                                     'UPDATE tokens SET pending_airdrop_lamports = pending_airdrop_lamports + $1 WHERE mint = $2',
                                     [share, tok.mint]
                                 );
@@ -2531,13 +2840,15 @@ async function runPurchaseAndFees(deps) {
                         }
                     } else if (perTokenCredit > 0) {
                         // No eligible platform tokens to distribute to — redirect to central pool to avoid losing funds
-                        await addToCentralPool(db, perTokenCredit);
+                        await addToCentralPool(tx, perTokenCredit);
                         logger.info(`[FeeCollection] No eligible platform tokens — redirected ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL per-token credit to central pool`);
                     }
                     if (centralCredit > 0) {
-                        await addToCentralPool(db, centralCredit);
+                        await addToCentralPool(tx, centralCredit);
                     }
-                    logger.info(`[FeeCollection] Attributed ${(totalRewardCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees: ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} to per-token pools, ${(centralCredit / LAMPORTS_PER_SOL).toFixed(4)} to central pool`);
+                    await accruePlatformFees(tx, platformSplit);
+                    });
+                    logger.info(`[FeeCollection] Attributed ${(totalRewardCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees: ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} to per-token pools, ${(centralCredit / LAMPORTS_PER_SOL).toFixed(4)} to central pool, ${((platformSplit.buybackBurn + platformSplit.upkeep) / LAMPORTS_PER_SOL).toFixed(4)} to platform`);
                 } catch (attrErr) {
                     logger.warn('[FeeCollection] Platform fee attribution failed', { error: attrErr.message });
                 }
@@ -2590,22 +2901,17 @@ async function runPurchaseAndFees(deps) {
             const MIN_SPEND = 0.02 * LAMPORTS_PER_SOL;
 
             if (spendable > MIN_SPEND) {
-                // Distribution: 95% goes to airdrop pool, 4.5% ASDF Fee, 0.5% Upkeep
-                const transfer9_5 = Math.floor(spendable * 0.045);
-                const transfer0_5 = Math.floor(spendable * 0.005);
-                // Remaining 95% stays in wallet for SOL airdrops
+                // v28.0: the platform's 25% is no longer transferred here. It was accrued to
+                // the pending counters when the claim was attributed, and processPlatformFeeSweep
+                // moves the accumulated total out in a single transaction once it clears the
+                // sweep threshold. Transferring per-claim meant one transaction per claim and,
+                // because this block only ran on platform claims, it skipped Robinhood entirely.
+                const projected = splitClaimedFees(spendable);
+                logData.solSpent = (projected.buybackBurn + projected.upkeep) / LAMPORTS_PER_SOL;
+                logData.transfer9_5 = projected.buybackBurn / LAMPORTS_PER_SOL;
+                logData.transfer0_5 = projected.upkeep / LAMPORTS_PER_SOL;
 
-                logData.solSpent = (transfer9_5 + transfer0_5) / LAMPORTS_PER_SOL;
-                logData.transfer9_5 = transfer9_5 / LAMPORTS_PER_SOL;
-                logData.transfer0_5 = transfer0_5 / LAMPORTS_PER_SOL;
-
-                // Fee distribution
-                const feeTx = new Transaction();
-                solana.addPriorityFee(feeTx);
-                feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_95, lamports: transfer9_5 }));
-                feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_05, lamports: transfer0_5 }));
-                await solana.sendTxWithRetry(feeTx, [devKeypair]);
-                logger.info("Fees Distributed (5% to wallets, 95% retained for SOL airdrop pool)");
+                logger.info("Fees attributed (50% holders, 25% central pool, 25% platform — platform cut accrued for sweep)");
                 logData.status = 'SUCCESS';
                 logData.reason = 'Fees Distributed';
             } else {
@@ -2699,12 +3005,15 @@ async function runFeeCollection(deps) {
                     }
 
                     // Check BOTH BC and AMM vaults
-                    const rentMin = 5000; // Small buffer for pending fee calculation
                     let tokenBcFees = 0;
                     let tokenAmmFees = 0;
 
                     // Check BC vault
                     const bcInfo = await connection.getAccountInfo(bcVaultAddr);
+                    // v27.6: cluster-derived rent-exempt floor, not a hardcoded 5000.
+                    const rentMin = bcInfo
+                        ? await solana.getRentExemptMinimum(bcInfo.data?.length || 0, 5000)
+                        : 5000;
                     if (bcInfo && bcInfo.lamports > rentMin) {
                         const pendingLamports = bcInfo.lamports - rentMin;
                         tokenBcFees = Math.floor(pendingLamports * ((token.feeShareBps ?? 10000) / 10000));
@@ -2754,17 +3063,20 @@ async function runFeeCollection(deps) {
                 await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [claimedAmount, 'lifetimeCreatorFeesLamports']);
                 logger.info(`[FeeCollection] Claimed ${(claimedAmount / LAMPORTS_PER_SOL).toFixed(4)} SOL from creator fees`);
 
-                // v27.0: Attribute 95% of platform fees: 50% to per-token holder pools (by volume), 50% to central pool
+                // v28.0: 50% to per-token holder pools (by volume), 25% central pool, 25% platform
                 try {
-                    const totalRewardCredit = Math.floor(claimedAmount * 0.95);
-                    const perTokenCredit = Math.floor(totalRewardCredit * CREATOR_REWARD_HOLDER_SPLIT);
-                    const centralCredit = totalRewardCredit - perTokenCredit;
+                    const platformSplit = splitClaimedFees(claimedAmount);
+                    const perTokenCredit = platformSplit.holders;
+                    const centralCredit = platformSplit.centralPool;
+                    const totalRewardCredit = perTokenCredit + centralCredit;
 
                     const eligiblePlatformTokens = await db.all(
                         'SELECT mint, volume24h FROM tokens WHERE volume24h >= $1',
-                        [100]
+                        [MIN_VOLUME_USD]
                     );
                     const totalPlatformVol = eligiblePlatformTokens.reduce((s, t) => s + (parseFloat(t.volume24h) || 0), 0);
+                    // v28.2: atomic — see runPurchaseAndFees above for why.
+                    await db.transaction(async (tx) => {
                     if (totalPlatformVol > 0 && eligiblePlatformTokens.length > 0) {
                         let totalAttributed = 0;
                         const shares = eligiblePlatformTokens.map(tok => {
@@ -2778,7 +3090,7 @@ async function runFeeCollection(deps) {
                         }
                         for (const { tok, share } of shares) {
                             if (share > 0) {
-                                await db.run(
+                                await tx.run(
                                     'UPDATE tokens SET pending_airdrop_lamports = pending_airdrop_lamports + $1 WHERE mint = $2',
                                     [share, tok.mint]
                                 );
@@ -2786,13 +3098,15 @@ async function runFeeCollection(deps) {
                         }
                     } else if (perTokenCredit > 0) {
                         // No eligible platform tokens to distribute to — redirect to central pool to avoid losing funds
-                        await addToCentralPool(db, perTokenCredit);
+                        await addToCentralPool(tx, perTokenCredit);
                         logger.info(`[FeeCollection] No eligible platform tokens — redirected ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL per-token credit to central pool`);
                     }
                     if (centralCredit > 0) {
-                        await addToCentralPool(db, centralCredit);
+                        await addToCentralPool(tx, centralCredit);
                     }
-                    logger.info(`[FeeCollection] Attributed ${(totalRewardCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees: ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} to per-token pools, ${(centralCredit / LAMPORTS_PER_SOL).toFixed(4)} to central pool`);
+                    await accruePlatformFees(tx, platformSplit);
+                    });
+                    logger.info(`[FeeCollection] Attributed ${(totalRewardCredit / LAMPORTS_PER_SOL).toFixed(4)} SOL platform fees: ${(perTokenCredit / LAMPORTS_PER_SOL).toFixed(4)} to per-token pools, ${(centralCredit / LAMPORTS_PER_SOL).toFixed(4)} to central pool, ${((platformSplit.buybackBurn + platformSplit.upkeep) / LAMPORTS_PER_SOL).toFixed(4)} to platform`);
                 } catch (attrErr) {
                     logger.warn('[FeeCollection] Platform fee attribution failed', { error: attrErr.message });
                 }
@@ -2829,21 +3143,17 @@ async function runFeeCollection(deps) {
                 logger.debug('[FeeCollection] PAGS fee collection skipped', { error: e.message });
             }
 
-            // Distribute platform fees (5% to fee wallets)
+            // v28.0: the platform's 25% was accrued at attribution time; sweep it when the
+            // accumulated total clears the threshold. This now covers Robinhood claims too,
+            // which the old per-claim transfer never touched.
+            //
+            // Run every cycle rather than only after a claim: the sweep is self-gating on the
+            // threshold (a single cheap stats read when there is nothing to do), and that way
+            // an accrual left just under the threshold cannot sit stranded waiting for a claim
+            // large enough to push it over.
+            await processPlatformFeeSweep(deps);
+
             if (claimedAmount > 0) {
-                const MIN_SPEND = 0.01 * LAMPORTS_PER_SOL;
-                if (claimedAmount > MIN_SPEND) {
-                    const transfer9_5 = Math.floor(claimedAmount * 0.045);
-                    const transfer0_5 = Math.floor(claimedAmount * 0.005);
-
-                    const feeTx = new Transaction();
-                    solana.addPriorityFee(feeTx);
-                    feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_95, lamports: transfer9_5 }));
-                    feeTx.add(SystemProgram.transfer({ fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_05, lamports: transfer0_5 }));
-                    await solana.sendTxWithRetry(feeTx, [devKeypair]);
-                    logger.info(`[FeeCollection] Distributed ${((transfer9_5 + transfer0_5) / LAMPORTS_PER_SOL).toFixed(4)} SOL to platform (5%)`);
-                }
-
                 // v25.4: Log to frontend
                 // v25.115: Enhanced with full breakdown
                 if (logPurchase) {
@@ -2958,4 +3268,4 @@ async function start(deps) {
     setTimeout(() => evaluateKothCandidates(db).catch(e => logger.warn('[KOTH] Startup evaluation failed', { error: e.message })), 10000);
 }
 
-module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, processTokenAirdrops, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, refreshAllFeeShares, start, getAiSelectedKoth, resetKothCache };
+module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, processTokenAirdrops, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, refreshAllFeeShares, start, getAiSelectedKoth, resetKothCache, splitClaimedFees, processPlatformFeeSweep, FEE_SPLIT };

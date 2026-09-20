@@ -328,7 +328,17 @@ async function addDeployJob(data) {
     if (!deployQueue) {
         throw new Error("Deploy queue not initialized");
     }
-    return deployQueue.add('deployToken', data);
+    // v28.2: every other queue trims finished jobs; this one kept every launch's completed
+    // and failed job forever, so Redis memory grew with each token ever launched. Retention
+    // is a little higher than the scanner queues because a failed launch is worth inspecting.
+    //
+    // Deliberately NO `attempts`: a launch that fails mid-way may already have created the
+    // mint and taken the buy, so a blind BullMQ retry could launch twice. Failures surface
+    // through job-status and are handled by the worker's own refund path.
+    return deployQueue.add('deployToken', data, {
+        removeOnComplete: 50,
+        removeOnFail: 25,
+    });
 }
 
 /**

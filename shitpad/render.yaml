@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: community-chest
+    name: shitpad
     env: static
     staticPublishPath: .
     buildCommand: ""

@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Community Chest</title>
-    <meta name="description" content="Community Chest — a SOL airdrop pool powered by on-chain fee sharing">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
+    <title>ShitPad</title>
+    <meta name="description" content="Token launchpads are shit. ShitPad pays you back: 50% of every fee to token holders, 25% to the shared pool, 25% to buyback and burn.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💩</text></svg>">
 
     <style>
         :root {
@@ -18,9 +18,9 @@
             --text:         #e8e8e8;
             --text2:        #a0a0a0;
             --muted:        #555;
-            --accent:       #f59e0b;
-            --accent-glow:  rgba(245,158,11,0.12);
-            --accent-dim:   rgba(245,158,11,0.08);
+            --accent:       #c68a56;
+            --accent-glow:  rgba(198,138,86,0.12);
+            --accent-dim:   rgba(198,138,86,0.08);
             --green:        #22c55e;
             --green-dim:    rgba(34,197,94,0.1);
             --red:          #ef4444;
@@ -312,7 +312,7 @@
             color: var(--accent);
             line-height: 1;
             font-variant-numeric: tabular-nums;
-            text-shadow: 0 0 40px rgba(245,158,11,0.25);
+            text-shadow: 0 0 40px rgba(198,138,86,0.25);
         }
 
         .pool-sol-unit {
@@ -426,7 +426,7 @@
             cursor: pointer;
             transition: color 0.15s, border-color 0.15s;
         }
-        .btn-recipients:hover { color: var(--accent); border-color: rgba(245,158,11,0.4); }
+        .btn-recipients:hover { color: var(--accent); border-color: rgba(198,138,86,0.4); }
 
         .cp-threshold {
             margin-top: 18px;
@@ -463,7 +463,7 @@
         .cp-threshold-badge.building {
             color: var(--accent);
             background: var(--accent-dim);
-            border: 1px solid rgba(245,158,11,0.25);
+            border: 1px solid rgba(198,138,86,0.25);
         }
         .cp-threshold-track {
             height: 5px;
@@ -837,7 +837,7 @@
             height: 22px;
             border-radius: 50%;
             background: var(--accent-dim);
-            border: 1px solid rgba(245,158,11,0.25);
+            border: 1px solid rgba(198,138,86,0.25);
             color: var(--accent);
             font-size: 11px;
             font-weight: 800;
@@ -896,7 +896,7 @@
         }
         .btn-copy-wallet {
             background: var(--accent-dim);
-            border: 1px solid rgba(245,158,11,0.25);
+            border: 1px solid rgba(198,138,86,0.25);
             color: var(--accent);
             border-radius: var(--radius-sm);
             padding: 5px 11px;
@@ -907,7 +907,7 @@
             flex-shrink: 0;
             transition: background 0.15s;
         }
-        .btn-copy-wallet:hover { background: rgba(245,158,11,0.18); }
+        .btn-copy-wallet:hover { background: rgba(198,138,86,0.18); }
 
         .register-hint {
             font-size: 13px;
@@ -916,7 +916,7 @@
             margin-bottom: 16px;
             padding: 11px 13px;
             background: var(--accent-dim);
-            border: 1px solid rgba(245,158,11,0.15);
+            border: 1px solid rgba(198,138,86,0.15);
             border-radius: var(--radius-sm);
         }
 
@@ -981,7 +981,7 @@
 
         .msg-error   { background: var(--red-dim);   border: 1px solid rgba(239,68,68,0.25);  color: #fca5a5; }
         .msg-success { background: var(--green-dim);  border: 1px solid rgba(34,197,94,0.25);  color: #86efac; }
-        .msg-info    { background: var(--accent-dim); border: 1px solid rgba(245,158,11,0.2);  color: #fcd34d; }
+        .msg-info    { background: var(--accent-dim); border: 1px solid rgba(198,138,86,0.2);  color: #e0b283; }
 
         .preview-card {
             display: flex;
@@ -1393,7 +1393,7 @@
 
         .toggle-input:checked + .toggle-track {
             background: var(--accent-dim);
-            border-color: rgba(245,158,11,0.4);
+            border-color: rgba(198,138,86,0.4);
         }
 
         .toggle-input:checked + .toggle-track .toggle-thumb {
@@ -1488,6 +1488,16 @@
             .about-banner { flex-direction: column; align-items: flex-start; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .modal { max-height: 92vh; }
+
+            /* The header laid out at its full desktop width on phones, pushing the page
+               ~100px wider than the viewport and giving the whole site a horizontal
+               scrollbar. Tighten the gutters, let the right-hand cluster shrink, and drop
+               the "built by" byline and the connection label — the status dot still shows
+               connection state without the text. */
+            header { padding: 0 14px; gap: 8px; }
+            .built-by { display: none; }
+            .header-right { gap: 10px; min-width: 0; flex-shrink: 1; }
+            .ws-indicator span:not(.ws-dot) { display: none; }
         }
     </style>
 </head>
@@ -1497,8 +1507,8 @@
 <header>
     <div style="display:flex;align-items:center;gap:0">
         <div class="logo">
-            <span class="logo-icon">💰</span>
-            <span>Community Chest</span>
+            <span class="logo-icon">💩</span>
+            <span>ShitPad</span>
         </div>
         <a href="https://alonisthe.dev" target="_blank" rel="noopener" class="built-by">
             <span class="built-by-label">built by</span>
@@ -1540,10 +1550,10 @@
     <!-- About Banner -->
     <div class="about-banner">
         <div class="about-banner-left">
-            <div class="about-banner-icon">💰</div>
+            <div class="about-banner-icon">💩</div>
             <div class="about-banner-text">
-                <div class="about-banner-title">What is Community Chest?</div>
-                <div class="about-banner-sub">A SOL airdrop pool funded by on-chain fee sharing from registered Pump.fun tokens. Every trade earns fees — every 15 minutes, the pool drops to holders.</div>
+                <div class="about-banner-title">Token launchpads are shit.</div>
+                <div class="about-banner-sub">So we built one that at least pays you back. Half of every fee goes straight to the holders of the token that earned it. No claims, no points, no vesting — SOL in your wallet every 15 minutes.</div>
             </div>
         </div>
         <button class="btn-ghost" onclick="openAboutModal()">Learn More →</button>
@@ -1573,7 +1583,7 @@
             </div>
             <div class="pool-split-note">
                 <span class="pool-split-icon">⚖️</span>
-                <span>Each token's collected fees are split <strong>50% → Central Pool</strong> (shared across all registered tokens) and <strong>50% → that token's pool</strong> (for its holders only).</span>
+                <span>Every fee collected is split <strong>50% → that token's holders</strong>, <strong>25% → Central Pool</strong> (shared across all registered tokens) and <strong>25% → buyback &amp; burn</strong>.</span>
             </div>
             <button class="btn-recipients" onclick="openRecipients()">View Expected Recipients →</button>
             <div class="pool-divider"></div>
@@ -1684,7 +1694,7 @@
                         <div class="step-num">1</div>
                         <div class="step-body">
                             <div class="step-label">Configure fee sharing on Pump.fun</div>
-                            <div class="step-desc">On your token's Pump.fun page, go to <em>Creator Settings</em> and add the Community Chest platform wallet as a fee recipient. Set any percentage — even 1% qualifies. This is done fully on-chain.</div>
+                            <div class="step-desc">On your token's Pump.fun page, go to <em>Creator Settings</em> and add the ShitPad platform wallet as a fee recipient. Set any percentage — even 1% qualifies. This is done fully on-chain.</div>
                         </div>
                     </div>
                     <div class="step">
@@ -1705,14 +1715,14 @@
                         <div class="step-num">4</div>
                         <div class="step-body">
                             <div class="step-label">Earn SOL airdrops every 15 minutes</div>
-                            <div class="step-desc">Trading fees from your token flow into the Community Chest pool. Every 15 minutes, the pool distributes SOL to your token's holders proportional to their holdings. Tokens need ≥ $100 in 24h volume to be eligible for a given cycle.</div>
+                            <div class="step-desc">Trading fees from your token flow into ShitPad and split 50% to your holders, 25% to the central pool, 25% to buyback &amp; burn. Every 15 minutes the pools distribute SOL proportional to holdings. Tokens need ≥ $250 in 24h volume to be eligible for a given cycle.</div>
                         </div>
                     </div>
                 </div>
             </div>
 
             <div class="platform-wallet-box">
-                <span class="platform-wallet-label">Community Chest Wallet</span>
+                <span class="platform-wallet-label">ShitPad Wallet</span>
                 <span class="platform-wallet-addr" id="platform-wallet">Loading…</span>
                 <button class="btn-copy-wallet" onclick="copyWallet()">Copy</button>
             </div>
@@ -1743,7 +1753,7 @@
 
 </main>
 
-<footer>💰 Community Chest — SOL airdrop pool powered by on-chain fee sharing</footer>
+<footer>💩 ShitPad — token launchpads are shit. This one pays you back: 50% holders · 25% central pool · 25% buyback &amp; burn</footer>
 
 <div id="toast"></div>
 
@@ -1769,7 +1779,7 @@
             <label class="filter-toggle-row" id="filter-lowvol-row">
                 <div>
                     <div class="filter-toggle-label">Show Low Volume</div>
-                    <div class="filter-toggle-sub">Active tokens with less than $100 in 24h volume — ineligible for the current airdrop cycle.</div>
+                    <div class="filter-toggle-sub">Active tokens with less than $250 in 24h volume — ineligible for the current airdrop cycle.</div>
                 </div>
                 <div class="toggle-wrap">
                     <input type="checkbox" id="filter-lowvol" class="toggle-input" onchange="applyFilters()">
@@ -1785,13 +1795,14 @@
 <div class="modal-overlay" id="about-modal" onclick="handleOverlayClick(event,'about-modal')">
     <div class="modal">
         <div class="modal-header">
-            <span class="modal-title">💰 About Community Chest</span>
+            <span class="modal-title">💩 About ShitPad</span>
             <button class="modal-close" onclick="closeModal('about-modal')">✕</button>
         </div>
         <div class="modal-body">
             <div class="about-section">
-                <div class="about-section-title">What is Community Chest?</div>
-                <p>Community Chest is a <strong>SOL airdrop pool</strong> powered entirely by on-chain fee sharing. When Pump.fun token creators configure the Community Chest wallet as a fee recipient, a portion of every trade flows into a shared pool. That pool is then distributed to token holders automatically every 15 minutes — no claims, no waiting.</p>
+                <div class="about-section-title">Token launchpads are shit.</div>
+                <p>Every one of them takes a cut of your trades and gives you a leaderboard. ShitPad takes a cut too — we're not pretending otherwise — but <strong>75% of it goes back on-chain</strong>, and the rest buys and burns.</p>
+                <p style="margin-top:10px">Mechanically: when a Pump.fun creator sets the ShitPad wallet as a fee recipient, a portion of every trade flows in. Every 15 minutes it's pushed out to token holders automatically. No claims, no points, no vesting, no waiting.</p>
             </div>
 
             <div class="about-divider"></div>
@@ -1801,11 +1812,15 @@
                 <div class="about-steps">
                     <div class="about-step">
                         <div class="about-step-icon">💸</div>
-                        <div class="about-step-text"><strong>Fee collection:</strong> Every trade on a registered token generates a fee. A portion of that fee is sent directly to the Community Chest platform wallet on-chain via Pump.fun's fee-sharing mechanism.</div>
+                        <div class="about-step-text"><strong>Fee collection:</strong> Every trade on a registered token generates a fee. A portion of that fee is sent directly to the ShitPad platform wallet on-chain via Pump.fun's fee-sharing mechanism.</div>
                     </div>
                     <div class="about-step">
                         <div class="about-step-icon">⚖️</div>
-                        <div class="about-step-text"><strong>50 / 50 fee split:</strong> Each time fees are collected from a token, they are split evenly — <strong>50% goes into the Central Pool</strong> (shared across all registered tokens' holder bases) and <strong>50% goes into that token's Individual Pool</strong> (distributed exclusively to holders of that specific token). This means active traders across all tokens contribute to everyone, while your token's own trading volume directly benefits your holders.</div>
+                        <div class="about-step-text"><strong>50 / 25 / 25 fee split:</strong> Each time fees are collected from a token they are split three ways — <strong>50% into that token's Individual Pool</strong> (paid out exclusively to holders of that token), <strong>25% into the Central Pool</strong> (shared across every registered token's holder base), and <strong>25% to buyback &amp; burn</strong>. Your token's own volume directly rewards your holders, while activity anywhere on the platform tops up everyone.</div>
+                    </div>
+                    <div class="about-step">
+                        <div class="about-step-icon">🔥</div>
+                        <div class="about-step-text"><strong>Buyback &amp; burn:</strong> The platform's 25% accrues on-chain and is swept to the buyback/burn wallet in batches. It's the only cut ShitPad keeps, and it's the one that shrinks supply rather than funding a dashboard.</div>
                     </div>
                     <div class="about-step">
                         <div class="about-step-icon">🏦</div>
@@ -1817,7 +1832,7 @@
                     </div>
                     <div class="about-step">
                         <div class="about-step-icon">✅</div>
-                        <div class="about-step-text"><strong>Eligibility:</strong> A token must have ≥ $100 in 24-hour trading volume to receive a distribution in a given cycle. Tokens below this threshold still accumulate fees in both pools but skip that cycle's drop.</div>
+                        <div class="about-step-text"><strong>Eligibility:</strong> A token must have ≥ $250 in 24-hour trading volume to receive a distribution in a given cycle. Tokens below this threshold still accumulate fees in both pools but skip that cycle's drop.</div>
                     </div>
                 </div>
             </div>
@@ -1826,7 +1841,7 @@
 
             <div class="about-section">
                 <div class="about-section-title">For Token Creators</div>
-                <p>Registration is free and permissionless. Add the Community Chest wallet as a fee recipient on Pump.fun, then register your token's mint address here. The platform verifies fee sharing on-chain automatically — no manual approval. Your token's holders start receiving SOL airdrops in the next cycle.</p>
+                <p>Registration is free and permissionless. Add the ShitPad wallet as a fee recipient on Pump.fun, then register your token's mint address here. The platform verifies fee sharing on-chain automatically — no manual approval. Your token's holders start receiving SOL airdrops in the next cycle.</p>
                 <p>Fee sharing can be removed at any time on Pump.fun, which will deactivate your token's registration. You can re-register anytime by re-adding fee sharing and using <strong>Re-register</strong>.</p>
             </div>
 
@@ -1834,7 +1849,7 @@
 
             <div class="about-section">
                 <div class="about-section-title">For Token Holders</div>
-                <p>Simply hold tokens that are registered on Community Chest. SOL distributions are sent directly to your wallet based on your proportional share of the token's supply (excluding LP and burnt tokens). You can track expected airdrop amounts by clicking any token in the leaderboard.</p>
+                <p>Simply hold tokens that are registered on ShitPad. SOL distributions are sent directly to your wallet based on your proportional share of the token's supply (excluding LP and burnt tokens). You can track expected airdrop amounts by clicking any token in the leaderboard.</p>
                 <p>A minimum distribution of 0.01 SOL per wallet applies — holders below this threshold in a given cycle are skipped to avoid dust transactions.</p>
             </div>
 
@@ -2625,7 +2640,7 @@ async function loadLeaderboard(showSpinner = false) {
         if (!allTokensCache.length) {
             body.innerHTML = `
                 <div class="lb-empty">
-                    <div class="lb-empty-icon">💰</div>
+                    <div class="lb-empty-icon">💩</div>
                     <div class="lb-empty-text">No tokens registered yet — be the first!</div>
                 </div>`;
             return;

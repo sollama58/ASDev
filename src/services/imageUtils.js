@@ -199,6 +199,38 @@ function extractHeliusBatchImage(asset) {
  * @param {number} timeout - Request timeout in ms (default 5000)
  * @returns {Promise<string|null>} Image URL or null
  */
+/**
+ * v28.2 SECURITY: refuse to fetch anything that could reach the local network.
+ *
+ * metadataUri for Robinhood partner tokens comes from on-chain metadata that anyone can
+ * write when they register a token, so this function is an SSRF primitive without a guard:
+ * a URI of http://169.254.169.254/ or http://localhost:6379/ would be fetched from inside
+ * the platform's network. The response is only ever read for a `.image` field, which keeps
+ * it blind, but blind SSRF is still a foothold. Hostnames are checked literally — a DNS
+ * name resolving to a private range is not caught here, which is why the fetch also runs
+ * with a short timeout and never follows the result anywhere sensitive.
+ */
+function isSafeFetchUrl(url) {
+    let parsed;
+    try { parsed = new URL(url); } catch { return false; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) return false;
+    // IPv4 literals in private, loopback, link-local or unspecified ranges
+    const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (m) {
+        const [a, b] = [parseInt(m[1], 10), parseInt(m[2], 10)];
+        if (a === 10 || a === 127 || a === 0) return false;
+        if (a === 169 && b === 254) return false;
+        if (a === 172 && b >= 16 && b <= 31) return false;
+        if (a === 192 && b === 168) return false;
+        if (a === 100 && b >= 64 && b <= 127) return false; // CGNAT / cloud metadata
+    }
+    // IPv6 loopback, unspecified, link-local, unique-local, and IPv4-mapped forms
+    if (host === '::1' || host === '::' || host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('::ffff:')) return false;
+    return true;
+}
+
 async function fetchImageFromMetadataUri(metadataUri, timeout = 5000) {
     if (!metadataUri || typeof metadataUri !== 'string') {
         return null;
@@ -208,6 +240,9 @@ async function fetchImageFromMetadataUri(metadataUri, timeout = 5000) {
         // v25.8: Use normalizeImageUrl for the metadata URI itself
         let fetchUrl = normalizeImageUrl(metadataUri);
         if (!fetchUrl) {
+            return null;
+        }
+        if (!isSafeFetchUrl(fetchUrl)) {
             return null;
         }
 

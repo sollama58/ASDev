@@ -66,7 +66,7 @@ function init(deps) {
             if (sanitizer.hasSuspiciousPatterns(req.body.name) ||
                 sanitizer.hasSuspiciousPatterns(req.body.description)) {
                 logger.warn('[Deploy] Suspicious patterns in metadata request', {
-                    ip: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip
+                    ip: req.ip
                 });
             }
 
@@ -120,32 +120,51 @@ function init(deps) {
 
             // v25.4: Payment verification loop (runs BEFORE inserting transaction record)
             // H-2 FIX: Insert only after confirmed payment to prevent orphaned records on crash
+            //
+            // v28.2 RPC COST: wait for confirmation with getSignatureStatuses — a cheap status
+            // lookup — and fetch the full parsed transaction exactly once, after it lands.
+            // Previously every 2s poll was a getParsedTransaction, up to 15 heavyweight calls
+            // per deploy while the user's payment was still propagating.
             let validPayment = false;
-            for (let i = 0; i < 15; i++) {
+            let landed = false;
+            for (let i = 0; i < 15 && !landed; i++) {
+                try {
+                    const { value } = await connection.getSignatureStatuses([userTx]);
+                    const status = value?.[0];
+                    if (status) {
+                        // H-1 FIX: a transaction can be confirmed yet reverted on-chain
+                        if (status.err) {
+                            logger.warn('[Deploy] TX found but has on-chain error', { userTx: userTx.substring(0, 20), err: JSON.stringify(status.err) });
+                            break;
+                        }
+                        if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+                            landed = true;
+                            break;
+                        }
+                    }
+                } catch (txErr) {
+                    logger.debug('[Deploy] TX status attempt failed', { attempt: i, error: txErr.message });
+                }
+                await new Promise(r => setTimeout(r, 2000));
+            }
+
+            if (landed) {
                 try {
                     const txInfo = await connection.getParsedTransaction(userTx, {
                         commitment: "confirmed",
                         maxSupportedTransactionVersion: 0
                     });
-
-                    if (txInfo) {
-                        // H-1 FIX: Check meta.err — transaction may be confirmed but reverted on-chain
-                        if (txInfo.meta?.err) {
-                            logger.warn('[Deploy] TX found but has on-chain error', { userTx: userTx.substring(0, 20), err: JSON.stringify(txInfo.meta.err) });
-                            break;
-                        }
+                    if (txInfo && !txInfo.meta?.err) {
                         validPayment = txInfo.transaction.message.instructions.some(ix => {
                             if (ix.programId.toString() !== '11111111111111111111111111111111') return false;
                             if (!ix.parsed || ix.parsed.type !== 'transfer') return false;
                             return ix.parsed.info.destination === devKeypair.publicKey.toString() &&
                                    ix.parsed.info.lamports >= config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL;
                         });
-                        if (validPayment) break;
                     }
                 } catch (txErr) {
-                    logger.debug('[Deploy] TX fetch attempt failed', { attempt: i, error: txErr.message });
+                    logger.debug('[Deploy] TX parse failed', { error: txErr.message });
                 }
-                await new Promise(r => setTimeout(r, 2000));
             }
 
             if (!validPayment) {
@@ -164,9 +183,6 @@ function init(deps) {
                 throw dbErr;
             }
 
-            // Record the fee
-            await addFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL);
-
             // v25.15: Normalize image URL before passing to worker
             // This handles imgur.com/xxx -> i.imgur.com/xxx.png conversion
             const rawImageUrl = sanitized.imageUrl || sanitized.image;
@@ -180,17 +196,36 @@ function init(deps) {
             });
 
             // Add job with sanitized data
-            const job = await redis.addDeployJob({
-                name: sanitized.name,
-                ticker: sanitized.ticker,
-                description: sanitized.description,
-                twitter: sanitized.twitter,
-                website: sanitized.website,
-                image: imageToSend, // Pass the direct URL
-                userPubkey,
-                isMayhemMode,
-                metadataUri
-            });
+            //
+            // v28.2 MONEY: if enqueueing fails (Redis blip, queue not initialised), the user
+            // has already paid and their signature has already been recorded as used — so
+            // without this they would lose the fee AND be unable to resubmit. Nothing has
+            // been launched at this point, so releasing the signature is safe: they simply
+            // retry with the same payment. The fee is recorded only once the job is queued,
+            // so a failed enqueue leaves no phantom revenue in the stats either.
+            let job;
+            try {
+                job = await redis.addDeployJob({
+                    name: sanitized.name,
+                    ticker: sanitized.ticker,
+                    description: sanitized.description,
+                    twitter: sanitized.twitter,
+                    website: sanitized.website,
+                    image: imageToSend, // Pass the direct URL
+                    userPubkey,
+                    isMayhemMode,
+                    metadataUri
+                });
+            } catch (queueErr) {
+                await db.run('DELETE FROM transactions WHERE signature = $1', [userTx]).catch(() => {});
+                logger.error('[Deploy] Could not queue launch after verified payment — signature released for retry', {
+                    userPubkey, userTx: userTx.substring(0, 20), error: queueErr.message
+                });
+                return res.status(503).json({ error: "Launch queue unavailable. Your payment was verified — please retry with the same transaction." });
+            }
+
+            // Record the fee
+            await addFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL);
 
             logger.info('[Deploy] Job queued', { jobId: job.id, userPubkey, name: sanitized.name, hasImage: !!imageToSend });
             res.json({ success: true, jobId: job.id, message: "Queued" });

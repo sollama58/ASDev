@@ -32,6 +32,21 @@ function safeBigInt(value, fallback = '0') {
             return BigInt(fallback);
         }
 
+        // v25.24: exponential notation ("1e21", "1.5E+9") reaches here from JSON payloads and
+        // from any value that passed through a JS Number on the way in. BigInt() rejects it,
+        // and splitting on '.' turns "1e21" into "1e21" which also throws -- so a perfectly
+        // real balance silently became 0n via the catch below. Expand it first.
+        if (/e/i.test(str)) {
+            const asNumber = Number(str);
+            if (Number.isFinite(asNumber)) {
+                // BigInt() accepts an integer-valued Number directly, which sidesteps string
+                // formatting entirely -- toFixed(0) would re-emit exponential notation at 1e21
+                // and above, putting us right back where we started.
+                return BigInt(Math.trunc(asNumber));
+            }
+            return BigInt(fallback);
+        }
+
         // Remove any decimal points (BigInt doesn't support decimals)
         const intPart = str.split('.')[0];
         return BigInt(intPart);

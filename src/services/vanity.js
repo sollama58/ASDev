@@ -1,11 +1,133 @@
 /**
- * Vanity Grinder Service — DISABLED
- * Grinder has been decommissioned; all mint keypairs are now random.
+ * Vanity Mint Service (consumer side)
+ * v28.1 - Hands pre-ground mint keypairs to the launch path.
+ *
+ * This is the half that runs inside the API/worker processes. It never grinds -- it only
+ * claims from the pool that the dedicated grinder service fills. Every failure mode here
+ * falls back to a random mint, because a launch must never be blocked by the pool being
+ * empty, the grinder being down, or an encryption key being wrong.
  */
 const { Keypair } = require('@solana/web3.js');
+const logger = require('./logger');
+const vanitySecret = require('./vanitySecret');
 
-async function getMintKeypair() {
-    return Keypair.generate();
+/**
+ * Claim one address from the pool.
+ *
+ * The claim is a single atomic statement. `FOR UPDATE SKIP LOCKED` is what makes concurrent
+ * launches safe: two simultaneous deploys each lock a different row instead of both reading
+ * the same one, and neither blocks waiting on the other.
+ *
+ * @returns {Promise<{keypair: Keypair, address: string, suffix: string}|null>}
+ */
+async function claimMintKeypair(db) {
+    if (!db) return null;
+    if (!vanitySecret.isConfigured()) return null;
+
+    let row;
+    try {
+        row = await db.get(
+            `UPDATE vanity_mints
+                SET status = 'claimed', claimed_at = $1
+              WHERE id = (
+                    SELECT id FROM vanity_mints
+                     WHERE status = 'available'
+                     ORDER BY id
+                     LIMIT 1
+                     FOR UPDATE SKIP LOCKED
+              )
+          RETURNING id, mint_address, encrypted_seed, suffix`,
+            [Date.now()]
+        );
+    } catch (e) {
+        logger.warn('[Vanity] Pool claim query failed, falling back to a random mint', { error: e.message });
+        return null;
+    }
+
+    if (!row) return null; // pool empty — expected, not an error
+
+    const seed = vanitySecret.decryptSeed(row.encrypted_seed);
+    if (!seed || seed.length !== 32) {
+        // Unreadable row: quarantine it so the next launch does not trip over it again.
+        logger.error('[Vanity] Claimed row could not be decrypted, marking it failed', { address: row.mint_address });
+        await db.run("UPDATE vanity_mints SET status = 'failed' WHERE id = $1", [row.id]).catch(() => {});
+        return null;
+    }
+
+    let keypair;
+    try {
+        keypair = Keypair.fromSeed(Uint8Array.from(seed));
+    } catch (e) {
+        logger.error('[Vanity] Claimed seed is not a valid keypair, marking it failed', { address: row.mint_address, error: e.message });
+        await db.run("UPDATE vanity_mints SET status = 'failed' WHERE id = $1", [row.id]).catch(() => {});
+        return null;
+    }
+
+    // Guard against a row whose stored address disagrees with its seed.
+    if (keypair.publicKey.toBase58() !== row.mint_address) {
+        logger.error('[Vanity] Stored address does not match its seed, marking it failed', { address: row.mint_address });
+        await db.run("UPDATE vanity_mints SET status = 'failed' WHERE id = $1", [row.id]).catch(() => {});
+        return null;
+    }
+
+    return { keypair, address: row.mint_address, suffix: row.suffix, id: row.id };
 }
 
-module.exports = { getMintKeypair };
+/**
+ * Get a mint keypair for a launch: a pooled vanity address when one is available, otherwise
+ * a plain random one.
+ *
+ * @param {object} [db] - database handle; omit to force the random path
+ * @returns {Promise<{keypair: Keypair, isVanity: boolean, id: number|null}>}
+ */
+async function getMintKeypair(db) {
+    try {
+        const claimed = await claimMintKeypair(db);
+        if (claimed) {
+            logger.info(`[Vanity] Using pooled mint ${claimed.address} (…${claimed.suffix})`);
+            return { keypair: claimed.keypair, isVanity: true, id: claimed.id };
+        }
+    } catch (e) {
+        // Defensive: claimMintKeypair handles its own errors, but a launch must never fail
+        // because of this service.
+        logger.warn('[Vanity] Unexpected error claiming a pooled mint', { error: e.message });
+    }
+
+    logger.info('[Vanity] No pooled mint available — using a random mint');
+    return { keypair: Keypair.generate(), isVanity: false, id: null };
+}
+
+/** Mark a claimed address as spent, once its create transaction has been broadcast. */
+async function markUsed(db, id) {
+    if (!db || !id) return;
+    await db.run("UPDATE vanity_mints SET status = 'used', used_at = $1 WHERE id = $2", [Date.now(), id])
+        .catch(e => logger.warn('[Vanity] Could not mark mint used', { id, error: e.message }));
+}
+
+/**
+ * Return a claimed address to the pool.
+ *
+ * Only safe to call when the launch failed *before* the create transaction was broadcast.
+ * After broadcast the mint may exist on-chain, and re-handing it to another launch would
+ * produce a create that can never succeed.
+ */
+async function release(db, id) {
+    if (!db || !id) return;
+    await db.run("UPDATE vanity_mints SET status = 'available', claimed_at = NULL WHERE id = $1 AND status = 'claimed'", [id])
+        .catch(e => logger.warn('[Vanity] Could not release mint back to the pool', { id, error: e.message }));
+}
+
+/** Pool depth by status, for health and admin views. */
+async function getPoolStats(db) {
+    if (!db) return null;
+    try {
+        const rows = await db.all('SELECT status, COUNT(*) AS c FROM vanity_mints GROUP BY status');
+        const out = { available: 0, claimed: 0, used: 0, failed: 0 };
+        for (const r of rows) out[r.status] = parseInt(r.c, 10) || 0;
+        return out;
+    } catch (e) {
+        return null;
+    }
+}
+
+module.exports = { getMintKeypair, claimMintKeypair, markUsed, release, getPoolStats };
