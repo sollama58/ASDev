@@ -556,6 +556,30 @@ async function createSchema() {
         logger.debug('[DB] Could not check for stranded airdrop reservations', { error: e.message });
     }
 
+    // v28.1: Pre-ground vanity mint keypairs whose addresses end in the configured suffix.
+    //
+    // The seed is stored encrypted: until the token is actually created, whoever holds this
+    // seed can create the mint themselves, so a database leak would let someone front-run a
+    // launch. After creation the keypair is spent and the row is only of historical interest.
+    //
+    // status: 'available' -> 'claimed' (handed to an in-flight launch) -> 'used' (minted).
+    // A launch that fails before broadcasting releases its row back to 'available'.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS vanity_mints (
+            id SERIAL PRIMARY KEY,
+            mint_address TEXT UNIQUE NOT NULL,
+            encrypted_seed TEXT NOT NULL,
+            suffix TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'available',
+            created_at BIGINT,
+            claimed_at BIGINT,
+            used_at BIGINT
+        )
+    `);
+    // Partial index: claims only ever scan the available rows, and this keeps that lookup
+    // O(1)-ish as used rows accumulate.
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_vanity_mints_available ON vanity_mints(id) WHERE status = 'available'`);
+
     // Indexes for per-token pool queries
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_pending_airdrop ON tokens(pending_airdrop_lamports DESC) WHERE pending_airdrop_lamports > 0`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_pending_airdrop ON robinhood_tokens(pending_airdrop_lamports DESC) WHERE pending_airdrop_lamports > 0`);

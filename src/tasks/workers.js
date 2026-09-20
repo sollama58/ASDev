@@ -30,9 +30,25 @@ function initDeployWorker(deps) {
      */
     async function launchTokenOnChain({ tokenName, tokenTicker, tokenMetadataUri, useMayhemMode, isDud = false }) {
         const { Keypair } = require('@solana/web3.js');
-        const mintKeypair = Keypair.generate();
+
+        // v28.1: real launches draw a pre-ground vanity mint from the pool; anti-bundling
+        // duds are throwaway tokens and must never burn one. getMintKeypair falls back to a
+        // random mint whenever the pool is empty or unavailable, so this cannot block a
+        // launch -- vanityId is null on that path and the release/markUsed calls below no-op.
+        const vanity = require('../services/vanity');
+        const { keypair: mintKeypair, isVanity, id: vanityId } = isDud
+            ? { keypair: Keypair.generate(), isVanity: false, id: null }
+            : await vanity.getMintKeypair(db);
+
         const mint = mintKeypair.publicKey;
         const creator = devKeypair.publicKey;
+
+        // Tracks whether we reached the point of no return (see the send block below).
+        // The try wrapping the rest of this function exists solely so a claimed vanity address
+        // can be returned to the pool on failure; its body is left at the original indentation
+        // to keep this diff reviewable rather than reflowing ~120 unrelated lines.
+        let broadcastAttempted = false;
+        try {
 
         const { global, bondingCurve, bondingCurveV2, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = pump.getPumpPDAs(mint);
         const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PROGRAMS.PUMP);
@@ -108,7 +124,15 @@ function initDeployWorker(deps) {
         tx.add(createIx).add(createATAIx).add(buyIx);
         tx.feePayer = creator;
 
+        // v28.1: the point of no return for a claimed vanity address. Once we have entered
+        // sendTxWithRetry the mint may exist on-chain, so the address can never be handed to
+        // another launch -- a second create against the same mint could never succeed.
+        // Anything that threw *before* this line left the mint untouched, and the catch at
+        // the end of this function puts the address back in the pool.
+        broadcastAttempted = true;
         const sig = await solana.sendTxWithRetry(tx, [devKeypair, mintKeypair]);
+        if (vanityId) await vanity.markUsed(db, vanityId);
+        if (isVanity) logger.info(`Launched ${tokenTicker} on vanity mint ${mint.toString()}`);
 
         // Fire-and-forget sell to recoup SOL
         setTimeout(async () => {
@@ -146,6 +170,17 @@ function initDeployWorker(deps) {
         }, 1500);
 
         return { mint, mintKeypair, sig };
+
+        } catch (launchErr) {
+            // A failure before broadcast means this mint was never created, so the ground
+            // address is still good — return it to the pool rather than wasting it. After a
+            // broadcast attempt it is retired instead, because the mint may now exist.
+            if (vanityId) {
+                if (broadcastAttempted) await vanity.markUsed(db, vanityId);
+                else await vanity.release(db, vanityId);
+            }
+            throw launchErr;
+        }
     }
 
     /**

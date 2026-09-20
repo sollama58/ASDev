@@ -339,6 +339,15 @@ function init(deps) {
                     centralPoolLamports = parseInt(cpRow?.value || 0);
                 } catch (e) { /* ignore */ }
 
+                // v28.1: vanity mint pool depth. The grinder runs as a separate service with
+                // no channel back to the API, so this is how an operator sees whether it is
+                // keeping up. `available` falling to zero is not an outage — launches just
+                // fall back to random mints — but it means the grinder needs attention.
+                let vanityPool = null;
+                try {
+                    vanityPool = await require('../services/vanity').getPoolStats(db);
+                } catch (e) { /* ignore — table may not exist until migration runs */ }
+
                 return {
                     stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped, totalSolAirdropped,
                     robinhoodTokenCount: robinhoodTokenCount?.count || 0,
@@ -346,7 +355,8 @@ function init(deps) {
                     robinhoodPendingFees,
                     robinhoodPendingDetails,
                     totalPendingAirdropLamports,
-                    centralPoolLamports
+                    centralPoolLamports,
+                    vanityPool
                 };
             });
 
@@ -400,6 +410,15 @@ function init(deps) {
                 centralPoolThresholdSol: 5.0,
                 tokenPoolThresholdSol: parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0,
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
+                // v28.1: vanity mint pool. `available` is how many branded contract addresses
+                // are ready; at zero, launches fall back to random mints rather than failing.
+                vanityPool: cachedHealth.vanityPool
+                    ? {
+                        ...cachedHealth.vanityPool,
+                        target: config.VANITY_POOL_TARGET,
+                        suffix: config.VANITY_SUFFIX
+                    }
+                    : null,
                 // M-8 FIX: Expose deployment fee so frontend stays in sync with backend config
                 deploymentFee: config.DEPLOYMENT_FEE_SOL,
                 // Pass dynamic conservation status to frontend

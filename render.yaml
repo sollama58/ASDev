@@ -1,0 +1,64 @@
+# Render Blueprint — ShitPad vanity mint grinder
+#
+# This blueprint defines ONLY the grinder service. The API and worker services are managed
+# separately (and the ShitPad static site has its own blueprint at shitpad/render.yaml), so
+# applying this one does not touch them.
+#
+# The grinder is deliberately its own service: grinding is sustained CPU work, and sharing an
+# instance with the API would mean request latency competing with a hot loop. Here it can own
+# its instance, and be scaled, restarted or switched off on its own.
+#
+# It needs no RPC endpoint, no Redis and no wallet key — only the database (where the pool
+# lives) and VANITY_ENCRYPTION_KEY.
+#
+# IMPORTANT: VANITY_ENCRYPTION_KEY must be set to the SAME value on the API service. The
+# grinder encrypts each mint seed with it and the API decrypts on claim; if they differ, the
+# API cannot read the pool and every launch silently falls back to a random mint.
+
+services:
+  - type: worker
+    name: shitpad-grinder
+    env: node
+    plan: starter
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/grinder.js
+    autoDeploy: false
+    envVars:
+      - key: SERVER_MODE
+        value: grinder
+      - key: VANITY_GRINDER_ENABLED
+        value: "true"
+      - key: NODE_ENV
+        value: production
+
+      # Same connection string as the API service.
+      - key: DATABASE_URL
+        sync: false
+
+      # Must match the API service exactly. Generate once, set in both places.
+      - key: VANITY_ENCRYPTION_KEY
+        sync: false
+
+      # Pool behaviour. Grinding stops at TARGET and restarts at LOW_WATER; the gap keeps the
+      # workers from flapping every time a single launch consumes an address.
+      - key: VANITY_POOL_TARGET
+        value: "50"
+      - key: VANITY_POOL_LOW_WATER
+        value: "40"
+
+      # Suffix matching. Case-insensitive accepts all 8 capitalisations of "shit" that base58
+      # can represent (there is no uppercase I or lowercase l in the alphabet), which is ~8x
+      # less work per address than exact lowercase.
+      - key: VANITY_SUFFIX
+        value: shit
+      - key: VANITY_CASE_INSENSITIVE
+        value: "true"
+
+      # Defaults to every core on the instance. Set a lower number to leave headroom.
+      # - key: VANITY_GRINDER_THREADS
+      #   value: "2"
+      #
+      # Fraction of wall-clock spent grinding (1 = flat out). Only worth lowering if this
+      # service ever shares an instance with something latency-sensitive.
+      # - key: VANITY_DUTY_CYCLE
+      #   value: "1"
