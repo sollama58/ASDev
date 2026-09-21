@@ -140,9 +140,6 @@ const config = {
     DB_SSL_CA_PATH: process.env.DB_SSL_CA_PATH || null,
     DB_SSL_CA: process.env.DB_SSL_CA || null, // CA certificate as env var
 
-    // Clarifai (Content Safety) - DEPRECATED in v25.0, replaced by Cloudflare Images
-    CLARIFAI_API_KEY: process.env.CLARIFAI_API_KEY,
-
     // Twitter OAuth 1.0a (for bot posting)
     TWITTER_ACCESS_TOKEN: process.env.TWITTER_ACCESS_TOKEN,
     TWITTER_ACCESS_SECRET: process.env.TWITTER_ACCESS_SECRET,

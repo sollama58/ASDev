@@ -17,7 +17,6 @@ const pinata = require('./pinata');
 const redis = require('./redis');
 const pump = require('./pump');
 const twitter = require('./twitter');
-const moderation = require('./moderation');
 const jupiter = require('./jupiter');
 const mutex = require('./mutex');
 const mintExtractor = require('./mintExtractor');
@@ -43,7 +42,6 @@ module.exports = {
     redis,
     pump,
     twitter,
-    moderation,
     jupiter,
     mutex,
     mintExtractor,

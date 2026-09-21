@@ -143,40 +143,8 @@ async function init(deps) {
     return true;
 }
 
-/**
- * Parse fee sharing config account data
- * Same format as robinhoodScanner.js
- */
-function parseFeeSharingConfig(data, accountPubkey = null) {
-    try {
-        if (!data || data.length < 44) return null;
-
-        const creator = new PublicKey(data.slice(8, 40));
-        const shareholderCount = data.readUInt32LE(40);
-
-        if (shareholderCount > 10 || shareholderCount < 1) return null;
-
-        const expectedMinSize = 44 + (shareholderCount * 34);
-        if (data.length < expectedMinSize) return null;
-
-        const shareholders = [];
-        let offset = 44;
-
-        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-            const shareBps = data.readUInt16LE(offset + 32);
-
-            if (shareBps > 10000) return null;
-
-            shareholders.push({ pubkey, shareBps });
-            offset += 34;
-        }
-
-        return { creator, shareholders, configPubkey: accountPubkey };
-    } catch (e) {
-        return null;
-    }
-}
+// v28.6: the fee_sharing_config parser lives in services/pump.js — one parser, one answer.
+const parseFeeSharingConfig = pump.parseFeeSharingConfig;
 
 /**
  * Get fee sharing config with caching

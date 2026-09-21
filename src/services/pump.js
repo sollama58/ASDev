@@ -11,6 +11,50 @@ const logger = require('./logger');
 /**
  * Get Associated Token Address
  */
+/**
+ * Parse a pump.fun fee_sharing_config account.
+ *
+ * v28.6: the single parser. Three copies of this lived in mintExtractor, robinhoodScanner
+ * and pagsFeeScanner, and all three had drifted: one rejected 0-bps entries, one skipped the
+ * "did we read every shareholder" check, one returned a `format` field nothing consumed.
+ * This account decides what share of a token's fees is ours, so three parsers meant three
+ * possible answers for the same bytes. This is the strictest of the three — 0-bps entries
+ * and short reads are both rejected, since either means the account is not what we expect.
+ *
+ * Layout: 8 discriminator | 32 creator | 4 shareholder_count (u32 LE) | N × (32 pubkey | 2 bps LE)
+ * The config does NOT store the mint; when fee sharing is on, the bonding curve / AMM
+ * coin_creator field points at this PDA.
+ *
+ * @param {Buffer} data
+ * @param {PublicKey} [accountPubkey]
+ * @returns {{creator: PublicKey, mint: null, shareholders: {pubkey: PublicKey, shareBps: number}[], configPubkey: PublicKey|null}|null}
+ */
+function parseFeeSharingConfig(data, accountPubkey = null) {
+    try {
+        if (!data || data.length < 44) return null;
+
+        const creator = new PublicKey(data.slice(8, 40));
+        const shareholderCount = data.readUInt32LE(40);
+        if (shareholderCount > 10 || shareholderCount < 1) return null;
+        if (data.length < 44 + shareholderCount * 34) return null;
+
+        const shareholders = [];
+        let offset = 44;
+        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
+            const pubkey = new PublicKey(data.slice(offset, offset + 32));
+            const shareBps = data.readUInt16LE(offset + 32);
+            if (shareBps === 0 || shareBps > 10000) return null;
+            shareholders.push({ pubkey, shareBps });
+            offset += 34;
+        }
+        if (shareholders.length !== shareholderCount) return null;
+
+        return { creator, mint: null, shareholders, configPubkey: accountPubkey };
+    } catch (e) {
+        return null;
+    }
+}
+
 function getATA(mint, owner, tokenProgramId = PROGRAMS.TOKEN_2022) {
     return PublicKey.findProgramAddressSync(
         [owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()],
@@ -291,6 +335,7 @@ function getShareholderFeeVaults(originalCreator) {
 }
 
 module.exports = {
+    parseFeeSharingConfig,
     getATA,
     getPumpPDAs,
     getPumpAmmPDAs,

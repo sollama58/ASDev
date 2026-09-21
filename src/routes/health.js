@@ -144,25 +144,7 @@ async function recordAdminLoginAttempt(ip, success) {
 
 // Admin auth middleware for sensitive endpoints
 // SECURITY FIX: Always require admin key in all environments
-const adminAuth = (req, res, next) => {
-    const apiKey = req.headers['x-admin-key'];
-    const expectedKey = process.env.ADMIN_API_KEY;
-
-    // SECURITY: Always require admin key - no environment exceptions
-    if (!expectedKey) {
-        logger.warn('Admin endpoint accessed but ADMIN_API_KEY not configured');
-        return res.status(403).json({ error: 'Admin endpoints not configured' });
-    }
-
-    // Use timing-safe comparison to prevent timing attacks
-    const crypto = require('crypto');
-    if (!apiKey || apiKey.length !== expectedKey.length ||
-        !crypto.timingSafeEqual(Buffer.from(apiKey), Buffer.from(expectedKey))) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    next();
-};
+const adminAuth = require('./adminAuth'); // v28.6: shared middleware
 
 /**
  * Initialize routes with dependencies

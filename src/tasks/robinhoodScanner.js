@@ -53,69 +53,8 @@ setInterval(() => {
     }
 }, 60 * 60 * 1000); // Run hourly
 
-/**
- * Parse fee sharing config account data
- *
- * The ACTUAL Pump.fun fee_sharing_config structure is:
- * - 8 bytes: discriminator (anchor account discriminator)
- * - 32 bytes: creator (the original token creator's pubkey)
- * - 4 bytes: shareholder_count (u32, little-endian)
- * - N * 34 bytes: shareholders (32 byte pubkey + 2 byte bps each)
- *
- * Total sizes: 44 base + 34 per shareholder
- * - 1 shareholder: 78 bytes
- * - 2 shareholders: 112 bytes
- * - 3 shareholders: 146 bytes
- * - 4 shareholders: 180 bytes
- * - 5 shareholders: 214 bytes
- *
- * NOTE: The fee_sharing_config does NOT store the mint.
- * When fee sharing is enabled, the coin_creator field in BC/AMM
- * IS set to the fee_sharing_config PDA itself.
- *
- * @param {Buffer} data - Raw account data
- * @param {PublicKey} [accountPubkey] - Optional: The account's public key
- * @returns {Object|null} Parsed config or null if invalid
- */
-function parseFeeSharingConfig(data, accountPubkey = null) {
-    try {
-        if (data.length < 44) return null; // Minimum: 8 (discriminator) + 32 (creator) + 4 (count)
-
-        const creator = new PublicKey(data.slice(8, 40));
-
-        // Number of shareholders (4 bytes, little-endian) at offset 40
-        const shareholderCount = data.readUInt32LE(40);
-
-        // Sanity check - shouldn't have more than 10 shareholders, and must have at least 1
-        if (shareholderCount > 10 || shareholderCount < 1) return null;
-
-        // Expected size: 44 base + 34 per shareholder
-        const expectedMinSize = 44 + (shareholderCount * 34);
-        if (data.length < expectedMinSize) return null;
-
-        const shareholders = [];
-        let offset = 44;
-
-        for (let i = 0; i < shareholderCount && offset + 34 <= data.length; i++) {
-            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-            const shareBps = data.readUInt16LE(offset + 32);
-
-            // M-8 FIX: Reject 0 BPS — a 0-share entry is invalid and should not be registered.
-            // Also reject > 10000 BPS as before.
-            if (shareBps === 0 || shareBps > 10000) return null;
-
-            shareholders.push({ pubkey, shareBps });
-            offset += 34;
-        }
-
-        // Verify we got all expected shareholders
-        if (shareholders.length !== shareholderCount) return null;
-
-        return { creator, mint: null, shareholders, configPubkey: accountPubkey };
-    } catch (e) {
-        return null;
-    }
-}
+// v28.6: the fee_sharing_config parser lives in services/pump.js — one parser, one answer.
+const parseFeeSharingConfig = pump.parseFeeSharingConfig;
 
 /**
  * Check if our wallet is a shareholder in a fee sharing config
@@ -195,41 +134,6 @@ async function fetchDexScreenerMetadata(mint) {
     return null;
 }
 
-/**
- * Fetch token metadata from GeckoTerminal API
- * Free API with 30 requests/minute rate limit
- * Good for images when DexScreener doesn't have them
- */
-async function fetchGeckoTerminalMetadata(mint) {
-    try {
-        // GeckoTerminal uses "solana" as the network identifier
-        const response = await axios.get(
-            `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}`,
-            {
-                timeout: 5000,
-                headers: {
-                    'Accept': 'application/json'
-                }
-            }
-        );
-
-        const tokenData = response.data?.data?.attributes;
-        if (tokenData) {
-            return {
-                name: tokenData.name || null,
-                ticker: tokenData.symbol || null,
-                image: tokenData.image_url || null,
-                marketCap: parseFloat(tokenData.fdv_usd) || 0,
-                volume24h: parseFloat(tokenData.volume_usd?.h24) || 0,
-                priceUsd: parseFloat(tokenData.price_usd) || 0
-            };
-        }
-    } catch (e) {
-        // Silent fail - GeckoTerminal may not have all tokens
-        logger.debug(`[GeckoTerminal] Failed to fetch ${mint?.slice(0, 8)}...`, { error: e.message });
-    }
-    return null;
-}
 
 /**
  * Fetch token info (including image) from GeckoTerminal's /info endpoint
@@ -1189,7 +1093,6 @@ module.exports = {
     findOurShare,
     fetchHeliusMetadata,
     fetchDexScreenerMetadata,
-    fetchGeckoTerminalMetadata,
     fetchGeckoTerminalTokenInfo,
     fetchPumpFunMetadata,
     scanSingleTokenHolders, // v25.65: Immediate scan for new tokens

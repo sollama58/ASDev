@@ -37,17 +37,7 @@ const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
 const PUMP_FUN_TOTAL_SUPPLY = BigInt('1000000000000000'); // 1B tokens * 10^6 decimals
 
 // Admin auth middleware for sensitive endpoints
-const adminAuth = (req, res, next) => {
-    const apiKey = req.headers['x-admin-key'];
-    const expectedKey = process.env.ADMIN_API_KEY;
-    if (!expectedKey) return res.status(403).json({ error: 'Admin endpoints not configured' });
-    const crypto = require('crypto');
-    if (!apiKey || apiKey.length !== expectedKey.length ||
-        !crypto.timingSafeEqual(Buffer.from(apiKey), Buffer.from(expectedKey))) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-    next();
-};
+const adminAuth = require('./adminAuth'); // v28.6: shared middleware
 
 // v24.0 SECURITY: Rate limiter for token registration (expensive on-chain operations)
 const tokenRegistrationLimiter = rateLimit({
