@@ -11,19 +11,23 @@
  *    ~10,500 keys/sec/core. The pure-JS tweetnacl equivalent manages ~61/sec -- 172x slower.
  *
  * 2. The suffix test never base58-encodes anything. In base58 the trailing characters are the
- *    least-significant digits, so the last four characters are determined entirely by
- *    (pubkey as a big-endian integer) mod 58^4. That reduces the check to a 32-step integer
- *    loop and a comparison against a precomputed set. 58^4 = 11,316,496 fits comfortably
- *    inside a float64's exact-integer range, so plain JS numbers are safe here.
+ *    least-significant digits, so the last N characters are determined entirely by
+ *    (pubkey as a big-endian integer) mod 58^N. That reduces the check to a 32-step integer
+ *    loop and a comparison against a precomputed set.
  *    (Leading zero bytes affect only the '1' characters at the *start* of the encoding, so
  *    they cannot disturb the suffix.)
+ *
+ *    N is the configured suffix's own length. The modulus must stay inside float64's
+ *    exact-integer range or the arithmetic below silently stops being exact: 58^8 is
+ *    ~1.28e14 and safe, 58^9 is ~1.07e16 and is not, so suffixes longer than 8 characters
+ *    are rejected outright rather than matched incorrectly. (A 9-character suffix would
+ *    need ~1e16 attempts anyway, so nothing practical is lost.)
  */
 const crypto = require('crypto');
 const { parentPort, workerData } = require('worker_threads');
 
 const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-const SUFFIX_LEN = 4;
-const MODULUS = 58 ** SUFFIX_LEN;
+const MAX_SUFFIX_LEN = 8; // 58^8 is the largest power of 58 below Number.MAX_SAFE_INTEGER
 
 /**
  * Every case variant of `word` that base58 can actually represent, as integer residues.
@@ -58,6 +62,18 @@ function buildTargets(word, caseInsensitive) {
 }
 
 const { suffix, caseInsensitive, reportEvery, dutyCycle } = workerData;
+
+if (!suffix || suffix.length === 0) {
+    throw new Error('VANITY_SUFFIX is empty — nothing to grind for');
+}
+if (suffix.length > MAX_SUFFIX_LEN) {
+    throw new Error(`suffix "${suffix}" is ${suffix.length} characters; the residue test is only exact up to ${MAX_SUFFIX_LEN}`);
+}
+
+// Derived from the configured suffix, not hardcoded: a mismatch between the modulus here and
+// the width buildTargets() encodes would mean every residue comparison fails and the grinder
+// would burn CPU forever without ever reporting a hit.
+const MODULUS = 58 ** suffix.length;
 const TARGETS = buildTargets(suffix, caseInsensitive);
 
 /** Raw 32-byte ed25519 keypair via OpenSSL. DER wraps both; the raw bytes are the last 32. */

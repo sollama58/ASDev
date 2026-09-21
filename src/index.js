@@ -261,9 +261,17 @@ async function main() {
     app.use('/api/', apiLimiter);
     app.use('/api/deploy', deployLimiter);
 
-    // Serve frontend
+    // Serve the ShitPad frontend.
+    //
+    // The static site is normally deployed on its own (see shitpad/render.yaml), so this
+    // route exists for single-service deployments and as a sane landing page on the API
+    // host itself. The `/` handler sends the page; `/admin` sends the admin console.
+    const SHITPAD_DIR = path.join(__dirname, '..', 'shitpad');
     app.get('/', (req, res) => {
-        res.sendFile(path.join(__dirname, '..', 'asdev_frontend.html'));
+        res.sendFile(path.join(SHITPAD_DIR, 'index.html'));
+    });
+    app.get('/admin', (req, res) => {
+        res.sendFile(path.join(SHITPAD_DIR, 'admin', 'index.html'));
     });
 
 

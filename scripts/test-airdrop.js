@@ -239,10 +239,8 @@ async function main() {
 
     // Get platform token count
     const platformTokens = await db.all('SELECT COUNT(*) as count FROM tokens WHERE volume24h >= 100');
-    const robinhoodTokens = await db.all('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
 
     console.log(`  Platform tokens (>$100 vol): ${platformTokens[0]?.count || 0}`);
-    console.log(`  Robinhood tokens (active): ${robinhoodTokens[0]?.count || 0}`);
 
     // Execute mode
     if (EXECUTE_MODE) {

@@ -14,7 +14,6 @@
  * - Deduplicates transactions across vaults
  * - Batched mint validation for efficiency
  *
- * Also scans for fee-sharing partnerships (Robinhood tokens) via memcmp filters.
  *
  * Requires HELIUS_API_KEY environment variable.
  *
@@ -110,93 +109,6 @@ async function fetchDexScreenerMetadata(mint) {
     return null;
 }
 
-
-/**
- * Scan for fee-sharing configs (Robinhood tokens)
- * Uses efficient getProgramAccounts with memcmp filters
- * Total RPC calls: ~10 (2 positions x 5 sizes)
- */
-async function scanForRobinhoodTokens(connection, devKeypair) {
-    console.log('\n📡 Scanning for fee-sharing partnerships (Robinhood tokens)...');
-    console.log('   Using efficient memcmp filters (minimal RPC calls)');
-
-    const foundTokens = [];
-    const seenMints = new Set(); // Dedupe across positions
-    const sizes = [110, 144, 178, 212, 246]; // Different shareholder counts (1-5 shareholders)
-
-    // Build all queries upfront for parallel execution
-    const queries = [];
-    for (const dataSize of sizes) {
-        // Check first shareholder position (offset 76)
-        queries.push({ dataSize, offset: 76 });
-        // Check second shareholder position (offset 110)
-        queries.push({ dataSize, offset: 110 });
-    }
-
-    console.log(`   Running ${queries.length} filtered queries...`);
-
-    // Execute queries with controlled concurrency
-    for (const { dataSize, offset } of queries) {
-        try {
-            const accounts = await connection.getProgramAccounts(PROGRAMS.PUMP, {
-                filters: [
-                    { dataSize },
-                    { memcmp: { offset, bytes: devKeypair.publicKey.toBase58() } }
-                ]
-            }).catch(() => []);
-
-            for (const account of accounts) {
-                try {
-                    const data = account.account.data;
-                    if (data.length < 76) continue;
-
-                    // Parse the config
-                    const creator = new PublicKey(data.slice(8, 40));
-                    const mint = new PublicKey(data.slice(40, 72));
-                    const mintStr = mint.toString();
-
-                    // Skip if we've already seen this mint
-                    if (seenMints.has(mintStr)) continue;
-                    seenMints.add(mintStr);
-
-                    const shareholderCount = data.readUInt32LE(72);
-                    if (shareholderCount < 1 || shareholderCount > 10) continue;
-
-                    // Find our share
-                    let ourShareBps = 0;
-                    let parseOffset = 76;
-                    for (let i = 0; i < shareholderCount && parseOffset + 34 <= data.length; i++) {
-                        const pubkey = new PublicKey(data.slice(parseOffset, parseOffset + 32));
-                        const shareBps = data.readUInt16LE(parseOffset + 32);
-                        if (pubkey.equals(devKeypair.publicKey)) {
-                            ourShareBps = shareBps;
-                            break;
-                        }
-                        parseOffset += 34;
-                    }
-
-                    if (ourShareBps > 0) {
-                        foundTokens.push({
-                            mint: mintStr,
-                            creator: creator.toString(),
-                            shareBps: ourShareBps,
-                            sharePercent: ourShareBps / 100,
-                            type: 'robinhood'
-                        });
-                        console.log(`   Found: ${mintStr.slice(0, 8)}... (${ourShareBps / 100}% share)`);
-                    }
-                } catch (e) {
-                    // Skip invalid accounts
-                }
-            }
-        } catch (e) {
-            console.log(`   ⚠️  Error scanning size ${dataSize} offset ${offset}: ${e.message}`);
-        }
-    }
-
-    console.log(`   Total: ${foundTokens.length} Robinhood partnerships found`);
-    return foundTokens;
-}
 
 /**
  * Insert or update tokens in the database
@@ -324,84 +236,6 @@ async function backfillTokens(db, tokens, devPubkey) {
 }
 
 /**
- * Insert Robinhood tokens into the database
- */
-async function backfillRobinhoodTokens(db, tokens) {
-    console.log('\n💾 Backfilling Robinhood tokens into database...');
-
-    let insertedCount = 0;
-    let skippedCount = 0;
-    let errorCount = 0;
-
-    for (const token of tokens) {
-        try {
-            // Check if already exists
-            const existing = await db.get('SELECT id FROM robinhood_tokens WHERE mint = $1', [token.mint]);
-
-            if (existing) {
-                console.log(`   ⏭️  Skipping ${token.mint.slice(0, 8)}... (already exists)`);
-                skippedCount++;
-                continue;
-            }
-
-            // Fetch metadata
-            console.log(`   📥 Fetching metadata for ${token.mint.slice(0, 8)}...`);
-            const heliusMeta = await fetchHeliusMetadata(token.mint);
-            const dexMeta = await fetchDexScreenerMetadata(token.mint);
-
-            const metadata = {
-                name: heliusMeta?.name || dexMeta?.name || 'Unknown Token',
-                ticker: heliusMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
-                image: heliusMeta?.image || dexMeta?.image || null,
-                marketCap: dexMeta?.marketCap || heliusMeta?.marketCap || 0,
-                volume24h: dexMeta?.volume24h || 0
-            };
-
-            if (DRY_RUN) {
-                console.log(`   [DRY RUN] Would insert Robinhood: ${metadata.ticker} (${token.mint.slice(0, 8)}...) - ${token.sharePercent}% share`);
-                insertedCount++;
-                continue;
-            }
-
-            // Insert into database
-            await db.run(`
-                INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive")
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
-                ON CONFLICT (mint) DO UPDATE SET
-                    ticker = EXCLUDED.ticker,
-                    name = EXCLUDED.name,
-                    image = COALESCE(EXCLUDED.image, robinhood_tokens.image),
-                    "feeShareBps" = EXCLUDED."feeShareBps",
-                    "marketCap" = EXCLUDED."marketCap",
-                    volume24h = EXCLUDED.volume24h
-            `, [
-                token.mint,
-                metadata.ticker,
-                metadata.name,
-                metadata.image,
-                token.creator,
-                token.shareBps,
-                Date.now(),
-                metadata.marketCap,
-                metadata.volume24h
-            ]);
-
-            console.log(`   ✅ Inserted Robinhood: ${metadata.ticker} (${token.mint.slice(0, 8)}...) - ${token.sharePercent}% share`);
-            insertedCount++;
-
-            // Rate limit
-            await new Promise(r => setTimeout(r, 500));
-
-        } catch (e) {
-            console.log(`   ❌ Error: ${e.message}`);
-            errorCount++;
-        }
-    }
-
-    return { insertedCount, skippedCount, errorCount };
-}
-
-/**
  * Discover tokens by analyzing transactions to BOTH creator fee vaults.
  * Uses the shared mintExtractor module for consistency with the main application.
  *
@@ -485,10 +319,6 @@ async function wipeTokens(db) {
     const tokenResult = await db.run('DELETE FROM tokens');
     console.log(`   Deleted ${tokenResult.changes || 0} tokens`);
 
-    // Clear robinhood_tokens table
-    const robinhoodResult = await db.run('DELETE FROM robinhood_tokens');
-    console.log(`   Deleted ${robinhoodResult.changes || 0} robinhood tokens`);
-
     // Clear vault scan progress logs so we do a full rescan
     // Progress is stored in the 'logs' table with type like 'vault_scan_%'
     const progressResult = await db.run("DELETE FROM logs WHERE type LIKE $1", ['vault_scan_%']);
@@ -504,7 +334,7 @@ async function verifyDatabaseSchema(db) {
     console.log('\n🔍 Verifying database schema...');
 
     // 'logs' is the correct table name (not 'system_log')
-    const requiredTables = ['tokens', 'robinhood_tokens', 'logs'];
+    const requiredTables = ['tokens', 'logs'];
     const missingTables = [];
 
     for (const table of requiredTables) {
@@ -570,14 +400,11 @@ async function main() {
 
     // Get current counts
     const tokenCount = await db.get('SELECT COUNT(*) as count FROM tokens');
-    const robinhoodCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
     console.log(`\n📊 Current database state:`);
     console.log(`   - Tokens: ${tokenCount?.count || 0}`);
-    console.log(`   - Robinhood tokens: ${robinhoodCount?.count || 0}`);
 
     // Collect all tokens to backfill
     const allTokens = [];
-    const allRobinhoodTokens = [];
     const existingMints = new Set();
 
     // 1. Scan vault transactions for tokens we earn fees on
@@ -601,18 +428,13 @@ async function main() {
         console.log(`   Found ${existingTokens.length} existing tokens to update`);
     }
 
-    // 3. Scan for Robinhood fee-sharing partnerships (uses memcmp filters - efficient)
-    const robinhoodTokens = await scanForRobinhoodTokens(connection, devKeypair);
-    allRobinhoodTokens.push(...robinhoodTokens);
-
     // Summary before insertion
     console.log('\n═══════════════════════════════════════════════════════════════');
     console.log('                         SUMMARY                                ');
     console.log('═══════════════════════════════════════════════════════════════');
     console.log(`   Tokens to process: ${allTokens.length}`);
-    console.log(`   Robinhood tokens to process: ${allRobinhoodTokens.length}`);
 
-    if (allTokens.length === 0 && allRobinhoodTokens.length === 0) {
+    if (allTokens.length === 0) {
         console.log('\n   ℹ️  No new tokens found to backfill');
         await db.close();
         process.exit(0);
@@ -624,18 +446,10 @@ async function main() {
         console.log(`\n   Tokens: ${result.insertedCount} inserted, ${result.updatedCount} updated, ${result.skippedCount} skipped, ${result.errorCount} errors`);
     }
 
-    // Backfill Robinhood tokens
-    if (allRobinhoodTokens.length > 0) {
-        const result = await backfillRobinhoodTokens(db, allRobinhoodTokens);
-        console.log(`   Robinhood: ${result.insertedCount} inserted, ${result.skippedCount} skipped, ${result.errorCount} errors`);
-    }
-
     // Final counts
     const finalTokenCount = await db.get('SELECT COUNT(*) as count FROM tokens');
-    const finalRobinhoodCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
     console.log(`\n📊 Final database state:`);
     console.log(`   - Tokens: ${finalTokenCount?.count || 0}`);
-    console.log(`   - Robinhood tokens: ${finalRobinhoodCount?.count || 0}`);
 
     console.log('\n═══════════════════════════════════════════════════════════════');
     console.log('                       BACKFILL COMPLETE                        ');
@@ -643,7 +457,6 @@ async function main() {
     console.log('\n📊 Discovery Method:');
     console.log('   - Vault transaction analysis: finds tokens by fee deposits');
     console.log('   - Progress tracked: incremental scans on restart');
-    console.log('   - Robinhood scan: ~10 calls (memcmp filtered)');
 
     await db.close();
     process.exit(0);

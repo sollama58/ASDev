@@ -1,4 +1,4 @@
-# Render Blueprint — full ShitPad / ASDev stack
+# Render Blueprint — the full ShitPad stack
 #
 # Applying this creates everything a fresh deployment needs: Postgres, Redis, the API, the
 # background worker, the vanity grinder, and the ShitPad static site.
@@ -31,10 +31,6 @@ envVarGroups:
       # Generated once, read by the API, the worker and the grinder.
       - key: VANITY_ENCRYPTION_KEY
         generateValue: true
-      # Session signing for PAGS Twitter login. Must be stable — if this changes, every
-      # existing session is invalidated.
-      - key: PAGS_SESSION_SECRET
-        generateValue: true
       # Admin API key. Until this is set, every /api/admin/* endpoint returns 403.
       - key: ADMIN_API_KEY
         generateValue: true
@@ -53,7 +49,7 @@ services:
     ipAllowList: []   # private network only
 
   # ---------------------------------------------------------------------------
-  # API — HTTP + WebSocket. Also serves asdev_frontend.html at /
+  # API — HTTP + WebSocket. Also serves the ShitPad page at / and the admin console at /admin
   # ---------------------------------------------------------------------------
   - type: web
     name: asdev-api
@@ -100,7 +96,7 @@ services:
         value: mainnet
 
   # ---------------------------------------------------------------------------
-  # Worker — holder scans, metadata, Robinhood, ASDF/ANSEM sync, the fee flywheel
+  # Worker — holder scans, metadata, ASDF/ANSEM sync, the fee flywheel
   # ---------------------------------------------------------------------------
   - type: worker
     name: asdev-worker
@@ -131,10 +127,10 @@ services:
         sync: false
       - key: SOLANA_NETWORK
         value: mainnet
-      # Optional: comma-separated subset of holders,metadata,robinhood,asdf,flywheel.
+      # Optional: comma-separated subset of holders,metadata,asdf,flywheel.
       # Leave unset to run them all.
       # - key: WORKER_TASKS
-      #   value: holders,metadata,robinhood,asdf,flywheel
+      #   value: holders,metadata,asdf,flywheel
 
   # ---------------------------------------------------------------------------
   # Grinder — pre-grinds mint addresses ending in "shit"

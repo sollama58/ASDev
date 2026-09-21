@@ -4,7 +4,6 @@
  *
  * This script shows:
  * - All users with points and their breakdown
- * - Platform vs Robinhood token contributions
  * - Expected airdrop amounts
  * - KOTH status
  *
@@ -54,22 +53,14 @@ async function main() {
     const platformTokens = await db.all(
         'SELECT COUNT(*) as count FROM tokens WHERE volume24h >= 100'
     );
-    const robinhoodTokens = await db.all(
-        'SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1'
-    );
     const platformHolders = await db.all(
         'SELECT COUNT(DISTINCT "holderPubkey") as count FROM token_holders'
-    );
-    const robinhoodHolders = await db.all(
-        'SELECT COUNT(DISTINCT "holderPubkey") as count FROM robinhood_token_holders'
     );
 
     console.log('');
     console.log('Token Eligibility:');
     console.log(`  Platform Tokens (>$100 vol): ${platformTokens[0]?.count || 0}`);
-    console.log(`  Robinhood Tokens (active): ${robinhoodTokens[0]?.count || 0}`);
     console.log(`  Unique Platform Holders: ${platformHolders[0]?.count || 0}`);
-    console.log(`  Unique Robinhood Holders: ${robinhoodHolders[0]?.count || 0}`);
 
     // KOTH info
     const kothToken = await db.get(
@@ -116,15 +107,6 @@ async function main() {
             [SPECIFIC_USER]
         );
 
-        const robinhoodHoldings = await db.all(
-            `SELECT rth.mint, rth.balance, rth.rank, rt.ticker, rt.volume24h, rt."feeShareBps"
-             FROM robinhood_token_holders rth
-             JOIN robinhood_tokens rt ON rth.mint = rt.mint
-             WHERE rth."holderPubkey" = $1 AND rt."isActive" = 1
-             ORDER BY rt.volume24h DESC`,
-            [SPECIFIC_USER]
-        );
-
         console.log('');
         console.log(`Platform Token Holdings: ${platformHoldings.length}`);
         if (platformHoldings.length > 0) {
@@ -133,17 +115,6 @@ async function main() {
             });
             if (platformHoldings.length > 10) {
                 console.log(`  ... and ${platformHoldings.length - 10} more`);
-            }
-        }
-
-        console.log('');
-        console.log(`Robinhood Token Holdings: ${robinhoodHoldings.length}`);
-        if (robinhoodHoldings.length > 0) {
-            robinhoodHoldings.slice(0, 10).forEach(h => {
-                console.log(`  - ${h.ticker || h.mint.slice(0, 8)} | Rank #${h.rank} | Vol: $${h.volume24h?.toFixed(0) || 0} | Fee: ${(h.feeShareBps / 100).toFixed(1)}%`);
-            });
-            if (robinhoodHoldings.length > 10) {
-                console.log(`  ... and ${robinhoodHoldings.length - 10} more`);
             }
         }
 

@@ -1,19 +1,23 @@
-# ASDev (Ignition)
+# ShitPad
 
 A Solana token launcher built around Pump.fun, wrapped in a self-sustaining
-fee-sharing ecosystem: every registered token routes a share of its trading
-fees back to a platform pool, which is redistributed as SOL airdrops to that
+fee-sharing ecosystem: every token launched here routes a share of its trading
+fees back to the platform, which is redistributed as SOL airdrops to that
 token's holders on a fixed schedule — no claiming, no staking, just holding.
+Tagline: "Token launchpads are shit."
 
-Beyond launching tokens, the platform runs three fee-sharing programs on top
-of the same holder-tracking/airdrop engine:
+Each time fees are claimed they split four ways:
 
-- **Robinhood** — external Pump.fun tokens that opt into fee sharing without
-  being launched here. Verified entirely on-chain at registration time.
-- **PAGS** ("Pay-to-Twitter/X") — token creators split fees with Twitter/X
-  accounts, who link a wallet via OAuth and claim their share.
-- **ShitPad** — a standalone airdrop-pool sub-site/brand (own static page and
-  admin panel) built on the same backend. Tagline: "Token launchpads are shit."
+| Share | Destination |
+|-------|-------------|
+| 50%   | that token's own holders |
+| 25%   | the central pool, shared across every ShitPad token's holders |
+| 24.5% | buyback & burn |
+| 0.5%  | upkeep |
+
+Tokens are minted with ShitPad already wired in as a fee recipient, so a
+creator never configures fee sharing by hand. Where the grinder has one ready,
+the contract address ends in `shit`.
 
 Two tracked tokens (`ASDF`, `ANSEM`) give their top holders a 2× multiplier
 on airdrop weight, stacking to 4× if you hold both.
@@ -36,23 +40,19 @@ src/
 │   ├── postgres.js         # The only database layer (PostgreSQL)
 │   ├── redis.js            # Caching, BullMQ queues, cross-process state, distributed locks
 │   ├── solana.js / pump.js / mintExtractor.js   # RPC, Pump.fun program calls, fee-vault discovery
-│   ├── pags.js / pagsTwitterAuth.js             # PAGS Twitter fee-sharing subsystem
+│   ├── vanity.js / vanityGrinder.js / vanityWorker.js / vanitySecret.js  # Pre-ground mint pool
 │   ├── twitter.js, pinata.js, imageUtils.js, moderation.js, claudeKoth.js, ...
 │   └── mutex.js, circuitBreaker.js, sanitizer.js, signatureVerifier.js, logger.js
 ├── routes/               # Express API (mounted under /api — see API section below)
-│   ├── tokens.js           # Listing, leaderboard, registration, holder lookups, token admin
+│   ├── tokens.js           # Listing, holder lookups, token admin
 │   ├── health.js           # /api/health + a large set of admin debug/diagnostic endpoints
-│   ├── pags.js             # PAGS OAuth, registration, claims, admin
 │   ├── deploy.js            # Token deployment queue
 │   └── solana.js            # Address validation, blockhash, balance
 ├── tasks/                # Background jobs, orchestrated by tasks/index.js
 │   ├── holderScanner.js     # Core points/airdrop-eligibility engine (on-chain holder scans)
 │   ├── flywheel.js          # Fee collection + SOL airdrop distribution (central + per-token pools)
-│   ├── robinhoodScanner.js  # Partner-token discovery, verification, holder tracking
 │   ├── metadataUpdater.js   # Price/image refresh (DexScreener → GeckoTerminal → Helius)
 │   ├── asdfSync.js          # Top 100 ASDF holder sync (2× multiplier)
-│   ├── pagsFeeScanner.js    # PAGS on-chain fee scanning
-│   ├── pagsClaimProcessor.js# PAGS claim processing (currently disabled in tasks/index.js)
 │   └── workers.js           # BullMQ worker wrappers around the above
 └── utils/                # Small shared helpers (bigint math, etc.)
 
@@ -61,30 +61,28 @@ grinder.js               # Vanity mint grinder service entrypoint (SERVER_MODE=g
 scripts/                 # One-off/maintenance scripts (see Scripts section)
 
 # Frontend — static HTML, no build step, each file is self-contained
-asdev_frontend.html       # Main platform UI (launches, leaderboard, Robinhood, PAGS, wallet connect)
-admin_panel.html          # Main platform admin console
-shitpad/                  # Standalone airdrop-pool sub-site (own render.yaml Blueprint)
-├── index.html
-├── admin/index.html
+shitpad/                  # The ShitPad site (own render.yaml Blueprint)
+├── index.html            # Launcher, pool stats, token list, wallet lookup
+├── admin/index.html      # Admin console
 └── render.yaml
-asdev_intro_modal.html    # Small promo modal snippet, meant to be pasted into other pages
 ```
 
-All frontend pages talk to the backend via a hardcoded `BACKEND_URL` constant
-near the top of each file's `<script>` — update that if you point them at a
-different deployment.
+Each page reads its API origin from a single `<meta name="shitpad-backend">`
+tag near the top of the file — change that one line to point the site at a
+different deployment. The API also serves `shitpad/index.html` at `/` and the
+admin console at `/admin`, for single-service deployments.
 
 ## Data & background jobs
 
-- **PostgreSQL** is the system of record (tokens, holders, points, PAGS
-  data, logs). `DATABASE_URL` is required — the server will not start
+- **PostgreSQL** is the system of record (tokens, holders, points,
+  reservations, logs). `DATABASE_URL` is required — the server will not start
   without it.
 - **Redis** backs BullMQ job queues, response caching, distributed mutexes,
   and cross-process global state (so the API process and worker process(es)
   agree on the same numbers).
 - Background tasks run on independent intervals — holder scans and price
   updates every few minutes, fee collection every 2.5 minutes, airdrop
-  distribution every 15 minutes, Robinhood/metadata sweeps every 10 minutes.
+  distribution every 15 minutes, metadata sweeps every 10 minutes.
   They run inline in `index.js` (default) or can be split onto a dedicated
   process via `src/worker.js` (`SERVER_MODE=worker`) so heavy scanning
   doesn't compete with API traffic.
@@ -134,7 +132,6 @@ PINATA_JWT=your-pinata-jwt
 
 # Optional feature areas — see .env.example for the full set
 # Twitter posting: TWITTER_API_KEY / TWITTER_API_SECRET / TWITTER_ACCESS_TOKEN / TWITTER_ACCESS_SECRET
-# PAGS (Twitter fee-sharing): PAGS_WALLET, PAGS_WALLET_PRIVATE_KEY, TWITTER_OAUTH2_CLIENT_ID/SECRET, PAGS_SESSION_SECRET
 # Content moderation: CLARIFAI_API_KEY
 # AI-selected "King of the Hill": ANTHROPIC_API_KEY
 ```
@@ -171,7 +168,6 @@ endpoints in total, including a large admin/debug surface gated behind
 | `GET /api/version` | Server version string |
 | `GET /api/services-status` | Live check of DB / Redis / Solana RPC |
 | `GET /api/all-launches` | All launched tokens (paginated) |
-| `GET /api/leaderboard` | Registered/Robinhood token leaderboard |
 | `GET /api/recent-launches` | Recent-launches ticker feed |
 | `GET /api/token-holders/:mint` | Top holders for a token |
 | `GET /api/check-holder?userPubkey=…` | A wallet's points + expected airdrop |
@@ -180,10 +176,6 @@ endpoints in total, including a large admin/debug surface gated behind
 | `POST /api/prepare-metadata` | Upload token metadata/image to IPFS |
 | `POST /api/deploy` | Queue a token deployment |
 | `GET /api/job-status/:id` | Poll a deployment job |
-| `POST /api/register-token` / `POST /api/reregister-token` | Register a Robinhood partner token (verified on-chain) |
-| `GET /api/robinhood/*` | Robinhood token/holder endpoints |
-| `POST /api/pags/register`, `GET /api/pags/lookup/:username`, `POST /api/pags/claim` | PAGS registration, lookup, claiming |
-| `GET /api/auth/twitter`, `GET /api/auth/twitter/callback` | PAGS Twitter OAuth |
 | `GET /api/admin/*`, `GET /api/debug/*` | Operational/admin endpoints (trigger scans, view logs, manage tokens/announcements, simulate airdrops, etc.) — requires `x-admin-key` header |
 
 ## Security
@@ -193,7 +185,7 @@ endpoints in total, including a large admin/debug surface gated behind
 - All admin/debug endpoints require a timing-safe-compared `ADMIN_API_KEY`
   (disabled entirely — returns 403 — if the key isn't set)
 - Solana address validation on all pubkey inputs; signature verification on
-  wallet-authenticated actions (PAGS link/claim, Robinhood re-registration)
+  wallet-authenticated actions
 - Frontend output escaping (`esc()`/`escAttr()` helpers and/or DOMPurify,
   depending on the page) on any field that originates from user-settable
   token metadata (ticker, name), to prevent stored XSS
