@@ -5,9 +5,7 @@
   "scripts": {
     "start": "node src/index.js",
     "start:grinder": "SERVER_MODE=grinder node src/grinder.js",
-    "start:legacy": "node server.js",
     "dev": "node --watch src/index.js",
-    "migrate": "node scripts/migrate-to-postgres.js",
     "backfill": "node scripts/backfillTokens.js",
     "backfill:dry": "node scripts/backfillTokens.js --dry-run"
   },
@@ -37,8 +35,6 @@
     "jsonwebtoken": "^9.0.2",
     "node-addon-api": "^7.1.0",
     "pg": "^8.16.3",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.6",
     "tweetnacl": "^1.0.3",
     "twitter-api-v2": "^1.15.0",
     "typescript": "^5.0.0",

@@ -33,7 +33,7 @@ src/
 │   ├── env.js            # All environment variables / config, validated on boot
 │   └── constants.js       # Program IDs, wallet addresses, token mints (incl. ASDF/ANSEM)
 ├── services/             # Integrations & shared logic used by routes and tasks
-│   ├── postgres.js         # The only live database (services/database.js is dead SQLite code)
+│   ├── postgres.js         # The only database layer (PostgreSQL)
 │   ├── redis.js            # Caching, BullMQ queues, cross-process state, distributed locks
 │   ├── solana.js / pump.js / mintExtractor.js   # RPC, Pump.fun program calls, fee-vault discovery
 │   ├── pags.js / pagsTwitterAuth.js             # PAGS Twitter fee-sharing subsystem
@@ -154,7 +154,6 @@ SERVER_MODE=worker WORKER_TASKS=holders,metadata node src/worker.js   # subset o
 
 | Script | What it does |
 |---|---|
-| `npm run migrate` | One-time SQLite → PostgreSQL data migration |
 | `npm run backfill` | Discover tokens the platform receives fees from, by scanning on-chain vault transaction history (`--dry-run` supported) |
 | `node scripts/show-points.js` | Dump current point distribution and eligibility |
 | `node scripts/test-airdrop.js` | Simulate/test the point → airdrop distribution flow |
