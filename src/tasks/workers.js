@@ -294,7 +294,15 @@ function initDeployWorker(deps) {
             }
 
             // Queue social post
-            await redis.addSocialJob({ name, ticker, mint: mint.toString() });
+            // v28.3 MONEY: non-fatal. This was the last unguarded await inside the catch-all
+            // below, which refunds the user on ANY error — so a Redis blip here, AFTER the token
+            // had launched on-chain and the user had it, paid them the deployment fee back and
+            // marked the job failed. A missed tweet is not a failed launch.
+            try {
+                await redis.addSocialJob({ name, ticker, mint: mint.toString() });
+            } catch (socialErr) {
+                logger.warn('[Deploy] Launch succeeded but social post could not be queued', { mint: mint.toString(), error: socialErr.message });
+            }
 
             return { mint: mint.toString(), signature: sig };
 

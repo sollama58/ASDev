@@ -965,9 +965,16 @@ function init(deps) {
      * v25.69 SECURITY: Now revokes the session token to prevent reuse
      */
     router.post('/auth/twitter/logout', pagsTwitterAuth.requireSession, async (req, res) => {
-        // v25.69 SECURITY: Revoke the token so it can't be reused
-        if (req.pagsSession && req.pagsSession.token) {
-            await pagsTwitterAuth.revokeSessionToken(req.pagsSession.token);
+        // v28.3: the only async route here without a try/catch. A Redis error in
+        // revokeSessionToken rejected the handler promise, which Express 4 does not catch —
+        // the request hung until the client gave up. Logging out must still clear the cookie.
+        try {
+            // v25.69 SECURITY: Revoke the token so it can't be reused
+            if (req.pagsSession && req.pagsSession.token) {
+                await pagsTwitterAuth.revokeSessionToken(req.pagsSession.token);
+            }
+        } catch (e) {
+            logger.warn('[PAGS API] Token revocation failed during logout', { error: e.message });
         }
         pagsTwitterAuth.clearSessionCookie(res);
         res.json({ success: true, message: 'Logged out' });
