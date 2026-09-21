@@ -6,11 +6,12 @@
  * can create that mint themselves and front-run the launch. It is therefore never written to
  * the database in the clear.
  *
- * This lives in its own module because the grinder runs
- * as a *separate service* from the API. Both processes must derive an identical key, and the
- * an ephemeral random value when unset would silently break decryption across restarts, which
- * would silently make every stored seed undecryptable after a restart -- throwing away hours
- * of grinding with no error until a launch tried to use one.
+ * This lives in its own module because the grinder runs as a *separate service* from the API.
+ * Both processes must derive an identical key from VANITY_ENCRYPTION_KEY, which is why that
+ * variable has no default: falling back to an ephemeral random value would make every stored
+ * seed undecryptable after a restart, throwing away hours of grinding with no error until a
+ * launch tried to use one. isConfigured() below is what keeps the grinder from persisting
+ * anything it could not read back.
  */
 const crypto = require('crypto');
 const logger = require('./logger');

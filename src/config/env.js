@@ -86,6 +86,13 @@ const config = {
         .split(',').map(h => h.trim().toLowerCase()).filter(Boolean),
     METADATA_URI_MAX_LENGTH: parseInt(process.env.METADATA_URI_MAX_LENGTH, 10) || 200,
 
+    // v29.3: /api/prepare-metadata fetches the supplied image once to confirm it exists and is
+    // really an image, before any token is minted against it. Metadata is immutable, so a dead
+    // or mistyped link caught here is the difference between a clear error and a token with a
+    // permanently broken image that the creator has already paid for.
+    IMAGE_MAX_BYTES: parseInt(process.env.IMAGE_MAX_BYTES, 10) || 10 * 1024 * 1024,
+    IMAGE_FETCH_TIMEOUT_MS: parseInt(process.env.IMAGE_FETCH_TIMEOUT_MS, 10) || 8000,
+
     // =====================================================
     // VANITY MINT GRINDER (v28.1)
     // =====================================================
