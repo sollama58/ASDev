@@ -124,6 +124,25 @@ function init(deps) {
             // This converts imgur.com/xxx -> i.imgur.com/xxx.png
             const normalizedImageUrl = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
 
+            // v29.3: confirm the image is really there before anything is minted against it.
+            // The metadata document is immutable once pinned and the on-chain URI cannot be
+            // changed, so this is the last point at which a dead or mistyped link can be
+            // caught. It also bounds what the normaliser guessed at: an Imgur page URL that
+            // was rewritten into a direct link which does not exist fails here rather than
+            // silently producing a token with no picture.
+            const imageCheck = await imageUtils.verifyImageUrl(normalizedImageUrl, {
+                maxBytes: config.IMAGE_MAX_BYTES,
+                timeoutMs: config.IMAGE_FETCH_TIMEOUT_MS
+            });
+            if (!imageCheck.ok) {
+                logger.warn('[Deploy] Image rejected before mint', {
+                    ip: req.ip,
+                    url: normalizedImageUrl.substring(0, 80),
+                    reason: imageCheck.reason
+                });
+                return res.status(400).json({ error: imageCheck.reason });
+            }
+
             const DESCRIPTION_FOOTER = " Launched via ShitPad.";
             const finalDescription = description + DESCRIPTION_FOOTER;
 
@@ -135,7 +154,9 @@ function init(deps) {
                 name,
                 ticker,
                 originalImage: imageUrl.substring(0, 50),
-                normalizedImage: normalizedImageUrl.substring(0, 50)
+                normalizedImage: normalizedImageUrl.substring(0, 50),
+                imageType: imageCheck.contentType,
+                imageBytes: imageCheck.bytes
             });
 
             res.json({ success: true, ...result });

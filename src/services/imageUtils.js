@@ -269,8 +269,89 @@ async function fetchImageFromMetadataUri(metadataUri, timeout = 5000) {
 }
 
 
+/**
+ * v29.3: Confirm an image URL actually serves an image before a token is minted against it.
+ *
+ * Nothing used to check this. The URL was validated for host and scheme, then written into the
+ * metadata document and minted. A dead link, a typo, or an Imgur page URL the normaliser could
+ * not convert therefore produced a token with a permanently broken image, and the creator had
+ * already paid for it. On-chain metadata is immutable, so the only place this can be caught is
+ * before the launch is queued.
+ *
+ * Streamed rather than buffered: the body is read only until the size limit is exceeded, then
+ * the connection is destroyed. That keeps a hostile or merely enormous file from occupying
+ * memory, and no part of the image is retained once the check finishes.
+ *
+ * @returns {Promise<{ok: true, contentType: string, bytes: number}|{ok: false, reason: string}>}
+ */
+async function verifyImageUrl(url, { maxBytes = 10 * 1024 * 1024, timeoutMs = 8000 } = {}) {
+    if (!url || typeof url !== 'string') return { ok: false, reason: 'No image URL was provided.' };
+    if (!isSafeFetchUrl(url)) return { ok: false, reason: 'That image URL cannot be fetched.' };
+
+    const axios = require('axios');
+    let response;
+    try {
+        response = await axios.get(url, {
+            responseType: 'stream',
+            timeout: timeoutMs,
+            maxRedirects: 3,
+            // Treat every status as non-throwing so a 404 becomes a clear message rather than
+            // an exception indistinguishable from a network failure.
+            validateStatus: () => true,
+            headers: { 'Accept': 'image/*', 'User-Agent': 'ShitPad/1.0' }
+        });
+    } catch (e) {
+        return { ok: false, reason: 'The image could not be reached. Check the link and try again.' };
+    }
+
+    const destroy = () => { try { response.data.destroy(); } catch (e) { /* already closed */ } };
+
+    if (response.status < 200 || response.status >= 300) {
+        destroy();
+        return { ok: false, reason: `The image URL returned ${response.status}. Make sure the link is public and still exists.` };
+    }
+
+    // Imgur answers a deleted image with a 200 and a placeholder rather than a 404, so the
+    // status alone does not tell us the image is still there.
+    const finalUrl = response.request?.res?.responseUrl || url;
+    if (/\/removed(\.[a-z]+)?$/i.test(new URL(finalUrl).pathname)) {
+        destroy();
+        return { ok: false, reason: 'That image has been removed from Imgur. Upload it again and use the new link.' };
+    }
+
+    const contentType = String(response.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    if (!contentType.startsWith('image/')) {
+        destroy();
+        return { ok: false, reason: `That URL serves ${contentType || 'unknown content'}, not an image.` };
+    }
+
+    // Trust a declared length when it is already over the limit, but never trust it as proof of
+    // being under: a wrong or absent header is checked against the bytes actually delivered.
+    const declared = parseInt(response.headers['content-length'], 10);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+        destroy();
+        return { ok: false, reason: `That image is ${(declared / 1048576).toFixed(1)}MB. The limit is ${(maxBytes / 1048576).toFixed(0)}MB.` };
+    }
+
+    const bytes = await new Promise((resolve) => {
+        let seen = 0;
+        response.data.on('data', (chunk) => {
+            seen += chunk.length;
+            if (seen > maxBytes) { destroy(); resolve(-1); }
+        });
+        response.data.on('end', () => resolve(seen));
+        response.data.on('error', () => resolve(-1));
+    });
+
+    if (bytes === -1) return { ok: false, reason: `That image is larger than the ${(maxBytes / 1048576).toFixed(0)}MB limit.` };
+    if (bytes === 0) return { ok: false, reason: 'That URL returned an empty file.' };
+
+    return { ok: true, contentType, bytes };
+}
+
 module.exports = {
     normalizeImageUrl,
+    verifyImageUrl,
     extractHeliusImage,
     extractHeliusBatchImage,
     fetchImageFromMetadataUri
