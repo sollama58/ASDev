@@ -155,24 +155,46 @@ async function sendTxWithRetry(tx, signers, retries = 5) {
 }
 
 /**
- * Refund user on error
+ * Refund a user whose launch failed.
+ *
+ * v29.2: the single implementation. This previously existed three times: this copy, which
+ * refunded the FULL deployment fee and which nothing ever called, plus byte-identical local
+ * copies in index.js and worker.js that refunded the fee minus 0.001 SOL. The two that ran
+ * agreed with each other, so the dead one here was the odd one out and would have silently
+ * changed refund amounts had anyone wired it up. index.js and worker.js now delegate here.
+ *
+ * The 0.001 SOL held back covers the network cost of the refund transfer itself, so a failed
+ * launch does not also cost the platform the fee to undo it.
+ *
+ * @returns {Promise<string|null>} the refund signature, or null if the refund failed
  */
 async function refundUser(userPubkeyStr, reason) {
     try {
         const userPubkey = new PublicKey(userPubkeyStr);
-        const refundAmount = config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL;
-        const tx = new Transaction().add(
-            SystemProgram.transfer({
-                fromPubkey: devKeypair.publicKey,
-                toPubkey: userPubkey,
-                lamports: refundAmount
-            })
-        );
+        const tx = new Transaction();
         addPriorityFee(tx);
-        await sendTxWithRetry(tx, [devKeypair]);
-        logger.info(`Refunded ${config.DEPLOYMENT_FEE_SOL} SOL to ${userPubkeyStr}`, { reason });
+        tx.add(SystemProgram.transfer({
+            fromPubkey: devKeypair.publicKey,
+            toPubkey: userPubkey,
+            lamports: Math.floor((config.DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL)
+        }));
+        const sig = await sendTxWithRetry(tx, [devKeypair]);
+
+        // v29.1: the deployment fee was credited to the lifetime counters the moment the
+        // launch was queued. The user has just been made whole, so reverse it -- otherwise
+        // reported revenue keeps every refunded fee. Only on a confirmed refund: if the
+        // transfer above throws, the user still has not been paid back.
+        //
+        // Required lazily: postgres does not depend on this module, but resolving it at call
+        // time keeps the two services independent of each other's load order.
+        await require('./postgres').subtractFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL)
+            .catch(e => logger.warn('Refund sent but fee counters not reversed', { error: e.message }));
+
+        logger.info(`REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
+        return sig;
     } catch (e) {
-        logger.error('Refund failed', { error: e.message, user: userPubkeyStr });
+        logger.error(`REFUND FAILED: ${e.message}`, { user: userPubkeyStr, reason });
+        return null;
     }
 }
 

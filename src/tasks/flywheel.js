@@ -1259,6 +1259,21 @@ async function claimCreatorFees(deps) {
     try {
         const bcInfo = await connection.getAccountInfo(bcVault);
         if (bcInfo && bcInfo.lamports > 0) {
+            // v29.2: the vault is a live account, so a claim can only move the lamports ABOVE
+            // its rent-exempt minimum -- the rest has to stay behind to keep the account alive.
+            // Crediting bcInfo.lamports in full therefore over-credited every claim by that
+            // minimum, and since the split below is what fills holder pools, the platform was
+            // promising holders slightly more than it had actually received. Deliberately
+            // computed rather than measured from a wallet balance delta: in `full` mode the
+            // deploy worker spends from the same wallet concurrently, so a delta would be
+            // polluted by unrelated activity.
+            const bcRentExempt = await solana.getRentExemptMinimum(bcInfo.data?.length || 0);
+            const claimable = Math.max(0, bcInfo.lamports - bcRentExempt);
+            if (claimable === 0) {
+                logger.debug('BC vault holds only its rent-exempt minimum, nothing to claim', {
+                    lamports: bcInfo.lamports, rentExempt: bcRentExempt
+                });
+            }
             const discriminator = pump.buildClaimFeesData();
             const [eventAuthority] = PublicKey.findProgramAddressSync(
                 [Buffer.from("__event_authority")], PROGRAMS.PUMP
@@ -1272,9 +1287,11 @@ async function claimCreatorFees(deps) {
                 { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
             ];
 
-            tx.add(new TransactionInstruction({ keys, programId: PROGRAMS.PUMP, data: discriminator }));
-            claimedSomething = true;
-            totalClaimed += bcInfo.lamports;
+            if (claimable > 0) {
+                tx.add(new TransactionInstruction({ keys, programId: PROGRAMS.PUMP, data: discriminator }));
+                claimedSomething = true;
+                totalClaimed += claimable;
+            }
         }
     } catch (e) {
         logger.debug('Failed to claim BC fees', { error: e.message });
@@ -1314,6 +1331,8 @@ async function claimCreatorFees(deps) {
             tx.add(new TransactionInstruction({ keys, programId: PROGRAMS.PUMP_AMM, data: ammDiscriminator }));
             tx.add(createCloseAccountInstruction(myWsolAta, devKeypair.publicKey, devKeypair.publicKey));
             claimedSomething = true;
+            // The AMM side needs no rent adjustment: this is a token-account balance, moved in
+            // full, and the account is closed on the next line so its own rent comes back too.
             totalClaimed += Number(bal.value.amount);
         }
     } catch (e) {
@@ -2218,7 +2237,15 @@ async function runFeeCollection(deps) {
         let platformPendingFees = new BN(0);
         try {
             const bcInfo = await connection.getAccountInfo(bcVault);
-            if (bcInfo) platformPendingFees = platformPendingFees.add(new BN(bcInfo.lamports));
+            if (bcInfo) {
+                // v29.2: same rent adjustment as claimCreatorFees below. The rent-exempt
+                // minimum can never be claimed, so counting it here reported pending fees the
+                // platform could not actually collect.
+                const bcRentExempt = await solana.getRentExemptMinimum(bcInfo.data?.length || 0);
+                platformPendingFees = platformPendingFees.add(
+                    new BN(Math.max(0, bcInfo.lamports - bcRentExempt))
+                );
+            }
         } catch (e) {
             // v25.14 ROBUSTNESS: Log RPC errors instead of silently ignoring
             logger.debug('[FeeCollection] BC vault check failed', { error: e.message });

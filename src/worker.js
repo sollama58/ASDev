@@ -21,7 +21,7 @@ process.stdout.write(`[${new Date().toISOString()}] [INFO] ASDev Worker process 
 
 require('dotenv').config();
 
-const { Connection, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
+const { Connection } = require('@solana/web3.js');
 const { Wallet } = require('@coral-xyz/anchor');
 
 // Internal imports
@@ -166,33 +166,10 @@ async function startWorker() {
 
     logger.info(`Network: ${config.SOLANA_NETWORK.toUpperCase()} | RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : (config.HELIUS_API_KEY ? 'Helius' : 'Public Mainnet')}`);
 
-    const refundUser = async (userPubkeyStr, reason) => {
-        try {
-            const { PublicKey } = require('@solana/web3.js');
-            const userPubkey = new PublicKey(userPubkeyStr);
-            const tx = new Transaction();
-            solana.addPriorityFee(tx);
-            tx.add(SystemProgram.transfer({
-                fromPubkey: devKeypair.publicKey,
-                toPubkey: userPubkey,
-                lamports: Math.floor((config.DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL)
-            }));
-            const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
-
-            // v29.1: the deployment fee was credited to the lifetime counters the moment the
-            // launch was queued. The user has just been made whole, so reverse it -- otherwise
-            // reported revenue keeps every refunded fee. Only on a confirmed refund: if the
-            // transfer above throws, the user still has not been paid back.
-            await database.subtractFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL)
-                .catch(e => logger.warn('Refund sent but fee counters not reversed', { error: e.message }));
-
-            logger.info(`REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
-            return sig;
-        } catch (e) {
-            logger.error(`REFUND FAILED: ${e.message}`);
-            return null;
-        }
-    };
+    // v29.2: delegate to the one implementation in services/solana.js. This was a local copy
+    // here and a byte-identical one in the other entrypoint, alongside a third, divergent copy
+    // in that service, so a change to refund behaviour had to be made in three places.
+    const refundUser = solana.refundUser;
 
     // Dependencies object for modules
     const deps = {
