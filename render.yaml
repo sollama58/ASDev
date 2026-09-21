@@ -20,7 +20,10 @@ services:
     name: shitpad-grinder
     env: node
     plan: starter
-    buildCommand: npm ci --omit=dev
+    # npm install, not npm ci: this repo deliberately gitignores package-lock.json, and
+    # npm ci refuses to run without a lockfile. (Tracking the lockfile would be the better
+    # fix — reproducible installs — but that is a repo-wide policy change, not a grinder one.)
+    buildCommand: npm install --omit=dev
     startCommand: node src/grinder.js
     autoDeploy: false
     envVars:
