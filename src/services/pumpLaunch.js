@@ -1,0 +1,296 @@
+/**
+ * Pump.fun launch service
+ * v30.0 - Builds create/buy/fee-collection instructions through the official SDK.
+ *
+ * WHY THIS EXISTS
+ *
+ * The instruction layouts in services/pump.js were hand-written, and they drifted. The
+ * create instruction this platform sends is `create_v2`, whose argument list pump.fun has
+ * extended twice: it now takes `is_cashback_enabled`, `creator_fee_bps` and
+ * `is_holder_reward` after `is_mayhem_mode`. Our builder still stopped at `is_mayhem_mode`,
+ * so it emitted a 93-byte payload where the official client emits 103. Custom Pairs raises
+ * the stakes further: a token-quoted launch adds four positional remaining accounts, and
+ * `buy_v2` carries 27 accounts against `buy`'s 16.
+ *
+ * Hand-maintaining that is how the drift happened, so this module delegates to
+ * @pump-fun/pump-sdk instead. The SDK derives every PDA, orders the remaining accounts and
+ * encodes the arguments, and it moves when the program moves.
+ *
+ * PLATFORM FEE POLICY
+ *
+ * Every coin launched here must keep the platform wallet as its on-chain creator, because
+ * that is what makes 100% of creator fees accrue to us for the 50/25/24.5/0.5 split in
+ * tasks/flywheel.js. Two SDK options would break that and are therefore forced off and never
+ * exposed as parameters:
+ *
+ *   holderReward — reassigns the creator to the coin's holder-rewards PDA. Every creator fee
+ *                  would then accrue to that PDA and be paid out by pump.fun directly,
+ *                  bypassing our split entirely. Permanent, and uncorrectable after launch.
+ *   cashback     — deprecated upstream; `create_v2` rejects it outright with error 6082.
+ */
+const { PublicKey, ComputeBudgetProgram } = require('@solana/web3.js');
+const { NATIVE_MINT } = require('@solana/spl-token');
+const BN = require('bn.js');
+const {
+    PumpSdk,
+    OnlinePumpSdk,
+    isSolLikeQuoteMint,
+    normalizeQuoteMint,
+    getBuyTokenAmountFromSolAmount,
+    UnsupportedQuoteMintError,
+} = require('@pump-fun/pump-sdk');
+const logger = require('./logger');
+const config = require('../config/env');
+
+// Instruction building is offline; only account reads need a connection.
+const sdk = new PumpSdk();
+
+/**
+ * Compute budgets.
+ *
+ * The SDK documents a token-quoted create as 200-240k CU and a first `buy_v2` on a
+ * Token-2022 quote as 200-220k, and recommends ~500k for create+buy with a token quote. The
+ * launch path previously requested 300k from solana.addPriorityFee plus a 200k limit set in
+ * the deploy worker, which is under what a token-quoted launch needs -- the transaction would
+ * exhaust its budget rather than fail cleanly.
+ */
+const CU_LIMIT_SOL_LAUNCH = 300_000;
+const CU_LIMIT_TOKEN_LAUNCH = 500_000;
+
+// Global and the supported-quote list change rarely and cost an RPC round-trip each.
+let globalCache = { value: null, at: 0 };
+let quoteMintCache = { value: null, at: 0 };
+const GLOBAL_TTL_MS = 60_000;
+const QUOTE_TTL_MS = 5 * 60_000;
+
+function online(connection) {
+    return new OnlinePumpSdk(connection);
+}
+
+async function fetchGlobal(connection) {
+    if (globalCache.value && Date.now() - globalCache.at < GLOBAL_TTL_MS) {
+        return globalCache.value;
+    }
+    const value = await online(connection).fetchGlobal();
+    globalCache = { value, at: Date.now() };
+    return value;
+}
+
+/**
+ * Every quote mint `create_v2` accepts right now: SOL, the Global whitelist, and the
+ * QuoteControl entries. One RPC round-trip, cached.
+ *
+ * Returns a plain, serialisable shape so routes can hand it straight to the frontend.
+ */
+async function getSupportedQuoteMints(connection, { force = false } = {}) {
+    if (!force && quoteMintCache.value && Date.now() - quoteMintCache.at < QUOTE_TTL_MS) {
+        return quoteMintCache.value;
+    }
+    const mints = await online(connection).fetchSupportedQuoteMints();
+    const value = mints.map(m => ({
+        mint: m.mint.toBase58(),
+        source: String(m.source),
+        isSol: isSolLikeQuoteMint(m.mint),
+    }));
+    quoteMintCache = { value, at: Date.now() };
+    logger.info('[PumpLaunch] Supported quote mints refreshed', { count: value.length });
+    return value;
+}
+
+/**
+ * Resolve a caller-supplied quote mint to what the builders need, or throw a message fit to
+ * show a user. `undefined`/null/SOL all resolve to the SOL entry.
+ */
+async function resolveQuote(connection, quoteMint) {
+    if (!quoteMint) return null; // SOL path
+    let key;
+    try {
+        key = new PublicKey(quoteMint);
+    } catch (e) {
+        const err = new Error('That quote asset is not a valid address.');
+        err.userFacing = true;
+        throw err;
+    }
+    if (isSolLikeQuoteMint(key)) return null;
+
+    try {
+        const resolved = await online(connection).resolveQuoteMint(key);
+        return {
+            mint: normalizeQuoteMint(resolved.mint),
+            quoteTokenProgram: resolved.quoteTokenProgram,
+            decimals: resolved.decimals,
+        };
+    } catch (e) {
+        if (e instanceof UnsupportedQuoteMintError) {
+            const err = new Error('That quote asset is not currently accepted by Pump.fun.');
+            err.userFacing = true;
+            throw err;
+        }
+        throw e;
+    }
+}
+
+/**
+ * Build the instructions for one launch: create the coin and make the platform's first buy,
+ * quoted in SOL or in a supported token.
+ *
+ * @returns {Promise<{instructions: TransactionInstruction[], computeUnitLimit: number,
+ *                    quoteMint: string|null, isTokenQuoted: boolean}>}
+ */
+async function buildLaunchInstructions({
+    connection,
+    mint,            // PublicKey of the new mint (its keypair co-signs)
+    name,
+    symbol,
+    uri,
+    creator,         // platform wallet: keeps 100% of creator fees with us
+    user,            // payer/signer, normally the same platform wallet
+    quoteAmount,     // BN, in the quote asset's base units (lamports for SOL)
+    mayhemMode = false,
+    quoteMint = null,
+    creatorFeeBps = null,
+}) {
+    const global = await fetchGlobal(connection);
+    const quote = await resolveQuote(connection, quoteMint);
+    const isTokenQuoted = !!quote;
+
+    // 6071: the program refuses mayhem mode on a mint admitted only through QuoteControl.
+    // Caught here so the launch fails with an explanation rather than an opaque program error.
+    if (isTokenQuoted && mayhemMode) {
+        const err = new Error('Mayhem mode cannot be combined with a token quote asset.');
+        err.userFacing = true;
+        throw err;
+    }
+
+    const common = {
+        global,
+        mint,
+        name,
+        symbol,
+        uri,
+        creator,
+        user,
+        mayhemMode,
+        // See PLATFORM FEE POLICY above. Never parameterised.
+        holderReward: false,
+        cashback: false,
+    };
+
+    if (creatorFeeBps != null) {
+        common.creatorFeeBps = BN.isBN(creatorFeeBps) ? creatorFeeBps : new BN(creatorFeeBps);
+    }
+
+    // How many tokens the first buy receives for `quoteAmount`. The curve does not exist
+    // yet, so this is priced off Global's initial virtual reserves -- which for a
+    // quote-control mint are seeded from the QuoteControl PDA, hence fetching it here. It
+    // must be quoted at the same creator fee rate the create stores, or the buy pays less
+    // than the program charges and fails.
+    const quoteControl = isTokenQuoted ? await online(connection).fetchQuoteControl() : null;
+    const amount = getBuyTokenAmountFromSolAmount({
+        global,
+        feeConfig: null,
+        mintSupply: null,
+        bondingCurve: null,
+        amount: quoteAmount,
+        quoteMint: isTokenQuoted ? quote.mint : NATIVE_MINT,
+        quoteControl,
+        ...(common.creatorFeeBps ? { creatorFeeBps: common.creatorFeeBps } : {}),
+    });
+
+    if (!amount || amount.isZero()) {
+        const err = new Error('That launch amount is too small to buy any tokens.');
+        err.userFacing = true;
+        throw err;
+    }
+
+    let instructions;
+    if (isTokenQuoted) {
+        instructions = await sdk.createV2AndBuyV2Instructions({
+            ...common,
+            amount,
+            quoteAmount,
+            quoteMint: quote.mint,
+            quoteTokenProgram: quote.quoteTokenProgram,
+        });
+    } else {
+        instructions = await sdk.createV2AndBuyInstructions({
+            ...common,
+            amount,
+            solAmount: quoteAmount,
+        });
+    }
+
+    return {
+        instructions,
+        computeUnitLimit: isTokenQuoted ? CU_LIMIT_TOKEN_LAUNCH : CU_LIMIT_SOL_LAUNCH,
+        quoteMint: quote ? quote.mint.toBase58() : null,
+        isTokenQuoted,
+    };
+}
+
+/**
+ * A compute-unit limit instruction sized for this launch. Kept here so callers cannot forget
+ * it: a token-quoted launch that runs on the default budget fails partway through.
+ */
+function computeBudgetInstruction(units) {
+    return ComputeBudgetProgram.setComputeUnitLimit({ units });
+}
+
+/**
+ * Collect the platform's creator fees across SOL and every supported quote mint, from both
+ * the pump creator vault and the pump-amm coin creator vault.
+ *
+ * This replaces the hand-rolled two-leg claim, which only ever knew about SOL. With Custom
+ * Pairs a coin quoted in a token accrues its creator fees in that token, so a SOL-only claim
+ * would silently leave them stranded in vault ATAs forever.
+ *
+ * `extraQuoteMints` matters for correctness over time: de-listing a mint from QuoteControl
+ * stops new creates but existing curves keep trading and accruing in it, and the SDK's
+ * listed-mint sweep would no longer see them. Callers should pass the distinct
+ * `quote_mint` values of our own launched tokens.
+ */
+async function buildCollectAllFeesInstructions({ connection, creator, feePayer, extraQuoteMints = [] }) {
+    const extras = extraQuoteMints
+        .filter(Boolean)
+        .map(m => { try { return new PublicKey(m); } catch (e) { return null; } })
+        .filter(Boolean);
+
+    return online(connection).collectCoinCreatorFeeAllQuotesInstructions(
+        creator,
+        feePayer || creator,
+        extras
+    );
+}
+
+/**
+ * What is waiting to be collected, per quote mint. Used to decide whether a claim is worth
+ * sending at all.
+ */
+async function fetchCollectableFees({ connection, creator, extraQuoteMints = [] }) {
+    const extras = extraQuoteMints
+        .filter(Boolean)
+        .map(m => { try { return new PublicKey(m); } catch (e) { return null; } })
+        .filter(Boolean);
+
+    const o = online(connection);
+    if (typeof o.fetchCreatorVaultQuoteBalances !== 'function') return null;
+    return o.fetchCreatorVaultQuoteBalances(creator, extras);
+}
+
+function resetCaches() {
+    globalCache = { value: null, at: 0 };
+    quoteMintCache = { value: null, at: 0 };
+}
+
+module.exports = {
+    buildLaunchInstructions,
+    buildCollectAllFeesInstructions,
+    fetchCollectableFees,
+    getSupportedQuoteMints,
+    resolveQuote,
+    computeBudgetInstruction,
+    fetchGlobal,
+    resetCaches,
+    CU_LIMIT_SOL_LAUNCH,
+    CU_LIMIT_TOKEN_LAUNCH,
+};

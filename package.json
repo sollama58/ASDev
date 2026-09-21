@@ -18,6 +18,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
     "@coral-xyz/anchor": "^0.29.0",
+    "@pump-fun/pump-sdk": "^2.0.0",
     "@solana/spl-token": "^0.4.0",
     "@solana/web3.js": "^1.91.0",
     "axios": "^1.6.8",
