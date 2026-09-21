@@ -14,8 +14,8 @@ const logger = require('./logger');
 /**
  * Parse a pump.fun fee_sharing_config account.
  *
- * v28.6: the single parser. Three copies of this lived in mintExtractor, robinhoodScanner
- * and pagsFeeScanner, and all three had drifted: one rejected 0-bps entries, one skipped the
+ * v28.6: the single parser. Copies of this once lived in several modules and had drifted:
+ * one rejected 0-bps entries, one skipped the
  * "did we read every shareholder" check, one returned a `format` field nothing consumed.
  * This account decides what share of a token's fees is ours, so three parsers meant three
  * possible answers for the same bytes. This is the strictest of the three — 0-bps entries

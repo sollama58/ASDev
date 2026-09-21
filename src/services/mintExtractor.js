@@ -1656,7 +1656,7 @@ async function filterMintsWeAreRecipientFor(mints, creatorPubkey, connection) {
 
 /**
  * Fetch token metadata with multi-source fallback
- * Used when registering PAGS beneficiaries to ensure token metadata is stored
+ * Used to ensure token metadata is stored
  *
  * Sources tried in order:
  * 1. Pump.fun API (best for new pump.fun tokens)

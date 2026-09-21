@@ -7,6 +7,12 @@
     <meta name="description" content="Token launchpads are shit. ShitPad pays you back: 50% of every fee to token holders, 25% to the shared pool, 25% to buyback and burn.">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💩</text></svg>">
 
+    <!-- The API this page talks to. Change this one line when you point the site at a new backend. -->
+    <meta name="shitpad-backend" content="https://asdev-1kvy.onrender.com">
+
+    <!-- Pinned rather than @latest: a silent major bump here would break signing for every visitor. -->
+    <script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
+
     <style>
         :root {
             --bg:           #080808;
@@ -971,6 +977,94 @@
         .btn-secondary { background: var(--surface3); color: var(--text); border: 1px solid var(--border2); }
         .btn-sm { padding: 8px 14px; font-size: 12px; }
 
+        .launch-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .launch-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+        .launch-field.full { grid-column: 1 / -1; }
+        .launch-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+        .launch-label .opt { font-weight: 500; text-transform: none; letter-spacing: 0; }
+        .launch-input {
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            color: var(--text);
+            padding: 10px 13px;
+            font-size: 13px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+            min-width: 0;
+            width: 100%;
+        }
+        .launch-input::placeholder { color: var(--muted); }
+        .launch-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+        .launch-input.mono { font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace; font-size: 12px; }
+        .char-count { font-size: 10px; color: var(--muted); align-self: flex-end; }
+        .char-count.over { color: #fca5a5; }
+
+        .wallet-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding: 11px 13px;
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            margin-bottom: 14px;
+        }
+        .wallet-bar-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+        .wallet-bar-addr { font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace; font-size: 12px; color: var(--text); word-break: break-all; }
+        .wallet-bar .btn { margin-left: auto; }
+
+        .launch-fee-note {
+            font-size: 11px;
+            color: var(--muted);
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+        .launch-fee-note strong { color: var(--text2); }
+
+        .launch-result {
+            margin-top: 14px;
+            padding: 14px;
+            background: var(--green-dim);
+            border: 1px solid rgba(34,197,94,0.25);
+            border-radius: var(--radius-sm);
+        }
+        .launch-result-title { font-size: 13px; font-weight: 800; color: #86efac; margin-bottom: 9px; }
+        .launch-result-mint {
+            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 12px;
+            color: var(--text);
+            word-break: break-all;
+            margin-bottom: 10px;
+        }
+        .launch-result-links { display: flex; gap: 8px; flex-wrap: wrap; }
+        .launch-result-links a {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--accent);
+            text-decoration: none;
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            padding: 7px 12px;
+        }
+        .launch-result-links a:hover { opacity: 0.8; }
+
         .msg {
             padding: 11px 13px;
             border-radius: var(--radius-sm);
@@ -1484,6 +1578,7 @@
             .pool-stat-value { font-size: 14px; }
             .col-vol, .col-status { display: none; }
             .input-group { flex-direction: column; }
+            .launch-grid { grid-template-columns: 1fr; }
             .token-name-sub { max-width: 90px; }
             .about-banner { flex-direction: column; align-items: flex-start; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1583,7 +1678,7 @@
             </div>
             <div class="pool-split-note">
                 <span class="pool-split-icon">⚖️</span>
-                <span>Every fee collected is split <strong>50% → that token's holders</strong>, <strong>25% → Central Pool</strong> (shared across all registered tokens) and <strong>25% → buyback &amp; burn</strong>.</span>
+                <span>Every fee collected is split <strong>50% → that token's holders</strong>, <strong>25% → Central Pool</strong> (shared across every ShitPad token) and <strong>25% → buyback &amp; burn</strong>.</span>
             </div>
             <button class="btn-recipients" onclick="openRecipients()">View Expected Recipients →</button>
             <div class="pool-divider"></div>
@@ -1611,7 +1706,7 @@
             </div>
             <div class="pool-stat">
                 <div class="pool-stat-value" id="stat-tokens">—</div>
-                <div class="pool-stat-label">Registered Tokens</div>
+                <div class="pool-stat-label">Launched Tokens</div>
             </div>
             <div class="pool-stat">
                 <div class="pool-stat-value" id="stat-interval">—</div>
@@ -1644,7 +1739,7 @@
                 <div class="lookup-calc-title">How your amount is calculated</div>
                 <div class="lookup-calc-row">
                     <span class="lookup-calc-icon">🏦</span>
-                    <span><strong>Token Pools</strong> — for each registered token you hold, your share = your balance ÷ tracked supply × that token's individual pool (99% distributable). <strong>ASDF Top 100</strong> and <strong>ANSEM Top 1000</strong> holders each receive <strong>2× weight</strong> (stackable to 4×). Fires when a token's pool reaches 1 SOL.</span>
+                    <span><strong>Token Pools</strong> — for each ShitPad token you hold, your share = your balance ÷ tracked supply × that token's individual pool (99% distributable). <strong>ASDF Top 100</strong> and <strong>ANSEM Top 1000</strong> holders each receive <strong>2× weight</strong> (stackable to 4×). Fires when a token's pool reaches 1 SOL.</span>
                 </div>
                 <div class="lookup-calc-row">
                     <span class="lookup-calc-icon">⚖️</span>
@@ -1664,7 +1759,7 @@
     <div class="card">
         <div class="card-header">
             <div class="card-header-left">
-                <span class="card-title">Registered Tokens</span>
+                <span class="card-title">Launched Tokens</span>
                 <span class="card-count" id="lb-count"></span>
             </div>
             <div style="display:flex;gap:8px;align-items:center">
@@ -1680,10 +1775,10 @@
         </div>
     </div>
 
-    <!-- Register -->
+    <!-- Launch -->
     <div class="card">
         <div class="card-header">
-            <span class="card-title">Register Your Token</span>
+            <span class="card-title">Launch a Token</span>
         </div>
         <div class="register-body">
 
@@ -1693,61 +1788,80 @@
                     <div class="step">
                         <div class="step-num">1</div>
                         <div class="step-body">
-                            <div class="step-label">Configure fee sharing on Pump.fun</div>
-                            <div class="step-desc">On your token's Pump.fun page, go to <em>Creator Settings</em> and add the ShitPad platform wallet as a fee recipient. Set any percentage — even 1% qualifies. This is done fully on-chain.</div>
+                            <div class="step-label">Upload your token image to Imgur</div>
+                            <div class="step-desc">Drop your image at <a href="https://imgur.com/upload" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">imgur.com/upload</a>, then right-click the result and copy the direct image link. It should look like <em>i.imgur.com/abc123.png</em>.</div>
                         </div>
                     </div>
                     <div class="step">
                         <div class="step-num">2</div>
                         <div class="step-body">
-                            <div class="step-label">Paste your token's mint address below</div>
-                            <div class="step-desc">Enter the Solana mint address of your token. Click <strong>Verify</strong> to confirm the token exists and that fee sharing is configured correctly on-chain.</div>
+                            <div class="step-label">Connect your wallet and fill in the details</div>
+                            <div class="step-desc">Phantom, Solflare and Backpack are supported. Name, ticker and image are required; description, X and website are optional.</div>
                         </div>
                     </div>
                     <div class="step">
                         <div class="step-num">3</div>
                         <div class="step-body">
-                            <div class="step-label">Submit registration</div>
-                            <div class="step-desc">Click <strong>Register Token</strong>. The backend verifies fee sharing on-chain — no manual approval needed. Your token is added to the pool immediately.</div>
+                            <div class="step-label">Sign the launch fee and we do the rest</div>
+                            <div class="step-desc">You sign one transaction for the launch fee. ShitPad mints the token on Pump.fun with fee sharing already wired up, so you never have to configure anything by hand. Where a pre-ground address is available your contract address ends in <strong>shit</strong>.</div>
                         </div>
                     </div>
                     <div class="step">
                         <div class="step-num">4</div>
                         <div class="step-body">
-                            <div class="step-label">Earn SOL airdrops every 15 minutes</div>
-                            <div class="step-desc">Trading fees from your token flow into ShitPad and split 50% to your holders, 25% to the central pool, 25% to buyback &amp; burn. Every 15 minutes the pools distribute SOL proportional to holdings. Tokens need ≥ $250 in 24h volume to be eligible for a given cycle.</div>
+                            <div class="step-label">Your holders earn SOL every 15 minutes</div>
+                            <div class="step-desc">Trading fees from your token flow into ShitPad and split 50% to your holders, 25% to the central pool, 25% to buyback &amp; burn. Every 15 minutes the pools distribute SOL proportional to holdings. Tokens need enough 24h volume to be eligible for a given cycle.</div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div class="platform-wallet-box">
-                <span class="platform-wallet-label">ShitPad Wallet</span>
-                <span class="platform-wallet-addr" id="platform-wallet">Loading…</span>
+            <div class="wallet-bar">
+                <span class="wallet-bar-label">Wallet</span>
+                <span class="wallet-bar-addr" id="wallet-addr">Not connected</span>
+                <button class="btn btn-primary btn-sm" id="wallet-btn" onclick="toggleWallet()">Connect</button>
+            </div>
+
+            <div class="launch-grid">
+                <div class="launch-field">
+                    <label class="launch-label" for="launch-name">Token Name</label>
+                    <input class="launch-input" id="launch-name" type="text" maxlength="32" placeholder="Poop Coin" autocomplete="off">
+                </div>
+                <div class="launch-field">
+                    <label class="launch-label" for="launch-ticker">Ticker</label>
+                    <input class="launch-input" id="launch-ticker" type="text" maxlength="11" placeholder="POOP" autocomplete="off">
+                </div>
+                <div class="launch-field full">
+                    <label class="launch-label" for="launch-image">Image URL <span class="opt">(direct Imgur link)</span></label>
+                    <input class="launch-input mono" id="launch-image" type="text" placeholder="https://i.imgur.com/abc123.png" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="launch-field full">
+                    <label class="launch-label" for="launch-desc">Description <span class="opt">(optional, max 75)</span></label>
+                    <input class="launch-input" id="launch-desc" type="text" maxlength="75" placeholder="The one launchpad that pays you back." autocomplete="off">
+                    <span class="char-count" id="desc-count">0 / 75</span>
+                </div>
+                <div class="launch-field">
+                    <label class="launch-label" for="launch-twitter">X / Twitter <span class="opt">(optional)</span></label>
+                    <input class="launch-input" id="launch-twitter" type="text" placeholder="https://x.com/yourhandle" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="launch-field">
+                    <label class="launch-label" for="launch-website">Website <span class="opt">(optional)</span></label>
+                    <input class="launch-input" id="launch-website" type="text" placeholder="https://example.com" autocomplete="off" spellcheck="false">
+                </div>
+            </div>
+
+            <div class="launch-fee-note">
+                Launch fee: <strong id="launch-fee">—</strong> SOL, paid to the ShitPad wallet
+                <span class="platform-wallet-addr" id="platform-wallet" style="font-size:11px;white-space:nowrap">…</span>
                 <button class="btn-copy-wallet" onclick="copyWallet()">Copy</button>
             </div>
 
-            <div class="register-divider"></div>
-
-            <div class="register-hint">
-                Enter your token's mint address to verify fee sharing is configured, then register to start earning airdrop distributions.
-            </div>
-
             <div class="input-group">
-                <input
-                    class="mint-input"
-                    id="mint-input"
-                    type="text"
-                    placeholder="Token mint address (e.g. 6EF8rr…)"
-                    maxlength="44"
-                    autocomplete="off"
-                    spellcheck="false"
-                />
-                <button class="btn btn-primary" id="verify-btn" onclick="verifyToken()">Verify</button>
+                <button class="btn btn-primary" id="launch-btn" onclick="launchToken()" style="flex:1">Launch Token</button>
             </div>
+
             <div id="reg-msg"></div>
-            <div id="reg-preview" style="display:none"></div>
-            <div id="reg-actions" style="display:none"></div>
+            <div id="launch-result" style="display:none"></div>
         </div>
     </div>
 
@@ -1812,11 +1926,11 @@
                 <div class="about-steps">
                     <div class="about-step">
                         <div class="about-step-icon">💸</div>
-                        <div class="about-step-text"><strong>Fee collection:</strong> Every trade on a registered token generates a fee. A portion of that fee is sent directly to the ShitPad platform wallet on-chain via Pump.fun's fee-sharing mechanism.</div>
+                        <div class="about-step-text"><strong>Fee collection:</strong> Every trade on a ShitPad token generates a fee. ShitPad mints each token with itself as a fee recipient, so that fee arrives at the platform wallet on-chain through Pump.fun's fee-sharing mechanism, with nothing for the creator to configure.</div>
                     </div>
                     <div class="about-step">
                         <div class="about-step-icon">⚖️</div>
-                        <div class="about-step-text"><strong>50 / 25 / 25 fee split:</strong> Each time fees are collected from a token they are split three ways — <strong>50% into that token's Individual Pool</strong> (paid out exclusively to holders of that token), <strong>25% into the Central Pool</strong> (shared across every registered token's holder base), and <strong>25% to buyback &amp; burn</strong>. Your token's own volume directly rewards your holders, while activity anywhere on the platform tops up everyone.</div>
+                        <div class="about-step-text"><strong>50 / 25 / 25 fee split:</strong> Each time fees are collected from a token they are split three ways — <strong>50% into that token's Individual Pool</strong> (paid out exclusively to holders of that token), <strong>25% into the Central Pool</strong> (shared across every ShitPad token's holder base), and <strong>25% to buyback &amp; burn</strong>. Your token's own volume directly rewards your holders, while activity anywhere on the platform tops up everyone.</div>
                     </div>
                     <div class="about-step">
                         <div class="about-step-icon">🔥</div>
@@ -1841,15 +1955,15 @@
 
             <div class="about-section">
                 <div class="about-section-title">For Token Creators</div>
-                <p>Registration is free and permissionless. Add the ShitPad wallet as a fee recipient on Pump.fun, then register your token's mint address here. The platform verifies fee sharing on-chain automatically — no manual approval. Your token's holders start receiving SOL airdrops in the next cycle.</p>
-                <p>Fee sharing can be removed at any time on Pump.fun, which will deactivate your token's registration. You can re-register anytime by re-adding fee sharing and using <strong>Re-register</strong>.</p>
+                <p>Launching is open to anyone. Connect a wallet, fill in the name, ticker and image, and sign the launch fee. ShitPad mints the token on Pump.fun with fee sharing already wired to the platform wallet, so there is nothing to configure afterwards. Your holders start receiving SOL airdrops in the next cycle.</p>
+                <p>Where the address pool has one ready, your contract address ends in <strong>shit</strong>. If the pool is empty the launch still goes ahead with an ordinary address rather than making you wait.</p>
             </div>
 
             <div class="about-divider"></div>
 
             <div class="about-section">
                 <div class="about-section-title">For Token Holders</div>
-                <p>Simply hold tokens that are registered on ShitPad. SOL distributions are sent directly to your wallet based on your proportional share of the token's supply (excluding LP and burnt tokens). You can track expected airdrop amounts by clicking any token in the leaderboard.</p>
+                <p>Simply hold tokens launched on ShitPad. SOL distributions are sent directly to your wallet based on your proportional share of the token's supply (excluding LP and burnt tokens). You can track expected airdrop amounts by clicking any token in the list.</p>
                 <p>A minimum distribution of 0.01 SOL per wallet applies — holders below this threshold in a given cycle are skipped to avoid dust transactions.</p>
             </div>
 
@@ -1919,7 +2033,7 @@
 <div class="modal-overlay" id="viewall-modal" onclick="handleOverlayClick(event,'viewall-modal')">
     <div class="modal modal-lg">
         <div class="modal-header">
-            <span class="modal-title">All Registered Tokens</span>
+            <span class="modal-title">All Launched Tokens</span>
             <button class="modal-close" onclick="closeModal('viewall-modal')">✕</button>
         </div>
         <div class="modal-body" style="padding:0" id="viewall-body">
@@ -1931,7 +2045,7 @@
 'use strict';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
-const BACKEND_URL  = 'https://asdev-1kvy.onrender.com';
+const BACKEND_URL  = (document.querySelector('meta[name="shitpad-backend"]')?.content || '').replace(/\/+$/, '');
 const WS_URL       = BACKEND_URL.replace(/^https/, 'wss') + '/ws';
 const POLL_HEALTH  = 30_000;
 const POLL_LB      = 60_000;
@@ -1942,12 +2056,13 @@ let nextAirdropAt         = null;
 let countdownTimer        = null;
 let ws                    = null;
 let wsReconnTimer         = null;
-let verifiedToken         = null;
 let allTokensCache        = [];
+let DEV_WALLET            = null;  // platform wallet, from /api/health
+let DEPLOY_FEE_SOL        = 0;     // launch fee in SOL, from /api/health
 let centralPoolThreshold  = 5.0;   // SOL — updated from health
 let tokenPoolThreshold    = 1.0;   // SOL — updated from health
 
-// Filter state — low vol shown by default so newly registered tokens are visible
+// Filter state — low vol shown by default so newly launched tokens are visible
 const filters = { showDeactivated: false, showLowVol: true };
 
 // ── Formatting ─────────────────────────────────────────────────────────────────
@@ -2243,26 +2358,22 @@ async function openTokenModal(token) {
 
     openModal('token-modal');
 
-    // Fetch holder data (only available for robinhood/fee-sharing tokens)
-    if (token.source === 'robinhood' || token.pendingAirdropSol !== null) {
-        try {
-            const r = await fetch(`${BACKEND_URL}/api/robinhood/holders/${encodeURIComponent(token.mint)}`);
-            if (!r.ok) throw new Error(r.status);
-            const d = await r.json();
-            renderHolders(d);
-        } catch (e) {
-            console.warn('[TokenModal] Holder fetch error:', e.message);
-            document.getElementById('holder-list-body').innerHTML =
-                `<div class="no-holders-note">Holder data unavailable — ${esc(e.message)}.</div>`;
-        }
-    } else {
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/token-holders/${encodeURIComponent(token.mint)}`);
+        if (!r.ok) throw new Error(r.status);
+        renderHolders(await r.json(), parseFloat(token.pendingAirdropSol) || 0);
+    } catch (e) {
+        console.warn('[TokenModal] Holder fetch error:', e.message);
         document.getElementById('holder-list-body').innerHTML =
-            `<div class="no-holders-note">Holder airdrop data is only tracked for fee-sharing registered tokens.</div>`;
+            `<div class="no-holders-note">Holder data unavailable — ${esc(e.message)}.</div>`;
     }
 }
 
-function renderHolders(data) {
-    const holders = data.holders || [];
+// `rows` is the raw /api/token-holders array; shares are derived here from the token's
+// own pending pool. These are estimates: the distributor also applies ASDF Top 100 and
+// ANSEM Top 1000 weighting, which the browser has no way to know.
+function renderHolders(rows, pendingSol) {
+    const holders = Array.isArray(rows) ? rows : [];
     const el = document.getElementById('holder-list-body');
 
     if (!holders.length) {
@@ -2270,14 +2381,36 @@ function renderHolders(data) {
         return;
     }
 
-    const hasBelow = holders.some(h => h.belowMinimum);
+    let trackedTotal = 0n;
+    for (const h of holders) {
+        try { trackedTotal += BigInt(h.balance || '0'); } catch {}
+    }
 
-    const rows = holders.map(h => {
+    // 99% distributable matches the distributor's 1% dust buffer.
+    const distributable = (parseFloat(pendingSol) || 0) * 0.99;
+
+    const enriched = holders.map(h => {
+        let bal = 0n;
+        try { bal = BigInt(h.balance || '0'); } catch {}
+        const share    = trackedTotal > 0n ? Number(bal * 1000000n / trackedTotal) / 1000000 : 0;
+        const expected = distributable * share;
+        return {
+            rank:         h.rank,
+            holderPubkey: h.holderPubkey,
+            supplyPct:    share * 100,
+            expectedSol:  expected,
+            belowMinimum: expected > 0 && expected < MIN_AIRDROP_SOL,
+        };
+    });
+
+    const hasBelow = enriched.some(h => h.belowMinimum);
+
+    const rowsHtml = enriched.map(h => {
         const wallet = h.holderPubkey
             ? h.holderPubkey.slice(0,6) + '…' + h.holderPubkey.slice(-4)
             : '—';
-        const expected = parseFloat(h.expectedAirdropSol) > 0
-            ? `<span class="sol-amount">◎ ${parseFloat(h.expectedAirdropSol).toFixed(6)}</span>`
+        const expected = h.expectedSol > 0
+            ? `<span class="sol-amount">◎ ${h.expectedSol.toFixed(6)}</span>`
             : `<span style="color:var(--muted)">—</span>`;
         const belowNote = h.belowMinimum
             ? ` <span style="color:var(--muted);font-size:10px">(below min)</span>`
@@ -2286,7 +2419,7 @@ function renderHolders(data) {
             <tr>
                 <td class="holder-rank">#${h.rank}</td>
                 <td class="holder-wallet">${wallet}</td>
-                <td class="right" style="color:var(--text2)">${parseFloat(h.supplyPct).toFixed(2)}%</td>
+                <td class="right" style="color:var(--text2)">${h.supplyPct.toFixed(2)}%</td>
                 <td class="right">${expected}${belowNote}</td>
             </tr>`;
     }).join('');
@@ -2298,12 +2431,13 @@ function renderHolders(data) {
                     <th>#</th>
                     <th>Wallet</th>
                     <th class="right">Supply %</th>
-                    <th class="right">Expected Airdrop</th>
+                    <th class="right">Est. Airdrop</th>
                 </tr>
             </thead>
-            <tbody>${rows}</tbody>
+            <tbody>${rowsHtml}</tbody>
         </table>
-        ${hasBelow ? `<div class="below-min-note">⚠ Holders marked "below min" hold less than the 0.01 SOL minimum distribution threshold and will be skipped in the current cycle.</div>` : ''}
+        <div class="below-min-note" style="opacity:0.8">Estimates from this token's pending pool and tracked balances. ASDF Top 100 and ANSEM Top 1000 holders receive extra weight at distribution time, so actual payouts differ.</div>
+        ${hasBelow ? `<div class="below-min-note">⚠ Holders marked "below min" fall under the 0.01 SOL minimum distribution threshold and will be skipped in the current cycle.</div>` : ''}
     `;
 }
 
@@ -2355,7 +2489,16 @@ function applyHealth(d) {
     document.getElementById('pool-updated').textContent = 'Updated ' + fmt.ago(Date.now());
 
     if (d.wallet) {
-        document.getElementById('platform-wallet').textContent = d.wallet;
+        DEV_WALLET = d.wallet;
+        const w = document.getElementById('platform-wallet');
+        w.textContent = d.wallet.slice(0, 6) + '…' + d.wallet.slice(-6);
+        w.title       = d.wallet;
+        w.dataset.full = d.wallet;
+    }
+
+    if (d.deploymentFee != null) {
+        DEPLOY_FEE_SOL = parseFloat(d.deploymentFee) || 0;
+        document.getElementById('launch-fee').textContent = DEPLOY_FEE_SOL.toFixed(3);
     }
 }
 
@@ -2444,7 +2587,7 @@ async function lookupWallet() {
         let holdingsHTML = '';
         const tokenList = (holdings?.holdings || []);
         if (!isHolder || tokenList.length === 0) {
-            holdingsHTML = `<div class="lookup-holdings"><div class="lookup-no-holdings">No registered token positions found for this wallet.</div></div>`;
+            holdingsHTML = `<div class="lookup-holdings"><div class="lookup-no-holdings">No ShitPad token positions found for this wallet.</div></div>`;
         } else {
             const rows = tokenList.map(h => {
                 const expSol  = parseFloat(h.expectedAirdropSol || 0);
@@ -2496,8 +2639,9 @@ async function lookupWallet() {
 }
 
 function copyWallet() {
-    const addr = document.getElementById('platform-wallet').textContent;
-    if (!addr || addr === 'Loading…') return;
+    // The label is truncated for display; copy the full address.
+    const addr = DEV_WALLET || document.getElementById('platform-wallet').dataset.full;
+    if (!addr) return;
     navigator.clipboard.writeText(addr).then(() => toast('Wallet address copied!', 'success'));
 }
 
@@ -2621,18 +2765,11 @@ async function loadLeaderboard(showSpinner = false) {
     const body = document.getElementById('lb-body');
 
     try {
-        const [tokens, lbData] = await Promise.all([
-            fetchAllTokens(),
-            fetch(`${BACKEND_URL}/api/leaderboard`).then(r => r.ok ? r.json() : { tokens: [] }),
-        ]);
-
-        const pendingMap = {};
-        for (const t of (lbData.tokens || [])) {
-            pendingMap[t.mint] = t.pendingAirdropSol;
-        }
+        // /api/all-launches already carries each token's own pending pool, so one call is enough.
+        const tokens = await fetchAllTokens();
 
         allTokensCache = tokens
-            .map(t => ({ ...t, pendingAirdropSol: pendingMap[t.mint] ?? t.pendingAirdropSol ?? null }))
+            .map(t => ({ ...t, pendingAirdropSol: t.pendingAirdropSol ?? null }))
             .sort((a, b) => (parseFloat(b.marketCap) || 0) - (parseFloat(a.marketCap) || 0));
 
         document.getElementById('stat-tokens').textContent = allTokensCache.length;
@@ -2641,7 +2778,7 @@ async function loadLeaderboard(showSpinner = false) {
             body.innerHTML = `
                 <div class="lb-empty">
                     <div class="lb-empty-icon">💩</div>
-                    <div class="lb-empty-text">No tokens registered yet — be the first!</div>
+                    <div class="lb-empty-text">No tokens launched yet — be the first!</div>
                 </div>`;
             return;
         }
@@ -2663,126 +2800,274 @@ async function loadLeaderboard(showSpinner = false) {
     }
 }
 
-// ── Token Registration ──────────────────────────────────────────────────────────
+// ── Wallet ─────────────────────────────────────────────────────────────────────
+let walletProvider = null;
+let walletPubkey   = null;
+let launching      = false;
+
+function detectProvider() {
+    if (window.solana?.isPhantom) return { provider: window.solana, name: 'Phantom' };
+    if (window.solflare?.isSolflare) return { provider: window.solflare, name: 'Solflare' };
+    if (window.backpack || window.xnft?.solana) return { provider: window.backpack || window.xnft.solana, name: 'Backpack' };
+    if (window.solana) return { provider: window.solana, name: 'Wallet' };
+    return null;
+}
+
+function setWalletUI() {
+    const addrEl = document.getElementById('wallet-addr');
+    const btnEl  = document.getElementById('wallet-btn');
+    if (walletPubkey) {
+        addrEl.textContent = walletPubkey.slice(0, 6) + '…' + walletPubkey.slice(-6);
+        addrEl.title       = walletPubkey;
+        btnEl.textContent  = 'Disconnect';
+        btnEl.classList.remove('btn-primary');
+        btnEl.classList.add('btn-secondary');
+    } else {
+        addrEl.textContent = 'Not connected';
+        addrEl.removeAttribute('title');
+        btnEl.textContent  = 'Connect';
+        btnEl.classList.remove('btn-secondary');
+        btnEl.classList.add('btn-primary');
+    }
+}
+
+async function toggleWallet() {
+    if (walletPubkey) {
+        try { await walletProvider?.disconnect(); } catch {}
+        walletProvider = null;
+        walletPubkey   = null;
+        setWalletUI();
+        return;
+    }
+
+    const found = detectProvider();
+    if (!found) {
+        setMsg('No Solana wallet detected. Install <a href="https://phantom.app/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Phantom</a>, Solflare or Backpack, then reload.', 'error');
+        return;
+    }
+
+    try {
+        const resp = await found.provider.connect();
+        const pk   = resp?.publicKey || found.provider.publicKey;
+        if (!pk) throw new Error('Wallet returned no public key');
+        walletProvider = found.provider;
+        walletPubkey   = pk.toString();
+        setWalletUI();
+        setMsg('', '');
+        toast(`Connected to ${found.name}`, 'success');
+    } catch (e) {
+        setMsg('Wallet connection rejected.', 'error');
+    }
+}
+
+// ── Token Launch ───────────────────────────────────────────────────────────────
 function setMsg(html, type) {
     const el = document.getElementById('reg-msg');
     el.innerHTML = html ? `<div class="msg msg-${type}">${html}</div>` : '';
 }
 
-function showPreview(token) {
-    const avatar = token.image
-        ? `<img class="preview-avatar" src="${escUrl(token.image)}" alt=""
-                onerror="this.outerHTML='<div class=\\'preview-avatar-placeholder\\'>${esc((token.ticker||'?')[0])}</div>'">`
-        : `<div class="preview-avatar-placeholder">${esc((token.ticker||'?')[0])}</div>`;
-
-    const mcap = token.marketCap ? fmt.usd(token.marketCap) : '—';
-    const vol  = token.volume24h  ? fmt.usd(token.volume24h) : '—';
-
-    document.getElementById('reg-preview').innerHTML = `
-        <div class="preview-card">
-            ${avatar}
-            <div class="preview-info">
-                <div class="preview-ticker">$${esc(token.ticker || token.symbol || '?')}</div>
-                <div class="preview-name">${esc(token.name || '')}</div>
-                <div class="preview-meta">MCap ${mcap} · Vol ${vol} · <span style="font-family:monospace;font-size:10px">${esc(token.mint.slice(0,8))}…</span></div>
-            </div>
-        </div>`;
-    document.getElementById('reg-preview').style.display = 'block';
+function setLaunchBtn(label, disabled) {
+    const b = document.getElementById('launch-btn');
+    b.textContent = label;
+    b.disabled    = !!disabled;
 }
 
-async function verifyToken() {
-    const mint = document.getElementById('mint-input').value.trim();
-    if (mint.length < 32 || mint.length > 44) {
-        setMsg('Enter a valid Solana mint address (32–44 characters).', 'error');
+const IMGUR_RE = /^https:\/\/i\.imgur\.com\/[A-Za-z0-9]+\.(png|jpe?g|gif|webp)$/i;
+const URL_RE   = /^https?:\/\/[^\s]+$/i;
+
+function readLaunchForm() {
+    return {
+        name:        document.getElementById('launch-name').value.trim(),
+        ticker:      document.getElementById('launch-ticker').value.trim(),
+        description: document.getElementById('launch-desc').value.trim(),
+        twitter:     document.getElementById('launch-twitter').value.trim(),
+        website:     document.getElementById('launch-website').value.trim(),
+        imageUrl:    document.getElementById('launch-image').value.trim(),
+    };
+}
+
+function validateLaunchForm(f) {
+    if (!f.name)                  return 'Token name is required.';
+    if (f.name.length > 32)       return 'Token name must be 32 characters or less.';
+    // The server strips a name to plain text and a ticker to A-Z0-9 before minting. Mirror
+    // that here so anything that would reduce to nothing is caught before the user pays,
+    // rather than after the fee transaction has already been signed and sent.
+    if (!f.name.replace(/[<>]/g, '').trim())
+        return 'Token name must contain some ordinary text.';
+    if (!f.ticker)                return 'Ticker is required.';
+    if (f.ticker.length > 11)     return 'Ticker must be 11 characters or less.';
+    if (!/[A-Za-z0-9]/.test(f.ticker))
+        return 'Ticker must contain letters or numbers. Symbols and emoji are removed on-chain.';
+    if (f.description.length > 75) return 'Description must be 75 characters or less.';
+    if (!f.imageUrl)              return 'Image URL is required — upload to Imgur first.';
+    if (!IMGUR_RE.test(f.imageUrl))
+        return 'Image URL must be a direct Imgur link, e.g. https://i.imgur.com/abc123.png';
+    if (f.twitter && !URL_RE.test(f.twitter)) return 'X / Twitter must be a full https:// URL.';
+    if (f.website && !URL_RE.test(f.website)) return 'Website must be a full https:// URL.';
+    return null;
+}
+
+async function launchToken() {
+    if (launching) return;
+
+    if (!walletPubkey || !walletProvider) {
+        setMsg('Connect a wallet before launching.', 'error');
+        return;
+    }
+    if (!window.solanaWeb3) {
+        setMsg('The Solana library failed to load. Check your connection and reload the page.', 'error');
+        return;
+    }
+    if (!DEV_WALLET) {
+        setMsg('Platform wallet not loaded yet — wait a moment and try again.', 'error');
         return;
     }
 
-    const btn = document.getElementById('verify-btn');
-    btn.disabled     = true;
-    btn.textContent  = 'Checking…';
-    setMsg('', '');
-    document.getElementById('reg-preview').style.display = 'none';
-    document.getElementById('reg-actions').style.display = 'none';
-    verifiedToken = null;
+    const form = readLaunchForm();
+    const err  = validateLaunchForm(form);
+    if (err) { setMsg(esc(err), 'error'); return; }
+
+    launching = true;
+    document.getElementById('launch-result').style.display = 'none';
+    setLaunchBtn('Preparing metadata…', true);
+    setMsg('Uploading token metadata…', 'info');
 
     try {
-        const regR  = await fetch(`${BACKEND_URL}/api/check-registration/${encodeURIComponent(mint)}`);
-        const regD  = await regR.json();
+        const prepR = await fetch(`${BACKEND_URL}/api/prepare-metadata`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(form),
+        });
+        const prepD = await prepR.json();
+        if (!prepR.ok || !prepD.metadataUri) {
+            throw new Error(prepD.error || 'Metadata upload failed.');
+        }
 
-        if (regD.registered) {
-            const t = regD.token;
-            showPreview({ ...t, mint });
-            setMsg(`✓ <strong>$${esc(t.ticker)}</strong> is already registered and earning airdrop fees.`, 'success');
+        setLaunchBtn('Waiting for signature…', true);
+        setMsg('Metadata ready. Approve the launch fee in your wallet…', 'info');
+
+        const bhR = await fetch(`${BACKEND_URL}/api/blockhash`);
+        if (!bhR.ok) throw new Error('Could not fetch a recent blockhash.');
+        const { blockhash } = await bhR.json();
+
+        const tx = new solanaWeb3.Transaction();
+        tx.add(solanaWeb3.ComputeBudgetProgram.setComputeUnitLimit({ units: 200000 }));
+        tx.add(solanaWeb3.ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 }));
+        tx.add(solanaWeb3.SystemProgram.transfer({
+            fromPubkey: new solanaWeb3.PublicKey(walletPubkey),
+            toPubkey:   new solanaWeb3.PublicKey(DEV_WALLET),
+            lamports:   Math.round(DEPLOY_FEE_SOL * 1e9),
+        }));
+        tx.recentBlockhash = blockhash;
+        tx.feePayer        = new solanaWeb3.PublicKey(walletPubkey);
+
+        const signed  = await walletProvider.signAndSendTransaction(tx);
+        const userTx  = signed?.signature || signed;
+        if (!userTx || typeof userTx !== 'string') throw new Error('Wallet did not return a transaction signature.');
+
+        setLaunchBtn('Queuing launch…', true);
+        setMsg('Payment sent. Verifying on-chain and queuing your launch…', 'info');
+
+        const depR = await fetch(`${BACKEND_URL}/api/deploy`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ ...form, metadataUri: prepD.metadataUri, userTx, userPubkey: walletPubkey }),
+        });
+        const depD = await depR.json();
+        if (!depR.ok || !depD.success || !depD.jobId) {
+            throw new Error(depD.error || 'Launch could not be queued.');
+        }
+
+        setLaunchBtn('Launching…', true);
+        setMsg('Launch queued. Minting your token — this usually takes under a minute…', 'info');
+        pollLaunch(depD.jobId);
+
+    } catch (e) {
+        setMsg(esc(e.message || 'Launch failed. Please try again.'), 'error');
+        setLaunchBtn('Launch Token', false);
+        launching = false;
+    }
+}
+
+function pollLaunch(jobId) {
+    let attempts = 0;
+    const MAX = 150; // 150 × 2s = 5 minutes
+
+    const timer = setInterval(async () => {
+        attempts++;
+        if (attempts > MAX) {
+            clearInterval(timer);
+            setMsg('Still working after 5 minutes. Your launch may still land — check the token list before retrying, so you do not pay twice.', 'error');
+            setLaunchBtn('Launch Token', false);
+            launching = false;
             return;
         }
 
-        const metaR = await fetch(`${BACKEND_URL}/api/token-metadata/${encodeURIComponent(mint)}`);
-        const metaD = await metaR.json();
+        try {
+            const r = await fetch(`${BACKEND_URL}/api/job-status/${encodeURIComponent(jobId)}`);
+            if (!r.ok) return;
+            const job = await r.json();
 
-        if (metaD.success && metaD.metadata) {
-            const m = metaD.metadata;
-            verifiedToken = { mint, name: m.name, ticker: m.symbol, image: m.image, marketCap: null, volume24h: null };
-            showPreview(verifiedToken);
-            setMsg(
-                'Token found. Click <strong>Register</strong> to submit — fee sharing must already be configured on Pump.fun.',
-                'info'
-            );
-            document.getElementById('reg-actions').innerHTML =
-                `<button class="btn btn-primary" id="register-btn" onclick="registerToken()">Register Token</button>`;
-            document.getElementById('reg-actions').style.display = 'block';
-        } else {
-            setMsg('Token metadata not found. Make sure this is a valid Pump.fun mint address.', 'error');
+            if (job.state === 'completed') {
+                clearInterval(timer);
+                launching = false;
+                setLaunchBtn('Launch Token', false);
+
+                const mint = job.result?.mint;
+                if (!mint) {
+                    setMsg('Launch completed, but the mint address was not returned. Check the token list below.', 'info');
+                    loadLeaderboard(true);
+                    return;
+                }
+
+                setMsg('', '');
+                showLaunchResult(mint, job.result?.signature);
+                toast('Token launched!', 'success');
+                ['launch-name','launch-ticker','launch-desc','launch-twitter','launch-website','launch-image']
+                    .forEach(id => { document.getElementById(id).value = ''; });
+                updateDescCount();
+                setTimeout(() => loadLeaderboard(true), 1500);
+
+            } else if (job.state === 'failed') {
+                clearInterval(timer);
+                launching = false;
+                setLaunchBtn('Launch Token', false);
+                // Strip stack frames and file paths before showing a worker error to the user.
+                const raw  = job.failedReason || '';
+                const safe = raw.replace(/\s+at\s+[\s\S]*/g, '').replace(/\/\S*/g, '[path]').trim().slice(0, 140) || 'Unknown error';
+                setMsg(`Launch failed: ${esc(safe)}`, 'error');
+            }
+        } catch {
+            // Transient network error — keep polling.
         }
-    } catch {
-        setMsg('Request failed. Please check your connection and try again.', 'error');
-    } finally {
-        btn.disabled    = false;
-        btn.textContent = 'Verify';
-    }
+    }, 2000);
 }
 
-async function registerToken() {
-    if (!verifiedToken) return;
-    const btn = document.getElementById('register-btn');
-    btn.disabled    = true;
-    btn.textContent = 'Registering…';
-
-    try {
-        const r = await fetch(`${BACKEND_URL}/api/register-token`, {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ mint: verifiedToken.mint }),
-        });
-        const d = await r.json();
-
-        if (d.success) {
-            const t       = d.token;
-            const sharePct = t.feeSharePercent ?? ((t.feeShareBps || 0) / 100);
-            setMsg(
-                `🎉 <strong>$${esc(t.ticker)}</strong> registered! Fee share: ${sharePct}%. Airdrops start next cycle.`,
-                'success'
-            );
-            document.getElementById('reg-actions').style.display = 'none';
-            document.getElementById('mint-input').value = '';
-            verifiedToken = null;
-            toast('Token registered!', 'success');
-            setTimeout(loadLeaderboard, 1200);
-        } else {
-            const errMsg = d.error || d.message || 'Registration failed. Ensure fee sharing is configured on-chain.';
-            setMsg(esc(errMsg), 'error');
-            btn.disabled    = false;
-            btn.textContent = 'Register Token';
-        }
-    } catch {
-        setMsg('Registration request failed. Please try again.', 'error');
-        btn.disabled    = false;
-        btn.textContent = 'Register Token';
-    }
+function showLaunchResult(mint, signature) {
+    const el = document.getElementById('launch-result');
+    const sigLink = signature
+        ? `<a href="https://solscan.io/tx/${encodeURIComponent(signature)}" target="_blank" rel="noopener">Transaction</a>`
+        : '';
+    el.innerHTML = `
+        <div class="launch-result">
+            <div class="launch-result-title">🎉 Launched — your holders start earning next cycle</div>
+            <div class="launch-result-mint">${esc(mint)}</div>
+            <div class="launch-result-links">
+                <a href="https://pump.fun/${encodeURIComponent(mint)}" target="_blank" rel="noopener">View on Pump.fun</a>
+                <a href="https://solscan.io/token/${encodeURIComponent(mint)}" target="_blank" rel="noopener">Solscan</a>
+                ${sigLink}
+            </div>
+        </div>`;
+    el.style.display = 'block';
 }
 
-document.getElementById('mint-input').addEventListener('keydown', e => {
-    if (e.key === 'Enter') verifyToken();
-});
+function updateDescCount() {
+    const v  = document.getElementById('launch-desc').value.length;
+    const el = document.getElementById('desc-count');
+    el.textContent = `${v} / 75`;
+    el.classList.toggle('over', v > 75);
+}
+document.getElementById('launch-desc').addEventListener('input', updateDescCount);
 
 // ── WebSocket ──────────────────────────────────────────────────────────────────
 function connectWS() {

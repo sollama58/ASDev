@@ -91,7 +91,7 @@ async function fetchTokenAccountsHeliusDAS(mint, limit = 250, caller = 'DAS') {
  * v27.6: replaces the hand-rolled getProgramAccounts scans that asdfSync.js and
  * workers.js#initAsdfSyncWorker each carried their own slightly-different copy of. Those
  * queried TOKEN_PROGRAM_ID only, while every other holder scan in this codebase
- * (holderScanner, robinhoodScanner) queries TOKEN *and* TOKEN_2022 -- so a Token-2022 mint
+ * (holderScanner) queries TOKEN *and* TOKEN_2022 -- so a Token-2022 mint
  * silently produced an empty holder list, and the multiplier it fed applied to nobody.
  *
  * DAS getTokenAccounts is program-agnostic, so it is the primary path. It also does not
@@ -145,7 +145,7 @@ async function fetchTopHoldersByBalance(mint, opts = {}) {
 
 /**
  * RPC fallback for fetchTopHoldersByBalance: query both token programs, exactly as
- * holderScanner and robinhoodScanner do, and merge whichever succeed.
+ * holderScanner does, and merge whichever succeed.
  */
 async function fetchTokenAccountsViaRpc(mint, connection, caller) {
     const { PublicKey } = require('@solana/web3.js');

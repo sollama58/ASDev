@@ -9,8 +9,6 @@
  * v25.22 - SECURITY: Added price bounds validation to prevent oracle manipulation
  * v25.46 - Added periodic image updates for ALL token types:
  *        - Platform tokens (tokens table)
- *        - Robinhood tokens (robinhood_tokens table)
- *        - PAGS tokens (pags_beneficiaries table)
  *        - Runs every 10 minutes to fill missing images
  */
 const axios = require('axios');
@@ -130,13 +128,11 @@ function chunkArray(array, size) {
     return result;
 }
 
-// v27.5 EFFICIENCY: A mint can be registered in more than one of tokens / robinhood_tokens /
-// pags_beneficiaries (e.g. a token can be both a platform launch and PAGS-registered, or a
-// Robinhood partner token that's also PAGS-registered). updateAllMissingImages runs the three
+// v27.5 EFFICIENCY: updateAllMissingImages runs the
 // per-table image passes back to back, so if an earlier pass in this same cycle (or a previous
 // cycle) already resolved an image for a mint, later passes can copy it straight from the DB
 // instead of independently re-querying DexScreener/GeckoTerminal/Helius for the same mint.
-const IMAGE_SOURCE_TABLES = ['tokens', 'robinhood_tokens', 'pags_beneficiaries'];
+const IMAGE_SOURCE_TABLES = ['tokens'];
 
 /**
  * Look up already-resolved images for a set of mints from the OTHER token tables.
@@ -239,7 +235,6 @@ async function fetchGeckoTerminalBatch(mints) {
 
 /**
  * v25.13: Update prices for specific tokens (no image/metadata updates)
- * v25.65: BUGFIX - Now handles both platform and robinhood_tokens tables
  *         Also sets volume to 0 for tokens without data from DexScreener
  * Used for frequent top token updates
  * @param {Object} deps - Dependencies
@@ -311,20 +306,15 @@ async function updatePricesOnly(deps, tokens) {
 
 /**
  * v25.13: Update prices for top 10 leaderboard tokens + King of the Hill
- * v25.65: BUGFIX - Now includes robinhood_tokens in top token updates
  * Runs every 1 minute
  */
 async function updateTopTokenPrices(deps) {
     const { db, globalState } = deps;
 
     try {
-        // v25.65: Get top 10 tokens from BOTH tables by market cap
         const topTokens = await db.all(`
             SELECT mint, ticker, 'platform' as table_name, "marketCap" FROM tokens
             WHERE "marketCap" > 0
-            UNION ALL
-            SELECT mint, ticker, 'robinhood_tokens' as table_name, "marketCap" FROM robinhood_tokens
-            WHERE "marketCap" > 0 AND "isActive" = 1
             ORDER BY "marketCap" DESC
             LIMIT 10
         `);
@@ -334,11 +324,7 @@ async function updateTopTokenPrices(deps) {
         let tokens = [...topTokens];
 
         if (kothMint && !tokens.find(t => t.mint === kothMint)) {
-            // Check both tables for KOTH token
-            let kothToken = await db.get('SELECT mint, ticker, "platform" as table_name FROM tokens WHERE mint = $1', [kothMint]);
-            if (!kothToken) {
-                kothToken = await db.get('SELECT mint, ticker, "robinhood_tokens" as table_name FROM robinhood_tokens WHERE mint = $1 AND "isActive" = 1', [kothMint]);
-            }
+            const kothToken = await db.get('SELECT mint, ticker, "platform" as table_name FROM tokens WHERE mint = $1', [kothMint]);
             if (kothToken) {
                 tokens.push(kothToken);
             }
@@ -359,28 +345,22 @@ async function updateTopTokenPrices(deps) {
 
 /**
  * v25.13: Full price update for all tokens (no metadata/images)
- * v25.65: BUGFIX - Now updates BOTH platform tokens AND robinhood_tokens
  *         Also ensures 0 volume is properly reflected (was holding old data)
  * Runs every 5 minutes
  */
 async function updateAllTokenPrices(deps) {
     const { db, globalState } = deps;
 
-    // v25.65: Fetch tokens from BOTH tables (platform + robinhood)
-    const platformTokens = await db.all('SELECT mint, ticker, "source" FROM tokens');
-    const robinhoodTokens = await db.all('SELECT mint, ticker, "source" FROM robinhood_tokens WHERE "isActive" = 1');
+    const platformTokens = await db.all('SELECT mint, ticker FROM tokens');
 
-    // Mark source for proper table updates
-    const allTokens = [
-        ...platformTokens.map(t => ({ ...t, table: 'tokens' })),
-        ...robinhoodTokens.map(t => ({ ...t, table: 'robinhood_tokens' }))
-    ];
+    // Every row lives in the same table; kept as a field so the update loop below stays generic.
+    const allTokens = platformTokens.map(t => ({ ...t, table: 'tokens' }));
 
     if (allTokens.length === 0) {
         return;
     }
 
-    logger.info(`[MetadataUpdater] Full price update: ${allTokens.length} tokens (${platformTokens.length} platform + ${robinhoodTokens.length} robinhood)`);
+    logger.info(`[MetadataUpdater] Full price update: ${allTokens.length} platform tokens`);
 
     const chunks = chunkArray(allTokens, 30);
     let totalUpdated = 0;
@@ -391,7 +371,7 @@ async function updateAllTokenPrices(deps) {
     // DexScreener chunk. getAssetBatch accepts up to 1000 ids, so for the typical token count
     // this turns what was previously ceil(allTokens.length / 30) Helius calls every 5 minutes
     // into a small, bounded number (1 per 1000 misses) — the same batching pattern already used
-    // elsewhere in this file (updateAllMissingImages / updatePagsTokenMetadata etc.).
+    // elsewhere in this file (updateAllMissingImages etc.).
     const missTable = new Map(); // mint -> table, so results can be applied after the loop
     const allMisses = [];
 
@@ -423,7 +403,6 @@ async function updateAllTokenPrices(deps) {
                 }
             }
 
-            // v25.65: Update BOTH platform tokens AND robinhood_tokens
             // IMPORTANT: Also update tokens with 0 volume (not just those with data)
             for (const t of chunk) {
                 const data = updates.get(t.mint);
@@ -741,344 +720,6 @@ async function fillMissingImagesFromMetadata(deps) {
 }
 
 /**
- * v25.46: Update metadata for Robinhood tokens (robinhood_tokens table)
- * Fetches images and market data from multiple sources
- * v27.3: DexScreener and Helius lookups are now batched (30 mints/request and one
- * getAssetBatch call respectively) instead of one HTTP request per token — this used
- * to be O(N) individual DexScreener/Helius calls per run.
- */
-async function updateRobinhoodTokenMetadata(deps) {
-    const { db } = deps;
-
-    try {
-        // Get Robinhood tokens missing images or needing metadata updates
-        const tokens = await db.all(`
-            SELECT id, mint, ticker, name, image FROM robinhood_tokens
-            WHERE "isActive" = 1 AND mint IS NOT NULL
-            LIMIT 100
-        `);
-
-        if (tokens.length === 0) return;
-
-        const tokensMissingImages = tokens.filter(t => !t.image || t.image === '' || t.image === 'null');
-        if (tokensMissingImages.length === 0) {
-            if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] Robinhood: All ${tokens.length} tokens have images`);
-            return;
-        }
-
-        logger.info(`[MetadataUpdater] Robinhood: ${tokensMissingImages.length}/${tokens.length} tokens missing images`);
-
-        let imagesUpdated = 0;
-
-        // Phase 0: Copy an image already resolved for the same mint in another table, if any —
-        // no external API call needed.
-        const crossTableImages = await findCrossTableImages(db, tokensMissingImages.map(t => t.mint), 'robinhood_tokens');
-        const needsExternalLookup = [];
-        for (const token of tokensMissingImages) {
-            const cross = crossTableImages.get(token.mint);
-            if (cross) {
-                const normalizedImage = imageUtils.normalizeImageUrl(cross.image) || cross.image;
-                await db.run(
-                    `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
-                    [normalizedImage, cross.name || token.name, cross.ticker || token.ticker, token.id]
-                );
-                imagesUpdated++;
-                if (DEBUG_METADATA) {
-                    logger.debug(`[MetadataUpdater] Robinhood: Found image for ${token.ticker || token.mint.slice(0, 8)} via another table`);
-                }
-            } else {
-                needsExternalLookup.push(token);
-            }
-        }
-
-        // Phase 1: DexScreener, batched 30 mints/request instead of one request per token
-        const dexResults = new Map(); // mint -> { liquidity, imageUrl, name, ticker }
-        const dexChunks = chunkArray(needsExternalLookup, 30);
-        for (const chunk of dexChunks) {
-            try {
-                const mints = chunk.map(t => t.mint).join(',');
-                const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 8000 });
-                const pairs = dexRes.data?.pairs || [];
-                for (const pair of pairs) {
-                    const mint = pair.baseToken?.address;
-                    if (!mint) continue;
-                    const liquidity = pair.liquidity?.usd || 0;
-                    const existing = dexResults.get(mint);
-                    if (!existing || liquidity > existing.liquidity) {
-                        dexResults.set(mint, {
-                            liquidity,
-                            imageUrl: pair.info?.imageUrl || null,
-                            name: pair.baseToken?.name || null,
-                            ticker: pair.baseToken?.symbol || null
-                        });
-                    }
-                }
-            } catch (e) {
-                logger.debug(`[MetadataUpdater] Robinhood: DexScreener batch error: ${e.message}`);
-            }
-            if (dexChunks.length > 1) await delay(300);
-        }
-
-        const stillMissing = [];
-        for (const token of needsExternalLookup) {
-            const dexData = dexResults.get(token.mint);
-            const imageUrl = dexData?.imageUrl || null;
-            const name = dexData?.name || token.name;
-            const ticker = dexData?.ticker || token.ticker;
-
-            if (imageUrl) {
-                const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
-                await db.run(
-                    `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
-                    [normalizedImage, name, ticker, token.id]
-                );
-                imagesUpdated++;
-                if (DEBUG_METADATA) {
-                    logger.debug(`[MetadataUpdater] Robinhood: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
-                }
-            } else {
-                // Carry forward any name/ticker DexScreener did resolve, even without an image
-                stillMissing.push({ ...token, name, ticker });
-            }
-        }
-
-        // Phase 2: GeckoTerminal — rate-limited API, fetchGeckoTerminalBatch already batches
-        // with an internal 500ms delay and a 25-item cap per run.
-        const geckoResults = stillMissing.length > 0
-            ? await fetchGeckoTerminalBatch(stillMissing.map(t => t.mint))
-            : new Map();
-
-        const stillMissingAfterGecko = [];
-        for (const token of stillMissing) {
-            const geckoData = geckoResults.get(token.mint);
-            if (geckoData?.image) {
-                const normalizedImage = imageUtils.normalizeImageUrl(geckoData.image) || geckoData.image;
-                const name = geckoData.name || token.name;
-                const ticker = geckoData.ticker || token.ticker;
-                await db.run(
-                    `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
-                    [normalizedImage, name, ticker, token.id]
-                );
-                imagesUpdated++;
-            } else {
-                stillMissingAfterGecko.push(token);
-            }
-        }
-
-        // Phase 3: Helius, batched into a single getAssetBatch call instead of one
-        // single-mint call per token.
-        const heliusResults = (stillMissingAfterGecko.length > 0 && config.HELIUS_API_KEY)
-            ? await fetchHeliusMarketDataBatch(stillMissingAfterGecko.map(t => t.mint))
-            : new Map();
-
-        const stillMissingAfterHelius = [];
-        for (const token of stillMissingAfterGecko) {
-            const heliusData = heliusResults.get(token.mint);
-            if (heliusData?.image) {
-                const normalizedImage = imageUtils.normalizeImageUrl(heliusData.image) || heliusData.image;
-                const name = heliusData.name || token.name;
-                const ticker = heliusData.ticker || token.ticker;
-                await db.run(
-                    `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
-                    [normalizedImage, name, ticker, token.id]
-                );
-                imagesUpdated++;
-            } else {
-                stillMissingAfterHelius.push(token);
-            }
-        }
-
-        // Phase 4: Pump.fun API as last resort — no batch endpoint, so this stays per-token,
-        // but only runs for tokens still missing after every batched source above.
-        for (const token of stillMissingAfterHelius) {
-            try {
-                const pumpRes = await axios.get(`https://frontend-api.pump.fun/coins/${token.mint}`, { timeout: 5000 });
-                const imageUrl = pumpRes.data?.image_uri || pumpRes.data?.image || null;
-                if (imageUrl) {
-                    const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
-                    const name = pumpRes.data.name || token.name;
-                    const ticker = pumpRes.data.symbol || token.ticker;
-                    await db.run(
-                        `UPDATE robinhood_tokens SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
-                        [normalizedImage, name, ticker, token.id]
-                    );
-                    imagesUpdated++;
-                    if (DEBUG_METADATA) {
-                        logger.debug(`[MetadataUpdater] Robinhood: Found image for ${token.ticker || token.mint.slice(0, 8)} via Pump.fun`);
-                    }
-                }
-            } catch (e) {
-                // Silent fail for individual tokens
-            }
-            await delay(500); // Rate limiting for the one remaining unbatched API
-        }
-
-        if (imagesUpdated > 0) {
-            logger.info(`[MetadataUpdater] Robinhood: Updated ${imagesUpdated} token images`);
-        }
-    } catch (e) {
-        logger.warn(`[MetadataUpdater] Robinhood metadata update error: ${e.message}`);
-    }
-}
-
-/**
- * v25.46: Update metadata for PAGS beneficiary tokens (pags_beneficiaries table)
- * Fetches images and metadata from multiple sources
- * v27.3: DexScreener lookups are now batched (30 mints/request) instead of one HTTP
- * request per token.
- */
-async function updatePagsTokenMetadata(deps) {
-    const { db } = deps;
-
-    try {
-        // Get PAGS tokens missing images
-        const tokens = await db.all(`
-            SELECT id, mint, ticker, name, image FROM pags_beneficiaries
-            WHERE "isActive" = 1 AND mint IS NOT NULL
-            LIMIT 100
-        `);
-
-        if (tokens.length === 0) return;
-
-        const tokensMissingImages = tokens.filter(t => !t.image || t.image === '' || t.image === 'null');
-        if (tokensMissingImages.length === 0) {
-            if (DEBUG_METADATA) logger.debug(`[MetadataUpdater] PAGS: All ${tokens.length} tokens have images`);
-            return;
-        }
-
-        logger.info(`[MetadataUpdater] PAGS: ${tokensMissingImages.length}/${tokens.length} tokens missing images`);
-
-        let imagesUpdated = 0;
-
-        // Phase 0: Copy an image already resolved for the same mint in another table, if any —
-        // no external API call needed.
-        const crossTableImages = await findCrossTableImages(db, tokensMissingImages.map(t => t.mint), 'pags_beneficiaries');
-        const needsExternalLookup = [];
-        for (const token of tokensMissingImages) {
-            const cross = crossTableImages.get(token.mint);
-            if (cross) {
-                const normalizedImage = imageUtils.normalizeImageUrl(cross.image) || cross.image;
-                await db.run(
-                    `UPDATE pags_beneficiaries SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
-                    [normalizedImage, cross.name || token.name, cross.ticker || token.ticker, token.id]
-                );
-                imagesUpdated++;
-                if (DEBUG_METADATA) {
-                    logger.debug(`[MetadataUpdater] PAGS: Found image for ${token.ticker || token.mint.slice(0, 8)} via another table`);
-                }
-            } else {
-                needsExternalLookup.push(token);
-            }
-        }
-
-        // Phase 1: DexScreener, batched 30 mints/request instead of one request per token
-        const dexResults = new Map(); // mint -> { liquidity, imageUrl, name, ticker }
-        const dexChunks = chunkArray(needsExternalLookup, 30);
-        for (const chunk of dexChunks) {
-            try {
-                const mints = chunk.map(t => t.mint).join(',');
-                const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mints}`, { timeout: 8000 });
-                const pairs = dexRes.data?.pairs || [];
-                for (const pair of pairs) {
-                    const mint = pair.baseToken?.address;
-                    if (!mint) continue;
-                    const liquidity = pair.liquidity?.usd || 0;
-                    const existing = dexResults.get(mint);
-                    if (!existing || liquidity > existing.liquidity) {
-                        dexResults.set(mint, {
-                            liquidity,
-                            imageUrl: pair.info?.imageUrl || null,
-                            name: pair.baseToken?.name || null,
-                            ticker: pair.baseToken?.symbol || null
-                        });
-                    }
-                }
-            } catch (e) {
-                logger.debug(`[MetadataUpdater] PAGS: DexScreener batch error: ${e.message}`);
-            }
-            if (dexChunks.length > 1) await delay(300);
-        }
-
-        const stillMissing = [];
-        for (const token of needsExternalLookup) {
-            const dexData = dexResults.get(token.mint);
-            const imageUrl = dexData?.imageUrl || null;
-            const name = dexData?.name || token.name;
-            const ticker = dexData?.ticker || token.ticker;
-
-            if (imageUrl) {
-                const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
-                await db.run(
-                    `UPDATE pags_beneficiaries SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
-                    [normalizedImage, name, ticker, token.id]
-                );
-                imagesUpdated++;
-                if (DEBUG_METADATA) {
-                    logger.debug(`[MetadataUpdater] PAGS: Found image for ${token.ticker || token.mint.slice(0, 8)}`);
-                }
-            } else {
-                // Carry forward any name/ticker DexScreener did resolve, even without an image
-                stillMissing.push({ ...token, name, ticker });
-            }
-        }
-
-        // Phase 2: GeckoTerminal — rate-limited API, fetchGeckoTerminalBatch already batches
-        // with an internal 500ms delay and a 25-item cap per run.
-        const geckoResults = stillMissing.length > 0
-            ? await fetchGeckoTerminalBatch(stillMissing.map(t => t.mint))
-            : new Map();
-
-        const stillMissingAfterGecko = [];
-        for (const token of stillMissing) {
-            const geckoData = geckoResults.get(token.mint);
-            if (geckoData?.image) {
-                const normalizedImage = imageUtils.normalizeImageUrl(geckoData.image) || geckoData.image;
-                const name = geckoData.name || token.name;
-                const ticker = geckoData.ticker || token.ticker;
-                await db.run(
-                    `UPDATE pags_beneficiaries SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
-                    [normalizedImage, name, ticker, token.id]
-                );
-                imagesUpdated++;
-            } else {
-                stillMissingAfterGecko.push(token);
-            }
-        }
-
-        // Phase 3: Pump.fun API — no batch endpoint, stays per-token, only for tokens still
-        // missing after both batched sources above.
-        for (const token of stillMissingAfterGecko) {
-            try {
-                const pumpRes = await axios.get(`https://frontend-api.pump.fun/coins/${token.mint}`, { timeout: 5000 });
-                const imageUrl = pumpRes.data?.image_uri || pumpRes.data?.image || null;
-                if (imageUrl) {
-                    const normalizedImage = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
-                    const name = pumpRes.data.name || token.name;
-                    const ticker = pumpRes.data.symbol || token.ticker;
-                    await db.run(
-                        `UPDATE pags_beneficiaries SET image = $1, name = COALESCE(NULLIF($2, ''), name), ticker = COALESCE(NULLIF($3, ''), ticker) WHERE id = $4`,
-                        [normalizedImage, name, ticker, token.id]
-                    );
-                    imagesUpdated++;
-                    if (DEBUG_METADATA) {
-                        logger.debug(`[MetadataUpdater] PAGS: Found image for ${token.ticker || token.mint.slice(0, 8)} via Pump.fun`);
-                    }
-                }
-            } catch (e) {
-                // Silent fail for individual tokens
-            }
-            await delay(500); // Rate limiting for the one remaining unbatched API
-        }
-
-        if (imagesUpdated > 0) {
-            logger.info(`[MetadataUpdater] PAGS: Updated ${imagesUpdated} token images`);
-        }
-    } catch (e) {
-        logger.warn(`[MetadataUpdater] PAGS metadata update error: ${e.message}`);
-    }
-}
-
-/**
  * v25.46: Update metadata for platform tokens missing images (tokens table)
  * Specifically targets tokens that have metadataUri but no image
  * v27.3: DexScreener and Helius lookups are now batched (30 mints/request and one
@@ -1250,8 +891,6 @@ async function updateAllMissingImages(deps) {
     logger.info(`[MetadataUpdater] Starting missing images update for all token types...`);
 
     await updatePlatformTokenImages(deps);
-    await updateRobinhoodTokenMetadata(deps);
-    await updatePagsTokenMetadata(deps);
 
     logger.info(`[MetadataUpdater] Missing images update complete`);
 }
@@ -1294,8 +933,6 @@ module.exports = {
     fetchHeliusMarketDataBatch,
     fillMissingImagesFromMetadata,
     // v25.46: New functions for all token type image updates
-    updateRobinhoodTokenMetadata,
-    updatePagsTokenMetadata,
     updatePlatformTokenImages,
     updateAllMissingImages
 };

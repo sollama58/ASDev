@@ -9,6 +9,7 @@
  */
 const { Keypair } = require('@solana/web3.js');
 const logger = require('./logger');
+const config = require('../config/env');
 const vanitySecret = require('./vanitySecret');
 
 /**
@@ -117,6 +118,46 @@ async function release(db, id) {
         .catch(e => logger.warn('[Vanity] Could not release mint back to the pool', { id, error: e.message }));
 }
 
+/**
+ * v29.1: Return addresses stranded in the 'claimed' state to the pool.
+ *
+ * A launch claims an address and then either marks it used, once its create transaction has
+ * been broadcast, or releases it if it failed before that point. A crash between those two
+ * steps left the row claimed forever, so every hard restart mid-launch permanently leaked a
+ * ground address -- expensive, since each one costs minutes of CPU to produce.
+ *
+ * Only rows older than the timeout are touched, so an in-flight launch is never reaped out
+ * from under itself. This is deliberately conservative about the opposite risk too: a row
+ * reaped while its transaction was in fact broadcast would be handed to a second launch
+ * whose create could never succeed, which is why the timeout is far longer than any launch.
+ *
+ * @returns {Promise<number>} how many addresses were recovered
+ */
+async function reapStrandedClaims(db, timeoutMs = config.VANITY_CLAIM_TIMEOUT_MS) {
+    if (!db) return 0;
+    try {
+        const cutoff = Date.now() - timeoutMs;
+        const rows = await db.all(
+            `UPDATE vanity_mints
+                SET status = 'available', claimed_at = NULL
+              WHERE status = 'claimed' AND claimed_at IS NOT NULL AND claimed_at < $1
+          RETURNING mint_address`,
+            [cutoff]
+        );
+        const n = rows?.length || 0;
+        if (n > 0) {
+            logger.warn(`[Vanity] Returned ${n} stranded address(es) to the pool`, {
+                addresses: rows.slice(0, 5).map(r => r.mint_address),
+                strandedForLongerThanMs: timeoutMs
+            });
+        }
+        return n;
+    } catch (e) {
+        logger.warn('[Vanity] Stranded-claim sweep failed', { error: e.message });
+        return 0;
+    }
+}
+
 /** Pool depth by status, for health and admin views. */
 async function getPoolStats(db) {
     if (!db) return null;
@@ -130,4 +171,4 @@ async function getPoolStats(db) {
     }
 }
 
-module.exports = { getMintKeypair, claimMintKeypair, markUsed, release, getPoolStats };
+module.exports = { getMintKeypair, claimMintKeypair, markUsed, release, reapStrandedClaims, getPoolStats };

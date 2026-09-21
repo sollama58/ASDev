@@ -156,18 +156,16 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
             const [
                 stats,
                 leaderboard,
-                recentLaunches,
-                robinhoodStats
+                recentLaunches
             ] = await Promise.all([
                 db.get('SELECT COUNT(*) as total FROM tokens'),
-                // v26.1: Leaderboard shows only active Robinhood partner tokens with pool data
+                // v29.0: leaderboard is platform-launched tokens, ranked by 24h volume
                 db.all(`
-                    SELECT mint, name, ticker, image, "creatorPubkey" as creator,
-                           volume24h, "marketCap", "isGraduated" as complete,
+                    SELECT mint, name, ticker, image, "userPubkey" as creator,
+                           volume24h, "marketCap", complete,
                            COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports
-                    FROM robinhood_tokens
-                    WHERE "isActive" = 1
-                    ORDER BY volume24h DESC
+                    FROM tokens
+                    ORDER BY volume24h DESC NULLS LAST
                     LIMIT 20
                 `),
                 db.all(`
@@ -175,14 +173,6 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
                     FROM tokens
                     ORDER BY timestamp DESC
                     LIMIT 10
-                `),
-                db.get(`
-                    SELECT
-                        COUNT(*) as count,
-                        COALESCE(SUM("pendingFees"), 0) as pendingFees,
-                        COALESCE(SUM("totalFeesCollected"), 0) as collectedFees
-                    FROM robinhood_tokens
-                    WHERE "isActive" = 1
                 `)
             ]);
 
@@ -210,8 +200,7 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
             // Add computed fields for leaderboard tokens
             const resolvedLeaderboard = (leaderboard || []).map(t => ({
                 ...t,
-                isRobinhood: true,
-                isEligible: (t.volume24h || 0) >= 100,
+                isEligible: (t.volume24h || 0) >= (config.AIRDROP_MIN_VOLUME_USD || 250),
                 pendingAirdropSol: ((t.pending_airdrop_lamports || 0) / 1e9).toFixed(6),
                 marketCap: t.marketCap || 0,
                 volume: t.volume24h
@@ -224,13 +213,9 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
             let tokenPoolsSol = 0;
             let centralPoolSol = 0;
             try {
-                const poolSum = await db.get(`
-                    SELECT COALESCE(SUM(p), 0) as total FROM (
-                        SELECT pending_airdrop_lamports as p FROM tokens WHERE pending_airdrop_lamports > 0
-                        UNION ALL
-                        SELECT pending_airdrop_lamports as p FROM robinhood_tokens WHERE pending_airdrop_lamports > 0
-                    ) combined
-                `);
+                const poolSum = await db.get(
+                    'SELECT COALESCE(SUM(pending_airdrop_lamports), 0) as total FROM tokens WHERE pending_airdrop_lamports > 0'
+                );
                 tokenPoolsSol = parseInt(poolSum?.total || 0) / 1e9;
                 airdropPoolSol = tokenPoolsSol; // backwards-compat
             } catch (e) { /* use 0 */ }
@@ -247,18 +232,11 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
                 centralPoolSol,
                 totalPoints: globalState.totalPoints || 0,
 
-                // Leaderboard — robinhood partner tokens only
+                // Leaderboard — platform-launched tokens by 24h volume
                 leaderboard: resolvedLeaderboard,
 
                 // Recent launches (with resolved images)
                 recentLaunches: resolvedRecentLaunches,
-
-                // Robinhood
-                robinhood: {
-                    count: robinhoodStats?.count || 0,
-                    pendingFees: parseFloat(robinhoodStats?.pendingFees || 0),
-                    collectedFees: parseFloat(robinhoodStats?.collectedFees || 0)
-                },
 
                 // Timestamp for frontend sync
                 serverTime: Date.now()

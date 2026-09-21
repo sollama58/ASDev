@@ -19,6 +19,7 @@ const bs58 = require('bs58');
 const logger = require('./logger');
 const config = require('../config/env');
 const vanitySecret = require('./vanitySecret');
+const vanity = require('./vanity');
 
 let workers = [];
 let db = null;
@@ -114,6 +115,10 @@ function resumeWorkers() {
  */
 async function reconcilePoolState() {
     try {
+        // v29.1: recover addresses stranded in 'claimed' by a crashed launch before measuring
+        // depth, so the pool size reflects what is genuinely spendable and the workers are not
+        // parked while leaked addresses make the pool look fuller than it is.
+        await vanity.reapStrandedClaims(db);
         stats.poolSize = await getPoolSize();
     } catch (e) {
         logger.warn('[Grinder] Pool size check failed', { error: e.message });

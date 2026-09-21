@@ -3,20 +3,13 @@
  * Central export for all background tasks
  * v13.0 - Worker-based architecture with Redis queues
  * v25.14 - Added graceful shutdown with interval cleanup
- * v25.47 - Added PAGS claim processor
  * v25.67 - Fixed Helius DAS API response parsing for holder scanning
- * v25.68 - Admin trigger-robinhood-scan now includes holder updates
- * v25.69 - Enhanced KOTH logging for Robinhood token eligibility
- * v25.70 - Claude KOTH now includes Robinhood tokens in candidates
- * v25.71 - Fixed /koth endpoint and Redis storage to handle Robinhood tokens
- * v25.72 - Added Robinhood vault debugging and admin fix endpoints for creatorPubkey
  * v25.73 - CRITICAL FIX: feeVaultAddress for fee sharing tokens - coinCreator IS the vault
  */
 const holderScanner = require('./holderScanner');
 const metadataUpdater = require('./metadataUpdater');
 const asdfSync = require('./asdfSync');
 const flywheel = require('./flywheel');
-const robinhoodScanner = require('./robinhoodScanner');
 const workers = require('./workers');
 const { logger } = require('../services');
 const config = require('../config/env');
@@ -38,14 +31,12 @@ function startAll(deps) {
     // These run as BullMQ workers with Redis-backed queues
     const holderWorker = workers.initHolderScannerWorker(deps);
     const metadataWorker = workers.initMetadataUpdaterWorker(deps);
-    const robinhoodWorker = workers.initRobinhoodScannerWorker(deps);
     workers.initAsdfSyncWorker(deps);
     workers.initAnsemSyncWorker(deps);
 
     // Track workers for graceful shutdown
     if (holderWorker) activeWorkers.push(holderWorker);
     if (metadataWorker) activeWorkers.push(metadataWorker);
-    if (robinhoodWorker) activeWorkers.push(robinhoodWorker);
 
     // Start flywheel (still runs in main process - timing critical)
     flywheel.start(deps);
@@ -83,7 +74,6 @@ function startAll(deps) {
     }, 600000); // 10 minutes
     registerInterval(redisCleanupInterval);
 
-    // PAGS claim processor disabled
 
     logger.info("All background tasks started (v25.73 - feeVaultAddress fix for fee sharing tokens)");
 }
@@ -134,7 +124,6 @@ module.exports = {
     metadataUpdater,
     asdfSync,
     flywheel,
-    robinhoodScanner,
     workers,
     startAll,
     stopAll,

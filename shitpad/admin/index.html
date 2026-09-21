@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ShitPad Admin</title>
+
+    <!-- The API this page talks to. Change this one line when you point the console at a new backend. -->
+    <meta name="shitpad-backend" content="https://asdev-1kvy.onrender.com">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💩</text></svg>">
 
     <style>
@@ -489,7 +492,7 @@
 
             <div class="action-cell">
                 <div class="action-header"><span class="action-icon">💩</span><span class="action-name">Trigger Fee Claim</span></div>
-                <div class="action-desc">Collect pending fees from creator vaults and Robinhood token pools into the airdrop pool.</div>
+                <div class="action-desc">Collect pending fees from creator vaults into the airdrop pool.</div>
                 <div class="action-status" id="as-fee-claim"></div>
                 <button class="btn btn-primary btn-sm" onclick="runAction('trigger-fee-claim','as-fee-claim')">Run</button>
             </div>
@@ -503,7 +506,7 @@
 
             <div class="action-cell">
                 <div class="action-header"><span class="action-icon">📊</span><span class="action-name">Update Metadata</span></div>
-                <div class="action-desc">Refresh token names, images, and on-chain data for all registered tokens via Helius.</div>
+                <div class="action-desc">Refresh token names, images, and on-chain data for all tokens via Helius.</div>
                 <div class="action-status" id="as-metadata"></div>
                 <button class="btn btn-secondary btn-sm" onclick="runAction('trigger-metadata-update','as-metadata')">Run</button>
             </div>
@@ -516,54 +519,12 @@
             </div>
 
             <div class="action-cell">
-                <div class="action-header"><span class="action-icon">🔍</span><span class="action-name">Robinhood Scan</span></div>
-                <div class="action-desc">Scan for new Pump.fun fee-sharing tokens and update holder data for existing ones.</div>
-                <div class="action-status" id="as-rh-scan"></div>
-                <button class="btn btn-secondary btn-sm" onclick="runAction('trigger-robinhood-scan','as-rh-scan')">Run</button>
-            </div>
-
-            <div class="action-cell">
-                <div class="action-header"><span class="action-icon">💎</span><span class="action-name">Refresh RH Fees</span></div>
-                <div class="action-desc">Re-read pending fee balances from on-chain vaults for all Robinhood partner tokens.</div>
-                <div class="action-status" id="as-rh-fees"></div>
-                <button class="btn btn-secondary btn-sm" onclick="runAction('refresh-robinhood-pending-fees','as-rh-fees')">Run</button>
-            </div>
-
-            <div class="action-cell">
                 <div class="action-header"><span class="action-icon">📋</span><span class="action-name">Reset Points</span></div>
                 <div class="action-desc">Wipe and fully recalculate all user point values from scratch. Takes a few minutes.</div>
                 <div class="action-status" id="as-reset-pts"></div>
                 <button class="btn btn-danger btn-sm" onclick="if(confirm('Wipe and fully recalculate all user points from scratch? This clears cached point/airdrop data until the recalculation finishes.'))runAction('reset-points','as-reset-pts')">Run</button>
             </div>
 
-            <div class="action-cell">
-                <div class="action-header"><span class="action-icon">♻️</span><span class="action-name">Reactivate Tokens</span></div>
-                <div class="action-desc">Re-verify all deactivated tokens on-chain. Restores any that still have fee sharing configured (skips those with genuine RPC errors).</div>
-                <div class="action-status" id="as-reactivate"></div>
-                <button class="btn btn-secondary btn-sm" onclick="reactivateDeactivated()">Run</button>
-            </div>
-
-        </div>
-    </div>
-
-    <!-- Import Token -->
-    <div class="card">
-        <div class="card-header">
-            <span class="card-title">Import Token</span>
-        </div>
-        <div class="import-body">
-            <p style="font-size:13px;color:var(--text2);margin-bottom:14px">
-                Manually import a token by mint address. Use <strong>Robinhood</strong> mode for fee-sharing partner tokens.
-            </p>
-            <div class="import-row">
-                <input class="field-input" id="import-mint" type="text" placeholder="Mint address…"
-                    style="font-family:monospace;font-size:12px" maxlength="44" autocomplete="off" spellcheck="false" />
-                <label style="display:flex;align-items:center;gap:6px;font-size:13px;white-space:nowrap;color:var(--text2);cursor:pointer">
-                    <input type="checkbox" id="import-rh" style="accent-color:var(--accent)"> Robinhood
-                </label>
-                <button class="btn btn-primary btn-sm" onclick="importToken()" style="white-space:nowrap">Import</button>
-            </div>
-            <div id="import-msg"></div>
         </div>
     </div>
 
@@ -609,7 +570,7 @@
 'use strict';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
-const BACKEND_URL = 'https://asdev-1kvy.onrender.com';
+const BACKEND_URL = (document.querySelector('meta[name="shitpad-backend"]')?.content || '').replace(/\/+$/, '');
 const WS_URL      = BACKEND_URL.replace(/^https/, 'wss') + '/ws';
 
 // ── Auth state ─────────────────────────────────────────────────────────────────
@@ -722,7 +683,7 @@ async function loadStats() {
 }
 
 function renderStats(d) {
-    const pendingFees = (parseFloat(d.platformPendingFees)||0) + (parseFloat(d.robinhoodPendingFees)||0);
+    const pendingFees = parseFloat(d.platformPendingFees) || 0;
     const nextDrop    = d.nextAirdropTime ? fmtCountdown(d.nextAirdropTime) : '—';
     const lastClaim   = d.lastClaimTime   ? fmtAgo(d.lastClaimTime)        : '—';
 
@@ -738,10 +699,6 @@ function renderStats(d) {
         <div class="stat-cell">
             <div class="stat-value green">${(parseFloat(d.totalSolAirdropped)||0).toFixed(2)}</div>
             <div class="stat-label">Total Airdropped (SOL)</div>
-        </div>
-        <div class="stat-cell">
-            <div class="stat-value">${fmtNum(d.robinhood?.activeTokens ?? 0)}</div>
-            <div class="stat-label">Registered Tokens</div>
         </div>
         <div class="stat-cell">
             <div class="stat-value">${pendingFees.toFixed(4)}</div>
@@ -806,79 +763,6 @@ async function runAction(endpoint, statusId) {
         setTimeout(() => { btn.disabled = false; }, 3000);
     }
 }
-
-// ── Reactivate Deactivated Tokens ─────────────────────────────────────────────
-async function reactivateDeactivated() {
-    const statusEl = document.getElementById('as-reactivate');
-    const btn = statusEl.closest('.action-cell').querySelector('button');
-    btn.disabled = true;
-    statusEl.className = 'action-status running';
-    statusEl.textContent = 'Verifying on-chain…';
-
-    try {
-        const r = await fetch(`${BACKEND_URL}/api/admin/reactivate-deactivated-tokens`, {
-            method: 'POST',
-            headers: apiHeaders(),
-        });
-        const d = await r.json();
-
-        if (r.ok) {
-            const { reactivated, stillInactive, errors } = d;
-            statusEl.className = 'action-status ok';
-            statusEl.textContent = `✓ ${reactivated} reactivated · ${stillInactive} inactive · ${errors} errors`;
-            toast(`♻️ ${reactivated} token${reactivated !== 1 ? 's' : ''} reactivated`, reactivated > 0 ? 'success' : 'info');
-            if (reactivated > 0) setTimeout(loadStats, 1500);
-        } else {
-            statusEl.className = 'action-status err';
-            statusEl.textContent = '✗ ' + (d.error || r.status);
-            toast('Failed: ' + (d.error || r.status), 'error');
-        }
-    } catch (e) {
-        statusEl.className = 'action-status err';
-        statusEl.textContent = '✗ Request failed';
-        toast('Request failed', 'error');
-    } finally {
-        setTimeout(() => { btn.disabled = false; }, 4000);
-    }
-}
-
-// ── Import Token ───────────────────────────────────────────────────────────────
-async function importToken() {
-    const mint  = document.getElementById('import-mint').value.trim();
-    const isRh  = document.getElementById('import-rh').checked;
-    const msgEl = document.getElementById('import-msg');
-
-    if (!mint || mint.length < 32) {
-        msgEl.innerHTML = '<div class="msg msg-error">Enter a valid mint address.</div>';
-        return;
-    }
-
-    msgEl.innerHTML = '<div class="msg msg-info">Importing…</div>';
-
-    try {
-        const r = await fetch(`${BACKEND_URL}/api/admin/import-token`, {
-            method:  'POST',
-            headers: apiHeaders(),
-            body:    JSON.stringify({ mint, isRobinhood: isRh }),
-        });
-        const d = await r.json();
-
-        if (r.ok) {
-            const t = d.token || {};
-            msgEl.innerHTML = `<div class="msg msg-success">✓ Imported <strong>$${esc(t.ticker||mint.slice(0,8))}</strong>${t.name ? ' — ' + esc(t.name) : ''}</div>`;
-            document.getElementById('import-mint').value = '';
-            toast('Token imported!', 'success');
-        } else {
-            msgEl.innerHTML = `<div class="msg msg-error">${esc(d.error || 'Import failed.')}</div>`;
-        }
-    } catch {
-        msgEl.innerHTML = '<div class="msg msg-error">Request failed.</div>';
-    }
-}
-
-document.getElementById('import-mint').addEventListener('keydown', e => {
-    if (e.key === 'Enter') importToken();
-});
 
 // ── Airdrop Logs ───────────────────────────────────────────────────────────────
 async function loadAirdropLogs() {

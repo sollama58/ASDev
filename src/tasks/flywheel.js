@@ -14,8 +14,6 @@
  * v25.39 - Fresh data guarantee: Holder scanner runs before each airdrop distribution
  * v25.46 - Twitter announcements when KOTH changes (with AI reasoning)
  * v25.75 - Fixed fee claiming for FEE program tokens: use feeVaultAddress as both vault+config
- * v25.76 - Threshold now considers SUM of platform + robinhood fees; improved FEE program handling
- * v25.97 - Robinhood fee claiming: always use distribute_creator_fees on PUMP program
  * v25.98 - Fix fee sharing config lookup: FEE tokens use bcVault, PUMP tokens use sharingConfigPDA
  * v25.100 - Fix AMM claim: ammVaultAuth from feeVaultPubkey (matches AMM pool.coin_creator)
  * v25.101 - Fix DistributeCreatorFees: correct discriminator and account structure from tx analysis
@@ -43,12 +41,6 @@ const { logger, pump, solana, jupiter, redis, mutex, mintExtractor, claudeKoth, 
 // RACE CONDITION FIX: Use mutex for atomic lock/unlock instead of boolean flags
 const buybackMutex = mutex.getMutex('flywheel_buyback');
 const airdropMutex = mutex.getMutex('flywheel_airdrop');
-
-// Import Robinhood scanner for fee claiming
-const robinhoodScanner = require('./robinhoodScanner');
-
-// v25.51: Import PAGS fee scanner for automatic fee detection and collection
-const pagsFeeScanner = require('./pagsFeeScanner');
 
 // v25.39: Import holder scanner to refresh data before airdrop
 const holderScanner = require('./holderScanner');
@@ -221,9 +213,7 @@ function calculateKothScore(token, stats) {
 async function evaluateKothCandidates(db) {
     // Uses module-level KOTH_MIN_HOLDERS, KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME constants
     try {
-        // Get all eligible tokens with their metrics (combined query for platform + robinhood tokens)
-        // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
-        // v25.64: Now includes Robinhood partner tokens in KOTH evaluation
+        // Get all eligible platform tokens with their metrics
         const candidates = await db.all(`
             SELECT mint, ticker, name, "marketCap", volume24h, "holderCount", timestamp, actualHolders, source FROM (
                 SELECT
@@ -242,90 +232,14 @@ async function evaluateKothCandidates(db) {
                 AND t.volume24h >= $2
                 GROUP BY t.mint, t.ticker, t.name, t."marketCap", t.volume24h, t."holderCount", t.timestamp
                 HAVING COUNT(th."holderPubkey") >= $3
-
-                UNION ALL
-
-                SELECT
-                    rt.mint,
-                    rt.ticker,
-                    rt.name,
-                    rt."marketCap",
-                    rt.volume24h,
-                    0 as "holderCount",
-                    rt."discoveredAt" as timestamp,
-                    COUNT(rth."holderPubkey") as actualHolders,
-                    'robinhood' as source
-                FROM robinhood_tokens rt
-                LEFT JOIN robinhood_token_holders rth ON rth.mint = rt.mint
-                WHERE rt."isActive" = 1
-                AND rt."marketCap" >= $1
-                AND rt.volume24h >= $2
-                GROUP BY rt.mint, rt.ticker, rt.name, rt."marketCap", rt.volume24h, rt."discoveredAt"
-                HAVING COUNT(rth."holderPubkey") >= $3
             )
             ORDER BY "marketCap" DESC
             LIMIT 50
         `, [KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME, KOTH_MIN_HOLDERS]);
 
-        // v25.69: Enhanced logging for KOTH candidate sources
-        const platformCandidates = candidates.filter(c => c.source === 'platform');
-        const robinhoodCandidates = candidates.filter(c => c.source === 'robinhood');
-        logger.info(`[KOTH] Candidates found: ${candidates.length} total (${platformCandidates.length} platform, ${robinhoodCandidates.length} robinhood)`);
-
-        // v25.69: If no robinhood candidates, log why they're not qualifying
-        if (robinhoodCandidates.length === 0) {
-            const robinhoodStatus = await db.all(`
-                SELECT
-                    rt.mint, rt.ticker, rt."marketCap", rt.volume24h, rt."isActive",
-                    COUNT(rth."holderPubkey") as holderCount
-                FROM robinhood_tokens rt
-                LEFT JOIN robinhood_token_holders rth ON rth.mint = rt.mint
-                WHERE rt."isActive" = 1
-                GROUP BY rt.mint, rt.ticker, rt."marketCap", rt.volume24h, rt."isActive"
-                ORDER BY rt.volume24h DESC
-                LIMIT 5
-            `);
-
-            if (robinhoodStatus.length > 0) {
-                logger.info(`[KOTH] Robinhood tokens not qualifying for KOTH:`);
-                for (const token of robinhoodStatus) {
-                    const issues = [];
-                    if ((token.marketCap || 0) < KOTH_MIN_MARKET_CAP) issues.push(`mcap $${token.marketCap || 0} < $${KOTH_MIN_MARKET_CAP}`);
-                    if ((token.volume24h || 0) < KOTH_MIN_VOLUME) issues.push(`vol $${token.volume24h || 0} < $${KOTH_MIN_VOLUME}`);
-                    if ((token.holderCount || 0) < KOTH_MIN_HOLDERS) issues.push(`holders ${token.holderCount || 0} < ${KOTH_MIN_HOLDERS}`);
-                    if (issues.length > 0) {
-                        logger.info(`[KOTH]   - ${token.ticker || token.mint?.slice(0, 8)}: ${issues.join(', ')}`);
-                    }
-                }
-            } else {
-                logger.info(`[KOTH] No active Robinhood tokens in database`);
-            }
-        }
+        logger.info(`[KOTH] Candidates found: ${candidates.length}`);
 
         if (candidates.length === 0) {
-            // v25.69: Debug why no candidates - check what robinhood tokens exist but don't qualify
-            const ineligibleRobinhood = await db.all(`
-                SELECT
-                    rt.mint, rt.ticker, rt."marketCap", rt.volume24h,
-                    COUNT(rth."holderPubkey") as holderCount
-                FROM robinhood_tokens rt
-                LEFT JOIN robinhood_token_holders rth ON rth.mint = rt.mint
-                WHERE rt."isActive" = 1
-                GROUP BY rt.mint, rt.ticker, rt."marketCap", rt.volume24h
-                ORDER BY rt.volume24h DESC
-                LIMIT 5
-            `);
-
-            if (ineligibleRobinhood.length > 0) {
-                for (const token of ineligibleRobinhood) {
-                    const issues = [];
-                    if ((token.marketCap || 0) < KOTH_MIN_MARKET_CAP) issues.push(`mcap ${token.marketCap || 0} < ${KOTH_MIN_MARKET_CAP}`);
-                    if ((token.volume24h || 0) < KOTH_MIN_VOLUME) issues.push(`vol ${token.volume24h || 0} < ${KOTH_MIN_VOLUME}`);
-                    if ((token.holderCount || 0) < KOTH_MIN_HOLDERS) issues.push(`holders ${token.holderCount || 0} < ${KOTH_MIN_HOLDERS}`);
-                    logger.info(`[KOTH] Robinhood ${token.ticker || token.mint?.slice(0, 8)} not eligible: ${issues.join(', ')}`);
-                }
-            }
-
             logger.info('[KOTH] No eligible candidates found');
             return { token: null, score: 0, reasoning: 'No tokens meet minimum requirements' };
         }
@@ -390,7 +304,7 @@ async function evaluateKothCandidates(db) {
         // Generate reasoning
         const reasoning = generateKothReasoning(winner, runnerUp, stats);
 
-        const sourceLabel = winner.source === 'robinhood' ? '🤝 Robinhood Partner' : '🚀 Platform';
+        const sourceLabel = '🚀 Platform';
         logger.info(`[KOTH] 👑 AI Selected: ${winner.ticker} (Score: ${winner.totalScore}/100) [${sourceLabel}]`);
         logger.info(`[KOTH] Breakdown: ${JSON.stringify(winner.breakdown)}`);
 
@@ -468,7 +382,7 @@ function generateKothReasoning(winner, runnerUp, stats) {
 }
 
 // v27.0: Per-token airdrop threshold raised to 1 SOL
-const TOKEN_AIRDROP_THRESHOLD_LAMPORTS = Math.round((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0) * 1e9);
+const TOKEN_AIRDROP_THRESHOLD_LAMPORTS = Math.round(config.TOKEN_AIRDROP_THRESHOLD_SOL * 1e9);
 
 // v26.0: Fixed 1B token supply for all pump.fun tokens (1B * 10^6 decimals)
 const PUMP_FUN_TOTAL_SUPPLY_BIG = BigInt('1000000000000000');
@@ -556,8 +470,8 @@ async function addToCentralPool(db, lamports) {
  * v28.0: Atomically accrue the platform's cut of a claim.
  *
  * The buyback-burn and upkeep shares are *not* transferred at claim time. Previously the
- * 4.5%/0.5% transfer fired once per platform claim and never fired at all on the Robinhood
- * claim paths, so Robinhood's platform cut simply accumulated in the dev wallet with nothing
+ * 4.5%/0.5% transfer fired only once per platform claim, so part of the platform cut simply
+ * accumulated in the dev wallet with nothing
  * tracking it. Accruing here instead means every claim path contributes identically, and a
  * single periodic sweep moves the total out -- one transaction rather than one per claim.
  */
@@ -692,7 +606,7 @@ async function processPlatformFeeSweep(deps) {
 /**
  * v26.0: Per-token airdrop distribution
  *
- * Replaces the global pool system. Each token (platform + robinhood) has its own
+ * Replaces the global pool system. Each token has its own
  * pending_airdrop_lamports balance credited from that token's creator fees.
  * When a token's pool exceeds TOKEN_AIRDROP_THRESHOLD_LAMPORTS, its holders receive
  * a proportional airdrop based on their share of the 1B total supply.
@@ -743,21 +657,14 @@ async function processTokenAirdrops(deps) {
         }
 
         // Collect all tokens with pools above threshold
-        const VALID_TABLES = { platform: { tokens: 'tokens', holders: 'token_holders' }, robinhood: { tokens: 'robinhood_tokens', holders: 'robinhood_token_holders' } };
+        const VALID_TABLES = { platform: { tokens: 'tokens', holders: 'token_holders' } };
 
         const platformTokensToAirdrop = await db.all(
             'SELECT mint, ticker, pending_airdrop_lamports FROM tokens WHERE pending_airdrop_lamports >= $1',
             [TOKEN_AIRDROP_THRESHOLD_LAMPORTS]
         );
-        const robinhoodTokensToAirdrop = await db.all(
-            'SELECT mint, ticker, pending_airdrop_lamports FROM robinhood_tokens WHERE "isActive" = 1 AND pending_airdrop_lamports >= $1',
-            [TOKEN_AIRDROP_THRESHOLD_LAMPORTS]
-        );
 
-        const allToDistribute = [
-            ...platformTokensToAirdrop.map(t => ({ ...t, source: 'platform' })),
-            ...robinhoodTokensToAirdrop.map(t => ({ ...t, source: 'robinhood' }))
-        ];
+        const allToDistribute = platformTokensToAirdrop.map(t => ({ ...t, source: 'platform' }));
 
         if (allToDistribute.length === 0) {
             logger.info(`[TokenAirdrop] No tokens above ${(TOKEN_AIRDROP_THRESHOLD_LAMPORTS / LAMPORTS_PER_SOL).toFixed(3)} SOL threshold`);
@@ -770,7 +677,7 @@ async function processTokenAirdrops(deps) {
             return;
         }
 
-        logger.info(`[TokenAirdrop] Processing ${allToDistribute.length} token pools (${platformTokensToAirdrop.length} platform, ${robinhoodTokensToAirdrop.length} robinhood)`);
+        logger.info(`[TokenAirdrop] Processing ${allToDistribute.length} token pools`);
 
         // Fetch bonus-holder sets once — ASDF Top 100 and ANSEM Top 1000 each receive 2× weight
         const [asdfTop100, ansemTop1000] = await Promise.all([
@@ -1044,16 +951,12 @@ async function processCentralPoolAirdrop(deps) {
         return;
     }
 
-    // Fetch all eligible tokens (platform + robinhood) with their market cap
+    // Fetch all eligible platform tokens with their market cap
     const eligiblePlatform = await db.all(
         'SELECT mint, "marketCap" as mcap FROM tokens WHERE volume24h >= $1',
         [MIN_VOLUME_USD]
     );
-    const eligibleRobinhood = await db.all(
-        'SELECT mint, "marketCap" as mcap FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
-        [MIN_VOLUME_USD]
-    );
-    const allEligible = [...eligiblePlatform, ...eligibleRobinhood];
+    const allEligible = eligiblePlatform;
 
     if (allEligible.length === 0) {
         logger.info('[CentralPool] No eligible tokens for central pool distribution');
@@ -1067,14 +970,10 @@ async function processCentralPoolAirdrop(deps) {
 
     // Fetch all holders and bonus sets in parallel
     const platformMints  = eligiblePlatform.map(t => t.mint).filter(Boolean);
-    const robinhoodMints = eligibleRobinhood.map(t => t.mint).filter(Boolean);
 
-    const [platformHolders, robinhoodHolders, asdfTop100, ansemTop1000] = await Promise.all([
+    const [platformHolders, asdfTop100, ansemTop1000] = await Promise.all([
         platformMints.length > 0
             ? db.all('SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)', [platformMints])
-            : [],
-        robinhoodMints.length > 0
-            ? db.all('SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1)', [robinhoodMints])
             : [],
         redis.getAsdfTop100Holders().catch(() => new Set()),
         redis.getAnsemTop1000Holders().catch(() => new Set()),
@@ -1084,7 +983,7 @@ async function processCentralPoolAirdrop(deps) {
     // At avg mcap (1/N share) → 1.0×; at 0 mcap → 0.5×; at 2× avg → 1.5× (capped).
     const N = allEligible.length;
     const userScores = new Map();
-    for (const h of [...platformHolders, ...robinhoodHolders]) {
+    for (const h of platformHolders) {
         const mcap    = mcapByMint.get(h.mint) || 0;
         const balance = BigInt(h.balance || '0');
         if (balance === BigInt(0)) continue;
@@ -1344,70 +1243,6 @@ async function getAiSelectedKoth(db) {
 }
 
 /**
- * v25.21: Get fee sharing config with caching
- * v25.75: Now handles both PUMP program PDAs and FEE program accounts
- * Reduces RPC calls by caching parsed configs
- *
- * @param {Object} connection - Solana connection
- * @param {PublicKey} configAccount - The config account (PDA for PUMP, or FEE account)
- * @param {PublicKey} creatorPubkey - Creator pubkey (for cache key)
- * @param {boolean} isFeeProgram - If true, account is FEE program (not PUMP PDA)
- */
-async function getCachedFeeSharingConfig(connection, configAccount, creatorPubkey, isFeeProgram = false) {
-    const cacheKey = configAccount.toString(); // v25.75: Use account address as cache key
-    const cached = feeSharingConfigCache.get(cacheKey);
-
-    // Return cached if fresh
-    if (cached && (Date.now() - cached.timestamp) < CONFIG_CACHE_TTL_MS) {
-        return cached.config;
-    }
-
-    // Fetch fresh config
-    try {
-        const configInfo = await connection.getAccountInfo(configAccount);
-        if (configInfo && configInfo.data) {
-            let configData = null;
-
-            // v25.75: Detect account type by owner and use appropriate parser
-            if (isFeeProgram || configInfo.owner.equals(PROGRAMS.FEE)) {
-                // FEE program account - use mintExtractor's FEE account parser
-                // We need a dummy wallet key just for parsing structure (we want all shareholders)
-                const dummyWallet = creatorPubkey; // Use creator as dummy (we just need allShareholders)
-                const result = mintExtractor.parseFeeAccountSharingConfig
-                    ? await Promise.resolve(require('../services/mintExtractor').parseFeeAccountSharingConfig(configInfo.data, dummyWallet, 'cache'))
-                    : null;
-
-                if (result && result.allShareholders) {
-                    // Convert to expected format with PublicKey objects
-                    configData = {
-                        creator: result.originalCreator ? new PublicKey(result.originalCreator) : creatorPubkey,
-                        shareholders: result.allShareholders.map(s => ({
-                            pubkey: new PublicKey(s.pubkey),
-                            shareBps: s.bps
-                        }))
-                    };
-                }
-            } else {
-                // PUMP program PDA - use robinhoodScanner's parser
-                configData = robinhoodScanner.parseFeeSharingConfig(configInfo.data, configAccount);
-            }
-
-            if (configData) {
-                feeSharingConfigCache.set(cacheKey, {
-                    config: configData,
-                    timestamp: Date.now()
-                });
-                return configData;
-            }
-        }
-    } catch (e) {
-        logger.debug(`[Robinhood] Failed to fetch config for ${cacheKey.slice(0, 8)}`, { error: e.message });
-    }
-
-    return null;
-}
-
-/**
  * Claim creator fees from bonding curve and AMM
  */
 async function claimCreatorFees(deps) {
@@ -1424,6 +1259,21 @@ async function claimCreatorFees(deps) {
     try {
         const bcInfo = await connection.getAccountInfo(bcVault);
         if (bcInfo && bcInfo.lamports > 0) {
+            // v29.2: the vault is a live account, so a claim can only move the lamports ABOVE
+            // its rent-exempt minimum -- the rest has to stay behind to keep the account alive.
+            // Crediting bcInfo.lamports in full therefore over-credited every claim by that
+            // minimum, and since the split below is what fills holder pools, the platform was
+            // promising holders slightly more than it had actually received. Deliberately
+            // computed rather than measured from a wallet balance delta: in `full` mode the
+            // deploy worker spends from the same wallet concurrently, so a delta would be
+            // polluted by unrelated activity.
+            const bcRentExempt = await solana.getRentExemptMinimum(bcInfo.data?.length || 0);
+            const claimable = Math.max(0, bcInfo.lamports - bcRentExempt);
+            if (claimable === 0) {
+                logger.debug('BC vault holds only its rent-exempt minimum, nothing to claim', {
+                    lamports: bcInfo.lamports, rentExempt: bcRentExempt
+                });
+            }
             const discriminator = pump.buildClaimFeesData();
             const [eventAuthority] = PublicKey.findProgramAddressSync(
                 [Buffer.from("__event_authority")], PROGRAMS.PUMP
@@ -1437,9 +1287,11 @@ async function claimCreatorFees(deps) {
                 { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
             ];
 
-            tx.add(new TransactionInstruction({ keys, programId: PROGRAMS.PUMP, data: discriminator }));
-            claimedSomething = true;
-            totalClaimed += bcInfo.lamports;
+            if (claimable > 0) {
+                tx.add(new TransactionInstruction({ keys, programId: PROGRAMS.PUMP, data: discriminator }));
+                claimedSomething = true;
+                totalClaimed += claimable;
+            }
         }
     } catch (e) {
         logger.debug('Failed to claim BC fees', { error: e.message });
@@ -1479,6 +1331,8 @@ async function claimCreatorFees(deps) {
             tx.add(new TransactionInstruction({ keys, programId: PROGRAMS.PUMP_AMM, data: ammDiscriminator }));
             tx.add(createCloseAccountInstruction(myWsolAta, devKeypair.publicKey, devKeypair.publicKey));
             claimedSomething = true;
+            // The AMM side needs no rent adjustment: this is a token-account balance, moved in
+            // full, and the account is closed on the next line so its own rent comes back too.
             totalClaimed += Number(bal.value.amount);
         }
     } catch (e) {
@@ -1491,544 +1345,6 @@ async function claimCreatorFees(deps) {
         return totalClaimed;
     }
     return 0;
-}
-
-/**
- * Claim creator fees from Robinhood tokens (external tokens sharing fees with us)
- * v12.0 - New feature for fee sharing partnerships
- * v25.73 - CRITICAL FIX: Use feeVaultAddress when available for fee sharing tokens
- *
- * Note: For fee sharing configs, we need to call distribute_creator_fees first
- * to have fees distributed to all shareholders, then claim our share
- */
-async function claimRobinhoodFees(deps) {
-    const { connection, devKeypair, db } = deps;
-
-    let totalClaimed = 0;
-    const claimedTokens = [];
-
-    try {
-        // Get all active Robinhood tokens (v25.14 SCALABILITY: Limit to 500 tokens)
-        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 500');
-
-        // C-3: Process tokens in parallel batches of 5 to avoid serial RPC bottleneck
-        const CLAIM_BATCH_SIZE = 5;
-        for (let bi = 0; bi < tokens.length; bi += CLAIM_BATCH_SIZE) {
-            const batchTokens = tokens.slice(bi, bi + CLAIM_BATCH_SIZE);
-            const batchResults = await Promise.allSettled(batchTokens.map(async (token) => {
-            let tokenTotalClaimed = 0;
-            const tokenEntries = [];
-            try {
-                const creatorPubkey = new PublicKey(token.creatorPubkey);
-
-                // v25.101: Determine vault type and addresses based on token configuration
-                // Two types: FEE program accounts (feeVaultAddress set) or PUMP program PDAs
-                let bcVault;           // Where to check BC fee balance
-                let pumpBcVault;       // PUMP program's creator-vault (for distribute instruction)
-                let coinCreator;       // coin_creator account (feeVaultAddress or original creator)
-                let ammVaultAuth, ammVaultAta, sharingConfigPDA;
-                let isFeeProgram = false;
-
-                if (token.feeVaultAddress) {
-                    // v25.105: FEE program tokens - fees are in PUMP creator-vault, NOT feeVaultAddress
-                    // From successful tx analysis: creator_vault (account 3) is PUMP PDA where SOL fees are
-                    // The feeVaultAddress is only the sharing_config (account 2), not where fees are stored
-                    const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-
-                    // coin_creator = feeVaultAddress (sharing_config for instruction account 2)
-                    coinCreator = feeVaultPubkey;
-
-                    // PUMP bc_vault derived from original creator - THIS IS WHERE FEES ARE
-                    const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
-                    pumpBcVault = creatorVaults.bcVault;
-                    sharingConfigPDA = creatorVaults.sharingConfigPDA;
-
-                    // v25.105: Check balance at PUMP creator-vault (same as where we distribute from)
-                    bcVault = pumpBcVault;
-
-                    // v25.100: AMM vaults derived from feeVaultPubkey (matches AMM pool.coin_creator)
-                    const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                    ammVaultAuth = feeVaults.ammVaultAuth;
-                    ammVaultAta = feeVaults.ammVaultAta;
-                    isFeeProgram = true;
-
-                    logger.debug(`[Robinhood] ${token.ticker}: FEE program - coinCreator=${token.feeVaultAddress.slice(0, 8)}..., bcVault/pumpBcVault from creator ${token.creatorPubkey.slice(0, 8)}...`);
-                } else {
-                    // Legacy path: PUMP program fee sharing - derive from original creator
-                    const vaults = pump.getShareholderFeeVaults(creatorPubkey);
-                    bcVault = vaults.bcVault;
-                    pumpBcVault = vaults.bcVault;  // Same for PUMP program tokens
-                    coinCreator = vaults.sharingConfigPDA;  // For PUMP tokens, coin_creator = sharingConfigPDA
-                    ammVaultAuth = vaults.ammVaultAuth;
-                    ammVaultAta = vaults.ammVaultAta;
-                    sharingConfigPDA = vaults.sharingConfigPDA;
-                }
-
-                let tokenClaimed = 0;
-
-                // v25.79: Check BC vault for pending fees
-                // CRITICAL FIX: Use 5000 lamports buffer (matches health.js and threshold)
-                let bcPendingLamports = 0;
-                let bcInfo = null;
-
-                try {
-                    bcInfo = await connection.getAccountInfo(bcVault);
-                    if (bcInfo) {
-                        // v27.6: the cluster's actual rent-exempt floor for this vault, not a
-                        // hardcoded 5000-lamport guess. See solana.getRentExemptMinimum.
-                        const rentExemptMin = await solana.getRentExemptMinimum(bcInfo.data?.length || 0, 5000);
-                        bcPendingLamports = Math.max(0, bcInfo.lamports - rentExemptMin);
-                    }
-                } catch (e) {
-                    logger.debug(`[Robinhood] ${token.ticker}: BC vault check failed - ${e.message}`);
-                }
-
-                // v25.88: Only claim BC fees if over 0.05 SOL threshold (50M lamports)
-                const BC_CLAIM_THRESHOLD = 50000000; // 0.05 SOL
-                if (bcPendingLamports > BC_CLAIM_THRESHOLD) {
-                    try {
-                        // v25.97: All Robinhood tokens use distribute_creator_fees on PUMP program
-                        // This distributes fees to all shareholders in the sharing config
-                        logger.info(`[Robinhood] ${token.ticker}: BC vault has ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL pending - calling distribute_creator_fees...`);
-
-                        // v25.98: Get sharing config from correct source
-                        // FEE program tokens: shareholders embedded in bcVault (feeVaultAddress)
-                        // PUMP program tokens: shareholders in separate sharingConfigPDA
-                        const configAccount = isFeeProgram ? coinCreator : sharingConfigPDA;
-                        const configData = await getCachedFeeSharingConfig(connection, configAccount, creatorPubkey, isFeeProgram);
-
-                        if (configData && configData.shareholders && configData.shareholders.length > 0) {
-                            const tx = new Transaction();
-                            solana.addPriorityFee(tx);
-
-                            const distributeDiscriminator = pump.buildDistributeFeesData();
-                            const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("__event_authority")], PROGRAMS.PUMP
-                            );
-
-                            // v25.104: Exact account structure from successful tx 2cGnFzu4w12n995MxTHo8BKFbb2V5FHJ4aeCQh69mxhkmhuyrnBH9zMSMwQ2tt9GhoZMardqgSXDPjm4SAA3i8AV
-                            // DistributeCreatorFees: mint, bonding_curve, sharing_config, creator_vault, system, event_auth, program, ...shareholders
-                            // NO separate claimer account - signer is implicit in transaction
-                            const mintPubkey = new PublicKey(token.mint);
-                            const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
-                            const distributeKeys = [
-                                { pubkey: mintPubkey, isSigner: false, isWritable: false },
-                                { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                                { pubkey: coinCreator, isSigner: false, isWritable: true },  // sharing_config (feeVaultAddress)
-                                { pubkey: pumpBcVault, isSigner: false, isWritable: true },  // creator_vault
-                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-                            ];
-                            for (const sh of configData.shareholders) {
-                                distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
-                            }
-
-                            tx.add(new TransactionInstruction({
-                                keys: distributeKeys,
-                                programId: PROGRAMS.PUMP,
-                                data: distributeDiscriminator
-                            }));
-
-                            tx.feePayer = devKeypair.publicKey;
-                            await solana.sendTxWithRetry(tx, [devKeypair]);
-
-                            const ourShare = Math.floor(bcPendingLamports * ((token.feeShareBps ?? 10000) / 10000));
-                            tokenClaimed += ourShare;
-                            tokenTotalClaimed += ourShare;
-                            tokenEntries.push({
-                                ticker: token.ticker || token.creatorPubkey.slice(0, 8),
-                                amount: ourShare,
-                                source: 'BC'
-                            });
-
-                            // v28.0: 50% holders / 25% central pool / 24.5% buyback-burn / 0.5% upkeep
-                            // v28.2: all four credits in ONE transaction. As three separate
-                            // statements, a failure after the first left the split partially
-                            // applied — holders credited, the platform's share never accrued.
-                            const bcSplit = splitClaimedFees(ourShare);
-                            await db.transaction(async (tx) => {
-                                await tx.run(
-                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
-                                    [Date.now(), ourShare / LAMPORTS_PER_SOL, bcSplit.holders, token.id]
-                                );
-                                if (bcSplit.centralPool > 0) {
-                                    await addToCentralPool(tx, bcSplit.centralPool);
-                                }
-                                // v28.0: Robinhood claims previously contributed nothing to the
-                                // platform cut -- the 5% transfer only ran on platform claims -- so
-                                // that share silently pooled in the dev wallet. Now accrued here too.
-                                await accruePlatformFees(tx, bcSplit);
-                            });
-
-                            logger.info(`[Robinhood] ${token.ticker}: Distributed ${(bcPendingLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL, ${(bcSplit.holders / LAMPORTS_PER_SOL).toFixed(6)} to token pool, ${(bcSplit.centralPool / LAMPORTS_PER_SOL).toFixed(6)} to central pool, ${((bcSplit.buybackBurn + bcSplit.upkeep) / LAMPORTS_PER_SOL).toFixed(6)} to platform)`);
-
-                            // v25.113: Cross-record to PAGS if this token is also a PAGS beneficiary
-                            // v25.114: Use on-chain shareholder BPS for PAGS wallet, not DB value
-                            try {
-                                const pagsBeneficiary = await db.get(
-                                    'SELECT id, "feeShareBps" FROM pags_beneficiaries WHERE mint = $1 AND "isActive" = 1',
-                                    [token.mint]
-                                );
-                                if (pagsBeneficiary) {
-                                    const pagsService = require('../services/pags');
-                                    // Look up PAGS wallet's actual on-chain share from configData
-                                    let pagsShareBps = pagsBeneficiary.feeShareBps; // fallback to DB
-                                    if (config.PAGS_WALLET && configData && configData.shareholders) {
-                                        const pagsShareholder = configData.shareholders.find(
-                                            sh => sh.pubkey.toString() === config.PAGS_WALLET
-                                        );
-                                        if (pagsShareholder) {
-                                            pagsShareBps = pagsShareholder.shareBps;
-                                            logger.debug(`[Robinhood] PAGS on-chain share for ${token.ticker}: ${pagsShareBps/100}% (DB: ${pagsBeneficiary.feeShareBps/100}%)`);
-                                        }
-                                    }
-                                    const pagsShareLamports = Math.floor(bcPendingLamports * (pagsShareBps / 10000));
-                                    const pagsShareSol = pagsShareLamports / LAMPORTS_PER_SOL;
-                                    if (pagsShareSol > 0.000001) {
-                                        await pagsService.recordFeeCollection(token.mint, pagsShareSol, 'robinhood_cross_claim', null, false);
-                                        logger.info(`[Robinhood] Cross-recorded ${pagsShareSol.toFixed(6)} SOL to PAGS for ${token.ticker} (${pagsShareBps/100}% on-chain)`);
-                                    }
-                                    // Update PAGS vault balance cache to prevent double-count
-                                    pagsFeeScanner.updateVaultBalanceCache(token.mint, 5000, 0);
-                                }
-                            } catch (crossErr) {
-                                logger.debug('[Robinhood] PAGS cross-record failed (non-critical)', { mint: token.mint, error: crossErr.message });
-                            }
-                        } else {
-                            logger.warn(`[Robinhood] ${token.ticker}: No sharing config found at ${sharingConfigPDA.toString().slice(0, 8)}...`);
-                        }
-                    } catch (e) {
-                        logger.info(`[Robinhood] BC distribute failed for ${token.ticker}: ${e.message}`, {
-                            bcVault: bcVault.toString(),
-                            sharingConfigPDA: sharingConfigPDA.toString()
-                        });
-                    }
-                } else {
-                    logger.debug(`[Robinhood] ${token.ticker}: No pending BC fees (balance: ${bcInfo?.lamports || 0})`);
-                }
-
-                // v25.112: BUGFIX - AMM fees use TransferCreatorFeesToPump + distribute_creator_fees
-                // collect_creator_fee requires signer to be creator, which fails for fee-sharing tokens (error 2006)
-                // The correct approach: transfer AMM fees to BC vault, then distribute to shareholders
-                try {
-                    const ammVaultAtaKey = await ammVaultAta;
-                    const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-                    const ammFeeLamports = parseInt(bal.value.amount) || 0;
-
-                    // v25.88: Only claim AMM fees if over 0.05 SOL threshold
-                    const AMM_CLAIM_THRESHOLD = 50000000; // 0.05 SOL
-                    if (ammFeeLamports > AMM_CLAIM_THRESHOLD) {
-                        const ammFeeSol = ammFeeLamports / LAMPORTS_PER_SOL;
-                        const ourShare = ammFeeSol * ((token.feeShareBps ?? 10000) / 10000);
-
-                        logger.info(`[Robinhood/AMM] ${token.ticker}: Found ${ammFeeSol.toFixed(6)} SOL in AMM vault (our share: ${ourShare.toFixed(6)} SOL @ ${(token.feeShareBps ?? 10000)/100}%)`);
-
-                        try {
-                            const ammTx = new Transaction();
-                            solana.addPriorityFee(ammTx);
-
-                            const mintPubkey = new PublicKey(token.mint);
-                            const { pool } = pump.getPumpAmmPDAs(mintPubkey);
-
-                            // v25.112: Read coin_creator from AMM pool (authoritative for graduated tokens)
-                            let ammCoinCreator = coinCreator;
-                            try {
-                                const poolAccountInfo = await connection.getAccountInfo(pool);
-                                if (poolAccountInfo && poolAccountInfo.data.length >= 43) {
-                                    ammCoinCreator = new PublicKey(poolAccountInfo.data.slice(11, 43));
-                                    logger.debug(`[Robinhood/AMM] ${token.ticker}: Using AMM pool coin_creator: ${ammCoinCreator.toString().slice(0, 8)}...`);
-                                }
-                            } catch (e) {
-                                logger.debug(`[Robinhood/AMM] ${token.ticker}: Could not read AMM pool, using fallback coin_creator`);
-                            }
-
-                            // Derive vaults from coin_creator for consistency
-                            const ammVaults = pump.getShareholderFeeVaults(ammCoinCreator);
-                            const ammVaultAuthKey = ammVaults.ammVaultAuth;
-                            const ammVaultAtaResolved = await ammVaults.ammVaultAta;
-                            const bcVaultKey = ammVaults.bcVault;
-
-                            // Step 1: TransferCreatorFeesToPump - moves wSOL from AMM vault to BC vault
-                            const transferDiscriminator = pump.buildTransferFeesToPumpData();
-
-                            // v25.113: BUGFIX - Account 8 must be event_authority, NOT pool
-                            // Reference: successful tx 2cGnFzu4w12n995MxTHo8BKFbb2V5FHJ4aeCQh69mxhkmhuyrnBH9zMSMwQ2tt9GhoZMardqgSXDPjm4SAA3i8AV
-                            const [ammEventAuthority] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
-                            );
-
-                            const transferKeys = [
-                                { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },           // 0: wsol_mint
-                                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },     // 1: token_program
-                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 2: system_program
-                                { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // 3: ata_program
-                                { pubkey: ammCoinCreator, isSigner: false, isWritable: false },        // 4: coin_creator
-                                { pubkey: ammVaultAuthKey, isSigner: false, isWritable: true },        // 5: amm_vault_auth
-                                { pubkey: ammVaultAtaResolved, isSigner: false, isWritable: true },    // 6: amm_vault_ata (wSOL)
-                                { pubkey: bcVaultKey, isSigner: false, isWritable: true },             // 7: bc_vault (destination)
-                                { pubkey: ammEventAuthority, isSigner: false, isWritable: false },     // 8: event_authority (NOT pool!)
-                                { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false },     // 9: pump_amm_program
-                            ];
-
-                            ammTx.add(new TransactionInstruction({
-                                keys: transferKeys,
-                                programId: PROGRAMS.PUMP_AMM,
-                                data: transferDiscriminator
-                            }));
-
-                            // Step 2: distribute_creator_fees - distributes from BC vault to shareholders
-                            // Get shareholders from config (re-use from BC claim if we have it)
-                            const configAccount = isFeeProgram ? new PublicKey(token.feeVaultAddress) : ammVaults.sharingConfigPDA;
-                            const ammConfigData = await getCachedFeeSharingConfig(connection, configAccount, creatorPubkey, isFeeProgram);
-
-                            if (ammConfigData && ammConfigData.shareholders && ammConfigData.shareholders.length > 0) {
-                                const distributeDiscriminator = pump.buildDistributeFeesData();
-                                const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP
-                                );
-
-                                const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
-                                const distributeKeys = [
-                                    { pubkey: mintPubkey, isSigner: false, isWritable: false },
-                                    { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                                    { pubkey: ammCoinCreator, isSigner: false, isWritable: true },  // sharing_config / coin_creator
-                                    { pubkey: bcVaultKey, isSigner: false, isWritable: true },       // creator_vault
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-                                ];
-                                for (const sh of ammConfigData.shareholders) {
-                                    distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
-                                }
-
-                                ammTx.add(new TransactionInstruction({
-                                    keys: distributeKeys,
-                                    programId: PROGRAMS.PUMP,
-                                    data: distributeDiscriminator
-                                }));
-                            } else {
-                                // No shareholders found - can still try transfer only
-                                logger.warn(`[Robinhood/AMM] ${token.ticker}: No shareholders found, attempting transfer only`);
-                            }
-
-                            ammTx.feePayer = devKeypair.publicKey;
-                            await solana.sendTxWithRetry(ammTx, [devKeypair]);
-
-                            // Distribution succeeded!
-                            const ourShareLamports = Math.floor(ammFeeLamports * ((token.feeShareBps ?? 10000) / 10000));
-                            tokenTotalClaimed += ourShareLamports;
-                            tokenEntries.push({
-                                ticker: token.ticker || token.creatorPubkey.slice(0, 8),
-                                amount: ourShareLamports,
-                                source: 'AMM'
-                            });
-
-                            // v28.0: 50% holders / 25% central pool / 24.5% buyback-burn / 0.5% upkeep
-                            // v28.2: atomic — see the BC path above.
-                            const ammSplit = splitClaimedFees(ourShareLamports);
-                            await db.transaction(async (tx) => {
-                                await tx.run(
-                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingAmmFees" = 0, pending_airdrop_lamports = pending_airdrop_lamports + $3 WHERE id = $4',
-                                    [Date.now(), ourShareLamports / LAMPORTS_PER_SOL, ammSplit.holders, token.id]
-                                );
-                                if (ammSplit.centralPool > 0) {
-                                    await addToCentralPool(tx, ammSplit.centralPool);
-                                }
-                                await accruePlatformFees(tx, ammSplit);
-                            });
-
-                            logger.info(`[Robinhood/AMM] ${token.ticker}: Distributed ${ammFeeSol.toFixed(6)} SOL (our share: ${ourShare.toFixed(6)} SOL, ${(ammSplit.holders / LAMPORTS_PER_SOL).toFixed(6)} to token pool, ${(ammSplit.centralPool / LAMPORTS_PER_SOL).toFixed(6)} to central pool, ${((ammSplit.buybackBurn + ammSplit.upkeep) / LAMPORTS_PER_SOL).toFixed(6)} to platform)`);
-
-                            // v25.113: Cross-record to PAGS if this token is also a PAGS beneficiary
-                            // v25.114: Use on-chain shareholder BPS for PAGS wallet, not DB value
-                            try {
-                                const pagsBeneficiary = await db.get(
-                                    'SELECT id, "feeShareBps" FROM pags_beneficiaries WHERE mint = $1 AND "isActive" = 1',
-                                    [token.mint]
-                                );
-                                if (pagsBeneficiary) {
-                                    const pagsService = require('../services/pags');
-                                    // Look up PAGS wallet's actual on-chain share from ammConfigData
-                                    let pagsShareBps = pagsBeneficiary.feeShareBps; // fallback to DB
-                                    if (config.PAGS_WALLET && ammConfigData && ammConfigData.shareholders) {
-                                        const pagsShareholder = ammConfigData.shareholders.find(
-                                            sh => sh.pubkey.toString() === config.PAGS_WALLET
-                                        );
-                                        if (pagsShareholder) {
-                                            pagsShareBps = pagsShareholder.shareBps;
-                                            logger.debug(`[Robinhood/AMM] PAGS on-chain share for ${token.ticker}: ${pagsShareBps/100}% (DB: ${pagsBeneficiary.feeShareBps/100}%)`);
-                                        }
-                                    }
-                                    const pagsShareLamports = Math.floor(ammFeeLamports * (pagsShareBps / 10000));
-                                    const pagsShareSol = pagsShareLamports / LAMPORTS_PER_SOL;
-                                    if (pagsShareSol > 0.000001) {
-                                        await pagsService.recordFeeCollection(token.mint, pagsShareSol, 'robinhood_cross_claim', null, false);
-                                        logger.info(`[Robinhood/AMM] Cross-recorded ${pagsShareSol.toFixed(6)} SOL to PAGS for ${token.ticker} (${pagsShareBps/100}% on-chain)`);
-                                    }
-                                    pagsFeeScanner.updateVaultBalanceCache(token.mint, 5000, 0);
-                                }
-                            } catch (crossErr) {
-                                logger.debug('[Robinhood/AMM] PAGS cross-record failed (non-critical)', { mint: token.mint, error: crossErr.message });
-                            }
-
-                        } catch (claimErr) {
-                            // AMM distribution failed - track as pending for monitoring
-                            totalPendingAmmFees += ammFeeLamports;
-
-                            // Update database with pending AMM fees
-                            await db.run(
-                                'UPDATE robinhood_tokens SET "pendingAmmFees" = $1 WHERE mint = $2',
-                                [ammFeeSol, token.mint]
-                            ).catch(() => {});
-
-                            logger.info(`[Robinhood/AMM] ${token.ticker}: AMM distribution failed - ${claimErr.message}`);
-                        }
-                    }
-                } catch (e) {
-                    logger.debug(`[Robinhood/AMM] ${token.ticker}: Check failed - ${e.message}`);
-                }
-
-            } catch (e) {
-                logger.error(`[Robinhood] Fee claim error for ${token.creatorPubkey}`, { error: e.message });
-            }
-            return { tokenTotalClaimed, tokenEntries };
-        })); // end Promise.allSettled batchTokens.map
-
-        for (const r of batchResults) {
-            if (r.status === 'fulfilled' && r.value) {
-                totalClaimed += r.value.tokenTotalClaimed;
-                claimedTokens.push(...r.value.tokenEntries);
-            }
-        }
-        if (bi + CLAIM_BATCH_SIZE < tokens.length) {
-            await new Promise(r => setTimeout(r, 500)); // Rate limit between batches
-        }
-    } // end outer batch for loop
-    } catch (e) {
-        logger.error('[Robinhood] Claim fees error', { error: e.message });
-    }
-
-    // v25.112: AMM fee monitoring - alert if pending fees exceed threshold
-    // Now using TransferCreatorFeesToPump + distribute_creator_fees pattern
-    const pendingAmmSol = totalPendingAmmFees / LAMPORTS_PER_SOL;
-    if (pendingAmmSol > AMM_FEE_ALERT_THRESHOLD_SOL) {
-        const now = Date.now();
-        // Only alert every 5 minutes to prevent spam
-        if (now - lastAmmFeeAlert > AMM_FEE_MONITOR_INTERVAL_MS) {
-            lastAmmFeeAlert = now;
-            logger.warn(`[Robinhood/AMM] ALERT: ${pendingAmmSol.toFixed(4)} SOL in pending AMM fees failed to distribute (check transaction errors)`);
-
-            // Store total pending AMM fees in stats for dashboard visibility
-            await db.run(
-                'INSERT INTO stats (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
-                ['pendingAmmFeesLamports', totalPendingAmmFees]
-            ).catch(() => {});
-        }
-    }
-
-    // Reset for next cycle
-    totalPendingAmmFees = 0;
-
-    return { totalClaimed, claimedTokens, pendingAmmSol };
-}
-
-/**
- * Refresh fee share BPS for all active Robinhood tokens
- * v23.0 - Called before airdrop to ensure points reflect current on-chain reward percentages
- * This is important because Pump.fun allows creators to change reward distribution dynamically
- *
- * @param {Object} deps - Dependencies including connection, devKeypair, db
- * @returns {Object} - Summary of refresh results
- */
-async function refreshAllFeeShares(deps) {
-    const { connection, devKeypair, db } = deps;
-
-    try {
-        // v25.14 SCALABILITY: Limit to 500 tokens to prevent memory issues
-        const tokens = await db.all('SELECT * FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 500');
-
-        if (tokens.length === 0) {
-            return { total: 0, updated: 0, deactivated: 0, errors: 0 };
-        }
-
-        const platformWallet = devKeypair.publicKey.toString();
-        let updated = 0;
-        let deactivated = 0;
-        let errors = 0;
-
-        // v27.3: Process tokens in parallel batches instead of one sequential RPC round trip
-        // at a time. verifyFeeRecipient() does 1-3 getAccountInfo calls per token, and this
-        // function runs before every airdrop distribution (processAirdrop), so serializing
-        // hundreds of tokens could add minutes of latency to the critical path.
-        const FEE_SHARE_REFRESH_BATCH_SIZE = 10;
-        for (let i = 0; i < tokens.length; i += FEE_SHARE_REFRESH_BATCH_SIZE) {
-            const batch = tokens.slice(i, i + FEE_SHARE_REFRESH_BATCH_SIZE);
-
-            const results = await Promise.allSettled(batch.map(async (token) => {
-                const verification = await mintExtractor.verifyFeeRecipient(
-                    token.mint,
-                    platformWallet,
-                    connection
-                );
-
-                // v25.37: Check for error flag - don't deactivate on RPC errors
-                // This prevents incorrectly removing tokens due to network issues
-                if (verification.error) {
-                    logger.warn(`[FeeShareRefresh] ${token.ticker} (${token.mint.slice(0, 8)}...) - Verification error, keeping current state: ${verification.error}`);
-                    return 'error';
-                }
-
-                if (!verification.isRecipient) {
-                    // No longer a fee recipient - deactivate
-                    await db.run(
-                        'UPDATE robinhood_tokens SET "isActive" = 0 WHERE mint = $1',
-                        [token.mint]
-                    );
-                    logger.warn(`[FeeShareRefresh] ${token.ticker} (${token.mint.slice(0, 8)}...) - No longer a fee recipient, deactivated`);
-                    return 'deactivated';
-                } else if (verification.feeShareBps !== token.feeShareBps) {
-                    // Fee share changed - update
-                    await db.run(
-                        'UPDATE robinhood_tokens SET "feeShareBps" = $1 WHERE mint = $2',
-                        [verification.feeShareBps, token.mint]
-                    );
-                    logger.info(`[FeeShareRefresh] ${token.ticker} - Fee share updated: ${token.feeShareBps} -> ${verification.feeShareBps} bps`);
-                    return 'updated';
-                }
-
-                return 'unchanged';
-            }));
-
-            for (let j = 0; j < results.length; j++) {
-                const result = results[j];
-                if (result.status === 'fulfilled') {
-                    if (result.value === 'updated') updated++;
-                    else if (result.value === 'deactivated') deactivated++;
-                    else if (result.value === 'error') errors++;
-                } else {
-                    // v25.37: Count errors but don't deactivate - could be temporary issue
-                    errors++;
-                    const token = batch[j];
-                    logger.warn(`[FeeShareRefresh] Error for ${token.ticker} (${token.mint.slice(0, 8)}...): ${result.reason?.message}`);
-                }
-            }
-
-            // Rate limit between batches (previously between every single token)
-            if (i + FEE_SHARE_REFRESH_BATCH_SIZE < tokens.length) {
-                await new Promise(r => setTimeout(r, 150));
-            }
-        }
-
-        if (updated > 0 || deactivated > 0 || errors > 0) {
-            logger.info(`[FeeShareRefresh] Complete: ${updated} updated, ${deactivated} deactivated, ${errors} errors out of ${tokens.length} tokens`);
-        }
-
-        return { total: tokens.length, updated, deactivated, errors };
-    } catch (e) {
-        logger.error('[FeeShareRefresh] Error', { error: e.message });
-        return { total: 0, updated: 0, deactivated: 0, errors: 1, error: e.message };
-    }
 }
 
 /**
@@ -2131,12 +1447,6 @@ async function processAirdrop(deps) {
             logEvent('HOLDER_REFRESH', `Holder refresh failed, using cached data: ${holderError.message}`, { durationMs: Date.now() - holderRefreshStart, error: holderError.message });
         }
 
-        // v23.0: Refresh fee share BPS for all Robinhood tokens before calculating points
-        // This ensures points reflect current on-chain reward percentages
-        logger.info('[Airdrop] Refreshing fee share percentages before distribution...');
-        await refreshAllFeeShares(deps);
-        logEvent('FEE_SHARE_REFRESH', 'Fee share percentages refreshed');
-
         // v25.13: Verify Redis is connected before proceeding
         if (!redis.isRedisConnected()) {
             logger.error('[Airdrop] ABORTED: Redis not connected - cannot fetch user points safely');
@@ -2181,22 +1491,10 @@ async function processAirdrop(deps) {
         const KOTH_MAX_PERCENT = 0.10; // 10% cap
 
         const kothResult = await getAiSelectedKoth(db);
-        // v25.113: Check both platform and robinhood token tables
-        let kothToken = kothResult.token ? await db.get(
+        const kothToken = kothResult.token ? await db.get(
             'SELECT "userPubkey", ticker, mint, "marketCap" FROM tokens WHERE mint = $1',
             [kothResult.token.mint]
         ) : null;
-        let kothSource = 'platform';
-        if (!kothToken && kothResult.token) {
-            const rhToken = await db.get(
-                'SELECT "creatorPubkey" as "userPubkey", ticker, mint, "marketCap" FROM robinhood_tokens WHERE mint = $1',
-                [kothResult.token.mint]
-            );
-            if (rhToken) {
-                kothToken = rhToken;
-                kothSource = 'robinhood';
-            }
-        }
 
         if (kothResult.reasoning) {
             logger.info(`[KOTH] AI Reasoning: ${kothResult.reasoning}`);
@@ -2209,9 +1507,7 @@ async function processAirdrop(deps) {
         // Selection may be up to 2h stale (Redis TTL). A token that crashed to 0 volume
         // after selection must not receive the 10% KOTH bonus.
         if (kothToken && kothToken.mint) {
-            const kothCurrentRow = kothSource === 'robinhood'
-                ? await db.get('SELECT volume24h FROM robinhood_tokens WHERE mint = $1', [kothToken.mint])
-                : await db.get('SELECT volume24h FROM tokens WHERE mint = $1', [kothToken.mint]);
+            const kothCurrentRow = await db.get('SELECT volume24h FROM tokens WHERE mint = $1', [kothToken.mint]);
             if (!kothCurrentRow || (parseFloat(kothCurrentRow.volume24h) || 0) < KOTH_MIN_VOLUME) {
                 logger.warn(`[KOTH] ${kothToken.ticker} no longer meets minimum volume at distribution time — skipping KOTH bonus`);
                 kothToken = null;
@@ -2219,8 +1515,8 @@ async function processAirdrop(deps) {
         }
         if (kothToken && kothToken.mint) {
             // v25.113: Query correct holder table based on token source
-            const holdersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
-            const VALID_HOLDER_TABLES = ['token_holders', 'robinhood_token_holders'];
+            const holdersTable = 'token_holders';
+            const VALID_HOLDER_TABLES = ['token_holders'];
             if (!VALID_HOLDER_TABLES.includes(holdersTable)) throw new Error(`Invalid holders table: ${holdersTable}`);
             kothHolders = await db.all(
                 `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1 ORDER BY rank ASC`,
@@ -2536,8 +1832,8 @@ async function processAirdrop(deps) {
         logger.info(`SOL Airdrop Complete. Success: ${successfulBatches}, Failed: ${failedBatches}, Actual sent: ${actualTotalSolSent.toFixed(4)} SOL (KOTH: ${actualKothSolSent.toFixed(4)}, Community: ${(actualCommunityLamportsSent / LAMPORTS_PER_SOL).toFixed(4)})`);
 
         // v13.0: Track KOTH holder recipients count (check correct table based on source)
-        const kothHoldersTable = kothSource === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
-        const VALID_KOTH_TABLES = ['token_holders', 'robinhood_token_holders'];
+        const kothHoldersTable = 'token_holders';
+        const VALID_KOTH_TABLES = ['token_holders'];
         if (!VALID_KOTH_TABLES.includes(kothHoldersTable)) throw new Error(`Invalid holders table: ${kothHoldersTable}`);
         const kothHolderCount = kothToken?.mint ? (await db.get(
             `SELECT COUNT(*) as count FROM ${kothHoldersTable} WHERE mint = $1`,
@@ -2763,7 +2059,6 @@ async function runPurchaseAndFees(deps) {
         status: 'SKIPPED',
         reason: 'Unknown',
         feesCollected: 0,
-        robinhoodFeesCollected: 0,
         solSpent: 0,
         transfer9_5: 0,
         transfer0_5: 0
@@ -2858,21 +2153,6 @@ async function runPurchaseAndFees(deps) {
             logData.reason = `Threshold not met`;
         }
 
-        // v12.0: Claim fees from Robinhood tokens (external tokens sharing fees with us)
-        try {
-            const { totalClaimed: robinhoodClaimed, claimedTokens } = await claimRobinhoodFees(deps);
-            if (robinhoodClaimed > 0) {
-                logger.info(`[Robinhood] Total claimed: ${(robinhoodClaimed / LAMPORTS_PER_SOL).toFixed(6)} SOL from ${claimedTokens.length} tokens`);
-                logData.robinhoodFeesCollected = robinhoodClaimed / LAMPORTS_PER_SOL;
-                claimedAmount += robinhoodClaimed;
-
-                // Track lifetime Robinhood fees
-                await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [robinhoodClaimed, 'lifetimeRobinhoodFeesLamports']);
-            }
-        } catch (e) {
-            logger.debug('[Robinhood] Fee claiming skipped', { error: e.message });
-        }
-
         const realBalance = await connection.getBalance(devKeypair.publicKey);
 
         // v11.0: Simplified airdrop status for SOL airdrops (no ATA costs)
@@ -2905,7 +2185,6 @@ async function runPurchaseAndFees(deps) {
                 // the pending counters when the claim was attributed, and processPlatformFeeSweep
                 // moves the accumulated total out in a single transaction once it clears the
                 // sweep threshold. Transferring per-claim meant one transaction per claim and,
-                // because this block only ran on platform claims, it skipped Robinhood entirely.
                 const projected = splitClaimedFees(spendable);
                 logData.solSpent = (projected.buybackBurn + projected.upkeep) / LAMPORTS_PER_SOL;
                 logData.transfer9_5 = projected.buybackBurn / LAMPORTS_PER_SOL;
@@ -2958,7 +2237,15 @@ async function runFeeCollection(deps) {
         let platformPendingFees = new BN(0);
         try {
             const bcInfo = await connection.getAccountInfo(bcVault);
-            if (bcInfo) platformPendingFees = platformPendingFees.add(new BN(bcInfo.lamports));
+            if (bcInfo) {
+                // v29.2: same rent adjustment as claimCreatorFees below. The rent-exempt
+                // minimum can never be claimed, so counting it here reported pending fees the
+                // platform could not actually collect.
+                const bcRentExempt = await solana.getRentExemptMinimum(bcInfo.data?.length || 0);
+                platformPendingFees = platformPendingFees.add(
+                    new BN(Math.max(0, bcInfo.lamports - bcRentExempt))
+                );
+            }
         } catch (e) {
             // v25.14 ROBUSTNESS: Log RPC errors instead of silently ignoring
             logger.debug('[FeeCollection] BC vault check failed', { error: e.message });
@@ -2973,89 +2260,14 @@ async function runFeeCollection(deps) {
             logger.debug('[FeeCollection] AMM vault check failed', { error: e.message });
         }
 
-        // v25.79: Check Robinhood token pending fees for threshold calculation (BC + AMM)
-        // CRITICAL: For fee sharing tokens, BOTH vaults are derived from feeVaultAddress
-        let robinhoodPendingFees = new BN(0);
-        try {
-            const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 100');
-            logger.info(`[FeeCollection] Found ${robinhoodTokens.length} active Robinhood tokens to check`);
-            for (const token of robinhoodTokens) {
-                try {
-                    // v25.79: CRITICAL FIX - For fee sharing tokens, BOTH BC and AMM vaults
-                    // are derived from feeVaultAddress. AMM pool stores coinCreator as creator.
-                    let bcVaultAddr;
-                    let ammVaultAta;
-
-                    if (token.feeVaultAddress) {
-                        // FEE program token - BC vault is PUMP creator-vault PDA (where fees accumulate)
-                        // Must match claimRobinhoodFees which uses pumpBcVault from creatorPubkey
-                        const creatorPubkey = new PublicKey(token.creatorPubkey);
-                        const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
-                        bcVaultAddr = creatorVaults.bcVault;
-                        // AMM vaults derived from feeVaultAddress (matches AMM pool.coin_creator)
-                        const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                        const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                        ammVaultAta = feeVaults.ammVaultAta;
-                    } else {
-                        // PUMP program token - derive from creatorPubkey
-                        const creatorPubkey = new PublicKey(token.creatorPubkey);
-                        const vaults = pump.getShareholderFeeVaults(creatorPubkey);
-                        bcVaultAddr = vaults.bcVault;
-                        ammVaultAta = vaults.ammVaultAta;
-                    }
-
-                    // Check BOTH BC and AMM vaults
-                    let tokenBcFees = 0;
-                    let tokenAmmFees = 0;
-
-                    // Check BC vault
-                    const bcInfo = await connection.getAccountInfo(bcVaultAddr);
-                    // v27.6: cluster-derived rent-exempt floor, not a hardcoded 5000.
-                    const rentMin = bcInfo
-                        ? await solana.getRentExemptMinimum(bcInfo.data?.length || 0, 5000)
-                        : 5000;
-                    if (bcInfo && bcInfo.lamports > rentMin) {
-                        const pendingLamports = bcInfo.lamports - rentMin;
-                        tokenBcFees = Math.floor(pendingLamports * ((token.feeShareBps ?? 10000) / 10000));
-                    }
-
-                    // Check AMM vault (for graduated tokens)
-                    try {
-                        const ammVaultAtaKey = await ammVaultAta;
-                        const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-                        const ammBalance = parseInt(bal.value.amount) || 0;
-                        if (ammBalance > 0) {
-                            tokenAmmFees = Math.floor(ammBalance * ((token.feeShareBps ?? 10000) / 10000));
-                        }
-                    } catch (e) {
-                        // AMM vault may not exist for non-graduated tokens
-                    }
-
-                    const tokenTotalFees = tokenBcFees + tokenAmmFees;
-                    if (tokenTotalFees > 0) {
-                        robinhoodPendingFees = robinhoodPendingFees.add(new BN(tokenTotalFees));
-                        logger.info(`[FeeCollection] ${token.ticker}: ${(tokenTotalFees / LAMPORTS_PER_SOL).toFixed(4)} SOL pending (BC: ${(tokenBcFees / LAMPORTS_PER_SOL).toFixed(4)}, AMM: ${(tokenAmmFees / LAMPORTS_PER_SOL).toFixed(4)}) @ ${(token.feeShareBps ?? 10000) / 100}%`);
-                    }
-                } catch (e) {
-                    logger.debug(`[FeeCollection] ${token.ticker}: Error checking pending fees - ${e.message}`);
-                }
-            }
-            logger.info(`[FeeCollection] Robinhood pending fees total: ${(robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL from ${robinhoodTokens.length} tokens`);
-        } catch (e) {
-            logger.debug('[FeeCollection] Robinhood pending fees check failed', { error: e.message });
-        }
-
-        // v25.76: Total pending = platform + robinhood (for threshold check)
-        // v25.77: Also log platform pending for visibility
+        const totalPendingFees = platformPendingFees;
         logger.info(`[FeeCollection] Platform pending fees: ${(platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
-        const totalPendingFees = platformPendingFees.add(robinhoodPendingFees);
-        logger.info(`[FeeCollection] Total pending fees: ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL (platform: ${(platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} + robinhood: ${(robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)})`);
 
         // v17.0: Fee threshold is 0.05 SOL
         const threshold = new BN((config.FEE_THRESHOLD_SOL || 0.05) * LAMPORTS_PER_SOL);
 
         if (totalPendingFees.gte(threshold)) {
-            logger.info(`[FeeCollection] Claiming ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL in fees (platform: ${(platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)}, robinhood: ${(robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)})...`);
+            logger.info(`[FeeCollection] Claiming ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL in fees...`);
 
             let claimedAmount = await claimCreatorFees(deps);
 
@@ -3113,38 +2325,7 @@ async function runFeeCollection(deps) {
             }
             await new Promise(r => setTimeout(r, 1000));
 
-            // Also claim Robinhood fees
-            try {
-                const { totalClaimed: robinhoodClaimed, claimedTokens } = await claimRobinhoodFees(deps);
-                if (robinhoodClaimed > 0) {
-                    logger.info(`[FeeCollection] Claimed ${(robinhoodClaimed / LAMPORTS_PER_SOL).toFixed(4)} SOL from ${claimedTokens.length} Robinhood tokens`);
-                    await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [robinhoodClaimed, 'lifetimeRobinhoodFeesLamports']);
-                    claimedAmount += robinhoodClaimed;
-                }
-            } catch (e) {
-                logger.debug('[FeeCollection] Robinhood fee claiming skipped', { error: e.message });
-            }
-
-            // v25.51: Also collect PAGS fees from Pump.fun vaults
-            try {
-                const pagsResult = await pagsFeeScanner.collectAllFees();
-                if (pagsResult.totalClaimed > 0) {
-                    logger.info(`[FeeCollection] Claimed ${pagsResult.totalClaimed.toFixed(4)} SOL from ${pagsResult.claimedCount} PAGS tokens`);
-                    // v27.4 BUGFIX: 'lifetimePagsFeesLamports' is never seeded in the stats table's
-                    // init list (see postgres.js createSchema), so a plain UPDATE matched zero rows
-                    // and this counter silently never got created. Upsert instead.
-                    await db.run(
-                        `INSERT INTO stats (key, value) VALUES ($2, $1)
-                         ON CONFLICT (key) DO UPDATE SET value = stats.value + $1`,
-                        [pagsResult.totalClaimed * LAMPORTS_PER_SOL, 'lifetimePagsFeesLamports']
-                    );
-                }
-            } catch (e) {
-                logger.debug('[FeeCollection] PAGS fee collection skipped', { error: e.message });
-            }
-
             // v28.0: the platform's 25% was accrued at attribution time; sweep it when the
-            // accumulated total clears the threshold. This now covers Robinhood claims too,
             // which the old per-claim transfer never touched.
             //
             // Run every cycle rather than only after a claim: the sweep is self-gating on the
@@ -3163,21 +2344,18 @@ async function runFeeCollection(deps) {
                         platformFeeSol: ((claimedAmount * 0.05) / LAMPORTS_PER_SOL).toFixed(4),
                         pendingBeforeClaimSol: (totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
                         platformPendingSol: (platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
-                        robinhoodPendingSol: (robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
                         thresholdSol: (config.FEE_THRESHOLD_SOL || 0.05).toFixed(2)
                     });
                 }
             }
         } else {
-            // v25.77: Log with breakdown of platform vs robinhood
-            logger.info(`[FeeCollection] Below threshold: ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL pending (platform: ${(platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} + robinhood: ${(robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)}), need ${config.FEE_THRESHOLD_SOL || 0.05} SOL`);
+            logger.info(`[FeeCollection] Below threshold: ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL pending, need ${config.FEE_THRESHOLD_SOL || 0.05} SOL`);
             // v25.115: Always log fee check to frontend (even at 0 pending)
             if (logPurchase) {
                 await logPurchase('FEE_CHECK', {
                     status: 'BELOW_THRESHOLD',
                     pendingSol: (totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
                     platformPendingSol: (platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
-                    robinhoodPendingSol: (robinhoodPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
                     thresholdSol: (config.FEE_THRESHOLD_SOL || 0.05).toFixed(2),
                     progressPercent: Math.min(100, Math.round((totalPendingFees.toNumber() / threshold.toNumber()) * 100)),
                     reason: totalPendingFees.toNumber() === 0 ? 'No pending fees' : 'Below threshold'
@@ -3233,22 +2411,6 @@ async function start(deps) {
         logger.warn('[Flywheel] Failed to initialize nextAirdropTimestamp', { error: e.message });
     }
 
-    // v25.51: Initialize PAGS fee scanner
-    // v25.113: Awaited to allow DB cache hydration for external claim detection
-    try {
-        const pags = require('../services/pags');
-        await pagsFeeScanner.init({
-            db: deps.db,
-            connection: deps.connection,
-            pagsKeypair: deps.pagsKeypair,
-            devKeypair: deps.devKeypair,
-            solana,
-            pags
-        });
-    } catch (e) {
-        logger.warn('[Flywheel] PAGS fee scanner init failed', { error: e.message });
-    }
-
     // Fee collection every 1 minute
     const feeInterval = config.FEE_COLLECTION_INTERVAL || 60000;
     setInterval(() => runFeeCollection(deps), feeInterval);
@@ -3256,16 +2418,15 @@ async function start(deps) {
 
     // v26.0: Per-token airdrop processing every 15 minutes
     setInterval(() => processTokenAirdrops(deps), airdropInterval);
-    logger.info(`Per-token airdrop distribution started (${airdropInterval / 60000}min interval, >${process.env.TOKEN_AIRDROP_THRESHOLD_SOL || 0.05} SOL threshold per token)`);
+    logger.info(`Per-token airdrop distribution started (${airdropInterval / 60000}min interval, >${config.TOKEN_AIRDROP_THRESHOLD_SOL} SOL threshold per token)`);
 
     // v25.64: Staggered initial runs to avoid RPC spike at startup
     setTimeout(() => runFeeCollection(deps), 30000); // Fee collection at 30s (was 5s)
     setTimeout(() => processTokenAirdrops(deps), 120000); // Airdrop at 2min (was 10s)
 
     // Run KOTH evaluation early so Redis has a valid selection before holderScanner first reads it.
-    // Without this, the first ~30 minutes after startup would have no KOTH and Robinhood tokens
     // would be excluded from KOTH during that window.
     setTimeout(() => evaluateKothCandidates(db).catch(e => logger.warn('[KOTH] Startup evaluation failed', { error: e.message })), 10000);
 }
 
-module.exports = { claimCreatorFees, claimRobinhoodFees, processAirdrop, processTokenAirdrops, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, refreshAllFeeShares, start, getAiSelectedKoth, resetKothCache, splitClaimedFees, processPlatformFeeSweep, FEE_SPLIT };
+module.exports = { claimCreatorFees, processAirdrop, processTokenAirdrops, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, start, getAiSelectedKoth, resetKothCache, splitClaimedFees, processPlatformFeeSweep, FEE_SPLIT };

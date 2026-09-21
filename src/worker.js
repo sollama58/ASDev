@@ -2,14 +2,14 @@
  * ASDev Worker Server
  * v25.26 - Dedicated worker process for background tasks
  *
- * This file runs ONLY the background tasks (holders, metadata, robinhood, flywheel, etc.)
+ * This file runs ONLY the background tasks (holders, metadata, flywheel, etc.)
  * without starting the Express HTTP server. Use this on a second Render instance
  * to offload background processing from the main API server.
  *
  * Environment Variables:
  *   SERVER_MODE=worker    - Required to start in worker mode
  *   WORKER_TASKS          - Comma-separated list of tasks to run (optional, defaults to all)
- *                           Options: holders,metadata,robinhood,asdf,flywheel
+ *                           Options: holders,metadata,asdf,flywheel
  *
  * Usage:
  *   SERVER_MODE=worker node src/worker.js
@@ -21,7 +21,7 @@ process.stdout.write(`[${new Date().toISOString()}] [INFO] ASDev Worker process 
 
 require('dotenv').config();
 
-const { Connection, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
+const { Connection } = require('@solana/web3.js');
 const { Wallet } = require('@coral-xyz/anchor');
 
 // Internal imports
@@ -38,7 +38,7 @@ if (process.env.SERVER_MODE !== 'worker') {
 }
 
 // Parse which tasks to run (defaults to all)
-const TASK_OPTIONS = ['holders', 'metadata', 'robinhood', 'asdf', 'flywheel'];
+const TASK_OPTIONS = ['holders', 'metadata', 'asdf', 'flywheel'];
 const enabledTasks = process.env.WORKER_TASKS
     ? process.env.WORKER_TASKS.split(',').map(t => t.trim().toLowerCase())
     : TASK_OPTIONS;
@@ -129,6 +129,11 @@ async function startWorker() {
     const db = database.getDB();
     logger.info('[Worker] PostgreSQL initialized with connection pooling');
 
+    // v29.1: recover any vanity addresses left in the 'claimed' state by a process that died
+    // mid-launch. This is the main source of the leak, so sweeping once on boot covers it even
+    // in deployments that run no separate grinder service.
+    await require('./services/vanity').reapStrandedClaims(db).catch(() => {});
+
     // Initialize Twitter (needed for social worker)
     // v25.22: Now async to fetch username for proper tweet URLs
     if (enabledTasks.includes('social')) {
@@ -161,25 +166,10 @@ async function startWorker() {
 
     logger.info(`Network: ${config.SOLANA_NETWORK.toUpperCase()} | RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : (config.HELIUS_API_KEY ? 'Helius' : 'Public Mainnet')}`);
 
-    const refundUser = async (userPubkeyStr, reason) => {
-        try {
-            const { PublicKey } = require('@solana/web3.js');
-            const userPubkey = new PublicKey(userPubkeyStr);
-            const tx = new Transaction();
-            solana.addPriorityFee(tx);
-            tx.add(SystemProgram.transfer({
-                fromPubkey: devKeypair.publicKey,
-                toPubkey: userPubkey,
-                lamports: Math.floor((config.DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL)
-            }));
-            const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
-            logger.info(`REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
-            return sig;
-        } catch (e) {
-            logger.error(`REFUND FAILED: ${e.message}`);
-            return null;
-        }
-    };
+    // v29.2: delegate to the one implementation in services/solana.js. This was a local copy
+    // here and a byte-identical one in the other entrypoint, alongside a third, divergent copy
+    // in that service, so a change to refund behaviour had to be made in three places.
+    const refundUser = solana.refundUser;
 
     // Dependencies object for modules
     const deps = {
@@ -210,11 +200,6 @@ async function startWorker() {
     if (enabledTasks.includes('metadata')) {
         workers.initMetadataUpdaterWorker(deps);
         logger.info('[Worker] Metadata updater started');
-    }
-
-    if (enabledTasks.includes('robinhood')) {
-        workers.initRobinhoodScannerWorker(deps);
-        logger.info('[Worker] Robinhood scanner started');
     }
 
     if (enabledTasks.includes('asdf')) {

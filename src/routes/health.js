@@ -1,8 +1,7 @@
 /**
  * Health & Status Routes
  * Server health, stats, and debugging endpoints
- * v23.0 - Added Robinhood pending fees to health endpoint
- * v24.0 - Parallelized Robinhood fee calculation, added circuit breaker
+ * v29.0 - ShitPad: platform-launched tokens only
  */
 const express = require('express');
 const rateLimit = require('express-rate-limit');
@@ -152,76 +151,6 @@ const adminAuth = require('./adminAuth'); // v28.6: shared middleware
 function init(deps) {
     const { connection, devKeypair, db, redis, getStats, getTotalLaunches, globalState } = deps;
 
-    // C-2: Background job to refresh Robinhood pending fees every 2 minutes
-    // Keeps expensive RPC calls off the health endpoint hot path
-    let isCalculatingRobinhoodPendingFees = false;
-    async function refreshRobinhoodPendingFeesCache() {
-        if (isCalculatingRobinhoodPendingFees) return;
-        isCalculatingRobinhoodPendingFees = true;
-        try {
-            const robinhoodTokens = await db.all('SELECT mint, ticker, "creatorPubkey", "feeShareBps", "feeVaultAddress" FROM robinhood_tokens WHERE "isActive" = 1 LIMIT 200');
-            let pendingFees = 0;
-            const pendingDetails = [];
-            const BATCH_SIZE = 10;
-            for (let i = 0; i < robinhoodTokens.length; i += BATCH_SIZE) {
-                const batch = robinhoodTokens.slice(i, i + BATCH_SIZE);
-                const batchResults = await Promise.all(batch.map(async (token) => {
-                    try {
-                        let bcVault, ammVaultAta;
-                        if (token.feeVaultAddress) {
-                            const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                            bcVault = feeVaultPubkey;
-                            const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                            ammVaultAta = feeVaults.ammVaultAta;
-                        } else {
-                            const creatorPubkey = new PublicKey(token.creatorPubkey);
-                            const vaults = pump.getShareholderFeeVaults(creatorPubkey);
-                            bcVault = vaults.bcVault;
-                            ammVaultAta = vaults.ammVaultAta;
-                        }
-                        const [bcLamports, ammBalance] = await Promise.all([
-                            circuitBreaker.execute('solana-rpc-health', async () => {
-                                const bcInfo = await connection.getAccountInfo(bcVault);
-                                return bcInfo?.lamports || 0;
-                            }, 0, { failureThreshold: 10, timeout: 60000 }),
-                            circuitBreaker.execute('solana-rpc-health', async () => {
-                                const ammVaultAtaKey = await ammVaultAta;
-                                const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-                                return parseInt(bal.value.amount) || 0;
-                            }, 0, { failureThreshold: 10, timeout: 60000 })
-                        ]);
-                        let tokenPendingFees = 0;
-                        if (bcLamports > 5000) tokenPendingFees += Math.floor((bcLamports - 5000) * (token.feeShareBps / 10000));
-                        if (ammBalance > 0) tokenPendingFees += Math.floor(ammBalance * (token.feeShareBps / 10000));
-                        if (tokenPendingFees > 0) {
-                            return { mint: token.mint, ticker: token.ticker, pendingLamports: tokenPendingFees, feeShareBps: token.feeShareBps };
-                        }
-                        return null;
-                    } catch (e) {
-                        logger.debug(`[Health/BG] Pending fee check error for ${token.mint}`, { error: e.message });
-                        return null;
-                    }
-                }));
-                for (const result of batchResults) {
-                    if (result) {
-                        pendingFees += result.pendingLamports;
-                        pendingDetails.push(result);
-                    }
-                }
-            }
-            const redisConn = redis.getConnection?.();
-            if (redisConn) {
-                await redisConn.set('robinhood_pending_fees_bg', JSON.stringify({ pendingFees, pendingDetails, calculatedAt: Date.now() }), 'EX', 360);
-            }
-        } catch (e) {
-            logger.debug('[Health/BG] Robinhood pending fees job error', { error: e.message });
-        } finally {
-            isCalculatingRobinhoodPendingFees = false;
-        }
-    }
-    refreshRobinhoodPendingFeesCache();
-    setInterval(refreshRobinhoodPendingFeesCache, 2 * 60 * 1000);
-
     // Version endpoint
     router.get('/version', (req, res) => {
         res.json({ version: config.VERSION });
@@ -283,38 +212,13 @@ function init(deps) {
                     logger.debug('Failed to fetch PUMP holdings', { error: e.message });
                 }
 
-                // v12.0: Robinhood stats (v13.0: PostgreSQL syntax)
-                const robinhoodTokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1');
-                const robinhoodTotalFees = await db.get('SELECT SUM("totalFeesCollected") as total FROM robinhood_tokens');
-
-                // C-2: Read Robinhood pending fees from background cache (refreshed every 2 min by setInterval job)
-                let robinhoodPendingFees = 0;
-                let robinhoodPendingDetails = [];
-                try {
-                    const robinhoodRedisConn = redis.getConnection?.();
-                    if (robinhoodRedisConn) {
-                        const cached = await robinhoodRedisConn.get('robinhood_pending_fees_bg');
-                        if (cached) {
-                            const parsed = JSON.parse(cached);
-                            robinhoodPendingFees = parsed.pendingFees || 0;
-                            robinhoodPendingDetails = parsed.pendingDetails || [];
-                        }
-                    }
-                } catch (e) {
-                    logger.debug('[Health] Failed to read robinhood pending fees from cache', { error: e.message });
-                }
-
                 // v26.0: Sum of all per-token pending airdrop lamports (replaces balance-based pool calc)
                 let totalPendingAirdropLamports = 0;
                 let centralPoolLamports = 0;
                 try {
-                    const pendingSum = await db.get(`
-                        SELECT COALESCE(SUM(p), 0) as total FROM (
-                            SELECT pending_airdrop_lamports as p FROM tokens WHERE pending_airdrop_lamports > 0
-                            UNION ALL
-                            SELECT pending_airdrop_lamports as p FROM robinhood_tokens WHERE pending_airdrop_lamports > 0
-                        ) combined
-                    `);
+                    const pendingSum = await db.get(
+                        'SELECT COALESCE(SUM(pending_airdrop_lamports), 0) as total FROM tokens WHERE pending_airdrop_lamports > 0'
+                    );
                     totalPendingAirdropLamports = parseInt(pendingSum?.total || 0);
                 } catch (e) {
                     // Ignore - column may not exist until migration runs
@@ -335,10 +239,6 @@ function init(deps) {
 
                 return {
                     stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped, totalSolAirdropped,
-                    robinhoodTokenCount: robinhoodTokenCount?.count || 0,
-                    robinhoodTotalFees: robinhoodTotalFees?.total || 0,
-                    robinhoodPendingFees,
-                    robinhoodPendingDetails,
                     totalPendingAirdropLamports,
                     centralPoolLamports,
                     vanityPool
@@ -367,11 +267,8 @@ function init(deps) {
                     }
                 }),
                 headerImageUrl: config.HEADER_IMAGE_URL,
-                // v23.0: Combined pending fees from both platform tokens and Robinhood tokens
-                currentFeeBalance: ((cachedHealth.totalPendingFees + (cachedHealth.robinhoodPendingFees || 0)) / LAMPORTS_PER_SOL).toFixed(4),
-                // v23.0: Separate pending fee breakdown
+                currentFeeBalance: (cachedHealth.totalPendingFees / LAMPORTS_PER_SOL).toFixed(4),
                 platformPendingFees: (cachedHealth.totalPendingFees / LAMPORTS_PER_SOL).toFixed(4),
-                robinhoodPendingFees: ((cachedHealth.robinhoodPendingFees || 0) / LAMPORTS_PER_SOL).toFixed(4),
                 lastClaimTime: cachedHealth.stats.lastClaimTimestamp || 0,
                 lastClaimAmount: (cachedHealth.stats.lastClaimAmountLamports / LAMPORTS_PER_SOL).toFixed(4),
                 nextCheckTime: cachedHealth.stats.nextCheckTimestamp || (Date.now() + 1*60*1000),
@@ -391,9 +288,9 @@ function init(deps) {
                 // v27.0: Per-token pools total and central pool separately
                 tokenPoolsSol: ((cachedHealth.totalPendingAirdropLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
                 centralPoolSol: ((cachedHealth.centralPoolLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
-                // v27.1: Thresholds for UI display (central pool fixed 5 SOL; token pool from env)
+                // v27.1: Thresholds for UI display (central pool fixed 5 SOL; token pool from config)
                 centralPoolThresholdSol: 5.0,
-                tokenPoolThresholdSol: parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0,
+                tokenPoolThresholdSol: config.TOKEN_AIRDROP_THRESHOLD_SOL,
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
                 // v28.1: vanity mint pool. `available` is how many branded contract addresses
                 // are ready; at zero, launches fall back to random mints rather than failing.
@@ -407,16 +304,7 @@ function init(deps) {
                 // M-8 FIX: Expose deployment fee so frontend stays in sync with backend config
                 deploymentFee: config.DEPLOYMENT_FEE_SOL,
                 // Pass dynamic conservation status to frontend
-                conservationStatus: globalState.conservationStatus || null,
-                // v12.0: Robinhood Bot stats (v23.0: Added pending fees)
-                robinhood: {
-                    activeTokens: cachedHealth.robinhoodTokenCount || 0,
-                    totalFeesCollectedSol: cachedHealth.robinhoodTotalFees || 0,
-                    lifetimeFeesLamports: cachedHealth.stats.lifetimeRobinhoodFeesLamports || 0,
-                    pendingFeesLamports: cachedHealth.robinhoodPendingFees || 0,
-                    pendingFeesSol: ((cachedHealth.robinhoodPendingFees || 0) / LAMPORTS_PER_SOL).toFixed(4),
-                    pendingDetails: cachedHealth.robinhoodPendingDetails || []
-                }
+                conservationStatus: globalState.conservationStatus || null
             });
         } catch (e) {
             logger.error('[Health] Endpoint error', { error: e.message, stack: e.stack });
@@ -500,146 +388,12 @@ function init(deps) {
         }
     });
 
-    // v13.0: Import token by mint address (admin only)
-    // Fetches metadata from Helius/DexScreener and adds to tokens table
-    // Extracted import logic — shared by single and bulk import endpoints
-    async function importTokenLogic(mint, isRobinhood) {
-        const axios = require('axios');
-        const { PublicKey } = require('@solana/web3.js');
-
-        // Validate mint is a valid pubkey
-        try { new PublicKey(mint); } catch (e) { throw Object.assign(new Error('Invalid mint address'), { status: 400 }); }
-
-        // Fetch metadata from Helius DAS API
-        let heliusMeta = null;
-        if (config.HELIUS_API_KEY) {
-            try {
-                const heliusRes = await axios.post(
-                    'https://mainnet.helius-rpc.com/',
-                    { jsonrpc: '2.0', id: '1', method: 'getAsset', params: { id: mint, displayOptions: { showFungible: true } } },
-                    { timeout: 5000, headers: { 'Authorization': `Bearer ${config.HELIUS_API_KEY}` } }
-                );
-                const asset = heliusRes.data?.result;
-                if (asset) {
-                    const metadata = asset.content?.metadata || {};
-                    heliusMeta = {
-                        name: metadata.name || 'Unknown', ticker: metadata.symbol || 'UNKNOWN',
-                        image: imageUtils.extractHeliusImage(asset), description: metadata.description || '',
-                        twitter: asset.content?.links?.twitter || null, website: asset.content?.links?.external_url || null,
-                        creator: asset.creators?.[0]?.address || null,
-                        marketCap: asset.token_info?.price_info?.total_price || 0, complete: false
-                    };
-                }
-            } catch (e) { logger.debug('Helius metadata fetch failed', { error: e.message }); }
-        }
-
-        // Fetch from DexScreener for additional data
-        let dexMeta = null;
-        try {
-            const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 5000 });
-            const pairs = dexRes.data?.pairs || [];
-            if (pairs.length > 0) {
-                const pair = pairs[0];
-                dexMeta = { name: pair.baseToken?.name, ticker: pair.baseToken?.symbol, image: pair.info?.imageUrl,
-                    marketCap: pair.fdv || pair.marketCap || 0, volume24h: pair.volume?.h24 || 0 };
-            }
-        } catch (e) { logger.debug('DexScreener metadata fetch failed', { error: e.message }); }
-
-        if (!heliusMeta && !dexMeta) throw Object.assign(new Error('Token not found on Helius or DexScreener'), { status: 404 });
-
-        const metadata = {
-            name: heliusMeta?.name || dexMeta?.name || 'Unknown Token',
-            ticker: heliusMeta?.ticker || dexMeta?.ticker || 'UNKNOWN',
-            image: heliusMeta?.image || dexMeta?.image || null,
-            description: heliusMeta?.description || '',
-            twitter: heliusMeta?.twitter || null, website: heliusMeta?.website || null,
-            creator: heliusMeta?.creator || null,
-            marketCap: dexMeta?.marketCap || heliusMeta?.marketCap || 0,
-            volume24h: dexMeta?.volume24h || 0, complete: heliusMeta?.complete || false
-        };
-
-        if (isRobinhood) {
-            await db.run(`
-                INSERT INTO robinhood_tokens (mint, ticker, name, image, "creatorPubkey", "feeShareBps", "discoveredAt", "marketCap", volume24h, "isActive", "isGraduated")
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10)
-                ON CONFLICT (mint) DO UPDATE SET
-                    ticker = EXCLUDED.ticker, name = EXCLUDED.name,
-                    image = COALESCE(EXCLUDED.image, robinhood_tokens.image),
-                    "marketCap" = EXCLUDED."marketCap", volume24h = EXCLUDED.volume24h
-            `, [mint, metadata.ticker, metadata.name, metadata.image, metadata.creator || devKeypair.publicKey.toString(), 10000, Date.now(), metadata.marketCap, metadata.volume24h, metadata.complete ? 1 : 0]);
-            logger.info(`[Admin] Imported Robinhood token: ${metadata.ticker} (${mint})`);
-        } else {
-            await db.run(`
-                INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, image, "marketCap", volume24h, timestamp, complete)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                ON CONFLICT (mint) DO UPDATE SET
-                    ticker = EXCLUDED.ticker, name = EXCLUDED.name,
-                    image = COALESCE(EXCLUDED.image, tokens.image),
-                    "marketCap" = EXCLUDED."marketCap", volume24h = EXCLUDED.volume24h
-            `, [metadata.creator || devKeypair.publicKey.toString(), mint, metadata.ticker, metadata.name, metadata.description, metadata.twitter, metadata.website, metadata.image, metadata.marketCap, metadata.volume24h, Date.now(), metadata.complete ? 1 : 0]);
-            logger.info(`[Admin] Imported launched token: ${metadata.ticker} (${mint})`);
-        }
-        return { mint, ticker: metadata.ticker, name: metadata.name, marketCap: metadata.marketCap, isRobinhood: !!isRobinhood };
-    }
-
-    router.post('/admin/import-token', adminAuth, async (req, res) => {
-        try {
-            const { mint, isRobinhood } = req.body;
-            if (!mint) return res.status(400).json({ error: 'Missing mint address' });
-            const token = await importTokenLogic(mint, isRobinhood);
-            res.json({ success: true, token });
-        } catch (e) {
-            logger.error('[Admin] Token import error', { error: e.message });
-            res.status(e.status || 500).json({ error: e.status ? e.message : 'Import failed' });
-        }
-    });
-
-    // v13.0: Bulk import tokens (admin only)
-    router.post('/admin/import-tokens-bulk', adminAuth, async (req, res) => {
-        try {
-            const { mints, isRobinhood } = req.body;
-
-            if (!mints || !Array.isArray(mints) || mints.length === 0) {
-                return res.status(400).json({ error: 'Missing or invalid mints array' });
-            }
-
-            if (mints.length > 50) {
-                return res.status(400).json({ error: 'Maximum 50 tokens per request' });
-            }
-
-            const results = { success: [], failed: [] };
-
-            for (const mint of mints) {
-                try {
-                    const token = await importTokenLogic(mint, isRobinhood);
-                    results.success.push({ mint, ticker: token.ticker });
-                } catch (e) {
-                    results.failed.push({ mint, error: e.message });
-                }
-                await new Promise(r => setTimeout(r, 500));
-            }
-
-            res.json({
-                success: true,
-                imported: results.success.length,
-                failed: results.failed.length,
-                results
-            });
-
-        } catch (e) {
-            logger.error('[Admin] Bulk import error', { error: e.message });
-            // v22.0: Don't expose internal error details
-            res.status(500).json({ error: 'Bulk import failed' });
-        }
-    });
-
     // ===== ADMIN ACTION ENDPOINTS =====
     // These endpoints allow triggering background tasks manually from the admin panel
 
     /**
      * POST /admin/trigger-metadata-update
      * Force an immediate metadata update cycle for all tokens
-     * v25.46: Also triggers image updates for robinhood_tokens and pags_beneficiaries
      */
     router.post('/admin/trigger-metadata-update', adminAuth, async (req, res) => {
         try {
@@ -655,7 +409,7 @@ function init(deps) {
                 logger.error('[Admin] Platform token metadata update failed', { error: e.message });
             });
 
-            // Run image updates for all token types (platform, robinhood, pags)
+            // Run image updates for all platform tokens
             metadataUpdater.updateAllMissingImages(deps).then(() => {
                 logger.info('[Admin] All token types image update completed');
             }).catch(e => {
@@ -664,7 +418,7 @@ function init(deps) {
 
             res.json({
                 success: true,
-                message: 'Metadata update triggered for all token types (platform, robinhood, pags). Check logs for progress.'
+                message: 'Metadata update triggered for all tokens. Check logs for progress.'
             });
         } catch (e) {
             logger.error('[Admin] Trigger metadata update error', { error: e.message });
@@ -675,7 +429,7 @@ function init(deps) {
 
     /**
      * POST /admin/refresh-all-volumes
-     * v25.65: Force immediate price/volume update for ALL tokens (platform + robinhood)
+     * v25.65: Force immediate price/volume update for ALL tokens
      * Updates market cap, volume, and price from DexScreener
      * Ensures 0 volume is properly reflected (doesn't hold stale data)
      */
@@ -694,7 +448,7 @@ function init(deps) {
 
             res.json({
                 success: true,
-                message: 'Volume and market cap refresh triggered for all tokens (platform + robinhood). Updates include 0 volume where applicable. Check logs for progress.'
+                message: 'Volume and market cap refresh triggered for all tokens. Updates include 0 volume where applicable. Check logs for progress.'
             });
         } catch (e) {
             logger.error('[Admin] Refresh all volumes error', { error: e.message });
@@ -732,7 +486,7 @@ function init(deps) {
 
     /**
      * POST /admin/trigger-fee-claim
-     * Force an immediate fee collection from creator vaults and Robinhood tokens
+     * Force an immediate fee collection from creator vaults
      */
     router.post('/admin/trigger-fee-claim', adminAuth, async (req, res) => {
         try {
@@ -875,766 +629,6 @@ function init(deps) {
     });
 
     /**
-     * POST /admin/trigger-robinhood-scan
-     * Force an immediate Robinhood token scan and verification
-     * v25.68: Now also scans holders, not just verification
-     */
-    router.post('/admin/trigger-robinhood-scan', adminAuth, async (req, res) => {
-        try {
-            const robinhoodScanner = require('../tasks/robinhoodScanner');
-
-            logger.info('[Admin] Triggering manual Robinhood scan (verify + holders)...');
-
-            // v25.68: Run both verification AND holder scan
-            (async () => {
-                try {
-                    await robinhoodScanner.reverifyRobinhoodTokens(deps);
-                    logger.info('[Admin] Robinhood verification completed, starting holder scan...');
-                    await robinhoodScanner.updateRobinhoodHolders(deps);
-                    logger.info('[Admin] Manual Robinhood scan completed (verify + holders)');
-                } catch (e) {
-                    logger.error('[Admin] Manual Robinhood scan failed', { error: e.message });
-                }
-            })();
-
-            res.json({
-                success: true,
-                message: 'Robinhood scan triggered (verify + holders). Check logs for progress.'
-            });
-        } catch (e) {
-            logger.error('[Admin] Trigger Robinhood scan error', { error: e.message });
-            // v22.0: Don't expose internal error details
-            res.status(500).json({ error: 'Failed to trigger Robinhood scan' });
-        }
-    });
-
-    /**
-     * POST /admin/refresh-robinhood-pending-fees
-     * v25.90: Immediately refresh pending fees from on-chain and return per-token breakdown
-     */
-    router.post('/admin/refresh-robinhood-pending-fees', adminAuth, async (req, res) => {
-        // M-7: Run the heavy on-chain scan asynchronously; return 202 immediately
-        res.status(202).json({ success: true, message: 'Pending fee refresh started. Check logs for results.' });
-
-        (async () => {
-        try {
-            const { PublicKey } = require('@solana/web3.js');
-            const pump = require('../services/pump');
-            const LAMPORTS_PER_SOL = 1000000000;
-
-            logger.info('[Admin] Refreshing Robinhood pending fees...');
-
-            // Get all active Robinhood tokens
-            const tokens = await db.all('SELECT id, mint, ticker, name, "creatorPubkey", "feeShareBps", "feeVaultAddress", "totalFeesCollected" FROM robinhood_tokens WHERE "isActive" = 1 ORDER BY "totalFeesCollected" DESC LIMIT 500');
-
-            const tokenFees = [];
-            let totalPendingLamports = 0;
-
-            for (const token of tokens) {
-                try {
-                    let bcVault, ammVaultAta;
-                    if (token.feeVaultAddress) {
-                        bcVault = new PublicKey(token.feeVaultAddress);
-                        const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                        const vaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                        ammVaultAta = vaults.ammVaultAta;
-                    } else {
-                        const creatorPubkey = new PublicKey(token.creatorPubkey);
-                        const vaults = pump.getShareholderFeeVaults(creatorPubkey);
-                        bcVault = vaults.bcVault;
-                        ammVaultAta = vaults.ammVaultAta;
-                    }
-
-                    let bcPending = 0, ammPending = 0;
-
-                    // Check BC vault
-                    try {
-                        const bcInfo = await connection.getAccountInfo(bcVault);
-                        if (bcInfo && bcInfo.lamports > 5000) {
-                            bcPending = Math.floor((bcInfo.lamports - 5000) * (token.feeShareBps / 10000));
-                        }
-                    } catch (e) { /* Silent */ }
-
-                    // Check AMM vault
-                    try {
-                        const ammVaultAtaKey = await ammVaultAta;
-                        const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-                        if (bal.value.amount && parseInt(bal.value.amount) > 0) {
-                            ammPending = Math.floor(parseInt(bal.value.amount) * (token.feeShareBps / 10000));
-                        }
-                    } catch (e) { /* Silent */ }
-
-                    const totalPending = bcPending + ammPending;
-                    const pendingFeesSol = totalPending / LAMPORTS_PER_SOL;
-
-                    // Update database
-                    await db.run('UPDATE robinhood_tokens SET "pendingFees" = $1 WHERE id = $2', [pendingFeesSol, token.id]);
-
-                    totalPendingLamports += totalPending;
-
-                    // Only include tokens with pending fees in the response
-                    if (totalPending > 0) {
-                        tokenFees.push({
-                            mint: token.mint,
-                            ticker: token.ticker || token.name || token.mint.slice(0, 8),
-                            feeShareBps: token.feeShareBps,
-                            feeSharePct: (token.feeShareBps / 100).toFixed(1) + '%',
-                            bcPendingSol: (bcPending / LAMPORTS_PER_SOL).toFixed(6),
-                            ammPendingSol: (ammPending / LAMPORTS_PER_SOL).toFixed(6),
-                            totalPendingSol: pendingFeesSol.toFixed(6),
-                            totalCollectedSol: (token.totalFeesCollected || 0).toFixed(4)
-                        });
-                    }
-                } catch (e) {
-                    logger.debug(`[Admin] Pending fee check error for ${token.ticker}`, { error: e.message });
-                }
-            }
-
-            // Sort by pending fees descending
-            tokenFees.sort((a, b) => parseFloat(b.totalPendingSol) - parseFloat(a.totalPendingSol));
-
-            const totalPendingSol = totalPendingLamports / LAMPORTS_PER_SOL;
-
-            logger.info(`[Admin] Refreshed pending fees: ${totalPendingSol.toFixed(4)} SOL across ${tokenFees.length} tokens with pending`);
-        } catch (e) {
-            logger.error('[Admin] Refresh Robinhood pending fees error', { error: e.message });
-        }
-        })();
-    });
-
-    /**
-     * GET /admin/token-fee-status/:mint
-     * v25.91: View fee status for a specific Robinhood token without claiming
-     */
-    router.get('/admin/token-fee-status/:mint', adminAuth, async (req, res) => {
-        try {
-            const { mint } = req.params;
-
-            const token = await db.get(
-                'SELECT * FROM robinhood_tokens WHERE mint = $1',
-                [mint]
-            );
-
-            if (!token) {
-                return res.status(404).json({ error: 'Token not found in Robinhood tokens' });
-            }
-
-            const pump = require('../services/pump');
-            const { PublicKey } = require('@solana/web3.js');
-            const LAMPORTS_PER_SOL = 1000000000;
-
-            const creatorPubkey = new PublicKey(token.creatorPubkey);
-            const isFeeProgram = !!token.feeVaultAddress;
-
-            // v25.101: Variables for vault addresses
-            let bcVault, pumpBcVault, coinCreator, ammVaultAuth, ammVaultAta, sharingConfigPDA;
-
-            if (isFeeProgram) {
-                const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                coinCreator = feeVaultPubkey;
-                const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
-                pumpBcVault = creatorVaults.bcVault;
-                sharingConfigPDA = creatorVaults.sharingConfigPDA;
-                // v25.105: Check balance at PUMP creator-vault (same as distribution)
-                bcVault = pumpBcVault;
-                // v25.100: AMM vaults from feeVaultPubkey (matches AMM pool.coin_creator)
-                const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                ammVaultAuth = feeVaults.ammVaultAuth;
-                ammVaultAta = feeVaults.ammVaultAta;
-            } else {
-                const vaults = pump.getShareholderFeeVaults(creatorPubkey);
-                bcVault = vaults.bcVault;
-                pumpBcVault = vaults.bcVault;
-                coinCreator = vaults.sharingConfigPDA;
-                ammVaultAuth = vaults.ammVaultAuth;
-                ammVaultAta = vaults.ammVaultAta;
-                sharingConfigPDA = vaults.sharingConfigPDA;
-            }
-
-            const ammVaultAtaKey = await ammVaultAta;
-
-            // Check balances
-            const [bcInfo, ammBal, configInfo] = await Promise.all([
-                connection.getAccountInfo(bcVault).catch(() => null),
-                connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } })),
-                connection.getAccountInfo(sharingConfigPDA).catch(() => null)
-            ]);
-
-            const bcBalance = bcInfo?.lamports || 0;
-            const bcPending = Math.max(0, bcBalance - 5000);
-            const ammBalance = parseInt(ammBal.value.amount) || 0;
-
-            // v25.91: Try multiple PDA derivations to find the actual sharing config
-            const { PROGRAMS } = require('../config/constants');
-            const configSearchResults = [];
-
-            // Helper to derive and check a config PDA
-            const checkConfigPDA = async (seed, creator, program, label) => {
-                try {
-                    const [pda] = PublicKey.findProgramAddressSync(
-                        [Buffer.from(seed), creator.toBuffer()],
-                        program
-                    );
-                    const info = await connection.getAccountInfo(pda).catch(() => null);
-                    return {
-                        label,
-                        seed,
-                        creator: creator.toString(),
-                        program: program.toString(),
-                        pda: pda.toString(),
-                        found: !!info,
-                        dataSize: info?.data?.length || 0,
-                        owner: info?.owner?.toString() || null
-                    };
-                } catch (e) {
-                    return { label, error: e.message };
-                }
-            };
-
-            // Try all possible derivations
-            const derivationsToTry = [
-                ['fee_sharing_config', creatorPubkey, PROGRAMS.PUMP, 'PUMP from creatorPubkey'],
-                ['fee_sharing_config', creatorPubkey, PROGRAMS.PUMP_AMM, 'PUMP_AMM from creatorPubkey'],
-            ];
-
-            if (isFeeProgram) {
-                const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                derivationsToTry.push(
-                    ['fee_sharing_config', feeVaultPubkey, PROGRAMS.PUMP, 'PUMP from feeVaultAddress'],
-                    ['fee_sharing_config', feeVaultPubkey, PROGRAMS.PUMP_AMM, 'PUMP_AMM from feeVaultAddress'],
-                    ['fee_sharing_config', feeVaultPubkey, PROGRAMS.FEE, 'FEE from feeVaultAddress'],
-                    ['fee_sharing_config', creatorPubkey, PROGRAMS.FEE, 'FEE from creatorPubkey']
-                );
-            }
-
-            for (const [seed, creator, program, label] of derivationsToTry) {
-                const result = await checkConfigPDA(seed, creator, program, label);
-                configSearchResults.push(result);
-            }
-
-            // Also check the BC vault and AMM vault owners
-            const bcVaultOwner = bcInfo?.owner?.toString() || null;
-
-            // Parse sharing config - different approach for FEE program vs PUMP program tokens
-            let shareholders = [];
-            let originalCreator = null;
-            let configFound = false;
-            let configSource = null;
-            const mintExtractor = require('../services/mintExtractor');
-
-            if (isFeeProgram && bcInfo && bcInfo.owner.equals(PROGRAMS.FEE)) {
-                // v25.91: For FEE program tokens, the sharing config is EMBEDDED in the feeVaultAddress account
-                // The feeVaultAddress IS the vault AND contains the sharing config
-                configSource = 'FEE program account (feeVaultAddress)';
-
-                // Parse FEE account structure to find shareholders
-                // Structure: 8 discriminator + 32 mint + 3 bump/padding + 32 creator + 1 unknown + 4 array_len + shareholders
-                const data = bcInfo.data;
-                if (data.length >= 80) {
-                    // Original creator is at offset 43 (after 8 disc + 32 mint + 3 bump)
-                    try {
-                        originalCreator = new PublicKey(data.slice(43, 75)).toString();
-                    } catch (e) {}
-
-                    // Shareholders array length at offset 76
-                    const numShareholders = data.readUInt32LE(76);
-                    let offset = 80; // Start of shareholders array
-
-                    if (numShareholders >= 1 && numShareholders <= 10) {
-                        configFound = true;
-                        for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                            offset += 32;
-                            const bps = data.readUInt16LE(offset);
-                            offset += 2;
-                            shareholders.push({
-                                pubkey: pubkey.toString(),
-                                bps,
-                                percent: bps / 100
-                            });
-                        }
-                    }
-                }
-            } else {
-                // For PUMP program tokens, try separate fee_sharing_config PDA
-                let foundConfigInfo = configInfo;
-
-                // If primary config not found, try to use any found config from search
-                if (!configInfo) {
-                    const foundResult = configSearchResults.find(r => r.found && r.dataSize > 44);
-                    if (foundResult) {
-                        foundConfigInfo = await connection.getAccountInfo(new PublicKey(foundResult.pda)).catch(() => null);
-                        configSource = foundResult.label;
-                    }
-                } else {
-                    configSource = 'Primary PDA (PUMP from creatorPubkey)';
-                }
-
-                configFound = !!foundConfigInfo;
-
-                if (foundConfigInfo && foundConfigInfo.data && foundConfigInfo.data.length > 44) {
-                    const data = foundConfigInfo.data;
-                    let offset = 8;
-                    originalCreator = new PublicKey(data.slice(offset, offset + 32)).toString();
-                    offset += 32;
-                    const numShareholders = data.readUInt32LE(offset);
-                    offset += 4;
-
-                    for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                        offset += 32;
-                        const bps = data.readUInt16LE(offset);
-                        offset += 2;
-                        shareholders.push({
-                            pubkey: pubkey.toString(),
-                            bps,
-                            percent: bps / 100
-                        });
-                    }
-                }
-            }
-
-            res.json({
-                token: {
-                    mint: token.mint,
-                    ticker: token.ticker,
-                    name: token.name,
-                    creatorPubkey: token.creatorPubkey,
-                    feeVaultAddress: token.feeVaultAddress,
-                    feeShareBps: token.feeShareBps,
-                    feeSharePercent: token.feeShareBps / 100,
-                    totalFeesCollected: token.totalFeesCollected,
-                    lastFeesClaimed: token.lastFeesClaimed,
-                    isActive: token.isActive
-                },
-                vaults: {
-                    bcVault: bcVault.toString(),
-                    ammVaultAta: ammVaultAtaKey.toString(),
-                    sharingConfigPDA: sharingConfigPDA.toString(),
-                    isFeeProgram
-                },
-                balances: {
-                    bc: {
-                        balance: bcBalance,
-                        pendingLamports: bcPending,
-                        pendingSol: bcPending / LAMPORTS_PER_SOL,
-                        ourShareSol: (bcPending / LAMPORTS_PER_SOL) * (token.feeShareBps / 10000)
-                    },
-                    amm: {
-                        balance: ammBalance,
-                        pendingLamports: ammBalance,
-                        pendingSol: ammBalance / LAMPORTS_PER_SOL,
-                        ourShareSol: (ammBalance / LAMPORTS_PER_SOL) * (token.feeShareBps / 10000)
-                    },
-                    totalPendingSol: (bcPending + ammBalance) / LAMPORTS_PER_SOL,
-                    totalOurShareSol: ((bcPending + ammBalance) / LAMPORTS_PER_SOL) * (token.feeShareBps / 10000)
-                },
-                sharingConfig: {
-                    found: configFound,
-                    source: configSource,
-                    dataSize: isFeeProgram ? bcInfo?.data?.length : (configInfo?.data?.length || 0),
-                    originalCreator,
-                    shareholders,
-                    primaryPDA: sharingConfigPDA.toString(),
-                    primaryFound: !!configInfo,
-                    isFeeProgram,
-                    feeVaultOwner: bcVaultOwner
-                },
-                configSearch: {
-                    bcVaultOwner,
-                    derivations: configSearchResults
-                }
-            });
-        } catch (e) {
-            logger.error('[Admin] Token fee status error', { error: e.message });
-            res.status(500).json({ error: 'Token fee status check failed' });
-        }
-    });
-
-    /**
-     * POST /admin/claim-token-fees/:mint
-     * v25.91: Manually trigger fee claim for a specific Robinhood token
-     * Useful for testing and debugging fee distribution
-     */
-    router.post('/admin/claim-token-fees/:mint', adminAuth, async (req, res) => {
-        try {
-            const { mint } = req.params;
-            const { claimType = 'both' } = req.body; // 'bc', 'amm', or 'both'
-
-            logger.info(`[Admin] Manual fee claim requested for ${mint}, type: ${claimType}`);
-
-            // Get token from database
-            const token = await db.get(
-                'SELECT * FROM robinhood_tokens WHERE mint = $1',
-                [mint]
-            );
-
-            if (!token) {
-                return res.status(404).json({ error: 'Token not found in Robinhood tokens' });
-            }
-
-            const pump = require('../services/pump');
-            const solana = require('../services/solana');
-            const { PublicKey, Transaction, TransactionInstruction, SystemProgram } = require('@solana/web3.js');
-            const { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getAccount, createAssociatedTokenAccountInstruction, createCloseAccountInstruction } = require('@solana/spl-token');
-            const { PROGRAMS, TOKENS } = require('../config/constants');
-            const LAMPORTS_PER_SOL = 1000000000;
-
-            const creatorPubkey = new PublicKey(token.creatorPubkey);
-            const results = {
-                token: {
-                    mint: token.mint,
-                    ticker: token.ticker,
-                    creatorPubkey: token.creatorPubkey,
-                    feeVaultAddress: token.feeVaultAddress,
-                    feeShareBps: token.feeShareBps
-                },
-                bc: null,
-                amm: null
-            };
-
-            // v25.101: Determine vault addresses
-            let bcVault, pumpBcVault, coinCreator, ammVaultAuth, ammVaultAta, sharingConfigPDA;
-            const isFeeProgram = !!token.feeVaultAddress;
-
-            if (isFeeProgram) {
-                const feeVaultPubkey = new PublicKey(token.feeVaultAddress);
-                // coin_creator = feeVaultAddress (sharing_config for instruction)
-                coinCreator = feeVaultPubkey;
-                // PUMP bc_vault derived from original creator - THIS IS WHERE FEES ARE
-                const creatorVaults = pump.getShareholderFeeVaults(creatorPubkey);
-                pumpBcVault = creatorVaults.bcVault;
-                sharingConfigPDA = creatorVaults.sharingConfigPDA;
-                // v25.105: Check balance at PUMP creator-vault (same as distribution)
-                bcVault = pumpBcVault;
-                // v25.100: AMM vaults from feeVaultPubkey (matches AMM pool.coin_creator)
-                const feeVaults = pump.getShareholderFeeVaults(feeVaultPubkey);
-                ammVaultAuth = feeVaults.ammVaultAuth;
-                ammVaultAta = feeVaults.ammVaultAta;
-            } else {
-                const vaults = pump.getShareholderFeeVaults(creatorPubkey);
-                bcVault = vaults.bcVault;
-                pumpBcVault = vaults.bcVault;
-                coinCreator = vaults.sharingConfigPDA;
-                ammVaultAuth = vaults.ammVaultAuth;
-                ammVaultAta = vaults.ammVaultAta;
-                sharingConfigPDA = vaults.sharingConfigPDA;
-            }
-
-            results.vaults = {
-                bcVault: bcVault.toString(),
-                ammVaultAta: (await ammVaultAta).toString(),
-                sharingConfigPDA: sharingConfigPDA.toString(),
-                isFeeProgram
-            };
-
-            // Check BC vault balance
-            if (claimType === 'bc' || claimType === 'both') {
-                try {
-                    const bcInfo = await connection.getAccountInfo(bcVault);
-                    const bcBalance = bcInfo?.lamports || 0;
-                    const bcPending = Math.max(0, bcBalance - 5000);
-
-                    results.bc = {
-                        vaultBalance: bcBalance,
-                        pendingLamports: bcPending,
-                        pendingSol: bcPending / LAMPORTS_PER_SOL,
-                        ourShare: (bcPending / LAMPORTS_PER_SOL) * (token.feeShareBps / 10000),
-                        isFeeProgram
-                    };
-
-                    if (bcPending > 0) {
-                        // v25.97: All Robinhood tokens use distribute_creator_fees on PUMP program
-                        results.bc.program = 'PUMP';
-                        results.bc.instruction = 'distribute_creator_fees';
-
-                        try {
-                            // v25.98: Parse shareholders based on token type
-                            // FEE program tokens: shareholders embedded in bcVault (feeVaultAddress)
-                            // PUMP program tokens: shareholders in separate sharingConfigPDA
-                            let shareholders = [];
-
-                            if (isFeeProgram && bcInfo && bcInfo.owner.equals(PROGRAMS.FEE)) {
-                                // FEE program: parse from bcVault (feeVaultAddress)
-                                // Structure: 8 disc + 32 mint + 3 bump + 32 creator + 1 unknown + 4 array_len + shareholders
-                                const data = bcInfo.data;
-                                results.bc.configSource = 'FEE program account (bcVault)';
-
-                                if (data.length >= 80) {
-                                    const numShareholders = data.readUInt32LE(76);
-                                    let offset = 80;
-
-                                    results.bc.numShareholders = numShareholders;
-
-                                    if (numShareholders >= 1 && numShareholders <= 10) {
-                                        for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                            const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                            offset += 32;
-                                            const bps = data.readUInt16LE(offset);
-                                            offset += 2;
-                                            shareholders.push({ pubkey, bps });
-                                        }
-                                    }
-                                }
-                            } else {
-                                // PUMP program: parse from sharingConfigPDA
-                                // Structure: 8 disc + 32 originalCreator + 4 numShareholders + shareholders
-                                const configInfo = await connection.getAccountInfo(sharingConfigPDA);
-                                results.bc.configSource = 'PUMP sharingConfigPDA';
-
-                                if (configInfo && configInfo.data.length > 44) {
-                                    const data = configInfo.data;
-                                    let offset = 8;
-                                    offset += 32; // skip originalCreator
-                                    const numShareholders = data.readUInt32LE(offset);
-                                    offset += 4;
-
-                                    results.bc.numShareholders = numShareholders;
-
-                                    for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                        offset += 32;
-                                        const bps = data.readUInt16LE(offset);
-                                        offset += 2;
-                                        shareholders.push({ pubkey, bps });
-                                    }
-                                }
-                            }
-
-                            results.bc.configFound = shareholders.length > 0;
-                            results.bc.shareholders = shareholders.map(s => ({
-                                pubkey: s.pubkey.toString(),
-                                bps: s.bps
-                            }));
-
-                            if (shareholders.length > 0) {
-                                const tx = new Transaction();
-                                solana.addPriorityFee(tx);
-
-                                const distributeDiscriminator = pump.buildDistributeFeesData();
-                                const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP
-                                );
-
-                                // v25.104: Exact account structure from successful tx
-                                // DistributeCreatorFees: mint, bonding_curve, sharing_config, creator_vault, system, event_auth, program, ...shareholders
-                                // NO separate claimer account - signer is implicit in transaction
-                                const mintPubkey = new PublicKey(token.mint);
-                                const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
-                                const distributeKeys = [
-                                    { pubkey: mintPubkey, isSigner: false, isWritable: false },
-                                    { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                                    { pubkey: coinCreator, isSigner: false, isWritable: true },  // sharing_config (feeVaultAddress)
-                                    { pubkey: pumpBcVault, isSigner: false, isWritable: true },  // creator_vault
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-                                ];
-                                for (const sh of shareholders) {
-                                    distributeKeys.push({ pubkey: sh.pubkey, isSigner: false, isWritable: true });
-                                }
-
-                                tx.add(new TransactionInstruction({
-                                    keys: distributeKeys,
-                                    programId: PROGRAMS.PUMP,
-                                    data: distributeDiscriminator
-                                }));
-
-                                tx.feePayer = devKeypair.publicKey;
-                                const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
-
-                                results.bc.claimed = true;
-                                results.bc.signature = sig;
-                                results.bc.claimedSol = bcPending / LAMPORTS_PER_SOL;
-
-                                const ourShare = Math.floor(bcPending * (token.feeShareBps / 10000));
-                                await db.run(
-                                    'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2, "pendingFees" = 0 WHERE id = $3',
-                                    [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
-                                );
-
-                                logger.info(`[Admin] BC fees distributed for ${token.ticker}: ${bcPending / LAMPORTS_PER_SOL} SOL`);
-                            } else {
-                                results.bc.error = 'No sharing config found';
-                            }
-                        } catch (txErr) {
-                            results.bc.claimed = false;
-                            results.bc.error = txErr.message;
-                            logger.error(`[Admin] BC distribute failed for ${token.ticker}`, { error: txErr.message });
-                        }
-                    }
-                } catch (e) {
-                    results.bc = { error: e.message };
-                }
-            }
-
-            // Check AMM vault balance
-            if (claimType === 'amm' || claimType === 'both') {
-                try {
-                    const ammVaultAtaKey = await ammVaultAta;
-                    const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-                    const ammBalance = parseInt(bal.value.amount) || 0;
-
-                    results.amm = {
-                        vaultBalance: ammBalance,
-                        pendingLamports: ammBalance,
-                        pendingSol: ammBalance / LAMPORTS_PER_SOL,
-                        ourShare: (ammBalance / LAMPORTS_PER_SOL) * (token.feeShareBps / 10000),
-                        isFeeProgram
-                    };
-
-                    if (ammBalance > 0) {
-                        // v25.112: BUGFIX - Use TransferCreatorFeesToPump + distribute_creator_fees pattern
-                        // collect_creator_fee requires signer to be creator, which fails for fee-sharing tokens
-                        // The correct approach: transfer AMM fees to BC vault, then distribute to shareholders
-                        try {
-                            const ammTx = new Transaction();
-                            solana.addPriorityFee(ammTx);
-
-                            // Get the AMM pool for this token
-                            const mintPubkey = new PublicKey(token.mint);
-                            const { pool } = pump.getPumpAmmPDAs(mintPubkey);
-
-                            // v25.112: Read coin_creator from AMM pool (authoritative for graduated tokens)
-                            let ammCoinCreator = coinCreator;
-                            try {
-                                const poolAccountInfo = await connection.getAccountInfo(pool);
-                                if (poolAccountInfo && poolAccountInfo.data.length >= 43) {
-                                    ammCoinCreator = new PublicKey(poolAccountInfo.data.slice(11, 43));
-                                    logger.info(`[Admin] Using AMM pool coin_creator: ${ammCoinCreator.toString().slice(0, 8)}...`);
-                                }
-                            } catch (e) {
-                                logger.debug(`[Admin] Could not read AMM pool coin_creator, using fallback`);
-                            }
-
-                            // Derive vaults from coin_creator for consistency
-                            const ammVaults = pump.getShareholderFeeVaults(ammCoinCreator);
-                            const ammVaultAuthKey = ammVaults.ammVaultAuth;
-                            const ammVaultAtaResolved = await ammVaults.ammVaultAta;
-                            const bcVaultKey = ammVaults.bcVault;
-
-                            // Step 1: TransferCreatorFeesToPump - moves wSOL from AMM vault to BC vault
-                            const transferDiscriminator = pump.buildTransferFeesToPumpData();
-                            const { ASSOCIATED_TOKEN_PROGRAM_ID } = require('@solana/spl-token');
-
-                            // v25.113: BUGFIX - Account 8 must be event_authority, NOT pool
-                            // Reference: successful tx 2cGnFzu4w12n995MxTHo8BKFbb2V5FHJ4aeCQh69mxhkmhuyrnBH9zMSMwQ2tt9GhoZMardqgSXDPjm4SAA3i8AV
-                            const [ammEventAuthority] = PublicKey.findProgramAddressSync(
-                                [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
-                            );
-
-                            const transferKeys = [
-                                { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },           // 0: wsol_mint
-                                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },     // 1: token_program
-                                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 2: system_program
-                                { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // 3: ata_program
-                                { pubkey: ammCoinCreator, isSigner: false, isWritable: false },        // 4: coin_creator
-                                { pubkey: ammVaultAuthKey, isSigner: false, isWritable: true },        // 5: amm_vault_auth
-                                { pubkey: ammVaultAtaResolved, isSigner: false, isWritable: true },    // 6: amm_vault_ata (wSOL)
-                                { pubkey: bcVaultKey, isSigner: false, isWritable: true },             // 7: bc_vault (destination)
-                                { pubkey: ammEventAuthority, isSigner: false, isWritable: false },     // 8: event_authority (NOT pool!)
-                                { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false },     // 9: pump_amm_program
-                            ];
-
-                            ammTx.add(new TransactionInstruction({
-                                keys: transferKeys,
-                                programId: PROGRAMS.PUMP_AMM,
-                                data: transferDiscriminator
-                            }));
-
-                            results.amm.method = 'TransferCreatorFeesToPump';
-                            results.amm.coinCreator = ammCoinCreator.toString();
-
-                            // Step 2: distribute_creator_fees - distributes from BC vault to shareholders
-                            // Re-use the shareholders from BC claim if available, otherwise fetch them
-                            let ammShareholders = results.bc?.shareholders || [];
-                            if (ammShareholders.length === 0) {
-                                // Fetch shareholders from sharing config
-                                const configAccount = isFeeProgram ? new PublicKey(token.feeVaultAddress) : ammVaults.sharingConfigPDA;
-                                const configInfo = await connection.getAccountInfo(configAccount);
-                                if (configInfo && configInfo.data.length > 44) {
-                                    const data = configInfo.data;
-                                    let offset = isFeeProgram ? 76 : 40;
-                                    const numShareholders = data.readUInt32LE(offset);
-                                    offset += 4;
-                                    for (let i = 0; i < numShareholders && offset + 34 <= data.length; i++) {
-                                        const pubkey = new PublicKey(data.slice(offset, offset + 32));
-                                        offset += 32;
-                                        const bps = data.readUInt16LE(offset);
-                                        offset += 2;
-                                        ammShareholders.push({ pubkey: pubkey.toString(), bps });
-                                    }
-                                }
-                            }
-
-                            if (ammShareholders.length > 0) {
-                                const distributeDiscriminator = pump.buildDistributeFeesData();
-                                const [eventAuthority] = PublicKey.findProgramAddressSync(
-                                    [Buffer.from("__event_authority")], PROGRAMS.PUMP
-                                );
-
-                                // DistributeCreatorFees accounts
-                                const { bondingCurve } = pump.getPumpPDAs(mintPubkey);
-                                const distributeKeys = [
-                                    { pubkey: mintPubkey, isSigner: false, isWritable: false },
-                                    { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                                    { pubkey: ammCoinCreator, isSigner: false, isWritable: true },  // sharing_config / coin_creator
-                                    { pubkey: bcVaultKey, isSigner: false, isWritable: true },       // creator_vault
-                                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                                    { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                                    { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-                                ];
-                                for (const sh of ammShareholders) {
-                                    distributeKeys.push({ pubkey: new PublicKey(sh.pubkey), isSigner: false, isWritable: true });
-                                }
-
-                                ammTx.add(new TransactionInstruction({
-                                    keys: distributeKeys,
-                                    programId: PROGRAMS.PUMP,
-                                    data: distributeDiscriminator
-                                }));
-
-                                results.amm.method = 'TransferCreatorFeesToPump + distribute_creator_fees';
-                                results.amm.shareholderCount = ammShareholders.length;
-                            }
-
-                            ammTx.feePayer = devKeypair.publicKey;
-                            const sig = await solana.sendTxWithRetry(ammTx, [devKeypair]);
-
-                            results.amm.claimed = true;
-                            results.amm.signature = sig;
-                            results.amm.claimedSol = ammBalance / LAMPORTS_PER_SOL;
-
-                            // Update database
-                            const ourShare = Math.floor(ammBalance * (token.feeShareBps / 10000));
-                            await db.run(
-                                'UPDATE robinhood_tokens SET "lastFeesClaimed" = $1, "totalFeesCollected" = "totalFeesCollected" + $2 WHERE id = $3',
-                                [Date.now(), ourShare / LAMPORTS_PER_SOL, token.id]
-                            );
-
-                            logger.info(`[Admin] AMM fees distributed for ${token.ticker}: ${ammBalance / LAMPORTS_PER_SOL} SOL (our share: ${(ourShare / LAMPORTS_PER_SOL).toFixed(6)} SOL)`);
-                        } catch (txErr) {
-                            results.amm.claimed = false;
-                            results.amm.error = txErr.message;
-                            logger.error(`[Admin] AMM distribute failed for ${token.ticker}`, { error: txErr.message });
-                        }
-                    }
-                } catch (e) {
-                    results.amm = { error: e.message };
-                }
-            }
-
-            res.json({
-                success: true,
-                results
-            });
-        } catch (e) {
-            logger.error('[Admin] Claim token fees error', { error: e.message });
-            res.status(500).json({ error: 'Fee claim failed' });
-        }
-    });
-
-    /**
      * POST /admin/reset-points
      * v25.25: Reset all point calculations and recalculate from scratch
      *
@@ -1679,7 +673,6 @@ function init(deps) {
                 'user_holdings_detail_*',
                 'user_holdings_detail_v2_*',
                 'platform_volume_range',
-                'robinhood_volume_range',
                 'all_eligible_users'
             ];
 
@@ -1920,53 +913,6 @@ function init(deps) {
                 LIMIT 10
             `, [KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME, KOTH_MIN_HOLDERS]);
 
-            // Get eligible robinhood candidates
-            const robinhoodCandidates = await db.all(`
-                SELECT
-                    rt.mint, rt.ticker, rt.name, rt."marketCap", rt.volume24h,
-                    COUNT(rth."holderPubkey") as holderCount,
-                    'robinhood' as source
-                FROM robinhood_tokens rt
-                LEFT JOIN robinhood_token_holders rth ON rth.mint = rt.mint
-                WHERE rt."isActive" = 1 AND rt."marketCap" >= $1 AND rt.volume24h >= $2
-                GROUP BY rt.mint, rt.ticker, rt.name, rt."marketCap", rt.volume24h
-                HAVING COUNT(rth."holderPubkey") >= $3
-                ORDER BY rt."marketCap" DESC
-                LIMIT 10
-            `, [KOTH_MIN_MARKET_CAP, KOTH_MIN_VOLUME, KOTH_MIN_HOLDERS]);
-
-            // Get all robinhood tokens with their status (to show why they don't qualify)
-            const allRobinhoodTokens = await db.all(`
-                SELECT
-                    rt.mint, rt.ticker, rt.name, rt."marketCap", rt.volume24h, rt."isActive",
-                    COUNT(rth."holderPubkey") as holderCount
-                FROM robinhood_tokens rt
-                LEFT JOIN robinhood_token_holders rth ON rth.mint = rt.mint
-                GROUP BY rt.mint, rt.ticker, rt.name, rt."marketCap", rt.volume24h, rt."isActive"
-                ORDER BY rt.volume24h DESC
-                LIMIT 20
-            `);
-
-            // Analyze why robinhood tokens don't qualify
-            const robinhoodAnalysis = allRobinhoodTokens.map(token => {
-                const issues = [];
-                if (!token.isActive) issues.push('inactive');
-                if ((token.marketCap || 0) < KOTH_MIN_MARKET_CAP) issues.push(`mcap $${token.marketCap || 0} < $${KOTH_MIN_MARKET_CAP}`);
-                if ((token.volume24h || 0) < KOTH_MIN_VOLUME) issues.push(`vol $${token.volume24h || 0} < $${KOTH_MIN_VOLUME}`);
-                if ((token.holderCount || 0) < KOTH_MIN_HOLDERS) issues.push(`holders ${token.holderCount} < ${KOTH_MIN_HOLDERS}`);
-
-                return {
-                    ticker: token.ticker,
-                    mint: token.mint?.slice(0, 8) + '...',
-                    isActive: !!token.isActive,
-                    marketCap: token.marketCap || 0,
-                    volume24h: token.volume24h || 0,
-                    holderCount: token.holderCount || 0,
-                    isEligible: issues.length === 0,
-                    issues: issues.length > 0 ? issues : ['✓ Eligible']
-                };
-            });
-
             res.json({
                 success: true,
                 requirements: {
@@ -1981,20 +927,10 @@ function init(deps) {
                         marketCap: c.marketCap,
                         volume24h: c.volume24h,
                         holderCount: c.holderCount
-                    })),
-                    robinhood: robinhoodCandidates.map(c => ({
-                        ticker: c.ticker,
-                        mint: c.mint?.slice(0, 8) + '...',
-                        marketCap: c.marketCap,
-                        volume24h: c.volume24h,
-                        holderCount: c.holderCount
                     }))
                 },
-                robinhoodTokenAnalysis: robinhoodAnalysis,
                 summary: {
-                    totalPlatformEligible: platformCandidates.length,
-                    totalRobinhoodEligible: robinhoodCandidates.length,
-                    totalRobinhoodTokens: allRobinhoodTokens.length
+                    totalPlatformEligible: platformCandidates.length
                 }
             });
         } catch (e) {
@@ -2035,9 +971,7 @@ function init(deps) {
 
             // Get token counts
             const platformTokenCount = await db.get('SELECT COUNT(*) as count FROM tokens WHERE volume24h >= $1', [100]);
-            const robinhoodTokenCount = await db.get('SELECT COUNT(*) as count FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1', [100]);
             const platformHolderCount = await db.get('SELECT COUNT(DISTINCT "holderPubkey") as count FROM token_holders');
-            const robinhoodHolderCount = await db.get('SELECT COUNT(DISTINCT "holderPubkey") as count FROM robinhood_token_holders');
 
             // Get globalState values
             const globalTotalPoints = globalState?.totalPoints || 0;
@@ -2061,9 +995,7 @@ function init(deps) {
                     },
                     tokens: {
                         eligiblePlatformTokens: parseInt(platformTokenCount?.count) || 0,
-                        eligibleRobinhoodTokens: parseInt(robinhoodTokenCount?.count) || 0,
-                        uniquePlatformHolders: parseInt(platformHolderCount?.count) || 0,
-                        uniqueRobinhoodHolders: parseInt(robinhoodHolderCount?.count) || 0
+                        uniquePlatformHolders: parseInt(platformHolderCount?.count) || 0
                     }
                 },
                 timestamp: new Date().toISOString()
@@ -2077,7 +1009,7 @@ function init(deps) {
 
     /**
      * GET /admin/eligible-tokens
-     * Returns all eligible tokens (platform + robinhood) with holder counts and point stats
+     * Returns all eligible tokens with holder counts and point stats
      */
     router.get('/admin/eligible-tokens', adminAuth, async (req, res) => {
         try {
@@ -2088,12 +1020,6 @@ function init(deps) {
             // Get platform eligible tokens
             const platformTokens = await db.all(
                 'SELECT mint, ticker, volume24h, "marketCap" FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
-                [MIN_VOL]
-            );
-
-            // Get robinhood eligible tokens (mint IS NOT NULL matches holderScanner.js filter)
-            const robinhoodTokens = await db.all(
-                'SELECT mint, ticker, volume24h, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL AND volume24h >= $1 ORDER BY volume24h DESC',
                 [MIN_VOL]
             );
 
@@ -2109,21 +1035,6 @@ function init(deps) {
                 for (const row of phRows) {
                     platformHolderCounts[row.mint] = parseInt(row.count) || 0;
                     platformTotalBalances[row.mint] = row.total_bal || '0';
-                }
-            }
-
-            // Robinhood holder counts (batch query)
-            const robinhoodMints = robinhoodTokens.map(t => t.mint);
-            let robinhoodHolderCounts = {};
-            let robinhoodTotalBalances = {};
-            if (robinhoodMints.length > 0) {
-                const rhRows = await db.all(
-                    `SELECT mint, COUNT(*) as count, SUM(CAST(balance AS BIGINT)) as total_bal FROM robinhood_token_holders WHERE mint = ANY($1) GROUP BY mint`,
-                    [robinhoodMints]
-                );
-                for (const row of rhRows) {
-                    robinhoodHolderCounts[row.mint] = parseInt(row.count) || 0;
-                    robinhoodTotalBalances[row.mint] = row.total_bal || '0';
                 }
             }
 
@@ -2143,31 +1054,13 @@ function init(deps) {
                 };
             });
 
-            const robinhoodResults = robinhoodTokens.map(token => {
-                const feeShareBps = token.feeShareBps ?? 10000;
-                const totalBal = BigInt(robinhoodTotalBalances[token.mint] || '0');
-                const totalDistributed = Number((totalBal * BigInt(BASE_PTS * 1000)) / TOTAL_SUPPLY) / 1000;
-
-                return {
-                    mint: token.mint,
-                    ticker: token.ticker,
-                    source: 'robinhood',
-                    volume24h: parseFloat(token.volume24h) || 0,
-                    holderCount: robinhoodHolderCounts[token.mint] || 0,
-                    basePoints: BASE_PTS,
-                    totalPointsDistributed: Math.round(totalDistributed * 100) / 100,
-                    feeSharePercent: Math.round((feeShareBps / 10000) * 100)
-                };
-            });
-
-            const allTokens = [...platformResults, ...robinhoodResults];
+            const allTokens = platformResults;
 
             res.json({
                 success: true,
                 tokens: allTokens,
                 summary: {
                     platformCount: platformResults.length,
-                    robinhoodCount: robinhoodResults.length,
                     totalHolders: allTokens.reduce((s, t) => s + t.holderCount, 0),
                     totalPointsDistributed: Math.round(allTokens.reduce((s, t) => s + t.totalPointsDistributed, 0) * 100) / 100
                 }
@@ -2185,15 +1078,10 @@ function init(deps) {
     router.get('/admin/token-holders-points/:mint', adminAuth, async (req, res) => {
         try {
             const { mint } = req.params;
-            const requestedSource = req.query.source; // 'platform' or 'robinhood' — used for dual-listed tokens
             const BASE_PTS = 1000;
             const TOTAL_SUPPLY = BigInt('1000000000000000');
 
-            // Check platform token (skip if source explicitly set to 'robinhood')
-            let token = null;
-            if (requestedSource !== 'robinhood') {
-                token = await db.get('SELECT mint, ticker, volume24h FROM tokens WHERE mint = $1', [mint]);
-            }
+            const token = await db.get('SELECT mint, ticker, volume24h FROM tokens WHERE mint = $1', [mint]);
 
             if (token) {
                 const holders = await db.all(
@@ -2217,36 +1105,7 @@ function init(deps) {
                 });
             }
 
-            // Check robinhood token (skip if source explicitly set to 'platform')
-            let rhToken = null;
-            if (requestedSource !== 'platform') {
-                rhToken = await db.get('SELECT mint, ticker, volume24h, "feeShareBps" FROM robinhood_tokens WHERE mint = $1 AND mint IS NOT NULL', [mint]);
-            }
-
-            if (!rhToken) {
-                return res.status(404).json({ success: false, error: 'Token not found' });
-            }
-
-            const feeShareBps = rhToken.feeShareBps ?? 10000;
-            const holders = await db.all(
-                'SELECT rank, "holderPubkey", balance FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC',
-                [mint]
-            );
-
-            res.json({
-                success: true,
-                token: {
-                    mint: rhToken.mint, ticker: rhToken.ticker, source: 'robinhood',
-                    volume24h: parseFloat(rhToken.volume24h) || 0,
-                    basePoints: BASE_PTS,
-                    feeSharePercent: Math.round((feeShareBps / 10000) * 100)
-                },
-                holders: holders.map(h => {
-                    const balance = BigInt(h.balance || '0');
-                    const pts = Number((balance * BigInt(BASE_PTS * 1000)) / TOTAL_SUPPLY) / 1000;
-                    return { rank: h.rank, holderPubkey: h.holderPubkey, balance: h.balance, points: Math.round(pts * 1000) / 1000 };
-                })
-            });
+            res.status(404).json({ success: false, error: 'Token not found' });
         } catch (e) {
             logger.error('[Admin] Token holder points error', { error: e.message });
             res.status(500).json({ success: false, error: 'Failed to get token holder points' });
@@ -2541,7 +1400,7 @@ function init(deps) {
 
     /**
      * GET /admin/tokens
-     * List all tokens from both tokens and robinhood_tokens tables
+     * List all tokens
      */
     router.get('/admin/tokens', adminAuth, async (req, res) => {
         try {
@@ -2552,20 +1411,10 @@ function init(deps) {
                 LIMIT 100
             `);
 
-            const robinhoodTokens = await db.all(`
-                SELECT mint, ticker, name, image, "marketCap", volume24h, "holderCount", "discoveredAt" as "createdAt", 'robinhood' as source, "feeShareBps"
-                FROM robinhood_tokens
-                WHERE "isActive" = 1
-                ORDER BY volume24h DESC
-                LIMIT 100
-            `);
-
             res.json({
                 success: true,
                 platformTokens: platformTokens || [],
-                robinhoodTokens: robinhoodTokens || [],
-                totalPlatform: platformTokens?.length || 0,
-                totalRobinhood: robinhoodTokens?.length || 0
+                totalPlatform: platformTokens?.length || 0
             });
         } catch (e) {
             logger.error('[Admin] List tokens error', { error: e.message });
@@ -2575,12 +1424,12 @@ function init(deps) {
 
     /**
      * DELETE /admin/tokens/:mint
-     * Remove a token from the database (platform or robinhood)
+     * Remove a token from the database
      */
     router.delete('/admin/tokens/:mint', adminAuth, async (req, res) => {
         try {
             const { mint } = req.params;
-            const { source, confirm } = req.query;
+            const { confirm } = req.query;
 
             if (confirm !== 'true') {
                 return res.status(400).json({
@@ -2593,673 +1442,36 @@ function init(deps) {
                 return res.status(400).json({ error: 'Invalid mint address' });
             }
 
-            let deleted = { platform: 0, robinhood: 0, holders: 0 };
+            let deleted = { platform: 0, holders: 0 };
 
-            // Check which tables the token exists in
             const platformToken = await db.get('SELECT mint, ticker FROM tokens WHERE mint = $1', [mint]);
-            const robinhoodToken = await db.get('SELECT mint, ticker FROM robinhood_tokens WHERE mint = $1', [mint]);
 
-            if (!platformToken && !robinhoodToken) {
+            if (!platformToken) {
                 return res.status(404).json({
                     error: 'Token not found in database',
                     mint
                 });
             }
 
-            // Delete based on source or both if not specified
-            if (!source || source === 'platform') {
-                if (platformToken) {
-                    // Delete holders first
-                    const holderResult = await db.run('DELETE FROM token_holders WHERE mint = $1', [mint]);
-                    deleted.holders += holderResult.changes || 0;
+            // Delete holders first
+            const holderResult = await db.run('DELETE FROM token_holders WHERE mint = $1', [mint]);
+            deleted.holders += holderResult.changes || 0;
 
-                    // Delete token
-                    const tokenResult = await db.run('DELETE FROM tokens WHERE mint = $1', [mint]);
-                    deleted.platform = tokenResult.changes || 0;
+            const tokenResult = await db.run('DELETE FROM tokens WHERE mint = $1', [mint]);
+            deleted.platform = tokenResult.changes || 0;
 
-                    logger.info('[Admin] Deleted platform token', { mint, ticker: platformToken.ticker });
-                }
-            }
-
-            if (!source || source === 'robinhood') {
-                if (robinhoodToken) {
-                    // Delete holders first
-                    const holderResult = await db.run('DELETE FROM robinhood_token_holders WHERE mint = $1', [mint]);
-                    deleted.holders += holderResult.changes || 0;
-
-                    // Delete token
-                    const tokenResult = await db.run('DELETE FROM robinhood_tokens WHERE mint = $1', [mint]);
-                    deleted.robinhood = tokenResult.changes || 0;
-
-                    logger.info('[Admin] Deleted robinhood token', { mint, ticker: robinhoodToken.ticker });
-                }
-            }
+            logger.info('[Admin] Deleted platform token', { mint, ticker: platformToken.ticker });
 
             res.json({
                 success: true,
                 message: 'Token deleted successfully',
                 mint,
-                ticker: platformToken?.ticker || robinhoodToken?.ticker,
+                ticker: platformToken.ticker,
                 deleted
             });
         } catch (e) {
             logger.error('[Admin] Delete token error', { error: e.message });
             res.status(500).json({ error: 'Failed to delete token' });
-        }
-    });
-
-    /**
-     * POST /admin/tokens/:mint/deactivate
-     * Soft-deactivate a robinhood token (keeps data but marks as inactive)
-     */
-    router.post('/admin/tokens/:mint/deactivate', adminAuth, async (req, res) => {
-        try {
-            const { mint } = req.params;
-
-            const robinhoodToken = await db.get('SELECT mint, ticker, "isActive" FROM robinhood_tokens WHERE mint = $1', [mint]);
-
-            if (!robinhoodToken) {
-                return res.status(404).json({
-                    error: 'Token not found in robinhood_tokens table',
-                    mint
-                });
-            }
-
-            if (!robinhoodToken.isActive) {
-                return res.json({
-                    success: true,
-                    message: 'Token was already deactivated',
-                    mint,
-                    ticker: robinhoodToken.ticker
-                });
-            }
-
-            await db.run('UPDATE robinhood_tokens SET "isActive" = 0 WHERE mint = $1', [mint]);
-
-            logger.info('[Admin] Deactivated robinhood token', { mint, ticker: robinhoodToken.ticker });
-
-            res.json({
-                success: true,
-                message: 'Token deactivated successfully',
-                mint,
-                ticker: robinhoodToken.ticker
-            });
-        } catch (e) {
-            logger.error('[Admin] Deactivate token error', { error: e.message });
-            res.status(500).json({ error: 'Failed to deactivate token' });
-        }
-    });
-
-    /**
-     * POST /admin/tokens/:mint/reactivate
-     * Re-activate a deactivated robinhood token
-     */
-    router.post('/admin/tokens/:mint/reactivate', adminAuth, async (req, res) => {
-        try {
-            const { mint } = req.params;
-
-            const robinhoodToken = await db.get('SELECT mint, ticker, "isActive" FROM robinhood_tokens WHERE mint = $1', [mint]);
-
-            if (!robinhoodToken) {
-                return res.status(404).json({
-                    error: 'Token not found in robinhood_tokens table',
-                    mint
-                });
-            }
-
-            if (robinhoodToken.isActive) {
-                return res.json({
-                    success: true,
-                    message: 'Token is already active',
-                    mint,
-                    ticker: robinhoodToken.ticker
-                });
-            }
-
-            await db.run('UPDATE robinhood_tokens SET "isActive" = 1 WHERE mint = $1', [mint]);
-
-            logger.info('[Admin] Reactivated robinhood token', { mint, ticker: robinhoodToken.ticker });
-
-            res.json({
-                success: true,
-                message: 'Token reactivated successfully',
-                mint,
-                ticker: robinhoodToken.ticker
-            });
-        } catch (e) {
-            logger.error('[Admin] Reactivate token error', { error: e.message });
-            res.status(500).json({ error: 'Failed to reactivate token' });
-        }
-    });
-
-    /**
-     * POST /admin/reactivate-deactivated-tokens
-     * Re-verify all inactive robinhood_tokens on-chain and reactivate those that
-     * still have fee sharing configured. Skips tokens where verification is
-     * inconclusive due to RPC errors (error flag set).
-     */
-    router.post('/admin/reactivate-deactivated-tokens', adminAuth, async (req, res) => {
-        try {
-            const mintExtractor = require('../services/mintExtractor');
-            const platformWallet = devKeypair.publicKey.toString();
-
-            const inactiveTokens = await db.all(
-                'SELECT mint, ticker, "feeShareBps" FROM robinhood_tokens WHERE "isActive" = 0'
-            );
-
-            if (!inactiveTokens.length) {
-                return res.json({ success: true, message: 'No deactivated tokens found', reactivated: 0, stillInactive: 0, errors: 0, results: [] });
-            }
-
-            logger.info(`[Admin] Reactivating deactivated tokens: checking ${inactiveTokens.length} tokens...`);
-
-            let reactivated = 0, stillInactive = 0, errors = 0;
-            const results = [];
-
-            for (const token of inactiveTokens) {
-                try {
-                    const verification = await mintExtractor.verifyFeeRecipient(token.mint, platformWallet, connection);
-
-                    if (verification.error) {
-                        errors++;
-                        results.push({ mint: token.mint, ticker: token.ticker, action: 'skipped', reason: `RPC error: ${verification.error}` });
-                    } else if (verification.isRecipient) {
-                        await db.run(
-                            'UPDATE robinhood_tokens SET "isActive" = 1, "feeShareBps" = $1 WHERE mint = $2',
-                            [verification.feeShareBps || token.feeShareBps, token.mint]
-                        );
-                        reactivated++;
-                        results.push({ mint: token.mint, ticker: token.ticker, action: 'reactivated', feeShareBps: verification.feeShareBps });
-                        logger.info(`[Admin] Reactivated ${token.ticker} (${token.mint.slice(0, 8)}...)`);
-                    } else {
-                        stillInactive++;
-                        results.push({ mint: token.mint, ticker: token.ticker, action: 'still_inactive', reason: 'No fee sharing found on-chain' });
-                    }
-
-                    await new Promise(r => setTimeout(r, 100));
-                } catch (e) {
-                    errors++;
-                    results.push({ mint: token.mint, ticker: token.ticker, action: 'error', reason: e.message });
-                }
-            }
-
-            logger.info(`[Admin] Reactivation complete: ${reactivated} reactivated, ${stillInactive} still inactive, ${errors} errors`);
-
-            res.json({
-                success: true,
-                message: `Reactivated ${reactivated} token${reactivated !== 1 ? 's' : ''} of ${inactiveTokens.length} checked`,
-                reactivated,
-                stillInactive,
-                errors,
-                results
-            });
-        } catch (e) {
-            logger.error('[Admin] Reactivate-deactivated-tokens error', { error: e.message });
-            res.status(500).json({ error: e.message });
-        }
-    });
-
-    /**
-     * GET /debug/robinhood-token/:mint
-     * v25.68: Debug endpoint to check Robinhood token status and holders
-     * Helps diagnose why holdings might not be showing up
-     */
-    router.get('/debug/robinhood-token/:mint', adminAuth, async (req, res) => {
-        try {
-            const { mint } = req.params;
-            const { PublicKey } = require('@solana/web3.js');
-
-            // Validate mint
-            try {
-                new PublicKey(mint);
-            } catch (e) {
-                return res.status(400).json({ error: 'Invalid mint address' });
-            }
-
-            // Get token info
-            const token = await db.get(
-                'SELECT * FROM robinhood_tokens WHERE mint = $1',
-                [mint]
-            );
-
-            if (!token) {
-                return res.json({
-                    found: false,
-                    error: 'Token not found in robinhood_tokens table',
-                    hint: 'Token may not be registered or may be in the regular tokens table'
-                });
-            }
-
-            // Get holder count and sample
-            const holderCount = await db.get(
-                'SELECT COUNT(*) as count FROM robinhood_token_holders WHERE mint = $1',
-                [mint]
-            );
-
-            const topHolders = await db.all(
-                'SELECT "holderPubkey", balance, rank FROM robinhood_token_holders WHERE mint = $1 ORDER BY rank ASC LIMIT 10',
-                [mint]
-            );
-
-            // Check if volume meets threshold
-            const MIN_VOLUME_USD = config.AIRDROP_MIN_VOLUME_USD || 100;
-            const isEligible = (parseFloat(token.volume24h) || 0) >= MIN_VOLUME_USD;
-
-            // v25.72: Add vault debugging info
-            // v25.73: CRITICAL FIX - Use feeVaultAddress if available (for fee sharing tokens)
-            // For fee sharing tokens, the vault is the coinCreator FEE program account,
-            // NOT a PDA derived from originalCreator
-            let vaultInfo = null;
-            let vaultBalances = null;
-            const creatorPubkey = token.creatorPubkey;
-            const storedFeeVaultAddress = token.feeVaultAddress; // v25.73: Direct vault address from DB
-
-            if (storedFeeVaultAddress || (creatorPubkey && creatorPubkey !== 'unknown' && creatorPubkey !== 'unknown_creator')) {
-                try {
-                    let bcVault;
-                    let ammVaultAtaResolved;
-                    let vaultSource;
-
-                    if (storedFeeVaultAddress) {
-                        // v25.73: Use stored feeVaultAddress directly (for fee sharing tokens)
-                        bcVault = new PublicKey(storedFeeVaultAddress);
-                        vaultSource = 'feeVaultAddress (direct)';
-                        logger.info(`[Debug] Using stored feeVaultAddress for ${token.ticker}: ${storedFeeVaultAddress.slice(0, 8)}...`);
-
-                        // v25.74: For fee sharing tokens, AMM vault is ALSO derived from feeVaultAddress (coinCreator)
-                        // The AMM pool stores coinCreator (FEE program account) as the creator, not originalCreator
-                        const feeVaultPubkey = new PublicKey(storedFeeVaultAddress);
-                        const { ammVaultAta } = pump.getShareholderFeeVaults(feeVaultPubkey);
-                        ammVaultAtaResolved = await ammVaultAta;
-                    } else {
-                        // Derive vault from creatorPubkey (legacy path for tokens without feeVaultAddress)
-                        const creatorPubkeyObj = new PublicKey(creatorPubkey);
-                        const { bcVault: derivedBcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
-                        bcVault = derivedBcVault;
-                        ammVaultAtaResolved = await ammVaultAta;
-                        vaultSource = 'derived from creatorPubkey';
-                    }
-
-                    vaultInfo = {
-                        creatorPubkey: creatorPubkey,
-                        feeVaultAddress: storedFeeVaultAddress || null,
-                        bcVault: bcVault.toString(),
-                        ammVaultAta: ammVaultAtaResolved?.toString() || null,
-                        vaultSource: vaultSource
-                    };
-
-                    // Check on-chain balances
-                    let bcBalance = 0;
-                    let ammBalance = 0;
-
-                    try {
-                        const bcInfo = await connection.getAccountInfo(bcVault);
-                        bcBalance = bcInfo?.lamports || 0;
-                    } catch (e) { /* silent */ }
-
-                    if (ammVaultAtaResolved) {
-                        try {
-                            const ammBal = await connection.getTokenAccountBalance(ammVaultAtaResolved).catch(() => ({ value: { amount: "0" } }));
-                            ammBalance = parseInt(ammBal.value.amount) || 0;
-                        } catch (e) { /* silent */ }
-                    }
-
-                    const feeShareBps = token.feeShareBps ?? 10000;
-                    const bcClaimable = Math.max(0, bcBalance - 5000);
-                    const ourBcShare = Math.floor(bcClaimable * (feeShareBps / 10000));
-                    const ourAmmShare = Math.floor(ammBalance * (feeShareBps / 10000));
-
-                    vaultBalances = {
-                        bcVault: {
-                            totalLamports: bcBalance,
-                            totalSol: (bcBalance / LAMPORTS_PER_SOL).toFixed(6),
-                            claimableLamports: bcClaimable,
-                            ourShareLamports: ourBcShare,
-                            ourShareSol: (ourBcShare / LAMPORTS_PER_SOL).toFixed(6)
-                        },
-                        ammVault: {
-                            totalLamports: ammBalance,
-                            totalSol: (ammBalance / LAMPORTS_PER_SOL).toFixed(6),
-                            ourShareLamports: ourAmmShare,
-                            ourShareSol: (ourAmmShare / LAMPORTS_PER_SOL).toFixed(6)
-                        },
-                        combined: {
-                            totalPendingLamports: ourBcShare + ourAmmShare,
-                            totalPendingSol: ((ourBcShare + ourAmmShare) / LAMPORTS_PER_SOL).toFixed(6)
-                        }
-                    };
-                } catch (e) {
-                    vaultInfo = { error: e.message, creatorPubkey, feeVaultAddress: storedFeeVaultAddress };
-                }
-            } else {
-                vaultInfo = {
-                    error: 'Invalid or missing creatorPubkey/feeVaultAddress',
-                    creatorPubkey,
-                    feeVaultAddress: storedFeeVaultAddress,
-                    hint: 'The token was registered without a valid original creator or vault address. Try re-registering or using the fix-robinhood-creator endpoint.'
-                };
-            }
-
-            res.json({
-                found: true,
-                token: {
-                    mint: token.mint,
-                    ticker: token.ticker,
-                    name: token.name,
-                    creatorPubkey: token.creatorPubkey,
-                    isActive: token.isActive === 1,
-                    volume24h: token.volume24h,
-                    marketCap: token.marketCap,
-                    feeShareBps: token.feeShareBps,
-                    createdAt: token.createdAt,
-                    updatedAt: token.updatedAt
-                },
-                vaultInfo,
-                vaultBalances,
-                eligibility: {
-                    isEligible,
-                    volumeThreshold: MIN_VOLUME_USD,
-                    currentVolume: parseFloat(token.volume24h) || 0,
-                    reason: !token.isActive ? 'Token is not active' :
-                            !isEligible ? `Volume ${token.volume24h || 0} below threshold ${MIN_VOLUME_USD}` :
-                            'Token is eligible'
-                },
-                holders: {
-                    totalCount: holderCount?.count || 0,
-                    sampleTop10: topHolders.map(h => ({
-                        wallet: h.holderPubkey.slice(0, 8) + '...',
-                        balance: h.balance,
-                        rank: h.rank
-                    }))
-                },
-                hints: [
-                    ...(holderCount?.count || 0) === 0 ? [
-                        'No holders in database - the holder scan may not have run yet',
-                        'Try POST /admin/trigger-robinhood-scan to force a scan'
-                    ] : [],
-                    ...(!creatorPubkey || creatorPubkey === 'unknown' || creatorPubkey === 'unknown_creator') ? [
-                        'CRITICAL: creatorPubkey is invalid - vault addresses cannot be derived',
-                        'Re-verify and re-register the token to fix this'
-                    ] : [],
-                    ...(vaultBalances?.combined?.totalPendingLamports === 0) ? [
-                        'No pending fees in vaults - token may not have generated any fees yet'
-                    ] : []
-                ]
-            });
-        } catch (e) {
-            logger.error('[Debug] Robinhood token lookup error', { error: e.message });
-            res.status(500).json({ error: 'Failed to lookup token' });
-        }
-    });
-
-    /**
-     * POST /admin/trigger-robinhood-holder-scan/:mint
-     * v25.68: Force an immediate holder scan for a specific Robinhood token
-     */
-    router.post('/admin/trigger-robinhood-holder-scan/:mint', adminAuth, async (req, res) => {
-        try {
-            const { mint } = req.params;
-            const { PublicKey } = require('@solana/web3.js');
-            const robinhoodScanner = require('../tasks/robinhoodScanner');
-
-            // Validate mint
-            try {
-                new PublicKey(mint);
-            } catch (e) {
-                return res.status(400).json({ error: 'Invalid mint address' });
-            }
-
-            // Check if token exists
-            const token = await db.get(
-                'SELECT ticker FROM robinhood_tokens WHERE mint = $1',
-                [mint]
-            );
-
-            if (!token) {
-                return res.status(404).json({
-                    error: 'Token not found in robinhood_tokens table'
-                });
-            }
-
-            logger.info(`[Admin] Triggering immediate holder scan for ${token.ticker || mint.slice(0, 8)}...`);
-
-            // Run the scan (async, don't wait for completion)
-            robinhoodScanner.scanSingleTokenHolders(deps, mint, token.ticker)
-                .then(() => {
-                    logger.info(`[Admin] Holder scan completed for ${token.ticker || mint.slice(0, 8)}`);
-                })
-                .catch(e => {
-                    logger.error(`[Admin] Holder scan failed for ${token.ticker || mint.slice(0, 8)}`, { error: e.message });
-                });
-
-            res.json({
-                success: true,
-                message: `Holder scan triggered for ${token.ticker || mint.slice(0, 8)}. Check logs for progress.`
-            });
-        } catch (e) {
-            logger.error('[Admin] Trigger holder scan error', { error: e.message });
-            res.status(500).json({ error: 'Failed to trigger holder scan' });
-        }
-    });
-
-    /**
-     * POST /admin/fix-robinhood-creator/:mint
-     * v25.72: Re-verify and fix the creatorPubkey for a Robinhood token
-     * v25.73: Also updates feeVaultAddress for fee sharing tokens
-     * This is needed when tokens were registered with incorrect/missing creatorPubkey/feeVaultAddress
-     */
-    router.post('/admin/fix-robinhood-creator/:mint', adminAuth, async (req, res) => {
-        try {
-            const { mint } = req.params;
-            const { PublicKey } = require('@solana/web3.js');
-            const mintExtractor = require('../services/mintExtractor');
-
-            // Validate mint
-            try {
-                new PublicKey(mint);
-            } catch (e) {
-                return res.status(400).json({ error: 'Invalid mint address' });
-            }
-
-            // Check if token exists
-            const token = await db.get(
-                'SELECT * FROM robinhood_tokens WHERE mint = $1',
-                [mint]
-            );
-
-            if (!token) {
-                return res.status(404).json({
-                    error: 'Token not found in robinhood_tokens table'
-                });
-            }
-
-            const oldCreator = token.creatorPubkey;
-            const oldFeeVaultAddress = token.feeVaultAddress;
-            logger.info(`[Admin] Re-verifying creatorPubkey for ${token.ticker}. Current: ${oldCreator?.slice(0, 8) || 'NONE'}...`);
-
-            // Re-verify fee recipient
-            // v25.73: Use devKeypair.publicKey instead of undefined config.PLATFORM_WALLET
-            const verification = await mintExtractor.verifyFeeRecipient(
-                mint,
-                devKeypair.publicKey.toString(),
-                connection
-            );
-
-            if (!verification.isRecipient) {
-                return res.status(400).json({
-                    error: 'Platform wallet is not a fee recipient for this token',
-                    verification
-                });
-            }
-
-            const newCreator = verification.originalCreator;
-            if (!newCreator || newCreator === 'unknown' || newCreator === 'unknown_creator') {
-                return res.status(400).json({
-                    error: 'Could not determine original creator from on-chain data',
-                    verification,
-                    hint: 'The token may have a non-standard fee sharing setup'
-                });
-            }
-
-            // v25.73: Get feeVaultAddress for fee sharing tokens
-            const newFeeVaultAddress = verification.feeVaultAddress || null;
-
-            // Update the creatorPubkey AND feeVaultAddress
-            await db.run(
-                'UPDATE robinhood_tokens SET "creatorPubkey" = $1, "feeShareBps" = $2, "feeVaultAddress" = $3 WHERE mint = $4',
-                [newCreator, verification.feeShareBps, newFeeVaultAddress, mint]
-            );
-
-            // v25.73: Use feeVaultAddress directly if available, otherwise derive from creatorPubkey
-            let bcVault;
-            let ammVaultAtaResolved;
-            let vaultSource;
-
-            if (newFeeVaultAddress) {
-                bcVault = new PublicKey(newFeeVaultAddress);
-                vaultSource = 'feeVaultAddress (direct)';
-
-                // v25.74: For fee sharing tokens, AMM vault is also derived from feeVaultAddress (coinCreator)
-                const feeVaultPubkey = new PublicKey(newFeeVaultAddress);
-                const { ammVaultAta } = pump.getShareholderFeeVaults(feeVaultPubkey);
-                ammVaultAtaResolved = await ammVaultAta;
-            } else {
-                const creatorPubkeyObj = new PublicKey(newCreator);
-                const { bcVault: derivedBcVault, ammVaultAta } = pump.getShareholderFeeVaults(creatorPubkeyObj);
-                bcVault = derivedBcVault;
-                ammVaultAtaResolved = await ammVaultAta;
-                vaultSource = 'derived from creatorPubkey';
-            }
-
-            // Check vault balances
-            let bcBalance = 0;
-            let ammBalance = 0;
-
-            try {
-                const bcInfo = await connection.getAccountInfo(bcVault);
-                bcBalance = bcInfo?.lamports || 0;
-            } catch (e) { /* silent */ }
-
-            try {
-                const ammBal = await connection.getTokenAccountBalance(ammVaultAtaResolved).catch(() => ({ value: { amount: "0" } }));
-                ammBalance = parseInt(ammBal.value.amount) || 0;
-            } catch (e) { /* silent */ }
-
-            logger.info(`[Admin] Fixed creatorPubkey for ${token.ticker}: ${oldCreator?.slice(0, 8) || 'NONE'} -> ${newCreator.slice(0, 8)}${newFeeVaultAddress ? `, vault: ${newFeeVaultAddress.slice(0, 8)}...` : ''}`);
-
-            res.json({
-                success: true,
-                token: token.ticker,
-                mint: mint,
-                oldCreator: oldCreator,
-                newCreator: newCreator,
-                oldFeeVaultAddress: oldFeeVaultAddress,
-                newFeeVaultAddress: newFeeVaultAddress,
-                feeShareBps: verification.feeShareBps,
-                feeSharePercent: verification.feeSharePercent,
-                vaults: {
-                    bcVault: bcVault.toString(),
-                    ammVaultAta: ammVaultAtaResolved.toString(),
-                    bcBalanceSol: (bcBalance / LAMPORTS_PER_SOL).toFixed(6),
-                    ammBalanceSol: (ammBalance / LAMPORTS_PER_SOL).toFixed(6),
-                    vaultSource: vaultSource
-                }
-            });
-        } catch (e) {
-            logger.error('[Admin] Fix Robinhood creator error', { error: e.message });
-            res.status(500).json({ error: 'Failed to fix creator', details: e.message });
-        }
-    });
-
-    /**
-     * POST /admin/fix-all-robinhood-creators
-     * v25.72: Re-verify and fix creatorPubkey for all Robinhood tokens with missing/invalid creators
-     * v25.73: Also fixes tokens with missing feeVaultAddress (needed for fee sharing tokens)
-     */
-    router.post('/admin/fix-all-robinhood-creators', adminAuth, async (req, res) => {
-        try {
-            const mintExtractor = require('../services/mintExtractor');
-            const { PublicKey } = require('@solana/web3.js');
-
-            // v25.73: Find tokens with missing/invalid creatorPubkey OR missing feeVaultAddress
-            const tokensToFix = await db.all(`
-                SELECT * FROM robinhood_tokens
-                WHERE "isActive" = 1
-                AND (
-                    "creatorPubkey" IS NULL OR "creatorPubkey" = 'unknown' OR "creatorPubkey" = 'unknown_creator' OR "creatorPubkey" = ''
-                    OR "feeVaultAddress" IS NULL
-                )
-            `);
-
-            logger.info(`[Admin] Fixing ${tokensToFix.length} Robinhood tokens with invalid creatorPubkey or missing feeVaultAddress`);
-
-            const results = {
-                total: tokensToFix.length,
-                fixed: 0,
-                failed: 0,
-                details: []
-            };
-
-            for (const token of tokensToFix) {
-                try {
-                    // v25.73: Use devKeypair.publicKey instead of undefined config.PLATFORM_WALLET
-                    const verification = await mintExtractor.verifyFeeRecipient(
-                        token.mint,
-                        devKeypair.publicKey.toString(),
-                        connection
-                    );
-
-                    if (verification.isRecipient && verification.originalCreator &&
-                        verification.originalCreator !== 'unknown' && verification.originalCreator !== 'unknown_creator') {
-
-                        // v25.73: Update both creatorPubkey AND feeVaultAddress
-                        const newFeeVaultAddress = verification.feeVaultAddress || null;
-
-                        await db.run(
-                            'UPDATE robinhood_tokens SET "creatorPubkey" = $1, "feeShareBps" = $2, "feeVaultAddress" = $3 WHERE mint = $4',
-                            [verification.originalCreator, verification.feeShareBps, newFeeVaultAddress, token.mint]
-                        );
-
-                        results.fixed++;
-                        results.details.push({
-                            mint: token.mint,
-                            ticker: token.ticker,
-                            status: 'fixed',
-                            newCreator: verification.originalCreator.slice(0, 8) + '...',
-                            newFeeVaultAddress: newFeeVaultAddress ? newFeeVaultAddress.slice(0, 8) + '...' : null
-                        });
-                    } else {
-                        results.failed++;
-                        results.details.push({
-                            mint: token.mint,
-                            ticker: token.ticker,
-                            status: 'failed',
-                            reason: !verification.isRecipient ? 'Not a fee recipient' : 'Could not determine original creator'
-                        });
-                    }
-                } catch (e) {
-                    results.failed++;
-                    results.details.push({
-                        mint: token.mint,
-                        ticker: token.ticker,
-                        status: 'error',
-                        reason: e.message
-                    });
-                }
-
-                // Add delay between tokens to avoid rate limiting
-                await new Promise(resolve => setTimeout(resolve, 500));
-            }
-
-            logger.info(`[Admin] Robinhood creator/vault fix complete: ${results.fixed} fixed, ${results.failed} failed`);
-
-            res.json({
-                success: true,
-                ...results
-            });
-        } catch (e) {
-            logger.error('[Admin] Fix all Robinhood creators error', { error: e.message });
-            res.status(500).json({ error: 'Failed to fix creators', details: e.message });
         }
     });
 
@@ -3274,7 +1486,7 @@ function init(deps) {
             const flywheel = require('../tasks/flywheel');
 
             // v26.0: Per-token simulation — each token has its own pending_airdrop_lamports pool
-            const TOKEN_THRESHOLD_LAMPORTS = Math.floor((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 0.05) * LAMPORTS_PER_SOL);
+            const TOKEN_THRESHOLD_LAMPORTS = Math.round(config.TOKEN_AIRDROP_THRESHOLD_SOL * LAMPORTS_PER_SOL);
 
             // Get KOTH info (informational only in v26.0 — no fee allocation)
             const kothResult = await flywheel.getAiSelectedKoth(db);
@@ -3295,8 +1507,6 @@ function init(deps) {
             // Query all tokens with pending airdrop pools
             const pendingRows = await db.all(`
                 SELECT mint, ticker, name, pending_airdrop_lamports, 'platform' as source FROM tokens WHERE pending_airdrop_lamports > 0
-                UNION ALL
-                SELECT mint, ticker, name, pending_airdrop_lamports, 'robinhood' as source FROM robinhood_tokens WHERE pending_airdrop_lamports > 0 AND "isActive" = 1
                 ORDER BY pending_airdrop_lamports DESC
             `);
 
@@ -3311,9 +1521,8 @@ function init(deps) {
                 const wouldTrigger = pendingLamports >= TOKEN_THRESHOLD_LAMPORTS;
                 if (wouldTrigger) tokensAboveThreshold++;
 
-                const holdersTable = row.source === 'robinhood' ? 'robinhood_token_holders' : 'token_holders';
                 const holders = await db.all(
-                    `SELECT "holderPubkey", balance FROM ${holdersTable} WHERE mint = $1 ORDER BY rank ASC`,
+                    `SELECT "holderPubkey", balance FROM token_holders WHERE mint = $1 ORDER BY rank ASC`,
                     [row.mint]
                 );
 

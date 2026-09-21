@@ -6,9 +6,9 @@
  * can create that mint themselves and front-run the launch. It is therefore never written to
  * the database in the clear.
  *
- * This lives in its own module rather than reusing the PAGS helpers because the grinder runs
+ * This lives in its own module because the grinder runs
  * as a *separate service* from the API. Both processes must derive an identical key, and the
- * PAGS secret falls back to an ephemeral random value when unset (see config/env.js), which
+ * an ephemeral random value when unset would silently break decryption across restarts, which
  * would silently make every stored seed undecryptable after a restart -- throwing away hours
  * of grinding with no error until a launch tried to use one.
  */

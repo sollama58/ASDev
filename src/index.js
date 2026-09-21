@@ -23,7 +23,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
-const { Connection, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
+const { Connection } = require('@solana/web3.js');
 const { Wallet } = require('@coral-xyz/anchor');
 const fs = require('fs');
 const path = require('path');
@@ -115,6 +115,11 @@ async function main() {
     await database.initDB();
     const db = database.getDB();
     logger.info('[Database] PostgreSQL initialized with connection pooling');
+
+    // v29.1: recover any vanity addresses left in the 'claimed' state by a process that died
+    // mid-launch. This is the main source of the leak, so sweeping once on boot covers it even
+    // in deployments that run no separate grinder service.
+    await require('./services/vanity').reapStrandedClaims(db).catch(() => {});
 
     // Initialize Twitter (v25.22: Now async to fetch username)
     await twitter.init();
@@ -228,7 +233,6 @@ async function main() {
     };
     app.use(cors(corsOptions));
 
-    // PAGS middleware disabled
     app.use(cookieParser());
     // v28.2: 1mb. Images go to Imgur client-side; the largest JSON body this API accepts is
     // launch metadata (a few hundred bytes). 10mb was a memory-amplification surface for no
@@ -262,45 +266,30 @@ async function main() {
     app.use('/api/', apiLimiter);
     app.use('/api/deploy', deployLimiter);
 
-    // Serve frontend
+    // Serve the ShitPad frontend.
+    //
+    // The static site is normally deployed on its own (see shitpad/render.yaml), so this
+    // route exists for single-service deployments and as a sane landing page on the API
+    // host itself. The `/` handler sends the page; `/admin` sends the admin console.
+    const SHITPAD_DIR = path.join(__dirname, '..', 'shitpad');
     app.get('/', (req, res) => {
-        res.sendFile(path.join(__dirname, '..', 'asdev_frontend.html'));
+        res.sendFile(path.join(SHITPAD_DIR, 'index.html'));
+    });
+    app.get('/admin', (req, res) => {
+        res.sendFile(path.join(SHITPAD_DIR, 'admin', 'index.html'));
     });
 
 
-    const refundUser = async (userPubkeyStr, reason) => {
-        try {
-            const { PublicKey } = require('@solana/web3.js');
-            const userPubkey = new PublicKey(userPubkeyStr);
-            const tx = new Transaction();
-            solana.addPriorityFee(tx);
-            tx.add(SystemProgram.transfer({
-                fromPubkey: devKeypair.publicKey,
-                toPubkey: userPubkey,
-                lamports: Math.floor((config.DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL)
-            }));
-            const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
-            logger.info(`REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
-            return sig;
-        } catch (e) {
-            logger.error(`REFUND FAILED: ${e.message}`);
-            return null;
-        }
-    };
+    // v29.2: delegate to the one implementation in services/solana.js. This was a local copy
+    // here and a byte-identical one in the other entrypoint, alongside a third, divergent copy
+    // in that service, so a change to refund behaviour had to be made in three places.
+    const refundUser = solana.refundUser;
 
-    // PAGS keypair decoded once in config/env.js
-    const pagsKeypair = config.pagsKeypair;
-    if (pagsKeypair) {
-        logger.info(`[PAGS] Keypair loaded: ${pagsKeypair.publicKey.toString()}`);
-    } else {
-        logger.warn('[PAGS] No PAGS_WALLET_PRIVATE_KEY set — falling back to devKeypair');
-    }
 
     // Dependencies object for modules
     const deps = {
         connection,
         devKeypair,
-        pagsKeypair,
         wallet,
         db,
         redis,

@@ -157,7 +157,6 @@ setInterval(() => {
  * - All tokens with >$100 24hr volume are eligible (no limit)
  *
  * v23.0 - Removed creator bonus (no longer 2x for creators)
- * - Includes both tokens table and robinhood_tokens table
  *
  * v25.36 - Points now proportional to % of TOTAL SUPPLY (1B tokens):
  * - Previously: points = (balance / tracked holders balance) * token points
@@ -184,7 +183,6 @@ async function updateGlobalState(deps) {
     try {
         // v18.0: Get all tokens with >$100 24hr volume (no limit)
         // v25.4: Include volume24h for dynamic volume weighting
-        // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
         const eligibleTokens = await db.all(
             'SELECT mint, "userPubkey", volume24h, ticker FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
             [MIN_VOLUME_USD]
@@ -221,7 +219,6 @@ async function updateGlobalState(deps) {
         // v25.112: Read AI-selected KOTH from Redis (set by flywheel) to match actual distribution
         // Falls back to highest market cap if Redis data unavailable
         let kothToken = null;
-        let kothSource = 'platform';
         try {
             const redisConn = redis.getConnection();
             if (redisConn) {
@@ -229,15 +226,7 @@ async function updateGlobalState(deps) {
                 if (kothData) {
                     const parsed = JSON.parse(kothData);
                     if (parsed.mint) {
-                        // v25.113: Check both platform and robinhood token tables
                         kothToken = await db.get('SELECT mint, "userPubkey" FROM tokens WHERE mint = $1', [parsed.mint]);
-                        if (!kothToken) {
-                            const rhToken = await db.get('SELECT mint, "creatorPubkey" as "userPubkey" FROM robinhood_tokens WHERE mint = $1', [parsed.mint]);
-                            if (rhToken) {
-                                kothToken = rhToken;
-                                kothSource = 'robinhood';
-                            }
-                        }
                     }
                 }
             }
@@ -519,7 +508,7 @@ async function updateGlobalState(deps) {
         // v26.2: Points = pure supply ownership — (balance / 1B supply) × BASE_POINTS_PER_TOKEN
         // Volume weight and feeShareBps removed: per-token pools already embed those economics.
         const BASE_POINTS_PER_TOKEN = 1000;
-        let rawPointsMap = new Map(); // pubkey -> { basePoints, robinhoodPoints, positionsCount }
+        let rawPointsMap = new Map(); // pubkey -> { basePoints, positionsCount }
         let tempTotalPoints = 0;
 
         if (eligibleMints.length > 0) {
@@ -536,67 +525,9 @@ async function updateGlobalState(deps) {
             for (const row of platformAggRows) {
                 rawPointsMap.set(row.holderPubkey, {
                     basePoints: parseFloat(row.basePoints) || 0,
-                    robinhoodPoints: 0,
                     positionsCount: parseInt(row.positionsCount) || 0
                 });
             }
-        }
-
-        // v12.0: Include Robinhood token holders in points calculation
-        // Holders of tokens that share fees with us also earn airdrop eligibility
-        // v16.0: Points are now scaled proportionally to our fee share percentage
-        // v18.0: All robinhood tokens with >$100 volume are eligible (no limit)
-        // v25.4: Also apply volume weighting to Robinhood tokens
-        // v25.63: Tokens can be in both platform AND PAGS (fee splitting allowed)
-        // v25.64: Added detailed logging for debugging Robinhood token issues
-        // v25.67: Enhanced debugging for volume-excluded tokens
-        let robinhoodPointsTotal = 0;
-        let robinhoodHoldersWithPoints = 0;
-        try {
-            // v26.1: Single query for all active robinhood tokens (replaces 3 separate queries)
-            const allActiveRobinhoodTokens = await db.all(
-                'SELECT mint, "feeShareBps", ticker, volume24h FROM robinhood_tokens WHERE "isActive" = 1 AND mint IS NOT NULL'
-            );
-
-            // Split into eligible (above volume threshold) and below-threshold for logging
-            const robinhoodTokens = allActiveRobinhoodTokens.filter(t => (parseFloat(t.volume24h) || 0) >= MIN_VOLUME_USD);
-            const robinhoodMints = robinhoodTokens.map(t => t.mint).filter(m => m);
-
-            const belowVolumeTokens = allActiveRobinhoodTokens.filter(t => (parseFloat(t.volume24h) || 0) < MIN_VOLUME_USD);
-            if (belowVolumeTokens.length > 0) {
-                const belowVolumeList = belowVolumeTokens.map(t => `${t.ticker || t.mint.slice(0, 8)}($${(parseFloat(t.volume24h) || 0).toFixed(0)})`).join(', ');
-                logger.info(`[HolderScanner] Robinhood tokens below volume threshold ($${MIN_VOLUME_USD}): ${belowVolumeList}`);
-            }
-
-            logger.info(`[HolderScanner] Robinhood: ${allActiveRobinhoodTokens.length} total active, ${robinhoodMints.length} with volume >= $${MIN_VOLUME_USD}`);
-
-            if (robinhoodMints.length > 0) {
-                // H-6: DB-side aggregation for robinhood holders
-                const robinhoodAggRows = await db.all(
-                    `SELECT "holderPubkey",
-                        SUM((balance::bigint * 1000)::numeric / 1000000000000000) AS "robinhoodPoints",
-                        COUNT(*) AS "positionsCount"
-                     FROM robinhood_token_holders WHERE mint = ANY($1) AND balance > '0'
-                     GROUP BY "holderPubkey"`,
-                    [robinhoodMints]
-                );
-                logger.debug(`[HolderScanner] Robinhood: aggregated ${robinhoodAggRows.length} unique holders from ${robinhoodMints.length} tokens`);
-                for (const row of robinhoodAggRows) {
-                    const pts = parseFloat(row.robinhoodPoints) || 0;
-                    const existing = rawPointsMap.get(row.holderPubkey);
-                    if (existing) {
-                        existing.robinhoodPoints += pts;
-                        existing.positionsCount += parseInt(row.positionsCount) || 0;
-                    } else {
-                        rawPointsMap.set(row.holderPubkey, { basePoints: 0, robinhoodPoints: pts, positionsCount: parseInt(row.positionsCount) || 0 });
-                    }
-                    robinhoodPointsTotal += pts;
-                }
-                robinhoodHoldersWithPoints = robinhoodAggRows.length;
-                logger.info(`[HolderScanner] Robinhood points: ${robinhoodPointsTotal.toFixed(2)} total across ${robinhoodHoldersWithPoints} unique holders`);
-            }
-        } catch (e) {
-            logger.error('[HolderScanner] Robinhood holder points calculation error', { error: e.message });
         }
 
         // Fetch ASDF Top 100 holders from Redis (single source of truth)
@@ -612,7 +543,7 @@ async function updateGlobalState(deps) {
             const isAsdfTop100 = asdfTop100Holders.has(pubkey);
 
             // Total base points from all sources (v23.0: removed creatorBonus)
-            const basePoints = data.basePoints + data.robinhoodPoints;
+            const basePoints = data.basePoints;
             const totalPoints = basePoints * (isAsdfTop100 ? 2 : 1);
 
             if (totalPoints > 0) {
@@ -633,28 +564,19 @@ async function updateGlobalState(deps) {
         let totalPendingAirdropLamports = 0;
         try {
             const pendingRows = await db.all(`
-                SELECT mint, pending_airdrop_lamports, 'platform' as source FROM tokens WHERE pending_airdrop_lamports > 0
-                UNION ALL
-                SELECT mint, pending_airdrop_lamports, 'robinhood' as source FROM robinhood_tokens WHERE pending_airdrop_lamports > 0 AND "isActive" = 1
+                SELECT mint, pending_airdrop_lamports FROM tokens WHERE pending_airdrop_lamports > 0
             `);
 
-            // BATCH: fetch all holders for pending tokens in 2 queries (one per table)
-            const platformPendingMints = pendingRows.filter(r => r.source === 'platform').map(r => r.mint);
-            const robinhoodPendingMints = pendingRows.filter(r => r.source === 'robinhood').map(r => r.mint);
-            const pendingByMint = new Map(pendingRows.map(r => [r.mint, r]));
+            // BATCH: fetch every pending token's holders in a single query
+            const platformPendingMints = pendingRows.map(r => r.mint).filter(Boolean);
 
-            const [platformPendingHolders, robinhoodPendingHolders] = await Promise.all([
-                platformPendingMints.length > 0
-                    ? db.all(`SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)`, [platformPendingMints])
-                    : [],
-                robinhoodPendingMints.length > 0
-                    ? db.all(`SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1)`, [robinhoodPendingMints])
-                    : []
-            ]);
+            const platformPendingHolders = platformPendingMints.length > 0
+                ? await db.all(`SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)`, [platformPendingMints])
+                : [];
 
             // Group holders by mint
             const holdersByMint = new Map();
-            for (const h of [...platformPendingHolders, ...robinhoodPendingHolders]) {
+            for (const h of platformPendingHolders) {
                 if (!holdersByMint.has(h.mint)) holdersByMint.set(h.mint, []);
                 holdersByMint.get(h.mint).push(h);
             }
@@ -697,36 +619,26 @@ async function updateGlobalState(deps) {
             const centralPoolLamports = Number(centralPoolRow?.value || 0);
 
             if (centralPoolLamports > 0) {
-                // Fetch all eligible tokens (platform + robinhood) with market cap
+                // Fetch every eligible platform token with market cap
                 const cpPlatform = await db.all(
                     'SELECT mint, "marketCap" as mcap FROM tokens WHERE volume24h >= $1',
                     [MIN_VOLUME_USD]
                 );
-                const cpRobinhood = await db.all(
-                    'SELECT mint, "marketCap" as mcap FROM robinhood_tokens WHERE "isActive" = 1 AND volume24h >= $1',
-                    [MIN_VOLUME_USD]
-                );
-                const cpAllEligible = [...cpPlatform, ...cpRobinhood];
+                const cpAllEligible = cpPlatform;
                 const cpTotalMcap = cpAllEligible.reduce((s, t) => s + (parseFloat(t.mcap) || 0), 0);
 
                 if (cpTotalMcap > 0 && cpAllEligible.length > 0) {
                     const cpMcapByMint = new Map(cpAllEligible.map(t => [t.mint, parseFloat(t.mcap) || 0]));
                     const cpPlatformMints = cpPlatform.map(t => t.mint).filter(Boolean);
-                    const cpRobinhoodMints = cpRobinhood.map(t => t.mint).filter(Boolean);
 
-                    const [cpPlatformHolders, cpRobinhoodHolders] = await Promise.all([
-                        cpPlatformMints.length > 0
-                            ? db.all('SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)', [cpPlatformMints])
-                            : [],
-                        cpRobinhoodMints.length > 0
-                            ? db.all('SELECT "holderPubkey", balance, mint FROM robinhood_token_holders WHERE mint = ANY($1)', [cpRobinhoodMints])
-                            : []
-                    ]);
+                    const cpPlatformHolders = cpPlatformMints.length > 0
+                        ? await db.all('SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)', [cpPlatformMints])
+                        : [];
 
                     // Build mcap-weighted score per user, with ASDF Top 100 and ANSEM Top 1000 2× bonus
                     const cpN = cpAllEligible.length;
                     const cpUserScores = new Map();
-                    for (const h of [...cpPlatformHolders, ...cpRobinhoodHolders]) {
+                    for (const h of cpPlatformHolders) {
                         const mcap    = cpMcapByMint.get(h.mint) || 0;
                         const balance = BigInt(h.balance || '0');
                         if (balance === BigInt(0)) continue;
@@ -771,7 +683,7 @@ async function updateGlobalState(deps) {
 
             const isAsdfTop100 = asdfTop100Holders.has(pubkey);
             const multiplier = isAsdfTop100 ? 2 : 1;
-            const basePoints = data.basePoints + data.robinhoodPoints;
+            const basePoints = data.basePoints;
             const points = basePoints * multiplier;
 
             if (points > 0) {
@@ -785,7 +697,6 @@ async function updateGlobalState(deps) {
                 userPointsData.push({
                     pubkey,
                     basePoints: data.basePoints,
-                    robinhoodPoints: data.robinhoodPoints,
                     multiplier,
                     totalPoints: points,
                     expectedAirdropSol: expected,
@@ -804,7 +715,6 @@ async function updateGlobalState(deps) {
                 userPointsData.push({
                     pubkey,
                     basePoints: 0,
-                    robinhoodPoints: 0,
                     multiplier: 1,
                     totalPoints: 0,
                     expectedAirdropSol: expected,
@@ -836,19 +746,19 @@ async function updateGlobalState(deps) {
             for (let i = 0; i < userPointsData.length; i += BATCH_SIZE) {
                 const batch = userPointsData.slice(i, i + BATCH_SIZE);
                 const values = batch.map((_, idx) => {
-                    const base = idx * 10;
-                    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
+                    const base = idx * 9;
+                    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`;
                 }).join(', ');
                 const params = batch.flatMap(u => [
-                    u.pubkey, u.basePoints, u.robinhoodPoints, u.multiplier,
+                    u.pubkey, u.basePoints, u.multiplier,
                     u.totalPoints, u.expectedAirdropSol, u.positionsCount, u.isAsdfHolder, now,
                     u.centralPoolExpectedSol || 0
                 ]);
                 await db.run(`
-                    INSERT INTO user_points (pubkey, base_points, robinhood_points, multiplier, total_points, expected_airdrop_sol, positions_count, is_asdf_holder, updated_at, central_pool_expected_sol)
+                    INSERT INTO user_points (pubkey, base_points, multiplier, total_points, expected_airdrop_sol, positions_count, is_asdf_holder, updated_at, central_pool_expected_sol)
                     VALUES ${values}
                     ON CONFLICT (pubkey) DO UPDATE SET
-                        base_points = EXCLUDED.base_points, robinhood_points = EXCLUDED.robinhood_points,
+                        base_points = EXCLUDED.base_points,
                         multiplier = EXCLUDED.multiplier, total_points = EXCLUDED.total_points,
                         expected_airdrop_sol = EXCLUDED.expected_airdrop_sol, positions_count = EXCLUDED.positions_count,
                         is_asdf_holder = EXCLUDED.is_asdf_holder, updated_at = EXCLUDED.updated_at,
