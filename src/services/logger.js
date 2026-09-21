@@ -13,7 +13,27 @@ if (!fs.existsSync(DISK_ROOT)) {
 }
 
 const DEBUG_LOG_FILE = path.join(DISK_ROOT, 'server_debug.log');
-const logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
+
+// The file is appended to forever otherwise. Once it passes this size it is moved to
+// `server_debug.log.1` (replacing the previous backup) and a fresh file is started.
+const MAX_LOG_BYTES = 20 * 1024 * 1024;
+const ROTATION_CHECK_EVERY = 500; // writes
+
+let logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
+let writesSinceCheck = 0;
+
+function rotateIfNeeded() {
+    writesSinceCheck = 0;
+    try {
+        if (!fs.existsSync(DEBUG_LOG_FILE) || fs.statSync(DEBUG_LOG_FILE).size < MAX_LOG_BYTES) return;
+        logStream.end();
+        fs.renameSync(DEBUG_LOG_FILE, `${DEBUG_LOG_FILE}.1`);
+        logStream = fs.createWriteStream(DEBUG_LOG_FILE, { flags: 'a' });
+    } catch (e) {
+        console.error(`[ERROR] Log rotation failed: ${e.message}`);
+    }
+}
+rotateIfNeeded();
 
 function log(level, message, meta = {}) {
     const timestamp = new Date().toISOString();
@@ -21,6 +41,7 @@ function log(level, message, meta = {}) {
 
     // Write to file
     logStream.write(`[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}\n`);
+    if (++writesSinceCheck >= ROTATION_CHECK_EVERY) rotateIfNeeded();
 
     // Write to console
     const consoleMethod = level === 'error' ? console.error : console.log;

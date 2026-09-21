@@ -75,7 +75,9 @@ async function initDB() {
                 volume24h REAL DEFAULT 0,
                 priceUsd REAL DEFAULT 0,
                 marketCap REAL DEFAULT 0,
-                holderCount INTEGER DEFAULT 0
+                holderCount INTEGER DEFAULT 0,
+                lastUpdated INTEGER,
+                complete INTEGER DEFAULT 0
             )
         `);
 
@@ -132,6 +134,8 @@ async function initDB() {
                 timestamp TEXT
             )
         `);
+        // /health reads the newest 50 rows on every cache miss
+        await db.exec('CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp)');
 
         // Initialize stats
         const statsKeys = [
@@ -151,21 +155,6 @@ async function initDB() {
                 [key]
             );
         }
-
-        await db.exec(`
-            CREATE TABLE IF NOT EXISTS flywheel_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp INTEGER,
-                status TEXT,
-                feesCollected REAL,
-                solSpent REAL,
-                tokensBought TEXT,
-                pumpBuySig TEXT,
-                transfer9_5 REAL,
-                transfer0_5 REAL,
-                reason TEXT
-            )
-        `);
 
         await db.exec(`
             CREATE TABLE IF NOT EXISTS airdrop_logs (
@@ -201,6 +190,8 @@ async function initDB() {
             )
         `);
 
+        await pruneLogs();
+
         logger.info(`DB Initialized at ${DB_PATH}`);
     } catch (e) {
         logger.error('Database initialization failed', { error: e.message });
@@ -215,11 +206,6 @@ async function addFees(amount) {
     await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amount, 'lifetimeFeesLamports']);
 }
 
-async function addPumpBought(amount) {
-    if (!db) return;
-    await db.run('UPDATE stats SET value = value + ? WHERE key = ?', [amount, 'totalPumpBoughtLamports']);
-}
-
 async function getTotalLaunches() {
     if (!db) return 0;
     const res = await db.get('SELECT COUNT(*) as count FROM tokens');
@@ -230,11 +216,6 @@ async function getStats() {
     if (!db) return {};
     const rows = await db.all('SELECT key, value FROM stats');
     return rows.reduce((acc, r) => ({ ...acc, [r.key]: r.value }), {});
-}
-
-async function resetAccumulatedFees(used) {
-    if (!db) return;
-    await db.run('UPDATE stats SET value = value - ? WHERE key = ?', [used, 'accumulatedFeesLamports']);
 }
 
 async function recordClaim(amount) {
@@ -250,13 +231,22 @@ async function updateNextCheckTime() {
     return nextCheck;
 }
 
-// Log to flywheel_logs table with structured columns
-async function logFlywheelCycle(data) {
-    if (!db) return;
-    await db.run(`
-        INSERT INTO flywheel_logs (timestamp, status, feesCollected, solSpent, tokensBought, pumpBuySig, transfer9_5, transfer0_5, reason)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [Date.now(), data.status, data.feesCollected || 0, data.solSpent || 0, data.tokensBought || '0', data.pumpBuySig || null, data.transfer9_5 || 0, data.transfer0_5 || 0, data.reason || null]);
+// The logs table gets a row every flywheel cycle forever; keep only the newest rows.
+const LOG_ROWS_TO_KEEP = 5000;
+
+async function pruneLogs(keep = LOG_ROWS_TO_KEEP) {
+    if (!db) return 0;
+    try {
+        const result = await db.run(
+            'DELETE FROM logs WHERE id <= (SELECT id FROM logs ORDER BY id DESC LIMIT 1 OFFSET ?)',
+            [keep]
+        );
+        if (result.changes > 0) logger.info(`Pruned ${result.changes} old log rows`);
+        return result.changes;
+    } catch (e) {
+        logger.error("Log prune error", { error: e.message });
+        return 0;
+    }
 }
 
 // Generic logging to logs table
@@ -316,14 +306,12 @@ module.exports = {
     getDB: () => db,
     smartCache,
     addFees,
-    addPumpBought,
     getTotalLaunches,
     getStats,
-    resetAccumulatedFees,
     recordClaim,
     updateNextCheckTime,
-    logFlywheelCycle,
     logPurchase,
+    pruneLogs,
     saveTokenData,
     DATA_DIR,
     DB_PATH,

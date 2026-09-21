@@ -15,6 +15,53 @@ const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 const PAYMENT_POLL_ATTEMPTS = 15;
 const PAYMENT_POLL_DELAY_MS = 2000;
 
+// On-chain limits of the pump.fun create instruction (Metaplex token metadata).
+// Anything longer fails on chain after the vanity keypair and the fee are spent.
+const MAX_NAME_BYTES = 32;
+const MAX_SYMBOL_BYTES = 10;
+const MAX_URI_BYTES = 200;
+const MAX_DESCRIPTION_CHARS = 75;
+const MAX_LINK_CHARS = 200;
+const PINATA_GATEWAY_PREFIX = 'https://gateway.pinata.cloud/ipfs/';
+
+const byteLength = (str) => Buffer.byteLength(String(str), 'utf8');
+
+/**
+ * Validate the name and ticker shared by /prepare-metadata and /deploy.
+ * Returns an error message, or null when they are acceptable.
+ */
+function validateNameAndTicker(name, ticker) {
+    if (typeof name !== 'string' || name.trim().length === 0) return "Missing token name.";
+    if (typeof ticker !== 'string' || ticker.trim().length === 0) return "Missing ticker.";
+    if (byteLength(name) > MAX_NAME_BYTES) return `Name must be at most ${MAX_NAME_BYTES} bytes.`;
+    if (byteLength(ticker) > MAX_SYMBOL_BYTES) return `Ticker must be at most ${MAX_SYMBOL_BYTES} bytes.`;
+    return null;
+}
+
+/**
+ * Validate the optional free-text fields that end up in the metadata JSON.
+ */
+function validateOptionalFields({ description, twitter, website }) {
+    if (description && (typeof description !== 'string' || description.length > MAX_DESCRIPTION_CHARS)) {
+        return "Description too long.";
+    }
+    for (const [label, value] of [['Twitter', twitter], ['Website', website]]) {
+        if (value && (typeof value !== 'string' || value.length > MAX_LINK_CHARS)) return `${label} too long.`;
+    }
+    return null;
+}
+
+/**
+ * The metadata URI must be one this server produced. Its shape is checked here;
+ * /deploy additionally checks that /prepare-metadata actually issued it.
+ */
+function isServerMetadataUri(uri) {
+    return typeof uri === 'string'
+        && uri.startsWith(PINATA_GATEWAY_PREFIX)
+        && uri.length > PINATA_GATEWAY_PREFIX.length
+        && byteLength(uri) <= MAX_URI_BYTES;
+}
+
 /**
  * A transaction signature is 64 bytes, base58 encoded.
  */
@@ -64,10 +111,11 @@ function init(deps) {
         try {
             let { name, ticker, description, twitter, website, image } = req.body;
 
-            const descInput = description || "";
-            if (descInput.length > 75) return res.status(400).json({ error: "Description too long." });
-            if (!name || !ticker || !image) return res.status(400).json({ error: "Missing fields." });
+            const fieldError = validateNameAndTicker(name, ticker) || validateOptionalFields({ description, twitter, website });
+            if (fieldError) return res.status(400).json({ error: fieldError });
+            if (!image || typeof image !== 'string') return res.status(400).json({ error: "Missing fields." });
 
+            const descInput = description || "";
             const DESCRIPTION_FOOTER = " Launched via Ignition.";
             const finalDescription = descInput + DESCRIPTION_FOOTER;
 
@@ -76,7 +124,10 @@ function init(deps) {
 
             // Returns { metadataUri, imageUrl }
             const result = await pinata.uploadMetadata(name, ticker, finalDescription, twitter, website, image);
-            
+
+            // Record that this URI passed moderation here, so /deploy can refuse any other.
+            await redis.rememberPreparedMetadata(result.metadataUri, { imageUrl: result.imageUrl });
+
             res.json({ success: true, ...result });
         } catch (err) {
             logger.error("Metadata Prep Error", { error: err.message });
@@ -88,11 +139,20 @@ function init(deps) {
     router.post('/deploy', async (req, res) => {
         try {
             // ACCEPT imageUrl explicitly
-            const { name, ticker, description, twitter, website, metadataUri, imageUrl, userTx, userPubkey, isMayhemMode } = req.body;
+            const { name, ticker, description, twitter, website, metadataUri, userTx, userPubkey, isMayhemMode } = req.body;
 
             if (!metadataUri) return res.status(400).json({ error: "Missing metadata URI" });
+            if (!isServerMetadataUri(metadataUri)) return res.status(400).json({ error: "Invalid metadata URI" });
+            const fieldError = validateNameAndTicker(name, ticker) || validateOptionalFields({ description, twitter, website });
+            if (fieldError) return res.status(400).json({ error: fieldError });
             if (!userPubkey || !isValidPubkey(userPubkey)) return res.status(400).json({ error: "Invalid Address" });
             if (!isValidSignature(userTx)) return res.status(400).json({ error: "Invalid transaction signature" });
+
+            // Only metadata this server uploaded (and moderated) may be launched. The image
+            // URL comes from that record too, never from the request body.
+            const prepared = await redis.getPreparedMetadata(metadataUri);
+            if (!prepared) return res.status(400).json({ error: "Metadata was not prepared by this server or has expired. Please start the launch again." });
+            const imageUrl = prepared.imageUrl;
 
             const feeLamports = Math.round(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL);
             const devWallet = devKeypair.publicKey.toString();
@@ -139,7 +199,7 @@ function init(deps) {
             const job = await redis.addDeployJob({
                 name, ticker, description, twitter, website, 
                 image: imageUrl, // Pass the direct URL, not base64
-                userPubkey, userTx, isMayhemMode, metadataUri
+                userPubkey, userTx, isMayhemMode: !!isMayhemMode, metadataUri
             });
 
             res.json({ success: true, jobId: job.id, message: "Queued" });
@@ -160,4 +220,4 @@ function init(deps) {
     return router;
 }
 
-module.exports = { init };
+module.exports = { init, validateNameAndTicker, validateOptionalFields, isServerMetadataUri };

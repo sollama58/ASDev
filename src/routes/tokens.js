@@ -141,10 +141,11 @@ function init(deps) {
     router.get('/token-holders/:mint', async (req, res) => {
         try {
             const { mint } = req.params;
-            const holders = await db.all(
+            if (!isValidPubkey(mint)) return res.status(400).json({ error: "Invalid mint" });
+            const holders = await redis.smartCache(`tokens:holders:${mint}`, LIST_CACHE_TTL, () => db.all(
                 'SELECT rank, holderPubkey, balance FROM token_holders WHERE mint = ? ORDER BY rank ASC LIMIT 50',
                 [mint]
-            );
+            ));
             res.json(holders);
         } catch (e) {
             res.status(500).json({ error: "DB Error" });
@@ -282,7 +283,8 @@ function init(deps) {
     // Airdrop logs
     router.get('/airdrop-logs', async (req, res) => {
         try {
-            const logs = await db.all('SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT 20');
+            const logs = await redis.smartCache('tokens:airdrop-logs', LIST_CACHE_TTL,
+                () => db.all('SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT 20'));
             res.json(logs);
         } catch (e) {
             res.status(500).json({ error: "DB Error" });

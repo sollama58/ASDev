@@ -6,6 +6,9 @@ const axios = require('axios');
 const config = require('../config/env');
 const logger = require('./logger');
 
+// The check fails open on error, so a timeout only means an unmoderated launch, not a stuck request.
+const MODERATION_TIMEOUT_MS = 20000;
+
 /**
  * Check image content safety using Clarifai
  * Returns true if safe, false if unsafe
@@ -39,7 +42,8 @@ async function checkContentSafety(base64Data) {
                 headers: {
                     "Authorization": `${authPrefix} ${cleanKey}`,
                     "Content-Type": "application/json"
-                }
+                },
+                timeout: MODERATION_TIMEOUT_MS
             }
         );
     };

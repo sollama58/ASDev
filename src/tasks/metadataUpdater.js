@@ -11,6 +11,7 @@
 const axios = require('axios');
 const config = require('../config/env');
 const { logger } = require('../services');
+const { createRunGuard, maxRunAge } = require('./runGuard');
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -19,7 +20,7 @@ const HOT_WINDOW_MS = 24 * 60 * 60 * 1000;   // tokens launched in the last 24h
 const HOT_TOP_N = 10;                        // plus the volume leaderboard the scanner uses
 const MAX_SLOW_PER_RUN = 3 * DEXSCREENER_BATCH;
 
-let isUpdating = false;
+const guard = createRunGuard('Metadata updater', maxRunAge(config.METADATA_UPDATE_INTERVAL));
 
 function chunkArray(array, size) {
     const result = [];
@@ -60,11 +61,8 @@ function selectDueTokens(tokens, now) {
 async function updateMetadata(deps) {
     const { db, globalState } = deps;
 
-    if (isUpdating) {
-        logger.warn("Metadata updater: previous run still in progress, skipping this tick");
-        return;
-    }
-    isUpdating = true;
+    const runToken = guard.tryAcquire();
+    if (!runToken) return;
 
     try {
         const now = Date.now();
@@ -175,7 +173,7 @@ async function updateMetadata(deps) {
     } catch (e) {
         logger.error("Metadata updater error", { error: e.message });
     } finally {
-        isUpdating = false;
+        guard.release(runToken);
     }
 }
 

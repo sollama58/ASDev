@@ -7,7 +7,7 @@ const metadataUpdater = require('./metadataUpdater');
 const asdfSync = require('./asdfSync');
 const flywheel = require('./flywheel');
 const workers = require('./workers');
-const { vanity, logger } = require('../services');
+const { vanity, logger, database } = require('../services');
 const config = require('../config/env');
 
 /**
@@ -33,6 +33,9 @@ function startAll(deps) {
 
     // Initialize workers
     workers.initDeployWorker(deps);
+
+    // Keep the logs table bounded (it also gets pruned at startup)
+    setInterval(() => database.pruneLogs(), 6 * 60 * 60 * 1000);
 
     logger.info("All background tasks started");
 }

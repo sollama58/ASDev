@@ -8,8 +8,9 @@ const { TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, WALLETS } = require('../config/constants');
 const { logger } = require('../services');
+const { createRunGuard, maxRunAge } = require('./runGuard');
 
-let isSyncing = false;
+const guard = createRunGuard('ASDF Sync', maxRunAge(config.ASDF_UPDATE_INTERVAL));
 
 // SPL token account layout: mint(0-32) owner(32-64) amount(64-72). Only owner and amount are
 // used, so ask the RPC for just those 40 bytes instead of the whole 165-byte account.
@@ -21,11 +22,8 @@ const HOLDER_DATA_SLICE = { offset: 32, length: 40 };
 async function updateAsdfHolders(deps) {
     const { connection, globalState } = deps;
 
-    if (isSyncing) {
-        logger.warn("ASDF Sync: previous run still in progress, skipping this tick");
-        return;
-    }
-    isSyncing = true;
+    const runToken = guard.tryAcquire();
+    if (!runToken) return;
 
     try {
         if (!TOKENS.ASDF) {
@@ -82,7 +80,7 @@ async function updateAsdfHolders(deps) {
     } catch (e) {
         logger.error("ASDF Sync Failed", { error: e.message });
     } finally {
-        isSyncing = false;
+        guard.release(runToken);
     }
 }
 
