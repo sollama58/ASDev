@@ -1,10 +1,30 @@
 /**
  * Input Sanitization Service
  * v24.0 - Provides input sanitization for user-provided content
+ * v29.1 - Sanitization is split by destination.
  *
- * Prevents XSS, SQL injection attempts, and other malicious input
+ * These two destinations need opposite treatment, and conflating them was a real bug:
+ *
+ *   - Text that ends up ON-CHAIN (a token's name, ticker and description) is written into
+ *     the mint instruction and is immutable forever. HTML-entity encoding it corrupts
+ *     ordinary input permanently: "Rock & Roll" was minted as "Rock &amp; Roll" and
+ *     "Ben's Coin" as "Ben&#x27;s Coin". On-chain text is therefore STRIPPED of anything
+ *     unsafe rather than escaped, so the characters a user typed survive intact.
+ *
+ *   - Text rendered into a PAGE still needs escaping, but that is the renderer's job at
+ *     output time, where the surrounding context is known. Both frontends already escape
+ *     every interpolated value, so nothing here needs to pre-encode for them.
+ *
+ * Escaping therefore no longer happens in this module. `sanitizeString` keeps an opt-in
+ * `encodeHtml` flag for any future caller that genuinely writes into markup.
  */
 const logger = require('./logger');
+
+// Invisible and direction-controlling characters. These are stripped from on-chain text:
+// they are never wanted in a token name, and bidi overrides in particular let a name render
+// as something entirely different from the bytes that were signed.
+// eslint-disable-next-line no-control-regex
+const INVISIBLE_CHARS = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
 
 // Characters that could be dangerous in various contexts
 const DANGEROUS_PATTERNS = [
@@ -37,13 +57,18 @@ function sanitizeString(input, options = {}) {
 
     const {
         maxLength = 500,
-        allowHtml = false,
+        encodeHtml = false,
         stripNewlines = false,
         trimWhitespace = true,
         checkSqlInjection = true,
+        stripAngleBrackets = true,
+        collapseWhitespace = false,
     } = options;
 
     let sanitized = input;
+
+    // Always remove invisible and bidi-control characters, whatever the destination.
+    sanitized = sanitized.replace(INVISIBLE_CHARS, '');
 
     // Trim whitespace
     if (trimWhitespace) {
@@ -75,14 +100,26 @@ function sanitizeString(input, options = {}) {
         }
     }
 
-    // HTML entity encode if not allowing HTML (after pattern removal)
-    if (!allowHtml) {
+    // Drop angle brackets outright. Nothing legitimate in a token name needs them, and
+    // removing them means no downstream renderer can be handed a partial tag, without
+    // mangling the apostrophes and ampersands that people actually type.
+    if (stripAngleBrackets) {
+        sanitized = sanitized.replace(/[<>]/g, '');
+    }
+
+    // Opt-in only, for a caller that really is writing into markup. On-chain text must
+    // never take this path: entity-encoding is not reversible once it has been minted.
+    if (encodeHtml) {
         sanitized = sanitized
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#x27;');
+    }
+
+    if (collapseWhitespace) {
+        sanitized = sanitized.replace(/\s{2,}/g, ' ').trim();
     }
 
     // Check for SQL injection patterns (warning only, as this is defense in depth)
@@ -109,7 +146,7 @@ function sanitizeName(name) {
     return sanitizeString(name, {
         maxLength: 32,
         stripNewlines: true,
-        allowHtml: false,
+        collapseWhitespace: true,
     });
 }
 
@@ -134,7 +171,7 @@ function sanitizeDescription(description) {
     return sanitizeString(description, {
         maxLength: 200,
         stripNewlines: true,
-        allowHtml: false,
+        collapseWhitespace: true,
     });
 }
 

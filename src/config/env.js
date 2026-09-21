@@ -58,6 +58,34 @@ const config = {
     AIRDROP_THRESHOLD_SOL: 1.0, // v17.0: Minimum 1 SOL to trigger airdrop distribution
     AIRDROP_MIN_VOLUME_USD: 250, // v18.0: Minimum 24hr volume for airdrop eligibility (v27.5: raised from 100 to shrink the RPC-scanned token set)
 
+    // v29.1: The single definition of the per-token airdrop threshold. This used to be read
+    // straight from process.env at four separate call sites with three different fallbacks
+    // (1.0 in the distributor, 0.05 in the admin simulator and in the startup log), so the
+    // simulator reported tokens as "would trigger" at twenty times below the amount the
+    // distributor actually requires. Everything now reads this one value.
+    TOKEN_AIRDROP_THRESHOLD_SOL: parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0,
+
+    // v29.1: Anti-bundling decoy launches, fired before each real launch to obscure it.
+    // Each decoy is a full create plus buy, and the account rent a create allocates is NOT
+    // recovered by the sell-and-close that follows, so this is a real per-launch cost set
+    // against a DEPLOYMENT_FEE_SOL of 0.02. It was previously a hardcoded random 1 to 5,
+    // which made that cost invisible and unbounded. Set ANTI_BUNDLE_MAX to 0 to disable.
+    ANTI_BUNDLE_MIN: Math.max(0, parseInt(process.env.ANTI_BUNDLE_MIN ?? '1', 10) || 0),
+    ANTI_BUNDLE_MAX: Math.max(0, parseInt(process.env.ANTI_BUNDLE_MAX ?? '5', 10) || 0),
+
+    // v29.1: A payment older than this cannot be redeemed for a launch. Without a bound,
+    // any historical transfer to the platform wallet of at least the fee could be handed
+    // to /api/deploy once for a free launch.
+    PAYMENT_MAX_AGE_SECONDS: parseInt(process.env.PAYMENT_MAX_AGE_SECONDS, 10) || 3600,
+
+    // v29.1: Hosts a token's metadata URI may point at. /api/deploy previously accepted any
+    // string here and wrote it straight into the mint instruction, so a caller could have the
+    // platform mint a token whose metadata pointed anywhere at all.
+    METADATA_URI_ALLOWED_HOSTS: (process.env.METADATA_URI_ALLOWED_HOSTS ||
+        'gateway.pinata.cloud,ipfs.io,cloudflare-ipfs.com')
+        .split(',').map(h => h.trim().toLowerCase()).filter(Boolean),
+    METADATA_URI_MAX_LENGTH: parseInt(process.env.METADATA_URI_MAX_LENGTH, 10) || 200,
+
     // =====================================================
     // VANITY MINT GRINDER (v28.1)
     // =====================================================
@@ -90,6 +118,12 @@ const config = {
     // How often the grinder re-reads pool depth. It shares no channel with the API, so this
     // poll is how it notices addresses being consumed.
     VANITY_POOL_CHECK_INTERVAL: parseInt(process.env.VANITY_POOL_CHECK_INTERVAL) || 30000,
+
+    // v29.1: How long an address may sit in the 'claimed' state before it is treated as
+    // stranded and returned to the pool. A launch claims an address, then marks it used or
+    // releases it; a crash in between left it claimed forever, slowly leaking ground
+    // addresses. Comfortably longer than any real launch, so a live launch is never reaped.
+    VANITY_CLAIM_TIMEOUT_MS: parseInt(process.env.VANITY_CLAIM_TIMEOUT_MS) || 15 * 60 * 1000,
     VANITY_GRINDER_LOG_INTERVAL: parseInt(process.env.VANITY_GRINDER_LOG_INTERVAL) || 60000,
 
     // =====================================================

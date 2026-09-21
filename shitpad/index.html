@@ -2889,8 +2889,15 @@ function readLaunchForm() {
 function validateLaunchForm(f) {
     if (!f.name)                  return 'Token name is required.';
     if (f.name.length > 32)       return 'Token name must be 32 characters or less.';
+    // The server strips a name to plain text and a ticker to A-Z0-9 before minting. Mirror
+    // that here so anything that would reduce to nothing is caught before the user pays,
+    // rather than after the fee transaction has already been signed and sent.
+    if (!f.name.replace(/[<>]/g, '').trim())
+        return 'Token name must contain some ordinary text.';
     if (!f.ticker)                return 'Ticker is required.';
     if (f.ticker.length > 11)     return 'Ticker must be 11 characters or less.';
+    if (!/[A-Za-z0-9]/.test(f.ticker))
+        return 'Ticker must contain letters or numbers. Symbols and emoji are removed on-chain.';
     if (f.description.length > 75) return 'Description must be 75 characters or less.';
     if (!f.imageUrl)              return 'Image URL is required — upload to Imgur first.';
     if (!IMGUR_RE.test(f.imageUrl))

@@ -382,7 +382,7 @@ function generateKothReasoning(winner, runnerUp, stats) {
 }
 
 // v27.0: Per-token airdrop threshold raised to 1 SOL
-const TOKEN_AIRDROP_THRESHOLD_LAMPORTS = Math.round((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0) * 1e9);
+const TOKEN_AIRDROP_THRESHOLD_LAMPORTS = Math.round(config.TOKEN_AIRDROP_THRESHOLD_SOL * 1e9);
 
 // v26.0: Fixed 1B token supply for all pump.fun tokens (1B * 10^6 decimals)
 const PUMP_FUN_TOTAL_SUPPLY_BIG = BigInt('1000000000000000');
@@ -2391,7 +2391,7 @@ async function start(deps) {
 
     // v26.0: Per-token airdrop processing every 15 minutes
     setInterval(() => processTokenAirdrops(deps), airdropInterval);
-    logger.info(`Per-token airdrop distribution started (${airdropInterval / 60000}min interval, >${process.env.TOKEN_AIRDROP_THRESHOLD_SOL || 0.05} SOL threshold per token)`);
+    logger.info(`Per-token airdrop distribution started (${airdropInterval / 60000}min interval, >${config.TOKEN_AIRDROP_THRESHOLD_SOL} SOL threshold per token)`);
 
     // v25.64: Staggered initial runs to avoid RPC spike at startup
     setTimeout(() => runFeeCollection(deps), 30000); // Fee collection at 30s (was 5s)

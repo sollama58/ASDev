@@ -783,6 +783,20 @@ async function addFees(amount) {
     await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [amount, 'lifetimeFeesLamports']);
 }
 
+/**
+ * v29.1: Reverse a deployment fee credited by addFees().
+ *
+ * addFees() runs the moment a launch is queued, but a launch that fails refunds the user,
+ * so without this the two lifetime counters kept every refunded fee and overstated revenue.
+ * Clamped at zero so a double-reversal can never drive a counter negative.
+ */
+async function subtractFees(amount) {
+    const db = getDB();
+    if (!(amount > 0)) return;
+    await db.run('UPDATE stats SET value = GREATEST(value - $1, 0) WHERE key = $2', [amount, 'accumulatedFeesLamports']);
+    await db.run('UPDATE stats SET value = GREATEST(value - $1, 0) WHERE key = $2', [amount, 'lifetimeFeesLamports']);
+}
+
 async function addPumpBought(amount) {
     const db = getDB();
     await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [amount, 'totalPumpBoughtLamports']);
@@ -912,6 +926,7 @@ module.exports = {
     getDB,
     smartCache,
     addFees,
+    subtractFees, // v29.1: reverse a deployment fee when a launch is refunded
     addPumpBought,
     getTotalLaunches,
     getStats,

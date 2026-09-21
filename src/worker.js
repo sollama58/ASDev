@@ -129,6 +129,11 @@ async function startWorker() {
     const db = database.getDB();
     logger.info('[Worker] PostgreSQL initialized with connection pooling');
 
+    // v29.1: recover any vanity addresses left in the 'claimed' state by a process that died
+    // mid-launch. This is the main source of the leak, so sweeping once on boot covers it even
+    // in deployments that run no separate grinder service.
+    await require('./services/vanity').reapStrandedClaims(db).catch(() => {});
+
     // Initialize Twitter (needed for social worker)
     // v25.22: Now async to fetch username for proper tweet URLs
     if (enabledTasks.includes('social')) {
@@ -173,6 +178,14 @@ async function startWorker() {
                 lamports: Math.floor((config.DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL)
             }));
             const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
+
+            // v29.1: the deployment fee was credited to the lifetime counters the moment the
+            // launch was queued. The user has just been made whole, so reverse it -- otherwise
+            // reported revenue keeps every refunded fee. Only on a confirmed refund: if the
+            // transfer above throws, the user still has not been paid back.
+            await database.subtractFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL)
+                .catch(e => logger.warn('Refund sent but fee counters not reversed', { error: e.message }));
+
             logger.info(`REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
             return sig;
         } catch (e) {

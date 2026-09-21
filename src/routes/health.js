@@ -288,9 +288,9 @@ function init(deps) {
                 // v27.0: Per-token pools total and central pool separately
                 tokenPoolsSol: ((cachedHealth.totalPendingAirdropLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
                 centralPoolSol: ((cachedHealth.centralPoolLamports || 0) / LAMPORTS_PER_SOL).toFixed(4),
-                // v27.1: Thresholds for UI display (central pool fixed 5 SOL; token pool from env)
+                // v27.1: Thresholds for UI display (central pool fixed 5 SOL; token pool from config)
                 centralPoolThresholdSol: 5.0,
-                tokenPoolThresholdSol: parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 1.0,
+                tokenPoolThresholdSol: config.TOKEN_AIRDROP_THRESHOLD_SOL,
                 airdropCurrency: 'SOL', // v11.0: Indicates current airdrop currency
                 // v28.1: vanity mint pool. `available` is how many branded contract addresses
                 // are ready; at zero, launches fall back to random mints rather than failing.
@@ -1486,7 +1486,7 @@ function init(deps) {
             const flywheel = require('../tasks/flywheel');
 
             // v26.0: Per-token simulation — each token has its own pending_airdrop_lamports pool
-            const TOKEN_THRESHOLD_LAMPORTS = Math.floor((parseFloat(process.env.TOKEN_AIRDROP_THRESHOLD_SOL) || 0.05) * LAMPORTS_PER_SOL);
+            const TOKEN_THRESHOLD_LAMPORTS = Math.round(config.TOKEN_AIRDROP_THRESHOLD_SOL * LAMPORTS_PER_SOL);
 
             // Get KOTH info (informational only in v26.0 — no fee allocation)
             const kothResult = await flywheel.getAiSelectedKoth(db);

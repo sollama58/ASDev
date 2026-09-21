@@ -183,11 +183,26 @@ function initDeployWorker(deps) {
     }
 
     /**
-     * Launch anti-bundling dud tokens before the real token
-     * Creates 1-5 throwaway tokens to obscure the real launch from bundlers
+     * Launch anti-bundling dud tokens before the real token.
+     *
+     * v29.1: the count is configurable and may be zero. Each dud is a full create plus buy,
+     * and a create allocates mint, bonding-curve and metadata accounts whose rent the
+     * sell-and-close below does NOT recover -- so this runs at a real per-launch cost set
+     * against a 0.02 SOL deployment fee. It was a hardcoded random 1 to 5, which made that
+     * cost invisible. Set ANTI_BUNDLE_MAX to 0 to turn decoys off.
      */
     async function launchDudTokens(job) {
-        const dudCount = Math.floor(Math.random() * 5) + 1; // 1-5 duds
+        // ANTI_BUNDLE_MAX is the off switch: setting it to 0 disables decoys whatever the
+        // minimum says, so an operator cannot half-disable them by touching only one value.
+        const hi = config.ANTI_BUNDLE_MAX;
+        const lo = Math.min(config.ANTI_BUNDLE_MIN, hi);
+        const dudCount = hi === 0 ? 0 : lo + Math.floor(Math.random() * (hi - lo + 1));
+
+        if (dudCount === 0) {
+            logger.debug(`[Anti-Bundle] Disabled, skipping decoys for job ${job.id}`);
+            return;
+        }
+
         logger.info(`[Anti-Bundle] Launching ${dudCount} dud token(s) for job ${job.id}`);
 
         // Upload dud metadata once (reuse for all duds)

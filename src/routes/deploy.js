@@ -4,6 +4,8 @@
  * v24.0 - Added input sanitization for user-provided content
  * v25.1 - Imgur URL support (user uploads to Imgur, provides URL)
  * v25.4 - Restored payment verification logic
+ * v29.1 - Payment is bound to the payer and to a time window; the metadata URI is validated
+ *         against an allowlist instead of being written to the chain verbatim.
  */
 const express = require('express');
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -38,6 +40,45 @@ function isValidImageUrl(url) {
     } catch (e) {
         return false;
     }
+}
+
+/**
+ * v29.1: Validate a token's metadata URI.
+ *
+ * /api/deploy passes this string straight into the Pump.fun create instruction, where it
+ * becomes the token's permanent metadata pointer. It was previously accepted unchecked, so
+ * a caller who paid the launch fee could have the platform mint a token whose metadata
+ * pointed anywhere, bypassing the Imgur-only image rule and the description footer that
+ * /api/prepare-metadata applies. An oversized value instead pushed the transaction past the
+ * packet limit, failing the launch after payment and burning a pre-ground vanity address.
+ *
+ * Accepts only an https URL on a known IPFS gateway, short enough to leave room in the
+ * transaction. That is stateless, so it cannot fail a legitimate launch because a cache
+ * expired or Redis restarted.
+ */
+function isValidMetadataUri(uri) {
+    if (!uri || typeof uri !== 'string') return false;
+    if (uri.length > config.METADATA_URI_MAX_LENGTH) return false;
+
+    let parsed;
+    try {
+        parsed = new URL(uri);
+    } catch (e) {
+        return false;
+    }
+
+    if (parsed.protocol !== 'https:') return false;
+    if (parsed.username || parsed.password) return false;
+
+    const host = parsed.hostname.toLowerCase();
+    const allowed = config.METADATA_URI_ALLOWED_HOSTS.some(
+        h => host === h || host.endsWith('.' + h)
+    );
+    if (!allowed) return false;
+
+    // Gateways serve content at /ipfs/<cid>; anything else is not a metadata document
+    // we could have produced.
+    return /^\/ipfs\/[A-Za-z0-9]+\/?$/.test(parsed.pathname);
 }
 
 /**
@@ -115,8 +156,22 @@ function init(deps) {
             const { metadataUri, userTx, userPubkey, isMayhemMode } = sanitized;
 
             if (!metadataUri) return res.status(400).json({ error: "Missing metadata URI" });
+            if (!isValidMetadataUri(metadataUri)) {
+                logger.warn('[Deploy] Rejected metadata URI', {
+                    userPubkey,
+                    uri: String(metadataUri).substring(0, 80),
+                    length: String(metadataUri).length
+                });
+                return res.status(400).json({ error: "Invalid metadata URI. Use the URI returned by /api/prepare-metadata." });
+            }
             if (!userPubkey || !isValidPubkey(userPubkey)) return res.status(400).json({ error: "Invalid Address" });
             if (!userTx || typeof userTx !== 'string') return res.status(400).json({ error: "Invalid transaction signature" });
+
+            // v29.1: /api/prepare-metadata rejected a blank name or ticker, but this route did
+            // not, and this route is what sets the on-chain name. A token could therefore be
+            // minted with empty strings for both.
+            if (!sanitized.name) return res.status(400).json({ error: "Token name is required." });
+            if (!sanitized.ticker) return res.status(400).json({ error: "Ticker is required." });
 
             // v25.4: Payment verification loop (runs BEFORE inserting transaction record)
             // H-2 FIX: Insert only after confirmed payment to prevent orphaned records on crash
@@ -155,12 +210,30 @@ function init(deps) {
                         maxSupportedTransactionVersion: 0
                     });
                     if (txInfo && !txInfo.meta?.err) {
-                        validPayment = txInfo.transaction.message.instructions.some(ix => {
-                            if (ix.programId.toString() !== '11111111111111111111111111111111') return false;
-                            if (!ix.parsed || ix.parsed.type !== 'transfer') return false;
-                            return ix.parsed.info.destination === devKeypair.publicKey.toString() &&
-                                   ix.parsed.info.lamports >= config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL;
-                        });
+                        // v29.1: bound the payment's age. Without this, any historical transfer
+                        // to the platform wallet of at least the fee could be handed in once
+                        // for a free launch, since the only other protection is the UNIQUE
+                        // constraint on the signature.
+                        const ageSeconds = txInfo.blockTime
+                            ? Math.floor(Date.now() / 1000) - txInfo.blockTime
+                            : null;
+                        if (ageSeconds !== null && ageSeconds > config.PAYMENT_MAX_AGE_SECONDS) {
+                            logger.warn('[Deploy] Payment rejected as too old', {
+                                userPubkey, userTx: userTx.substring(0, 20), ageSeconds
+                            });
+                        } else {
+                            const minLamports = Math.floor(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL);
+                            validPayment = txInfo.transaction.message.instructions.some(ix => {
+                                if (ix.programId.toString() !== '11111111111111111111111111111111') return false;
+                                if (!ix.parsed || ix.parsed.type !== 'transfer') return false;
+                                // v29.1: the payer must be the wallet the launch is credited to.
+                                // Only the destination and amount were checked before, so anyone
+                                // watching the chain could take a launch someone else had paid for.
+                                return ix.parsed.info.source === userPubkey &&
+                                       ix.parsed.info.destination === devKeypair.publicKey.toString() &&
+                                       ix.parsed.info.lamports >= minLamports;
+                            });
+                        }
                     }
                 } catch (txErr) {
                     logger.debug('[Deploy] TX parse failed', { error: txErr.message });
