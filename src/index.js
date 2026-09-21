@@ -168,7 +168,7 @@ async function main() {
                 scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline for frontend
                 styleSrc: ["'self'", "'unsafe-inline'"],
                 imgSrc: ["'self'", "data:", "https:"], // Allow external images
-                connectSrc: ["'self'", "https://api.dexscreener.com", "https://mainnet.helius-rpc.com", "https://api.clarifai.com"],
+                connectSrc: ["'self'", "https://api.dexscreener.com", "https://mainnet.helius-rpc.com"],
                 fontSrc: ["'self'"],
                 objectSrc: ["'none'"],
                 upgradeInsecureRequests: []

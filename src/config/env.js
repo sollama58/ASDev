@@ -122,8 +122,6 @@ const config = {
 
     // Pinata (IPFS)
     PINATA_JWT: process.env.PINATA_JWT?.trim() || null,
-    PINATA_API_KEY: process.env.API_KEY?.trim() || null,
-    PINATA_SECRET_KEY: process.env.SECRET_KEY?.trim() || null,
 
     // Redis
     REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
@@ -142,18 +140,7 @@ const config = {
     DB_SSL_CA_PATH: process.env.DB_SSL_CA_PATH || null,
     DB_SSL_CA: process.env.DB_SSL_CA || null, // CA certificate as env var
 
-    // Clarifai (Content Safety) - DEPRECATED in v25.0, replaced by Cloudflare Images
-    CLARIFAI_API_KEY: process.env.CLARIFAI_API_KEY,
-
-    // v25.0: Cloudflare Images (Content-Moderated Image Hosting)
-    // Images are uploaded directly to Cloudflare, which handles moderation
-    CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
-    CLOUDFLARE_ACCOUNT_HASH: process.env.CLOUDFLARE_ACCOUNT_HASH, // For imagedelivery.net URLs
-    CLOUDFLARE_IMAGES_TOKEN: process.env.CLOUDFLARE_IMAGES_TOKEN,
-
     // Twitter OAuth 1.0a (for bot posting)
-    TWITTER_API_KEY: process.env.TWITTER_API_KEY,
-    TWITTER_API_SECRET: process.env.TWITTER_API_SECRET,
     TWITTER_ACCESS_TOKEN: process.env.TWITTER_ACCESS_TOKEN,
     TWITTER_ACCESS_SECRET: process.env.TWITTER_ACCESS_SECRET,
     TWITTER_USERNAME: process.env.TWITTER_USERNAME, // v25.22: Fallback for tweet URLs

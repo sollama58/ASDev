@@ -17,7 +17,6 @@ const metadataUpdater = require('./metadataUpdater');
 const asdfSync = require('./asdfSync');
 const flywheel = require('./flywheel');
 const robinhoodScanner = require('./robinhoodScanner');
-// const pagsClaimProcessor = require('./pagsClaimProcessor'); // PAGS disabled
 const workers = require('./workers');
 const { logger } = require('../services');
 const config = require('../config/env');
@@ -136,7 +135,6 @@ module.exports = {
     asdfSync,
     flywheel,
     robinhoodScanner,
-    // pagsClaimProcessor, // PAGS disabled
     workers,
     startAll,
     stopAll,

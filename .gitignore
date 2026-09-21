@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 
 # Environment & Secrets
 .env
@@ -12,15 +11,8 @@ data/
 dump.rdb
 *.log
 
-# Vanity Grinder (cloned separately)
-asdf-vanity-grinder/
-start_grinder.sh
-vanity_pool.json
-vanity_mints.json
-
-# Test files
-vanity_mock.js
-vanity_grinder_real.js
+# Local tooling
+.claude/settings.local.json
 
 # OS files
 .DS_Store

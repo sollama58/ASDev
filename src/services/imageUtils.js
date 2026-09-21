@@ -268,42 +268,10 @@ async function fetchImageFromMetadataUri(metadataUri, timeout = 5000) {
     }
 }
 
-/**
- * v25.4: Get the best available image for a token
- * v25.8: Now normalizes all image URLs for consistency
- * Tries multiple sources in order:
- * 1. Direct image URL from database (normalized)
- * 2. Fetch from metadataUri
- *
- * @param {Object} token - Token object with image and metadataUri fields
- * @param {number} timeout - Request timeout for metadata fetch
- * @returns {Promise<string|null>} Best available image URL or null
- */
-async function getBestImage(token, timeout = 3000) {
-    // If we have a valid image already, normalize and use it
-    if (token.image && token.image !== '' && token.image !== 'null' && token.image !== 'undefined') {
-        const normalized = normalizeImageUrl(token.image);
-        if (normalized) {
-            return normalized;
-        }
-    }
-
-    // Try fetching from metadataUri as fallback
-    if (token.metadataUri) {
-        const metadataImage = await fetchImageFromMetadataUri(token.metadataUri, timeout);
-        if (metadataImage) {
-            return metadataImage;
-        }
-    }
-
-    return null;
-}
 
 module.exports = {
     normalizeImageUrl,
-    cleanHeliusImageUrl,
     extractHeliusImage,
     extractHeliusBatchImage,
-    fetchImageFromMetadataUri,
-    getBestImage
+    fetchImageFromMetadataUri
 };
