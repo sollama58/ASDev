@@ -985,7 +985,6 @@
                 checkAsdfStatus()
             ]);
         } catch (e) { console.error("Auto-Refresh Error", e); }
-        checkHealth(); 
         if (ui.refreshBtn) ui.refreshBtn.classList.remove('opacity-50', 'cursor-wait');
     };
     window.refreshAllData = refreshAllData;
@@ -1465,12 +1464,22 @@
     };
 
     const pollJobStatus = async (jobId) => {
-        let attempts = 0;
-        const maxAttempts = 150;
-        const interval = setInterval(async () => {
-            attempts++;
-            if (attempts > maxAttempts) {
-                clearInterval(interval);
+        // Poll quickly while a launch normally completes, then back off; still give up
+        // after five minutes. Each poll waits for the previous response, so a slow
+        // backend never has several status requests in flight.
+        const FAST_MS = 2000, FAST_FOR_MS = 30000, SLOW_MS = 5000, DEADLINE_MS = 5 * 60 * 1000;
+        const startedAt = Date.now();
+        let done = false;
+        const finish = () => { done = true; };
+        const schedule = () => {
+            if (done) return;
+            const elapsed = Date.now() - startedAt;
+            setTimeout(tick, elapsed < FAST_FOR_MS ? FAST_MS : SLOW_MS);
+        };
+        const tick = async () => {
+            if (done) return;
+            if (Date.now() - startedAt > DEADLINE_MS) {
+                finish();
                 showStatus("DEPLOYMENT TIMEOUT - Check status manually", 'error');
                 isDeploying = false;
                 ui.deployBtn.disabled = false; ui.deployBtn.innerText = "CHECK STATUS";
@@ -1480,7 +1489,7 @@
                 const res = await fetch(`${BACKEND_URL}/api/job-status/${jobId}`);
                 const job = await res.json();
                 if (job.state === 'completed') {
-                    clearInterval(interval);
+                    finish();
                     showStatus("LAUNCH CONFIRMED", 'success');
                     const mintAddr = job.result.mint;
                     const txSig = job.result.signature;
@@ -1492,7 +1501,7 @@
                     isDeploying = false;
                     refreshAllData();
                 } else if (job.state === 'failed') {
-                    clearInterval(interval);
+                    finish();
                     showStatus(`DEPLOYMENT FAILED: ${job.failedReason}`, 'error');
                     isDeploying = false;
                     ui.deployBtn.disabled = false; ui.deployBtn.innerText = "RETRY LAUNCH";
@@ -1500,7 +1509,9 @@
                     showStatus(`STATUS: ${job.state.toUpperCase()} (Please Wait...)`, 'normal');
                 }
             } catch (e) { console.error("Polling error", e); }
-        }, 2000);
+            schedule();
+        };
+        schedule();
     };
     
     window.addEventListener('load', () => {
