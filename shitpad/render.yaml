@@ -1,3 +1,9 @@
+# Standalone blueprint for the ShitPad static site ONLY.
+#
+# The root render.yaml already includes this site as part of the full stack. Apply ONE of
+# them, not both, or Render will create the site twice. Use this file only if you deploy the
+# static site separately from the backend.
+
 services:
   - type: web
     name: shitpad

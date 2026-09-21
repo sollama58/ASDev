@@ -1,67 +1,191 @@
-# Render Blueprint — ShitPad vanity mint grinder
+# Render Blueprint — full ShitPad / ASDev stack
 #
-# This blueprint defines ONLY the grinder service. The API and worker services are managed
-# separately (and the ShitPad static site has its own blueprint at shitpad/render.yaml), so
-# applying this one does not touch them.
+# Applying this creates everything a fresh deployment needs: Postgres, Redis, the API, the
+# background worker, the vanity grinder, and the ShitPad static site.
 #
-# The grinder is deliberately its own service: grinding is sustained CPU work, and sharing an
-# instance with the API would mean request latency competing with a hot loop. Here it can own
-# its instance, and be scaled, restarted or switched off on its own.
+# Do NOT also apply shitpad/render.yaml — that is the standalone blueprint for deploying the
+# static site on its own, and applying both would create the site twice.
 #
-# It needs no RPC endpoint, no Redis and no wallet key — only the database (where the pool
-# lives) and VANITY_ENCRYPTION_KEY.
+# Two things are deliberately NOT in here and must be set by hand in the Render dashboard
+# after the first apply (they are secrets, so `sync: false` leaves them blank):
+#   DEV_WALLET_PRIVATE_KEY   — the platform hot wallet, on the API and worker
+#   PINATA_JWT               — IPFS uploads for token metadata
+# Everything else is either generated, linked between services, or has a working default.
 #
-# IMPORTANT: VANITY_ENCRYPTION_KEY must be set to the SAME value on the API service. The
-# grinder encrypts each mint seed with it and the API decrypts on claim; if they differ, the
-# API cannot read the pool and every launch silently falls back to a random mint.
+# Secrets that must MATCH across services live in the shared env var group below, so Render
+# generates each once and every service reads the same value. That removes the failure mode
+# where the grinder encrypts mint seeds with one key and the API tries to decrypt with
+# another — which fails silently, with every launch quietly falling back to a random mint.
+
+databases:
+  - name: asdev-db
+    databaseName: asdev
+    user: asdev
+    # Check current plan names in the Render dashboard before applying; they change.
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+
+envVarGroups:
+  - name: asdev-shared
+    envVars:
+      # Generated once, read by the API, the worker and the grinder.
+      - key: VANITY_ENCRYPTION_KEY
+        generateValue: true
+      # Session signing for PAGS Twitter login. Must be stable — if this changes, every
+      # existing session is invalidated.
+      - key: PAGS_SESSION_SECRET
+        generateValue: true
+      # Admin API key. Until this is set, every /api/admin/* endpoint returns 403.
+      - key: ADMIN_API_KEY
+        generateValue: true
 
 services:
+  # ---------------------------------------------------------------------------
+  # Redis — BullMQ job queues, caches, distributed locks and cross-process state
+  # ---------------------------------------------------------------------------
+  - type: redis
+    name: asdev-redis
+    plan: starter
+    # REQUIRED: BullMQ will not run reliably under an eviction policy. On the default
+    # allkeys-lru, Redis can evict queue keys under memory pressure and silently drop
+    # queued launches.
+    maxmemoryPolicy: noeviction
+    ipAllowList: []   # private network only
+
+  # ---------------------------------------------------------------------------
+  # API — HTTP + WebSocket. Also serves asdev_frontend.html at /
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: asdev-api
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/index.js
+    # /api/version is a static response; /api/health runs real database queries and is
+    # far too heavy to use as a liveness probe.
+    healthCheckPath: /api/version
+    envVars:
+      - fromGroup: asdev-shared
+      # api-only: background jobs belong to the worker service below. Running them here
+      # too would double every scheduled task.
+      - key: SERVER_MODE
+        value: api-only
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: asdev-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: asdev-redis
+          property: connectionString
+      # Set by hand after the first apply.
+      - key: DEV_WALLET_PRIVATE_KEY
+        sync: false
+      - key: PINATA_JWT
+        sync: false
+      - key: HELIUS_API_KEY
+        sync: false
+      # Production CORS refuses a wildcard, so set this to the exact origin(s) serving
+      # your frontends or cross-origin browser requests will be blocked.
+      - key: CORS_ORIGINS
+        sync: false
+      - key: BASE_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: SOLANA_NETWORK
+        value: mainnet
+
+  # ---------------------------------------------------------------------------
+  # Worker — holder scans, metadata, Robinhood, ASDF/ANSEM sync, the fee flywheel
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: asdev-worker
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/worker.js
+    envVars:
+      - fromGroup: asdev-shared
+      - key: SERVER_MODE
+        value: worker
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: asdev-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: asdev-redis
+          property: connectionString
+      - key: DEV_WALLET_PRIVATE_KEY
+        sync: false
+      - key: PINATA_JWT
+        sync: false
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: SOLANA_NETWORK
+        value: mainnet
+      # Optional: comma-separated subset of holders,metadata,robinhood,asdf,flywheel.
+      # Leave unset to run them all.
+      # - key: WORKER_TASKS
+      #   value: holders,metadata,robinhood,asdf,flywheel
+
+  # ---------------------------------------------------------------------------
+  # Grinder — pre-grinds mint addresses ending in "shit"
+  #
+  # Its own service on purpose: grinding is sustained CPU work and would otherwise
+  # compete with request latency. It needs no RPC, no Redis and no wallet key — only
+  # the database and the shared encryption key.
+  # ---------------------------------------------------------------------------
   - type: worker
     name: shitpad-grinder
-    env: node
+    runtime: node
     plan: starter
-    # npm install, not npm ci: this repo deliberately gitignores package-lock.json, and
-    # npm ci refuses to run without a lockfile. (Tracking the lockfile would be the better
-    # fix — reproducible installs — but that is a repo-wide policy change, not a grinder one.)
-    buildCommand: npm install --omit=dev
+    buildCommand: npm ci --omit=dev
     startCommand: node src/grinder.js
-    autoDeploy: false
     envVars:
+      - fromGroup: asdev-shared
       - key: SERVER_MODE
         value: grinder
       - key: VANITY_GRINDER_ENABLED
         value: "true"
       - key: NODE_ENV
         value: production
-
-      # Same connection string as the API service.
       - key: DATABASE_URL
-        sync: false
-
-      # Must match the API service exactly. Generate once, set in both places.
-      - key: VANITY_ENCRYPTION_KEY
-        sync: false
-
-      # Pool behaviour. Grinding stops at TARGET and restarts at LOW_WATER; the gap keeps the
-      # workers from flapping every time a single launch consumes an address.
+        fromDatabase:
+          name: asdev-db
+          property: connectionString
+      # Grinding stops at TARGET and restarts at LOW_WATER; the gap keeps the workers
+      # from flapping every time a single launch consumes an address.
       - key: VANITY_POOL_TARGET
         value: "50"
       - key: VANITY_POOL_LOW_WATER
         value: "40"
-
-      # Suffix matching. Case-insensitive accepts all 8 capitalisations of "shit" that base58
-      # can represent (there is no uppercase I or lowercase l in the alphabet), which is ~8x
-      # less work per address than exact lowercase.
+      # Case-insensitive accepts all 8 capitalisations of "shit" that base58 can represent
+      # (no uppercase I, no lowercase l), which is ~8x less work per address than exact
+      # lowercase: ~2.2 min/address/core against ~18 min.
       - key: VANITY_SUFFIX
         value: shit
       - key: VANITY_CASE_INSENSITIVE
         value: "true"
+      # Defaults to the instance's cores capped at 4. os.cpus() reports the container
+      # HOST's cores, so on a small plan set this explicitly to avoid thrashing.
+      - key: VANITY_GRINDER_THREADS
+        value: "2"
 
-      # Defaults to every core on the instance. Set a lower number to leave headroom.
-      # - key: VANITY_GRINDER_THREADS
-      #   value: "2"
-      #
-      # Fraction of wall-clock spent grinding (1 = flat out). Only worth lowering if this
-      # service ever shares an instance with something latency-sensitive.
-      # - key: VANITY_DUTY_CYCLE
-      #   value: "1"
+  # ---------------------------------------------------------------------------
+  # ShitPad static site
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: shitpad
+    runtime: static
+    rootDir: shitpad
+    staticPublishPath: .
+    buildCommand: ""
+    pullRequestPreviewsEnabled: false
