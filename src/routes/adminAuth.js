@@ -1,10 +1,11 @@
 /**
  * Admin API-key middleware
  * v28.6 - The one copy. health.js and tokens.js each carried an identical implementation.
+ * v29.4 - Compare byte lengths, and never let the comparison throw.
  *
- * Timing-safe comparison against ADMIN_API_KEY. Length is checked first because
- * timingSafeEqual throws on unequal lengths; the early length-compare leaks only the key's
- * length, which is not secret.
+ * Timing-safe comparison against ADMIN_API_KEY. Lengths are compared first because
+ * timingSafeEqual throws on unequal lengths; that comparison leaks only the key's length,
+ * which is not secret.
  */
 const crypto = require('crypto');
 const logger = require('../services/logger');
@@ -19,8 +20,31 @@ function adminAuth(req, res, next) {
         return res.status(403).json({ error: 'Admin endpoints not configured' });
     }
 
-    if (!apiKey || apiKey.length !== expectedKey.length ||
-        !crypto.timingSafeEqual(Buffer.from(apiKey), Buffer.from(expectedKey))) {
+    // v29.4: the previous guard compared String.length, which counts UTF-16 code units, then
+    // handed the values to timingSafeEqual, which compares BYTES. A header of the same
+    // character length but a different byte length -- any multi-byte character will do --
+    // passed the guard and made timingSafeEqual throw, turning a wrong key into a 500 from
+    // the error handler instead of a clean 401. Not an auth bypass, but it let an
+    // unauthenticated caller provoke an exception on every admin route.
+    //
+    // Duplicate x-admin-key headers arrive joined into one string, so this is always a
+    // string; the typeof guard covers the malformed-request case regardless.
+    if (typeof apiKey !== 'string') {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const supplied = Buffer.from(apiKey, 'utf8');
+    const expected = Buffer.from(expectedKey, 'utf8');
+
+    let match = false;
+    try {
+        match = supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+    } catch (e) {
+        // Defensive: the length check above already rules out the documented throw.
+        match = false;
+    }
+
+    if (!match) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
 

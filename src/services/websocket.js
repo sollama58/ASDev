@@ -18,6 +18,15 @@ let lastBroadcastData = null;
 // Track connected clients
 const clients = new Set();
 
+// v29.4: the only inbound message is a ping, so anything larger is either a mistake or an
+// attempt to make the server allocate memory on demand.
+const MAX_INBOUND_FRAME_BYTES = 4 * 1024;
+
+// v29.4: a ceiling on concurrent sockets. Each one costs a file descriptor and a slot in
+// every broadcast, and nothing else bounded them. Refused connections are closed immediately
+// with a policy-violation code rather than left hanging.
+const MAX_CLIENTS = parseInt(process.env.WS_MAX_CLIENTS, 10) || 1000;
+
 /**
  * Initialize WebSocket server attached to HTTP server
  * @param {http.Server} server - HTTP server instance
@@ -28,11 +37,27 @@ function init(server) {
         path: '/ws',
         // Permissive settings for reliability
         perMessageDeflate: false, // Disable compression for lower latency
-        clientTracking: true
+        clientTracking: true,
+        // v29.4: cap inbound frames. The default is 100MB, and every frame is stringified and
+        // JSON.parsed below, so without this any client could make the server allocate and
+        // parse 100MB at will, repeatedly and from many sockets. The only message this server
+        // understands is {"type":"ping"}, so a small ceiling costs nothing. ws rejects an
+        // oversized frame and closes that connection without invoking the message handler.
+        maxPayload: MAX_INBOUND_FRAME_BYTES
     });
 
     wss.on('connection', (ws, req) => {
         const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress;
+
+        if (wss.clients.size > MAX_CLIENTS) {
+            logger.warn('[WebSocket] Connection refused, client limit reached', {
+                ip: clientIp, limit: MAX_CLIENTS
+            });
+            // 1013 "try again later" tells a well-behaved client to back off and retry.
+            try { ws.close(1013, 'Server busy'); } catch (e) { ws.terminate(); }
+            return;
+        }
+
         logger.debug('[WebSocket] Client connected', { ip: clientIp, totalClients: wss.clients.size });
 
         clients.add(ws);

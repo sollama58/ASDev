@@ -9,7 +9,7 @@ const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const config = require('../config/env');
 const { TOKENS, PROGRAMS } = require('../config/constants');
-const { pump, logger, imageUtils, circuitBreaker, redis, claudeKoth } = require('../services');
+const { pump, logger, imageUtils, circuitBreaker, redis, claudeKoth, sanitizer } = require('../services');
 
 const router = express.Router();
 
@@ -314,6 +314,11 @@ function init(deps) {
     });
 
     // Services status check
+    //
+    // v29.4: PUBLIC endpoint. It previously returned the raw error text from each failed
+    // dependency check, so an unauthenticated caller could read connection-failure messages
+    // that name the database host, port, user and database, or the RPC endpoint. It now
+    // reports reachability and latency only; the detail goes to the log.
     router.get('/services-status', async (req, res) => {
         const services = {
             database: { status: 'unknown', latency: null },
@@ -327,7 +332,8 @@ function init(deps) {
             await db.get('SELECT 1');
             services.database = { status: 'online', latency: Date.now() - start };
         } catch (e) {
-            services.database = { status: 'offline', error: e.message };
+            logger.warn('[ServicesStatus] Database check failed', { error: e.message });
+            services.database = { status: 'offline' };
         }
 
         // Check Redis
@@ -341,7 +347,8 @@ function init(deps) {
                 services.redis = { status: 'not_configured' };
             }
         } catch (e) {
-            services.redis = { status: 'offline', error: e.message };
+            logger.warn('[ServicesStatus] Redis check failed', { error: e.message });
+            services.redis = { status: 'offline' };
         }
 
         // Check Solana RPC
@@ -350,7 +357,8 @@ function init(deps) {
             await connection.getLatestBlockhash('finalized');
             services.solana_rpc = { status: 'online', latency: Date.now() - start };
         } catch (e) {
-            services.solana_rpc = { status: 'offline', error: e.message };
+            logger.warn('[ServicesStatus] Solana RPC check failed', { error: e.message });
+            services.solana_rpc = { status: 'offline' };
         }
 
         const allOnline = Object.values(services).every(s => s.status === 'online' || s.status === 'disabled' || s.status === 'not_configured');
@@ -725,7 +733,8 @@ function init(deps) {
 
         } catch (e) {
             logger.error('[Admin] Point reset error', { error: e.message });
-            res.status(500).json({ error: 'Failed to reset points', details: e.message });
+            // v29.4: detail stays in the log rather than the response body.
+            res.status(500).json({ error: 'Failed to reset points' });
         }
     });
 
@@ -1223,7 +1232,15 @@ function init(deps) {
         const websocket = require('../services/websocket');
 
         try {
-            const { title, message, type, expiresAt, broadcast: shouldBroadcast } = req.body;
+            const { type, expiresAt, broadcast: shouldBroadcast } = req.body;
+
+            // v29.4: announcements are stored, broadcast over the WebSocket and served from a
+            // public endpoint. They were taken verbatim and unbounded, so a compromised or
+            // careless admin key could store megabytes per row, and any consumer that
+            // interpolated them without escaping would have a stored-XSS sink. Bounded and
+            // stripped of markup here, at the one place they enter the system.
+            const title = sanitizer.sanitizeString(req.body.title, { maxLength: 120, stripNewlines: true });
+            const message = sanitizer.sanitizeString(req.body.message, { maxLength: 1000 });
 
             if (!title || !message) {
                 return res.status(400).json({ error: 'Title and message are required' });
@@ -1295,13 +1312,15 @@ function init(deps) {
             const params = [];
             let paramIndex = 1;
 
+            // v29.4: same bounds as the create path above, so an update cannot reintroduce
+            // unbounded or markup-bearing text that the create route now rejects.
             if (title !== undefined) {
                 updates.push(`title = $${paramIndex++}`);
-                params.push(title);
+                params.push(sanitizer.sanitizeString(title, { maxLength: 120, stripNewlines: true }));
             }
             if (message !== undefined) {
                 updates.push(`message = $${paramIndex++}`);
-                params.push(message);
+                params.push(sanitizer.sanitizeString(message, { maxLength: 1000 }));
             }
             if (type !== undefined) {
                 const validTypes = ['info', 'warning', 'success', 'error', 'announcement'];
@@ -1512,7 +1531,8 @@ function init(deps) {
 
             let totalPendingLamports = 0;
             let tokensAboveThreshold = 0;
-            const maxDetailedRecipients = parseInt(req.query.limit) || 50;
+            // v29.4: bounded, so a caller cannot ask for an unbounded result set.
+            const maxDetailedRecipients = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 500);
             const tokenSimulations = [];
 
             for (const row of pendingRows) {
@@ -1599,7 +1619,8 @@ function init(deps) {
             });
         } catch (e) {
             logger.error('[Admin] Simulate airdrop error', { error: e.message, stack: e.stack });
-            res.status(500).json({ error: 'Failed to simulate airdrop', details: e.message });
+            // v29.4: detail stays in the log rather than the response body.
+            res.status(500).json({ error: 'Failed to simulate airdrop' });
         }
     });
 
