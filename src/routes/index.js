@@ -6,7 +6,6 @@ const healthRoutes = require('./health');
 const tokenRoutes = require('./tokens');
 const deployRoutes = require('./deploy');
 const solanaRoutes = require('./solana');
-const pagsRoutes = require('./pags');
 
 /**
  * Register all routes on the Express app
@@ -16,7 +15,6 @@ function register(app, deps) {
     app.use('/api', tokenRoutes.init(deps));
     app.use('/api', deployRoutes.init(deps));
     app.use('/api', solanaRoutes.init(deps));
-    app.use('/api', pagsRoutes.init(deps));
 }
 
 module.exports = { register };

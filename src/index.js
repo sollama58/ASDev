@@ -228,7 +228,6 @@ async function main() {
     };
     app.use(cors(corsOptions));
 
-    // PAGS middleware disabled
     app.use(cookieParser());
     // v28.2: 1mb. Images go to Imgur client-side; the largest JSON body this API accepts is
     // launch metadata (a few hundred bytes). 10mb was a memory-amplification surface for no
@@ -288,19 +287,11 @@ async function main() {
         }
     };
 
-    // PAGS keypair decoded once in config/env.js
-    const pagsKeypair = config.pagsKeypair;
-    if (pagsKeypair) {
-        logger.info(`[PAGS] Keypair loaded: ${pagsKeypair.publicKey.toString()}`);
-    } else {
-        logger.warn('[PAGS] No PAGS_WALLET_PRIVATE_KEY set — falling back to devKeypair');
-    }
 
     // Dependencies object for modules
     const deps = {
         connection,
         devKeypair,
-        pagsKeypair,
         wallet,
         db,
         redis,

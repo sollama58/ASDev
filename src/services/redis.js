@@ -15,7 +15,6 @@ let deployQueue = null;
 let socialQueue = null;
 let holderScannerQueue = null;
 let metadataUpdaterQueue = null;
-let robinhoodScannerQueue = null;
 let isConnected = false;
 
 // Redis keys for globalState
@@ -119,13 +118,11 @@ async function init() {
         // v13.0: New worker queues for background tasks
         holderScannerQueue = new Queue('holderScannerQueue', { connection: redisConnection });
         metadataUpdaterQueue = new Queue('metadataUpdaterQueue', { connection: redisConnection });
-        robinhoodScannerQueue = new Queue('robinhoodScannerQueue', { connection: redisConnection });
 
         deployQueue.resume();
         socialQueue.resume();
         holderScannerQueue.resume();
         metadataUpdaterQueue.resume();
-        robinhoodScannerQueue.resume();
 
         logger.info("Redis Queues Initialized (v24.0 - with connection validation)");
         return true;
@@ -622,26 +619,12 @@ async function addMetadataUpdaterJob(data = {}) {
 }
 
 /**
- * Add job to Robinhood scanner queue
- * v25.28: Reduced job retention from 100/50 to 5/3 to save Redis memory
- */
-async function addRobinhoodScannerJob(data = {}) {
-    if (!robinhoodScannerQueue) {
-        throw new Error("Robinhood scanner queue not initialized");
-    }
-    return robinhoodScannerQueue.add('scanRobinhood', data, {
-        removeOnComplete: 5,
-        removeOnFail: 3,
-    });
-}
-
-/**
  * v25.27: Clean up old completed and failed jobs from all queues
  * v25.28: More aggressive cleanup - 10 min for completed, 1 hour for failed
  * This helps prevent Redis memory buildup from BullMQ job history
  */
 async function cleanupOldJobs() {
-    const queues = [deployQueue, socialQueue, holderScannerQueue, metadataUpdaterQueue, robinhoodScannerQueue];
+    const queues = [deployQueue, socialQueue, holderScannerQueue, metadataUpdaterQueue];
     let totalCleaned = 0;
 
     for (const queue of queues) {
@@ -750,10 +733,8 @@ module.exports = {
     // v13.0: New worker queues
     getHolderScannerQueue: () => holderScannerQueue,
     getMetadataUpdaterQueue: () => metadataUpdaterQueue,
-    getRobinhoodScannerQueue: () => robinhoodScannerQueue,
     addHolderScannerJob,
     addMetadataUpdaterJob,
-    addRobinhoodScannerJob,
 
     // v13.0: GlobalState operations
     GLOBAL_STATE_KEYS,

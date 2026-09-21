@@ -1,7 +1,7 @@
 /**
  * Workers Module
  * Deploy, social, and background task workers
- * v13.0 - Added holder scanner, metadata updater, and Robinhood scanner workers
+ * v13.0 - Added holder scanner and metadata updater workers
  * v25.4 - Added worker event handlers for debugging job processing issues
  */
 const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
@@ -438,7 +438,7 @@ function initMetadataUpdaterWorker(deps) {
     const worker = redis.createWorker('metadataUpdaterQueue', async (job) => {
         logger.info('[Worker] Starting metadata updater job...');
         try {
-            // v28.6: delegate to the task module, as the holder/robinhood/asdf workers already
+            // v28.6: delegate to the task module, as the holder/asdf workers already
             // do. This worker used to carry its own 190-line copy of the price/image update —
             // its own DexScreener chunking, its own Helius fallback, its own UPDATE statements —
             // none of it shared with metadataUpdater.js, so the two implementations drifted
@@ -474,54 +474,6 @@ function initMetadataUpdaterWorker(deps) {
     }, 45000);
 
     logger.info('[Worker] Metadata updater worker initialized');
-    return worker;
-}
-
-/**
- * Initialize Robinhood Scanner Worker
- * Scans for fee sharing configs and updates Robinhood token holders
- */
-function initRobinhoodScannerWorker(deps) {
-    const { connection, devKeypair, db } = deps;
-
-    const worker = redis.createWorker('robinhoodScannerQueue', async (job) => {
-        logger.info('[Worker] Starting Robinhood scanner job...');
-
-        try {
-            // Import robinhoodScanner functions
-            const robinhoodScanner = require('./robinhoodScanner');
-
-            // Run the main update function
-            await robinhoodScanner.updateRobinhoodState(deps);
-
-            logger.info('[Worker] Robinhood scanner job complete');
-            return { success: true };
-
-        } catch (e) {
-            logger.error('[Worker] Robinhood scanner error', { error: e.message });
-            throw e;
-        }
-    }, { concurrency: 1 });
-
-    // Schedule recurring jobs (every 10 minutes)
-    setInterval(async () => {
-        try {
-            await redis.addRobinhoodScannerJob({});
-        } catch (e) {
-            logger.error('[Worker] Failed to schedule Robinhood scanner job', { error: e.message });
-        }
-    }, 10 * 60 * 1000);
-
-    // v25.64: Staggered initial job after 60 seconds (was 10s) to avoid RPC spike at startup
-    setTimeout(async () => {
-        try {
-            await redis.addRobinhoodScannerJob({});
-        } catch (e) {
-            logger.error('[Worker] Failed to add initial Robinhood scanner job', { error: e.message });
-        }
-    }, 60000);
-
-    logger.info('[Worker] Robinhood scanner worker initialized');
     return worker;
 }
 
@@ -645,7 +597,6 @@ module.exports = {
     // v13.0: New workers
     initHolderScannerWorker,
     initMetadataUpdaterWorker,
-    initRobinhoodScannerWorker,
     initAsdfSyncWorker,
     initAnsemSyncWorker,
 };

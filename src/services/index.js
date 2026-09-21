@@ -8,7 +8,6 @@
  * v25.4 - Added websocket for real-time frontend updates
  * v25.22 - Added signatureVerifier for cryptographic request authentication
  * v25.38 - Added claudeKoth for AI-based KOTH selection
- * v25.47 - Added PAGS (Pay-to-Twitter/X) services
  */
 const logger = require('./logger');
 const postgres = require('./postgres');
@@ -26,8 +25,6 @@ const sanitizer = require('./sanitizer');
 const websocket = require('./websocket');
 const signatureVerifier = require('./signatureVerifier');
 const claudeKoth = require('./claudeKoth');
-const pags = require('./pags');
-const pagsTwitterAuth = require('./pagsTwitterAuth');
 const heliusDAS = require('./heliusDAS');
 
 // v13.0: Use PostgreSQL as the database layer
@@ -51,7 +48,5 @@ module.exports = {
     websocket,
     signatureVerifier,
     claudeKoth,
-    pags,
-    pagsTwitterAuth,
     heliusDAS,
 };

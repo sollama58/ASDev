@@ -202,7 +202,7 @@ function extractHeliusBatchImage(asset) {
 /**
  * v28.2 SECURITY: refuse to fetch anything that could reach the local network.
  *
- * metadataUri for Robinhood partner tokens comes from on-chain metadata that anyone can
+ * metadataUri comes from on-chain metadata that anyone can
  * write when they register a token, so this function is an SSRF primitive without a guard:
  * a URI of http://169.254.169.254/ or http://localhost:6379/ would be fetched from inside
  * the platform's network. The response is only ever read for a `.image` field, which keeps

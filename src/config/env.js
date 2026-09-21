@@ -5,7 +5,6 @@
 require('dotenv').config();
 const { Keypair } = require('@solana/web3.js');
 const bs58 = require('bs58');
-const crypto = require('crypto');
 
 // Environment validation
 //
@@ -23,14 +22,14 @@ if (missingVars.length > 0) {
 
 const config = {
     // Server
-    VERSION: "v25.88-PAGS-SEPARATION",
+    VERSION: "v29.0-SHITPAD",
     PORT: process.env.PORT || 3000,
     NODE_ENV: process.env.NODE_ENV || 'development',
     // v25.49: Base URL where the BACKEND API is hosted (for OAuth callbacks)
     // Example: https://your-app.onrender.com (without trailing slash)
     BASE_URL: process.env.BASE_URL || 'http://localhost:3000',
     // v25.49: Full URL where the FRONTEND is hosted (for redirects after OAuth)
-    // Can be a full URL (https://alonisthe.dev/robinhood) or a relative path (/robinhood)
+    // Can be a full URL (https://shitpad.example) or a relative path (/)
     // If on a different domain than BASE_URL, use full URL
     FRONTEND_URL: process.env.FRONTEND_URL || process.env.FRONTEND_PATH || '/',
     // Legacy alias for backwards compatibility
@@ -100,11 +99,10 @@ const config = {
     // -------------------------|------------|---------------|------------------------
     // WebSocket Broadcast      | 30s        | 2s            | Frontend state updates
     // Top Token Prices         | 60s        | 10s           | Top 10 by market cap
-    // Fee Collection           | 2.5min     | 30s           | Robinhood fee claims
+    // Fee Collection           | 2.5min     | 30s           | Creator reward claims
     // ASDF Top 100 Sync        | 2min       | 0s            | 2x multiplier holders
     // Holder Scanner           | 5min       | 20s           | Points recalculation
     // All Token Prices         | 5min       | 45s           | Full metadata update
-    // Robinhood Scanner        | 10min      | 60s           | Partner token sync
     // Missing Images           | 10min      | 90s           | Fill missing images
     // Redis Cleanup            | 10min      | immediate     | Memory management
     // Airdrop Distribution     | 15min      | 2min          | SOL distribution
@@ -144,36 +142,9 @@ const config = {
     TWITTER_ACCESS_TOKEN: process.env.TWITTER_ACCESS_TOKEN,
     TWITTER_ACCESS_SECRET: process.env.TWITTER_ACCESS_SECRET,
     TWITTER_USERNAME: process.env.TWITTER_USERNAME, // v25.22: Fallback for tweet URLs
-    // v25.47: Twitter OAuth 2.0 (for PAGS user authentication)
-    // Get these from Twitter Developer Portal > Your App > Keys and tokens > OAuth 2.0 Client ID and Client Secret
-    // If not set, falls back to TWITTER_API_KEY/SECRET (works if app has OAuth 2.0 enabled with same credentials)
-    TWITTER_OAUTH2_CLIENT_ID: process.env.TWITTER_OAUTH2_CLIENT_ID || process.env.TWITTER_APP_KEY || process.env.TWITTER_API_KEY,
-    TWITTER_OAUTH2_CLIENT_SECRET: process.env.TWITTER_OAUTH2_CLIENT_SECRET || process.env.TWITTER_APP_SECRET || process.env.TWITTER_API_SECRET,
-
     // v25.38: Claude AI for KOTH Selection
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     KOTH_AI_ENABLED: process.env.KOTH_AI_ENABLED !== 'false', // Enabled by default if API key exists
-
-    // PAGS (Pay-to-Twitter/X) Configuration
-    PAGS_ENABLED: process.env.PAGS_ENABLED !== 'false', // Enabled by default
-    PAGS_WALLET: process.env.PAGS_WALLET, // Public key of wallet that holds PAGS fees before claims
-    PAGS_WALLET_PRIVATE_KEY: '[REDACTED]', // keypair built below; raw key never stored in config
-    PAGS_MIN_CLAIM_SOL: parseFloat(process.env.PAGS_MIN_CLAIM_SOL) || 0.01, // Minimum claim amount
-    // SECURITY: Session secret MUST be set in production; random fallback in dev
-    PAGS_SESSION_SECRET: (() => {
-        const secret = process.env.PAGS_SESSION_SECRET;
-        if (!secret && process.env.NODE_ENV === 'production') {
-            console.error('FATAL: PAGS_SESSION_SECRET must be set in production');
-            process.exit(1);
-        }
-        if (!secret) {
-            const generated = crypto.randomBytes(32).toString('hex');
-            console.warn('[Security] PAGS_SESSION_SECRET not set — using ephemeral random secret (sessions will not survive restart)');
-            return generated;
-        }
-        return secret;
-    })(),
-    TWITTER_OAUTH_CALLBACK_URL: process.env.TWITTER_OAUTH_CALLBACK_URL || '/api/auth/twitter/callback',
 
     // UI
     HEADER_IMAGE_URL: process.env.HEADER_IMAGE_URL || "https://placehold.co/60x60/d97706/ffffff?text=LOGO",
@@ -196,16 +167,6 @@ config.devKeypair = process.env.DEV_WALLET_PRIVATE_KEY
     ? Keypair.fromSecretKey(bs58.decode(process.env.DEV_WALLET_PRIVATE_KEY))
     : null;
 process.env.DEV_WALLET_PRIVATE_KEY = '[REDACTED]';
-
-config.pagsKeypair = null;
-if (process.env.PAGS_WALLET_PRIVATE_KEY && process.env.PAGS_WALLET_PRIVATE_KEY !== '[REDACTED]') {
-    try {
-        config.pagsKeypair = Keypair.fromSecretKey(bs58.decode(process.env.PAGS_WALLET_PRIVATE_KEY));
-    } catch (e) {
-        console.error('[PAGS] Failed to decode PAGS_WALLET_PRIVATE_KEY:', e.message);
-    }
-    process.env.PAGS_WALLET_PRIVATE_KEY = '[REDACTED]';
-}
 
 // Warn at startup if admin key not configured
 if (!process.env.ADMIN_API_KEY) {

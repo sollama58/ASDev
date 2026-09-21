@@ -2,14 +2,14 @@
  * ASDev Worker Server
  * v25.26 - Dedicated worker process for background tasks
  *
- * This file runs ONLY the background tasks (holders, metadata, robinhood, flywheel, etc.)
+ * This file runs ONLY the background tasks (holders, metadata, flywheel, etc.)
  * without starting the Express HTTP server. Use this on a second Render instance
  * to offload background processing from the main API server.
  *
  * Environment Variables:
  *   SERVER_MODE=worker    - Required to start in worker mode
  *   WORKER_TASKS          - Comma-separated list of tasks to run (optional, defaults to all)
- *                           Options: holders,metadata,robinhood,asdf,flywheel
+ *                           Options: holders,metadata,asdf,flywheel
  *
  * Usage:
  *   SERVER_MODE=worker node src/worker.js
@@ -38,7 +38,7 @@ if (process.env.SERVER_MODE !== 'worker') {
 }
 
 // Parse which tasks to run (defaults to all)
-const TASK_OPTIONS = ['holders', 'metadata', 'robinhood', 'asdf', 'flywheel'];
+const TASK_OPTIONS = ['holders', 'metadata', 'asdf', 'flywheel'];
 const enabledTasks = process.env.WORKER_TASKS
     ? process.env.WORKER_TASKS.split(',').map(t => t.trim().toLowerCase())
     : TASK_OPTIONS;
@@ -210,11 +210,6 @@ async function startWorker() {
     if (enabledTasks.includes('metadata')) {
         workers.initMetadataUpdaterWorker(deps);
         logger.info('[Worker] Metadata updater started');
-    }
-
-    if (enabledTasks.includes('robinhood')) {
-        workers.initRobinhoodScannerWorker(deps);
-        logger.info('[Worker] Robinhood scanner started');
     }
 
     if (enabledTasks.includes('asdf')) {

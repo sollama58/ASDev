@@ -247,7 +247,7 @@ async function createSchema() {
     // 9,007,199,254,740,992 exactly -- i.e. every lamport value below ~9 million SOL and every
     // millisecond timestamp. It is also the widest type node-postgres still returns as a JS
     // number, so existing readers (Number(), parseInt(), and the raw pass-throughs in
-    // getStats() and /api/robinhood/stats) keep the type they have today. BIGINT or NUMERIC
+    // getStats()) keep the type they have today. BIGINT or NUMERIC
     // would be returned as strings and would change those API payloads.
     //
     // Every other float4 column in this schema holds money, a USD figure, or points, and has
@@ -285,7 +285,6 @@ async function createSchema() {
         'nextCheckTimestamp',
         'nextAirdropTimestamp', // v25.7: Track next airdrop time for frontend countdown
         'lifetimeCreatorFeesLamports',
-        'lifetimeRobinhoodFeesLamports',
         'pendingAmmFeesLamports', // v25.23: Track pending AMM fees that can't be claimed yet
         // v28.0: the platform's 25% cut accrues here between on-chain sweeps, so the amount
         // owed to the buyback/burn and upkeep wallets is auditable rather than implicit in
@@ -372,71 +371,6 @@ async function createSchema() {
         )
     `);
 
-    // Robinhood tokens table
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS robinhood_tokens (
-            id SERIAL PRIMARY KEY,
-            mint TEXT UNIQUE,
-            ticker TEXT,
-            name TEXT,
-            image TEXT,
-            "creatorPubkey" TEXT,
-            "feeShareBps" INTEGER DEFAULT 0,
-            "isGraduated" INTEGER DEFAULT 0,
-            "discoveredAt" BIGINT,
-            "lastFeesClaimed" BIGINT,
-            "totalFeesCollected" DOUBLE PRECISION DEFAULT 0,
-            volume24h DOUBLE PRECISION DEFAULT 0,
-            "marketCap" DOUBLE PRECISION DEFAULT 0,
-            "isActive" INTEGER DEFAULT 1
-        )
-    `);
-
-    // Robinhood token holders table
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS robinhood_token_holders (
-            id SERIAL PRIMARY KEY,
-            mint TEXT,
-            "holderPubkey" TEXT,
-            balance TEXT,
-            rank INTEGER,
-            "updatedAt" BIGINT,
-            UNIQUE(mint, "holderPubkey")
-        )
-    `);
-
-    // v25.23: Migration - Add pendingAmmFees column for AMM fee monitoring
-    await pool.query(`
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'robinhood_tokens' AND column_name = 'pendingAmmFees') THEN
-                ALTER TABLE robinhood_tokens ADD COLUMN "pendingAmmFees" DOUBLE PRECISION DEFAULT 0;
-            END IF;
-        END $$;
-    `);
-
-    // v25.73: Migration - Add feeVaultAddress column for fee sharing tokens
-    // For fee sharing tokens, the vault is the coinCreator FEE program account, NOT derived from originalCreator
-    await pool.query(`
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'robinhood_tokens' AND column_name = 'feeVaultAddress') THEN
-                ALTER TABLE robinhood_tokens ADD COLUMN "feeVaultAddress" TEXT;
-            END IF;
-        END $$;
-    `);
-
-    // v25.90: Migration - Add pendingFees column for tracking on-chain pending fees
-    // This column is updated periodically by robinhoodScanner and used by WebSocket for frontend display
-    await pool.query(`
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'robinhood_tokens' AND column_name = 'pendingFees') THEN
-                ALTER TABLE robinhood_tokens ADD COLUMN "pendingFees" DOUBLE PRECISION DEFAULT 0;
-            END IF;
-        END $$;
-    `);
-
     // v26.0: Migration - Per-token airdrop pools
     // pending_airdrop_lamports: fees credited to this token, pending distribution to holders
     // lifetime_airdrop_lamports: cumulative lamports ever airdropped from this token's pool
@@ -453,22 +387,6 @@ async function createSchema() {
         BEGIN
             IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tokens' AND column_name = 'lifetime_airdrop_lamports') THEN
                 ALTER TABLE tokens ADD COLUMN lifetime_airdrop_lamports BIGINT DEFAULT 0;
-            END IF;
-        END $$;
-    `);
-    await pool.query(`
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'robinhood_tokens' AND column_name = 'pending_airdrop_lamports') THEN
-                ALTER TABLE robinhood_tokens ADD COLUMN pending_airdrop_lamports BIGINT DEFAULT 0;
-            END IF;
-        END $$;
-    `);
-    await pool.query(`
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'robinhood_tokens' AND column_name = 'lifetime_airdrop_lamports') THEN
-                ALTER TABLE robinhood_tokens ADD COLUMN lifetime_airdrop_lamports BIGINT DEFAULT 0;
             END IF;
         END $$;
     `);
@@ -582,7 +500,6 @@ async function createSchema() {
 
     // Indexes for per-token pool queries
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_pending_airdrop ON tokens(pending_airdrop_lamports DESC) WHERE pending_airdrop_lamports > 0`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_pending_airdrop ON robinhood_tokens(pending_airdrop_lamports DESC) WHERE pending_airdrop_lamports > 0`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_airdrop_logs_mint ON airdrop_logs(mint)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_airdrop_history_mint ON user_airdrop_history(mint)`);
 
@@ -600,18 +517,8 @@ async function createSchema() {
         UPDATE token_holders SET balance = '0' WHERE balance IS NULL;
     `);
     await pool.query(`
-        UPDATE robinhood_token_holders SET balance = '0' WHERE balance IS NULL;
-    `);
-    await pool.query(`
         ALTER TABLE token_holders ALTER COLUMN balance SET DEFAULT '0';
     `);
-    await pool.query(`
-        ALTER TABLE robinhood_token_holders ALTER COLUMN balance SET DEFAULT '0';
-    `);
-
-    // Create indexes for robinhood tables
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_tokens_active ON robinhood_tokens("isActive")`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_holders_mint ON robinhood_token_holders(mint)`);
 
     // Transactions table
     await pool.query(`
@@ -633,9 +540,7 @@ async function createSchema() {
     // v22.0: SCALABILITY FIX - Add composite indexes for optimized JOIN queries
     // These indexes dramatically improve /check-holder, /user-holdings, and /all-eligible-users endpoints
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_token_holders_pubkey_mint ON token_holders("holderPubkey", mint)`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_holders_pubkey_mint ON robinhood_token_holders("holderPubkey", mint)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_volume_eligible ON tokens(volume24h DESC) WHERE volume24h >= 100`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_tokens_volume_active ON robinhood_tokens(volume24h DESC) WHERE "isActive" = 1`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_creator ON tokens("userPubkey")`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_flywheel_logs_timestamp ON flywheel_logs(timestamp DESC)`);
@@ -650,17 +555,8 @@ async function createSchema() {
     `);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_token_total_balances_mint ON token_total_balances(mint)`);
 
-    await pool.query(`
-        CREATE MATERIALIZED VIEW IF NOT EXISTS robinhood_token_total_balances AS
-        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance, COUNT(*) as holder_count
-        FROM robinhood_token_holders
-        GROUP BY mint
-    `);
-    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_robinhood_total_balances_mint ON robinhood_token_total_balances(mint)`);
-
     // v25.22: Index for faster mint lookups in GROUP BY queries
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_token_holders_mint_only ON token_holders(mint)`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_holders_mint_only ON robinhood_token_holders(mint)`);
 
     // v25.33: User points table - single source of truth for all point displays
     // Worker calculates points once, all endpoints read from this table
@@ -668,7 +564,6 @@ async function createSchema() {
         CREATE TABLE IF NOT EXISTS user_points (
             pubkey TEXT PRIMARY KEY,
             base_points DOUBLE PRECISION DEFAULT 0,
-            robinhood_points DOUBLE PRECISION DEFAULT 0,
             multiplier INTEGER DEFAULT 1,
             total_points DOUBLE PRECISION DEFAULT 0,
             expected_airdrop_sol DOUBLE PRECISION DEFAULT 0,
@@ -702,132 +597,11 @@ async function createSchema() {
     // Composite (mint, timestamp) for per-token airdrop history queries
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_airdrop_logs_mint_ts ON airdrop_logs(mint, timestamp DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_airdrop_history_mint_ts ON user_airdrop_history(mint, timestamp DESC)`);
-    // Robinhood holder pubkey for /user-holdings JOIN lookups
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_robinhood_holders_pubkey ON robinhood_token_holders("holderPubkey")`);
     // Token mint lookup (userPubkey already indexed; add mint→timestamp for recent launches)
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_mint ON tokens(mint)`);
 
     // ===========================================
-    // PAGS (Pay-to-Twitter/X) Tables
-    // ===========================================
-
-    // PAGS beneficiaries - Token-to-Twitter username mapping
-    // v25.48: Now supports multiple beneficiaries per token via pags_beneficiary_shares junction table
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS pags_beneficiaries (
-            id SERIAL PRIMARY KEY,
-            mint TEXT NOT NULL UNIQUE,
-            "creatorPubkey" TEXT,
-            "twitterUsername" TEXT NOT NULL,
-            "feeShareBps" INTEGER NOT NULL DEFAULT 10000,
-            "totalFeesAccumulated" DOUBLE PRECISION DEFAULT 0,
-            "totalFeesClaimed" DOUBLE PRECISION DEFAULT 0,
-            "isActive" INTEGER DEFAULT 1,
-            "createdAt" BIGINT NOT NULL,
-            "lastFeeUpdate" BIGINT
-        )
-    `);
-
-    // v25.48: PAGS beneficiary shares - Multiple Twitter users can receive shares of a token's fees
-    // Each share has a percentage (in basis points) and its own accumulated/claimed tracking
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS pags_beneficiary_shares (
-            id SERIAL PRIMARY KEY,
-            "beneficiaryId" INTEGER NOT NULL REFERENCES pags_beneficiaries(id) ON DELETE CASCADE,
-            "twitterUsername" TEXT NOT NULL,
-            "shareBps" INTEGER NOT NULL DEFAULT 10000,
-            "totalFeesAccumulated" DOUBLE PRECISION DEFAULT 0,
-            "totalFeesClaimed" DOUBLE PRECISION DEFAULT 0,
-            "createdAt" BIGINT NOT NULL,
-            UNIQUE("beneficiaryId", "twitterUsername")
-        )
-    `);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_shares_beneficiary ON pags_beneficiary_shares("beneficiaryId")`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_shares_twitter ON pags_beneficiary_shares("twitterUsername")`);
-    // v25.50: Make creatorPubkey nullable for existing databases
-    try {
-        await pool.query(`ALTER TABLE pags_beneficiaries ALTER COLUMN "creatorPubkey" DROP NOT NULL`);
-    } catch (e) {
-        // Ignore error if column is already nullable or doesn't exist
-    }
-    // v25.44: Add metadata columns to pags_beneficiaries (separate from main tokens table)
-    try {
-        await pool.query(`ALTER TABLE pags_beneficiaries ADD COLUMN IF NOT EXISTS ticker TEXT`);
-        await pool.query(`ALTER TABLE pags_beneficiaries ADD COLUMN IF NOT EXISTS name TEXT`);
-        await pool.query(`ALTER TABLE pags_beneficiaries ADD COLUMN IF NOT EXISTS image TEXT`);
-    } catch (e) {
-        // Ignore if columns already exist
-    }
-    // v25.113: Persist vault balances for external claim detection across restarts
-    try {
-        await pool.query(`ALTER TABLE pags_beneficiaries ADD COLUMN IF NOT EXISTS "lastKnownVaultBalance" BIGINT DEFAULT 0`);
-        await pool.query(`ALTER TABLE pags_beneficiaries ADD COLUMN IF NOT EXISTS "lastVaultCheckAt" BIGINT`);
-    } catch (e) {
-        // Ignore if columns already exist
-    }
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_twitter ON pags_beneficiaries("twitterUsername")`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_active ON pags_beneficiaries("isActive") WHERE "isActive" = 1`);
-    // v25.47 SCALABILITY: Add missing indexes for high-frequency PAGS queries
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_mint ON pags_beneficiaries(mint)`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_fees ON pags_beneficiaries("totalFeesAccumulated" DESC)`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_beneficiaries_creator ON pags_beneficiaries("creatorPubkey")`);
-
-    // PAGS Twitter users - Verified Twitter users who can claim rewards
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS pags_twitter_users (
-            id SERIAL PRIMARY KEY,
-            "twitterId" TEXT UNIQUE NOT NULL,
-            "twitterUsername" TEXT NOT NULL,
-            "displayName" TEXT,
-            "profileImageUrl" TEXT,
-            "linkedWallet" TEXT,
-            "walletLinkedAt" BIGINT,
-            "accessToken" TEXT,
-            "refreshToken" TEXT,
-            "tokenExpiresAt" BIGINT,
-            "lastVerified" BIGINT,
-            "createdAt" BIGINT NOT NULL,
-            "isActive" INTEGER DEFAULT 1
-        )
-    `);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_users_username ON pags_twitter_users("twitterUsername")`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_users_wallet ON pags_twitter_users("linkedWallet")`);
-
-    // PAGS claims - Claim history and pending claims
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS pags_claims (
-            id SERIAL PRIMARY KEY,
-            "twitterId" TEXT NOT NULL,
-            "twitterUsername" TEXT NOT NULL,
-            "recipientWallet" TEXT NOT NULL,
-            amount DOUBLE PRECISION NOT NULL,
-            signature TEXT UNIQUE,
-            status TEXT DEFAULT 'pending',
-            "createdAt" BIGINT NOT NULL,
-            "completedAt" BIGINT,
-            "failReason" TEXT
-        )
-    `);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_claims_twitter ON pags_claims("twitterId")`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_claims_status ON pags_claims(status)`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_claims_created ON pags_claims("createdAt" DESC)`);
-
-    // PAGS fee logs - Fee collection history per beneficiary
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS pags_fee_logs (
-            id SERIAL PRIMARY KEY,
-            "beneficiaryId" INTEGER REFERENCES pags_beneficiaries(id),
-            amount DOUBLE PRECISION NOT NULL,
-            source TEXT,
-            "txSignature" TEXT,
-            "collectedAt" BIGINT NOT NULL
-        )
-    `);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_fee_logs_beneficiary ON pags_fee_logs("beneficiaryId")`);
-    // v25.47 SCALABILITY: Index for fee log lookups by mint (via beneficiary join)
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pags_fee_logs_collected ON pags_fee_logs("collectedAt" DESC)`);
-
-    // ===========================================
+    // Announcements Table    // ===========================================
     // Announcements Table
     // ===========================================
 
@@ -851,21 +625,19 @@ async function createSchema() {
 }
 
 /**
- * v25.22 SCALABILITY: Refresh materialized views
+ * v25.22 SCALABILITY: Refresh the materialized view
  * Should be called after holder scanner updates
  */
 async function refreshMaterializedViews() {
     if (!pool) return;
     try {
         await pool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY token_total_balances');
-        await pool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY robinhood_token_total_balances');
-        logger.debug('[PostgreSQL] Materialized views refreshed');
+        logger.debug('[PostgreSQL] Materialized view refreshed');
     } catch (e) {
         // CONCURRENTLY requires unique index - fall back to regular refresh
         try {
             await pool.query('REFRESH MATERIALIZED VIEW token_total_balances');
-            await pool.query('REFRESH MATERIALIZED VIEW robinhood_token_total_balances');
-            logger.debug('[PostgreSQL] Materialized views refreshed (non-concurrent)');
+            logger.debug('[PostgreSQL] Materialized view refreshed (non-concurrent)');
         } catch (err) {
             logger.debug('[PostgreSQL] Materialized view refresh error', { error: err.message });
         }
@@ -1135,53 +907,6 @@ async function healthCheck() {
     }
 }
 
-// ===========================================
-// v25.44: PAGS Beneficiary Metadata
-// Save metadata directly to pags_beneficiaries table (NOT tokens table)
-// This keeps PAGS tokens separate from the main leaderboard
-// ===========================================
-
-async function savePagsBeneficiaryMetadata(mint, metadata) {
-    const db = getDB();
-
-    if (!mint) {
-        logger.error("[PostgreSQL] savePagsBeneficiaryMetadata: mint is required");
-        return null;
-    }
-
-    // Normalize image URL
-    const rawImage = metadata?.image || '';
-    const imageValue = rawImage ? (imageUtils.normalizeImageUrl(rawImage) || rawImage) : '';
-
-    try {
-        const result = await db.run(`
-            UPDATE pags_beneficiaries
-            SET ticker = $1, name = $2, image = $3
-            WHERE mint = $4
-        `, [
-            metadata?.ticker || null,
-            metadata?.name || null,
-            imageValue || null,
-            mint
-        ]);
-
-        logger.info("[PostgreSQL] PAGS beneficiary metadata saved", {
-            mint: mint.substring(0, 12),
-            ticker: metadata?.ticker,
-            hasImage: !!imageValue,
-            changes: result.changes
-        });
-
-        return result;
-    } catch (e) {
-        logger.error("[PostgreSQL] savePagsBeneficiaryMetadata error", {
-            error: e.message,
-            mint: mint.substring(0, 12)
-        });
-        return null;
-    }
-}
-
 module.exports = {
     initDB,
     getDB,
@@ -1196,7 +921,6 @@ module.exports = {
     logFlywheelCycle,
     logPurchase,
     saveTokenData,
-    savePagsBeneficiaryMetadata, // v25.44: Save PAGS metadata to pags_beneficiaries (NOT tokens)
     healthCheck,
     refreshMaterializedViews, // v25.22 SCALABILITY
     // For backwards compatibility
