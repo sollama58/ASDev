@@ -31,9 +31,17 @@ if (devKeypair) {
 /**
  * Add priority fee instructions to a transaction
  */
-function addPriorityFee(tx) {
+/**
+ * Add the compute-budget instructions.
+ *
+ * v30.0: the unit limit is a parameter. A transaction may carry only ONE SetComputeUnitLimit
+ * instruction -- a second is rejected outright -- so a caller that needs a different budget
+ * has to say so here rather than adding its own alongside this one. Token-quoted launches
+ * need roughly 500k against the 300k that suits everything else.
+ */
+function addPriorityFee(tx, { units = 300000 } = {}) {
     tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: config.PRIORITY_FEE_MICRO_LAMPORTS }));
-    tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 300000 }));
+    tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units }));
     return tx;
 }
 

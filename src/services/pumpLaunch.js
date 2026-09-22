@@ -28,7 +28,7 @@
  *                  bypassing our split entirely. Permanent, and uncorrectable after launch.
  *   cashback     — deprecated upstream; `create_v2` rejects it outright with error 6082.
  */
-const { PublicKey, ComputeBudgetProgram } = require('@solana/web3.js');
+const { PublicKey, ComputeBudgetProgram, Transaction } = require('@solana/web3.js');
 const { NATIVE_MINT } = require('@solana/spl-token');
 const BN = require('bn.js');
 const {
@@ -220,9 +220,12 @@ async function buildLaunchInstructions({
         });
     }
 
+    const computeUnitLimit = isTokenQuoted ? CU_LIMIT_TOKEN_LAUNCH : CU_LIMIT_SOL_LAUNCH;
+
     return {
         instructions,
-        computeUnitLimit: isTokenQuoted ? CU_LIMIT_TOKEN_LAUNCH : CU_LIMIT_SOL_LAUNCH,
+        transactions: planLaunchTransactions(instructions, user, computeUnitLimit),
+        computeUnitLimit,
         quoteMint: quote ? quote.mint.toBase58() : null,
         isTokenQuoted,
     };
@@ -234,6 +237,139 @@ async function buildLaunchInstructions({
  */
 function computeBudgetInstruction(units) {
     return ComputeBudgetProgram.setComputeUnitLimit({ units });
+}
+
+// A legacy transaction may not exceed 1232 serialized bytes. The margin absorbs the
+// difference between a placeholder blockhash and a real one, and rounding in the
+// compact-array length prefixes.
+const MAX_TX_BYTES = 1232;
+const TX_SIZE_MARGIN = 24;
+
+/**
+ * Serialized size of a transaction carrying these instructions, measured rather than
+ * estimated. `requireAllSignatures: false` still reserves space for every required signer,
+ * so this is the real wire size.
+ */
+function measureTxBytes(instructions, feePayer, computeUnitLimit) {
+    const tx = new Transaction();
+    tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: config.PRIORITY_FEE_MICRO_LAMPORTS }));
+    tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnitLimit }));
+    for (const ix of instructions) tx.add(ix);
+    tx.feePayer = feePayer;
+    tx.recentBlockhash = '11111111111111111111111111111111';
+    try {
+        return tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length;
+    } catch (e) {
+        return Infinity; // already over the limit
+    }
+}
+
+/**
+ * Split a launch into as few transactions as will actually fit.
+ *
+ * A launch is create + the user's base ATA + the seed buy. That combination does not reliably
+ * fit in one legacy transaction, and the failure is silent until a launch is attempted with
+ * real-world inputs: a token-quoted create carries 34 distinct accounts, and even the SOL
+ * path overflows once the metadata URI is a real 80-character gateway URL and the name
+ * approaches its 32-character maximum. Measured, not assumed, because the size depends on
+ * the name, symbol and URI the user chose.
+ *
+ * The create must lead and is the only instruction the mint keypair signs, so the split point
+ * is after it. Group two is best-effort: if it fails the coin still exists and trades, it
+ * simply has no seed position.
+ */
+function planLaunchTransactions(instructions, feePayer, computeUnitLimit) {
+    const whole = measureTxBytes(instructions, feePayer, computeUnitLimit);
+    if (whole + TX_SIZE_MARGIN <= MAX_TX_BYTES) {
+        return [{ instructions, needsMintSignature: true, critical: true, bytes: whole }];
+    }
+
+    const [create, ...rest] = instructions;
+    const head = [create];
+    const headBytes = measureTxBytes(head, feePayer, computeUnitLimit);
+    const tailBytes = rest.length ? measureTxBytes(rest, feePayer, computeUnitLimit) : 0;
+
+    if (headBytes + TX_SIZE_MARGIN > MAX_TX_BYTES) {
+        // Nothing can be done by splitting: the create alone is too big. Surface it as a
+        // user-facing error naming the cause rather than letting the send fail opaquely.
+        const err = new Error('That name, ticker or image URL is too long for a single transaction. Try a shorter name.');
+        err.userFacing = true;
+        throw err;
+    }
+
+    logger.info('[PumpLaunch] Splitting launch across two transactions', {
+        combinedBytes: whole === Infinity ? 'over limit' : whole,
+        createBytes: headBytes,
+        buyBytes: tailBytes,
+    });
+
+    return [
+        { instructions: head, needsMintSignature: true, critical: true, bytes: headBytes },
+        { instructions: rest, needsMintSignature: false, critical: false, bytes: tailBytes },
+    ];
+}
+
+/**
+ * Sell back the seed position the launch bought, whatever the coin is quoted in.
+ *
+ * The launch buys a small amount of its own coin to seed the curve; this returns it. The
+ * previous implementation hand-assembled a SOL-only `sell`, so a token-quoted coin would have
+ * left the position stranded. `fetchSellState` reads the curve and tells us its normalized
+ * quote, so the right builder is chosen from what is actually on chain rather than from what
+ * the caller believed it launched.
+ *
+ * @returns {Promise<{instructions: TransactionInstruction[], isTokenQuoted: boolean,
+ *                    amount: BN}|null>} null when there is nothing to sell
+ */
+async function buildSeedSellInstructions({ connection, mint, user, tokenProgram, slippage = 500 }) {
+    const o = online(connection);
+    const state = await o.fetchSellState(mint, user, tokenProgram);
+    const global = await fetchGlobal(connection);
+
+    // How much of the coin the platform actually holds right now.
+    const { getAssociatedTokenAddressSync } = require('@solana/spl-token');
+    const baseProgram = tokenProgram || require('@solana/spl-token').TOKEN_2022_PROGRAM_ID;
+    const ata = getAssociatedTokenAddressSync(mint, user, false, baseProgram);
+
+    let amount;
+    try {
+        const bal = await connection.getTokenAccountBalance(ata);
+        amount = new BN(bal?.value?.amount || '0');
+    } catch (e) {
+        return null; // no token account: nothing was received, nothing to sell
+    }
+    if (amount.isZero()) return null;
+
+    const isTokenQuoted = !isSolLikeQuoteMint(state.quoteMint);
+
+    const instructions = isTokenQuoted
+        ? await sdk.sellV2Instructions({
+            global,
+            bondingCurveAccountInfo: state.bondingCurveAccountInfo,
+            bondingCurve: state.bondingCurve,
+            mint,
+            user,
+            amount,
+            // 0 asks the builder for whatever the curve pays; slippage bounds the shortfall.
+            quoteAmount: new BN(0),
+            slippage,
+            tokenProgram: baseProgram,
+            quoteTokenProgram: state.quoteTokenProgram,
+        })
+        : await sdk.sellInstructions({
+            global,
+            bondingCurveAccountInfo: state.bondingCurveAccountInfo,
+            bondingCurve: state.bondingCurve,
+            mint,
+            user,
+            amount,
+            solAmount: new BN(0),
+            slippage,
+            tokenProgram: baseProgram,
+            mayhemMode: !!state.bondingCurve.isMayhemMode,
+        });
+
+    return { instructions, isTokenQuoted, amount };
 }
 
 /**
@@ -284,6 +420,9 @@ function resetCaches() {
 
 module.exports = {
     buildLaunchInstructions,
+    planLaunchTransactions,
+    measureTxBytes,
+    buildSeedSellInstructions,
     buildCollectAllFeesInstructions,
     fetchCollectableFees,
     getSupportedQuoteMints,

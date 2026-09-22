@@ -4,9 +4,8 @@
  * v13.0 - Added holder scanner and metadata updater workers
  * v25.4 - Added worker event handlers for debugging job processing issues
  */
-const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { PublicKey, Transaction, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
-const { createCloseAccountInstruction, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const config = require('../config/env');
 const { PROGRAMS, WALLETS, TOKENS } = require('../config/constants');
 const { logger, redis, pump, solana, twitter, imageUtils, pinata } = require('../services');
@@ -27,8 +26,14 @@ function initDeployWorker(deps) {
      * Build and send a token create+buy transaction on-chain
      * Reusable for both real tokens and anti-bundling duds
      */
-    async function launchTokenOnChain({ tokenName, tokenTicker, tokenMetadataUri, useMayhemMode, isDud = false }) {
+    async function launchTokenOnChain({
+        tokenName, tokenTicker, tokenMetadataUri, useMayhemMode,
+        quoteMint = null,      // null = SOL; otherwise a supported quote mint (Custom Pairs)
+        quoteAmount = null,    // base units of the quote asset for the seed buy
+        isDud = false,
+    }) {
         const { Keypair } = require('@solana/web3.js');
+        const pumpLaunch = require('../services/pumpLaunch');
 
         // v28.1: real launches draw a pre-ground vanity mint from the pool; anti-bundling
         // duds are throwaway tokens and must never burn one. getMintKeypair falls back to a
@@ -42,133 +47,111 @@ function initDeployWorker(deps) {
         const mint = mintKeypair.publicKey;
         const creator = devKeypair.publicKey;
 
+        // Decoys are always SOL-quoted: their only job is to obscure the real launch, and a
+        // token quote would make them cost quote-asset inventory as well as rent.
+        const effectiveQuoteMint = isDud ? null : quoteMint;
+        const seedAmount = new BN(
+            quoteAmount != null && !isDud ? quoteAmount : Math.floor(0.01 * LAMPORTS_PER_SOL)
+        );
+
         // Tracks whether we reached the point of no return (see the send block below).
-        // The try wrapping the rest of this function exists solely so a claimed vanity address
-        // can be returned to the pool on failure; its body is left at the original indentation
-        // to keep this diff reviewable rather than reflowing ~120 unrelated lines.
         let broadcastAttempted = false;
         try {
 
-        const { global, bondingCurve, bondingCurveV2, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = pump.getPumpPDAs(mint);
-        const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PROGRAMS.PUMP);
-        const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), PROGRAMS.METADATA.toBuffer(), mint.toBuffer()], PROGRAMS.METADATA);
-        const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PROGRAMS.PUMP);
-        const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PROGRAMS.PUMP);
-        const [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], PROGRAMS.MAYHEM);
-        const mayhemTokenVault = pump.getATA(mint, WALLETS.SOL_VAULT, PROGRAMS.TOKEN_2022);
-
-        const createData = pump.buildCreateInstructionData(tokenName, tokenTicker, tokenMetadataUri, creator, useMayhemMode);
-        const createKeys = [
-            { pubkey: mint, isSigner: true, isWritable: true },
-            { pubkey: mintAuthority, isSigner: false, isWritable: false },
-            { pubkey: bondingCurve, isSigner: false, isWritable: true },
-            { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-            { pubkey: global, isSigner: false, isWritable: false },
-            { pubkey: creator, isSigner: true, isWritable: true },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-            { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.MAYHEM, isSigner: false, isWritable: true },
-            { pubkey: WALLETS.GLOBAL_PARAMS, isSigner: false, isWritable: false },
-            { pubkey: WALLETS.SOL_VAULT, isSigner: false, isWritable: true },
-            { pubkey: mayhemState, isSigner: false, isWritable: true },
-            { pubkey: mayhemTokenVault, isSigner: false, isWritable: true },
-            { pubkey: eventAuthority, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-        ];
-        const createIx = new TransactionInstruction({ keys: createKeys, programId: PROGRAMS.PUMP, data: createData });
-
-        const feeRecipient = useMayhemMode ? WALLETS.MAYHEM_FEE : WALLETS.FEE_STANDARD;
-        const associatedUser = pump.getATA(mint, creator, PROGRAMS.TOKEN_2022);
-        const solBuyAmount = Math.floor(0.01 * LAMPORTS_PER_SOL);
-        const tokenBuyAmount = pump.calculateTokensForSol(solBuyAmount);
-        const buyData = pump.buildBuyInstructionData(tokenBuyAmount, new BN(Math.floor(solBuyAmount * 1.05)));
-        const buyKeys = [
-            { pubkey: global, isSigner: false, isWritable: false },
-            { pubkey: feeRecipient, isSigner: false, isWritable: true },
-            { pubkey: mint, isSigner: false, isWritable: false },
-            { pubkey: bondingCurve, isSigner: false, isWritable: true },
-            { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-            { pubkey: associatedUser, isSigner: false, isWritable: true },
-            { pubkey: creator, isSigner: true, isWritable: true },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-            { pubkey: creatorVault, isSigner: false, isWritable: true },
-            { pubkey: eventAuthority, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-            { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: false },
-            { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
-            { pubkey: feeConfig, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false },
-            // v25.47: bondingCurveV2 trailing account — required to prevent 6024 Overflow
-            { pubkey: bondingCurveV2, isSigner: false, isWritable: false }
-        ];
-        const buyIx = new TransactionInstruction({ keys: buyKeys, programId: PROGRAMS.PUMP, data: buyData });
-
-        const createATAIx = new TransactionInstruction({
-            keys: [
-                { pubkey: creator, isSigner: true, isWritable: true },
-                { pubkey: associatedUser, isSigner: false, isWritable: true },
-                { pubkey: creator, isSigner: false, isWritable: false },
-                { pubkey: mint, isSigner: false, isWritable: false },
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-            ],
-            programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-            data: Buffer.alloc(0),
+        // v30.0: the create/buy instructions now come from the official SDK rather than being
+        // hand-assembled here. The hand-written create_v2 payload had fallen ten bytes behind
+        // the program's argument list, and Custom Pairs adds four positional remaining
+        // accounts plus a 27-account buy_v2 that is not worth re-deriving by hand.
+        // buildLaunchInstructions also pins holderReward and cashback off, which is what keeps
+        // this platform the on-chain creator and therefore the recipient of every creator fee.
+        const built = await pumpLaunch.buildLaunchInstructions({
+            connection,
+            mint,
+            name: tokenName,
+            symbol: tokenTicker,
+            uri: tokenMetadataUri,
+            creator,
+            user: creator,
+            quoteAmount: seedAmount,
+            mayhemMode: !!useMayhemMode,
+            quoteMint: effectiveQuoteMint,
         });
 
-        const tx = new Transaction();
-        solana.addPriorityFee(tx);
-        tx.add(createIx).add(createATAIx).add(buyIx);
-        tx.feePayer = creator;
+        // v30.0: the launch may not fit in one legacy transaction. buildLaunchInstructions
+        // measures it and hands back one group, or two when create + seed buy would exceed
+        // 1232 bytes -- which happens on any token-quoted launch, and on a SOL launch once
+        // the metadata URI is a real gateway URL and the name is long.
+        let sig = null;
+        for (const [n, group] of built.transactions.entries()) {
+            const tx = new Transaction();
+            // One SetComputeUnitLimit per transaction: the budget has to be chosen here, not
+            // added alongside a second one. Token-quoted launches need the larger figure.
+            solana.addPriorityFee(tx, { units: built.computeUnitLimit });
+            for (const ix of group.instructions) tx.add(ix);
+            tx.feePayer = creator;
 
-        // v28.1: the point of no return for a claimed vanity address. Once we have entered
-        // sendTxWithRetry the mint may exist on-chain, so the address can never be handed to
-        // another launch -- a second create against the same mint could never succeed.
-        // Anything that threw *before* this line left the mint untouched, and the catch at
-        // the end of this function puts the address back in the pool.
-        broadcastAttempted = true;
-        const sig = await solana.sendTxWithRetry(tx, [devKeypair, mintKeypair]);
+            const signers = group.needsMintSignature ? [devKeypair, mintKeypair] : [devKeypair];
+
+            if (group.critical) {
+                // v28.1: the point of no return for a claimed vanity address. Once we have
+                // entered sendTxWithRetry the mint may exist on-chain, so the address can
+                // never be handed to another launch -- a second create against the same mint
+                // could never succeed. Anything that threw *before* this line left the mint
+                // untouched, and the catch at the end of this function returns it to the pool.
+                broadcastAttempted = true;
+                sig = await solana.sendTxWithRetry(tx, signers);
+            } else {
+                // The coin already exists and trades by this point. A failed seed buy leaves
+                // it without a seed position, which is not worth failing the launch or
+                // refunding the user over.
+                try {
+                    await solana.sendTxWithRetry(tx, signers);
+                } catch (seedErr) {
+                    logger.warn('[Deploy] Seed buy failed; the coin is live without one', {
+                        ticker: tokenTicker, mint: mint.toString(), group: n, error: seedErr.message
+                    });
+                }
+            }
+        }
+
         if (vanityId) await vanity.markUsed(db, vanityId);
         if (isVanity) logger.info(`Launched ${tokenTicker} on vanity mint ${mint.toString()}`);
 
-        // Fire-and-forget sell to recoup SOL
+        // Sell the seed position back, whatever the coin is quoted in.
+        //
+        // v30.0: built by the SDK from the curve's own state rather than a hand-assembled
+        // SOL-only `sell`, which would have stranded the position on any token-quoted coin.
+        // Still deliberately detached: the launch has already succeeded and the user has
+        // their token, so nothing here may fail the job or trigger a refund.
         setTimeout(async () => {
             try {
-                const bal = await connection.getTokenAccountBalance(associatedUser);
-                if (bal.value?.uiAmount > 0) {
-                    const sellData = pump.buildSellInstructionData(new BN(bal.value.amount));
-                    const sellKeys = [
-                        { pubkey: global, isSigner: false, isWritable: false },
-                        { pubkey: feeRecipient, isSigner: false, isWritable: true },
-                        { pubkey: mint, isSigner: false, isWritable: false },
-                        { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                        { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-                        { pubkey: associatedUser, isSigner: false, isWritable: true },
-                        { pubkey: creator, isSigner: true, isWritable: true },
-                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                        { pubkey: creatorVault, isSigner: false, isWritable: true },
-                        { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-                        { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                        { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-                        { pubkey: feeConfig, isSigner: false, isWritable: false },
-                        { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false },
-                        // v25.47: bondingCurveV2 trailing account — required to prevent 6024 Overflow
-                        { pubkey: bondingCurveV2, isSigner: false, isWritable: false }
-                    ];
-                    const sellIx = new TransactionInstruction({ keys: sellKeys, programId: PROGRAMS.PUMP, data: sellData });
-                    const closeIx = createCloseAccountInstruction(associatedUser, creator, creator, [], PROGRAMS.TOKEN_2022);
-                    const sellTx = new Transaction();
-                    solana.addPriorityFee(sellTx);
-                    sellTx.add(sellIx).add(closeIx);
-                    await solana.sendTxWithRetry(sellTx, [devKeypair]);
-                    logger.info(`Sold & Closed Account for ${tokenTicker} (${mint.toString().substring(0, 8)}...)`);
-                }
-            } catch (e) { logger.error("Sell error", { ticker: tokenTicker, msg: e.message }); }
+                const seedSell = await pumpLaunch.buildSeedSellInstructions({
+                    connection,
+                    mint,
+                    user: creator,
+                    tokenProgram: PROGRAMS.TOKEN_2022,
+                });
+                if (!seedSell) return; // nothing was received, nothing to sell
+
+                const sellTx = new Transaction();
+                solana.addPriorityFee(sellTx, {
+                    units: seedSell.isTokenQuoted
+                        ? pumpLaunch.CU_LIMIT_TOKEN_LAUNCH
+                        : pumpLaunch.CU_LIMIT_SOL_LAUNCH,
+                });
+                for (const ix of seedSell.instructions) sellTx.add(ix);
+                sellTx.feePayer = creator;
+
+                await solana.sendTxWithRetry(sellTx, [devKeypair]);
+                logger.info(`Sold seed position for ${tokenTicker} (${mint.toString().substring(0, 8)}...)`, {
+                    tokenQuoted: seedSell.isTokenQuoted
+                });
+            } catch (e) {
+                logger.error('Seed sell error', { ticker: tokenTicker, msg: e.message });
+            }
         }, 1500);
 
-        return { mint, mintKeypair, sig };
+        return { mint, mintKeypair, sig, quoteMint: built.quoteMint, isTokenQuoted: built.isTokenQuoted };
 
         } catch (launchErr) {
             // A failure before broadcast means this mint was never created, so the ground
@@ -233,7 +216,7 @@ function initDeployWorker(deps) {
         logger.info(`STARTING JOB ${job.id}: ${job.data.ticker}`);
 
         // Image here is now the URL passed from deploy route, NOT base64
-        const { name, ticker, description, twitter: twitterHandle, website, image, userPubkey, isMayhemMode, metadataUri } = job.data;
+        const { name, ticker, description, twitter: twitterHandle, website, image, userPubkey, isMayhemMode, metadataUri, quoteMint } = job.data;
 
         // v25.4: Debug logging for image URL tracking
         logger.info(`[Deploy] Job ${job.id} image debug`, {
@@ -253,12 +236,14 @@ function initDeployWorker(deps) {
             await job.updateProgress({ phase: 'deploying', message: 'Launching your token...' });
             logger.info(`[Deploy] Launching real token: ${ticker}`);
 
-            const { mint, sig } = await launchTokenOnChain({
+            const launched = await launchTokenOnChain({
                 tokenName: name,
                 tokenTicker: ticker,
                 tokenMetadataUri: metadataUri,
-                useMayhemMode: isMayhemMode
+                useMayhemMode: isMayhemMode,
+                quoteMint: quoteMint || null,
             });
+            const { mint, sig } = launched;
 
             logger.info(`[Deploy] Real token confirmed: ${ticker} ${mint.toString()} sig=${sig}`);
 
@@ -294,7 +279,10 @@ function initDeployWorker(deps) {
                 await saveTokenData(userPubkey, mint.toString(), {
                     name, ticker, description, twitter: twitterHandle,
                     website, image: finalImageUrl, // v25.6: Use resolved image URL
-                    isMayhemMode, metadataUri
+                    isMayhemMode, metadataUri,
+                    // v30.0: what the coin is quoted in. Fee collection needs this to sweep
+                    // the right vaults once a quote is de-listed from QuoteControl.
+                    quoteMint: launched.quoteMint || null,
                 });
                 logger.info(`[Deploy] Token saved to database successfully: ${ticker} (${mint.toString()})`);
             } catch (dbError) {

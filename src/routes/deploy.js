@@ -194,6 +194,24 @@ function init(deps) {
             if (!sanitized.name) return res.status(400).json({ error: "Token name is required." });
             if (!sanitized.ticker) return res.status(400).json({ error: "Ticker is required." });
 
+            // v30.0: Custom Pairs. Validated here, before the payment is verified, so an
+            // unsupported quote costs the user nothing. Absent or SOL takes the SOL path.
+            const requestedQuote = typeof req.body.quoteMint === 'string' ? req.body.quoteMint.trim() : null;
+            let resolvedQuoteMint = null;
+            if (requestedQuote) {
+                try {
+                    const pumpLaunch = require('../services/pumpLaunch');
+                    const quote = await pumpLaunch.resolveQuote(connection, requestedQuote);
+                    resolvedQuoteMint = quote ? quote.mint.toBase58() : null;
+                } catch (quoteErr) {
+                    if (quoteErr.userFacing) {
+                        return res.status(400).json({ error: quoteErr.message });
+                    }
+                    logger.error('[Deploy] Quote asset check failed', { error: quoteErr.message });
+                    return res.status(503).json({ error: "Could not check that quote asset. Please try again." });
+                }
+            }
+
             // v25.4: Payment verification loop (runs BEFORE inserting transaction record)
             // H-2 FIX: Insert only after confirmed payment to prevent orphaned records on crash
             //
@@ -308,7 +326,8 @@ function init(deps) {
                     image: imageToSend, // Pass the direct URL
                     userPubkey,
                     isMayhemMode,
-                    metadataUri
+                    metadataUri,
+                    quoteMint: resolvedQuoteMint,
                 });
             } catch (queueErr) {
                 await db.run('DELETE FROM transactions WHERE signature = $1', [userTx]).catch(() => {});
@@ -327,6 +346,25 @@ function init(deps) {
             logger.error("Deploy API Error", { error: err.message, stack: err.stack });
             // SECURITY FIX: Don't expose internal error messages
             res.status(500).json({ error: "Deployment failed. Please try again." });
+        }
+    });
+
+    /**
+     * v30.0: the quote assets a launch may be priced in right now.
+     *
+     * Read live from Global and the QuoteControl PDA rather than hardcoded, because pump.fun
+     * adds and removes them: a stale list would offer a quote the program then rejects, after
+     * the user had already paid.
+     */
+    router.get('/quote-assets', async (req, res) => {
+        try {
+            const pumpLaunch = require('../services/pumpLaunch');
+            const assets = await pumpLaunch.getSupportedQuoteMints(connection);
+            res.json({ assets, count: assets.length });
+        } catch (e) {
+            logger.warn('[Deploy] Could not list quote assets', { error: e.message });
+            // A launch can still proceed in SOL, so degrade rather than fail.
+            res.json({ assets: [], count: 0, unavailable: true });
         }
     });
 

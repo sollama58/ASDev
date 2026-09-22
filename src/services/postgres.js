@@ -390,6 +390,20 @@ async function createSchema() {
             END IF;
         END $$;
     `);
+    // v30.0: Custom Pairs. A coin may be quoted in a token rather than SOL, and its creator
+    // fees then accrue in that asset. Stored per token so fee collection can sweep the right
+    // vaults even after a quote is de-listed from QuoteControl, which stops new creates but
+    // leaves existing curves trading. NULL means SOL.
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tokens' AND column_name = 'quote_mint') THEN
+                ALTER TABLE tokens ADD COLUMN quote_mint TEXT;
+            END IF;
+        END $$;
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_quote_mint ON tokens(quote_mint) WHERE quote_mint IS NOT NULL`);
+
     // v26.0: Migration - Track mint in airdrop_logs and user_airdrop_history for per-token accountability
     await pool.query(`
         DO $$
@@ -885,8 +899,8 @@ async function saveTokenData(pubkey, mint, metadata) {
 
     try {
         const result = await db.run(`
-            INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp, quote_mint)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (mint) DO UPDATE SET
                 ticker = EXCLUDED.ticker,
                 name = EXCLUDED.name,
@@ -895,10 +909,12 @@ async function saveTokenData(pubkey, mint, metadata) {
                 website = EXCLUDED.website,
                 "metadataUri" = EXCLUDED."metadataUri",
                 image = EXCLUDED.image,
-                "isMayhemMode" = EXCLUDED."isMayhemMode"
+                "isMayhemMode" = EXCLUDED."isMayhemMode",
+                quote_mint = COALESCE(EXCLUDED.quote_mint, tokens.quote_mint)
         `, [pubkey, mint, metadata.ticker, metadata.name, metadata.description || '',
             metadata.twitter || '', metadata.website || '', metadata.metadataUri || '',
-            imageValue, metadata.isMayhemMode ? 1 : 0, Date.now()]);
+            imageValue, metadata.isMayhemMode ? 1 : 0, Date.now(),
+            metadata.quoteMint || null]);
 
         logger.info("[PostgreSQL] Token saved successfully", { mint, ticker: metadata.ticker, hasImage: !!imageValue, changes: result.changes });
         return result;
