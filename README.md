@@ -151,10 +151,8 @@ SERVER_MODE=worker WORKER_TASKS=holders,metadata node src/worker.js   # subset o
 
 | Script | What it does |
 |---|---|
-| `npm run backfill` | Discover tokens the platform receives fees from, by scanning on-chain vault transaction history (`--dry-run` supported) |
 | `node scripts/show-points.js` | Dump current point distribution and eligibility |
 | `node scripts/test-airdrop.js` | Simulate/test the point → airdrop distribution flow |
-| `node scripts/debugVaultScan.js` | Diagnostic: inspect raw vault transactions and mint extraction |
 
 ## API
 
@@ -166,26 +164,31 @@ endpoints in total, including a large admin/debug surface gated behind
 |---|---|
 | `GET /api/health` | Wallet balance, pending fees, pool sizes, lifetime stats |
 | `GET /api/version` | Server version string |
-| `GET /api/services-status` | Live check of DB / Redis / Solana RPC |
+| `GET /api/services-status` | Live check of DB / Redis / Solana RPC (admin) |
 | `GET /api/all-launches` | All launched tokens (paginated) |
 | `GET /api/recent-launches` | Recent-launches ticker feed |
 | `GET /api/token-holders/:mint` | Top holders for a token |
 | `GET /api/check-holder?userPubkey=…` | A wallet's points + expected airdrop |
 | `GET /api/user-holdings?userPubkey=…` | Per-token holdings breakdown for a wallet |
 | `GET /api/all-eligible-users` | All wallets with a pending airdrop |
-| `POST /api/prepare-metadata` | Upload token metadata/image to IPFS |
-| `POST /api/deploy` | Queue a token deployment |
+| `POST /api/prepare-metadata` | Validate a launch (image reachable and an image) before the user pays; pins nothing |
+| `POST /api/deploy` | Verify the fee payment and queue a launch; the launch job pins the metadata |
 | `GET /api/job-status/:id` | Poll a deployment job |
 | `GET /api/admin/*`, `GET /api/debug/*` | Operational/admin endpoints (trigger scans, view logs, manage tokens/announcements, simulate airdrops, etc.) — requires `x-admin-key` header |
 
 ## Security
 
-- Rate limiting: 120 req/min globally on `/api`, 5/min on `/api/deploy`
+- Rate limiting: 120 req/min globally on `/api`, 5/min on `/api/deploy`, 10/min on
+  `/api/prepare-metadata`, and 20 failed admin-key attempts per 15 min per IP
 - `helmet` security headers + configurable CORS allowlist (`CORS_ORIGINS`)
 - All admin/debug endpoints require a timing-safe-compared `ADMIN_API_KEY`
   (disabled entirely — returns 403 — if the key isn't set)
-- Solana address validation on all pubkey inputs; signature verification on
-  wallet-authenticated actions
+- Solana address and transaction-signature validation on all inputs, before any RPC call
+- Launch metadata is built and pinned server-side after payment; clients cannot supply a
+  metadata URI
+- The launcher's web3.js bundle is pinned with a Subresource Integrity hash
+- Endpoints that proxy to paid APIs (`/balance`, `/token-metadata`, `/pump-proxy`,
+  `/services-status`) are admin-only
 - Frontend output escaping (`esc()`/`escAttr()` helpers and/or DOMPurify,
   depending on the page) on any field that originates from user-settable
   token metadata (ticker, name), to prevent stored XSS

@@ -29,7 +29,7 @@
  *   cashback     — deprecated upstream; `create_v2` rejects it outright with error 6082.
  */
 const { PublicKey, ComputeBudgetProgram, Transaction } = require('@solana/web3.js');
-const { NATIVE_MINT } = require('@solana/spl-token');
+const { NATIVE_MINT, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const BN = require('bn.js');
 const {
     PumpSdk,
@@ -86,10 +86,21 @@ async function fetchGlobal(connection) {
  *
  * Returns a plain, serialisable shape so routes can hand it straight to the frontend.
  */
+let quoteMintInflight = null;
+
 async function getSupportedQuoteMints(connection, { force = false } = {}) {
     if (!force && quoteMintCache.value && Date.now() - quoteMintCache.at < QUOTE_TTL_MS) {
         return quoteMintCache.value;
     }
+    // v30.2: single-flight. Every page load asks for this list, so when the cache expires under
+    // traffic each concurrent request used to start its own full refresh.
+    if (quoteMintInflight) return quoteMintInflight;
+    quoteMintInflight = refreshSupportedQuoteMints(connection)
+        .finally(() => { quoteMintInflight = null; });
+    return quoteMintInflight;
+}
+
+async function refreshSupportedQuoteMints(connection) {
     const mints = await online(connection).fetchSupportedQuoteMints();
 
     // The SDK returns addresses only. A picker of ~90 base58 blobs is unusable, so decorate
@@ -128,8 +139,37 @@ async function getSupportedQuoteMints(connection, { force = false } = {}) {
  * Resolve a caller-supplied quote mint to what the builders need, or throw a message fit to
  * show a user. `undefined`/null/SOL all resolve to the SOL entry.
  */
+const resolvedQuoteCache = new Map(); // base58 -> { value, at }
+
 async function resolveQuote(connection, quoteMint) {
     if (!quoteMint) return null; // SOL path
+
+    // v30.2: answered from cache where possible. /api/deploy validates the quote before it
+    // verifies payment, so an uncached lookup here let unpaid requests drive RPC calls. A mint
+    // not on the (cached) supported list is rejected without touching the chain at all.
+    try {
+        new PublicKey(quoteMint);
+    } catch (e) {
+        const err = new Error('That quote asset is not a valid address.');
+        err.userFacing = true;
+        throw err;
+    }
+    if (isSolLikeQuoteMint(new PublicKey(quoteMint))) return null;
+
+    const cached = resolvedQuoteCache.get(String(quoteMint));
+    if (cached && Date.now() - cached.at < QUOTE_TTL_MS) return cached.value;
+    if (quoteMintCache.value && !quoteMintCache.value.some(q => q.mint === String(quoteMint))) {
+        const err = new Error('That quote asset is not currently accepted by Pump.fun.');
+        err.userFacing = true;
+        throw err;
+    }
+
+    const value = await resolveQuoteUncached(connection, quoteMint);
+    resolvedQuoteCache.set(String(quoteMint), { value, at: Date.now() });
+    return value;
+}
+
+async function resolveQuoteUncached(connection, quoteMint) {
     let key;
     try {
         key = new PublicKey(quoteMint);
@@ -176,6 +216,11 @@ async function buildLaunchInstructions({
     mayhemMode = false,
     quoteMint = null,
     creatorFeeBps = null,
+    // v30.2: false builds the create alone. Token-quoted launches use this: a seed buy would
+    // spend a fixed number of base units of whatever the quote asset is (10 USDC, or a tenth
+    // of a share of a stock token) out of inventory the platform wallet would have to hold
+    // in every one of ~90 assets.
+    seedBuy = true,
 }) {
     const global = await fetchGlobal(connection);
     const quote = await resolveQuote(connection, quoteMint);
@@ -205,6 +250,22 @@ async function buildLaunchInstructions({
 
     if (creatorFeeBps != null) {
         common.creatorFeeBps = BN.isBN(creatorFeeBps) ? creatorFeeBps : new BN(creatorFeeBps);
+    }
+
+    if (!seedBuy) {
+        const createIx = await sdk.createV2Instruction({
+            ...common,
+            ...(isTokenQuoted ? { quoteMint: quote.mint, quoteTokenProgram: quote.quoteTokenProgram } : {}),
+        });
+        const computeUnitLimit = isTokenQuoted ? CU_LIMIT_TOKEN_LAUNCH : CU_LIMIT_SOL_LAUNCH;
+        return {
+            instructions: [createIx],
+            transactions: planLaunchTransactions([createIx], user, computeUnitLimit),
+            computeUnitLimit,
+            quoteMint: quote ? quote.mint.toBase58() : null,
+            isTokenQuoted,
+            seedBuy: false,
+        };
     }
 
     // How many tokens the first buy receives for `quoteAmount`. The curve does not exist
@@ -255,6 +316,7 @@ async function buildLaunchInstructions({
         computeUnitLimit,
         quoteMint: quote ? quote.mint.toBase58() : null,
         isTokenQuoted,
+        seedBuy: true,
     };
 }
 
@@ -425,80 +487,78 @@ async function buildCollectAllFeesInstructions({ connection, creator, feePayer, 
     );
 }
 
+// A mint's owning token program never changes, so it is looked up once per process.
+const mintProgramCache = new Map(); // base58 -> PublicKey
+
 /**
  * What is waiting to be collected, per quote mint, as
  * `[{ mint, isSol, quoteTokenProgram, total: BN }]` with `total` in the mint's base units.
- * Used to decide whether a claim is worth sending, and to know how much of each quote asset
- * a claim will land in our ATAs so exactly that much can be swapped back to SOL afterwards.
- *
- * Two sources, because the SDK's reader only knows about currently-listed mints:
- *
- *   - `getCreatorVaultQuoteBalances` for every mint on Global or QuoteControl.
- *   - the vault ATAs read directly for `extraQuoteMints`, which is how a de-listed mint is
- *     still seen: de-listing stops new creates, but curves already quoted in it keep trading
- *     and keep accruing creator fees. Callers should pass the distinct `quote_mint` values of
- *     our own launched tokens.
- *
  * Entries with nothing waiting are omitted.
+ *
+ * v30.2 RPC: reads only the vaults fees can actually be in. The platform is the creator of
+ * every coin it launches, so it can only hold creator fees in SOL and in the quote assets of
+ * coins it launched -- `quoteMints`, the distinct `quote_mint` values in our tokens table.
+ * The SDK's getCreatorVaultQuoteBalances instead walks every quote asset pump.fun lists (~90),
+ * costing ~4-5 RPC round-trips on every survey; this is one getMultipleAccountsInfo (plus a
+ * one-off lookup of each new quote mint's token program).
+ *
+ * SOL: the pump creator vault's lamports above its rent-exempt minimum, plus the PumpSwap
+ * creator vault's WSOL ATA. Token quote Q: the Q ATAs of both vaults.
  */
 async function fetchCollectableFees({ connection, creator, extraQuoteMints = [] }) {
-    const o = online(connection);
-    const seen = new Set();
-    const out = [];
-
-    for (const b of await o.getCreatorVaultQuoteBalances(creator)) {
-        const mint = b.mint.toBase58();
-        seen.add(mint);
-        const total = b.pumpVault.add(b.ammVault);
-        if (total.lten(0)) continue;
-        out.push({
-            mint,
-            isSol: isSolLikeQuoteMint(b.mint),
-            quoteTokenProgram: b.quoteTokenProgram,
-            total,
-        });
-    }
-
-    const extras = extraQuoteMints
-        .filter(Boolean)
-        .map(m => { try { return new PublicKey(m); } catch (e) { return null; } })
-        .filter(k => k && !isSolLikeQuoteMint(k) && !seen.has(k.toBase58()));
-    if (!extras.length) return out;
-
-    // De-listed mints: derive both vault ATAs and read their balances in one batch. A mint
-    // whose owning program cannot be read is skipped rather than guessed at — deriving the
-    // ATA with the wrong token program yields an address that simply does not exist, which
-    // would silently report zero.
+    const { getRentExemptMinimum } = require('./solana');
     const pumpVault = creatorVaultPda(creator);
     const ammVault = ammCreatorVaultPda(creator);
-    const mintInfos = await connection.getMultipleAccountsInfo(extras);
-    const atas = [];
-    const owners = [];
-    extras.forEach((k, i) => {
-        const info = mintInfos[i];
-        if (!info) return;
-        owners.push({ mint: k, program: info.owner });
-        atas.push(quoteAta(pumpVault, k, info.owner), quoteAta(ammVault, k, info.owner));
-    });
-    if (!atas.length) return out;
 
-    for (let i = 0; i < atas.length; i += 100) {
-        const slice = atas.slice(i, i + 100);
-        const infos = await connection.getMultipleAccountsInfo(slice);
-        for (let n = 0; n < slice.length; n++) {
-            const globalIdx = i + n;
-            const { mint, program } = owners[Math.floor(globalIdx / 2)];
-            const info = infos[n];
-            // A token account's `amount` is a u64 at offset 64; anything shorter, or owned by
-            // a different program, is not a token account of this quote and counts as zero.
-            if (!info || !info.owner.equals(program) || info.data.length < 72) continue;
-            const amount = new BN(info.data.slice(64, 72), 'le');
-            if (amount.lten(0)) continue;
-            const existing = out.find(e => e.mint === mint.toBase58());
-            if (existing) existing.total = existing.total.add(amount);
-            else out.push({ mint: mint.toBase58(), isSol: false, quoteTokenProgram: program, total: amount });
-        }
+    const quotes = [...new Set(extraQuoteMints.filter(Boolean).map(String))]
+        .map(m => { try { return new PublicKey(m); } catch (e) { return null; } })
+        .filter(k => k && !isSolLikeQuoteMint(k));
+
+    // Token programs for any quote mint not seen before.
+    const unknown = quotes.filter(q => !mintProgramCache.has(q.toBase58()));
+    if (unknown.length) {
+        const infos = await connection.getMultipleAccountsInfo(unknown);
+        unknown.forEach((q, i) => {
+            if (infos[i]) mintProgramCache.set(q.toBase58(), infos[i].owner);
+        });
     }
+    const known = quotes.filter(q => mintProgramCache.has(q.toBase58()));
+
+    // One batch: [pump SOL vault, AMM WSOL ATA, then (pump ATA, AMM ATA) per token quote].
+    const keys = [pumpVault, quoteAta(ammVault, NATIVE_MINT, TOKEN_PROGRAM_ID)];
+    for (const q of known) {
+        const prog = mintProgramCache.get(q.toBase58());
+        keys.push(quoteAta(pumpVault, q, prog), quoteAta(ammVault, q, prog));
+    }
+    const infos = [];
+    for (let i = 0; i < keys.length; i += 100) {
+        infos.push(...await connection.getMultipleAccountsInfo(keys.slice(i, i + 100)));
+    }
+
+    // A token account's `amount` is a u64 at offset 64. Anything else counts as zero.
+    const tokenAmount = (info, program) =>
+        (info && info.owner.equals(program) && info.data.length >= 72)
+            ? new BN(info.data.slice(64, 72), 'le')
+            : new BN(0);
+
+    const out = [];
+
+    let solTotal = new BN(0);
+    const pumpInfo = infos[0];
+    if (pumpInfo) {
+        const rent = await getRentExemptMinimum(pumpInfo.data?.length || 0);
+        solTotal = solTotal.add(new BN(Math.max(0, pumpInfo.lamports - rent)));
+    }
+    solTotal = solTotal.add(tokenAmount(infos[1], TOKEN_PROGRAM_ID));
+    if (solTotal.gtn(0)) {
+        out.push({ mint: NATIVE_MINT.toBase58(), isSol: true, quoteTokenProgram: TOKEN_PROGRAM_ID, total: solTotal });
+    }
+
+    known.forEach((q, i) => {
+        const prog = mintProgramCache.get(q.toBase58());
+        const total = tokenAmount(infos[2 + i * 2], prog).add(tokenAmount(infos[3 + i * 2], prog));
+        if (total.gtn(0)) out.push({ mint: q.toBase58(), isSol: false, quoteTokenProgram: prog, total });
+    });
 
     return out;
 }
@@ -550,6 +610,7 @@ function planFeeTransactions(instructions, feePayer, computeUnitLimit) {
 function resetCaches() {
     globalCache = { value: null, at: 0 };
     quoteMintCache = { value: null, at: 0 };
+    resolvedQuoteCache.clear();
 }
 
 module.exports = {

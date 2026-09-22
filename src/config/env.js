@@ -70,21 +70,15 @@ const config = {
     // recovered by the sell-and-close that follows, so this is a real per-launch cost set
     // against a DEPLOYMENT_FEE_SOL of 0.02. It was previously a hardcoded random 1 to 5,
     // which made that cost invisible and unbounded. Set ANTI_BUNDLE_MAX to 0 to disable.
-    ANTI_BUNDLE_MIN: Math.max(0, parseInt(process.env.ANTI_BUNDLE_MIN ?? '1', 10) || 0),
-    ANTI_BUNDLE_MAX: Math.max(0, parseInt(process.env.ANTI_BUNDLE_MAX ?? '5', 10) || 0),
+    // v30.2: default 0-1 decoys (was 1-5). Each costs non-recoverable create rent against a
+    // 0.02 SOL fee, so five decoys could cost several times what the launch earned.
+    ANTI_BUNDLE_MIN: Math.max(0, parseInt(process.env.ANTI_BUNDLE_MIN ?? '0', 10) || 0),
+    ANTI_BUNDLE_MAX: Math.max(0, parseInt(process.env.ANTI_BUNDLE_MAX ?? '1', 10) || 0),
 
     // v29.1: A payment older than this cannot be redeemed for a launch. Without a bound,
     // any historical transfer to the platform wallet of at least the fee could be handed
     // to /api/deploy once for a free launch.
     PAYMENT_MAX_AGE_SECONDS: parseInt(process.env.PAYMENT_MAX_AGE_SECONDS, 10) || 3600,
-
-    // v29.1: Hosts a token's metadata URI may point at. /api/deploy previously accepted any
-    // string here and wrote it straight into the mint instruction, so a caller could have the
-    // platform mint a token whose metadata pointed anywhere at all.
-    METADATA_URI_ALLOWED_HOSTS: (process.env.METADATA_URI_ALLOWED_HOSTS ||
-        'gateway.pinata.cloud,ipfs.io,cloudflare-ipfs.com')
-        .split(',').map(h => h.trim().toLowerCase()).filter(Boolean),
-    METADATA_URI_MAX_LENGTH: parseInt(process.env.METADATA_URI_MAX_LENGTH, 10) || 200,
 
     // v29.3: /api/prepare-metadata fetches the supplied image once to confirm it exists and is
     // really an image, before any token is minted against it. Metadata is immutable, so a dead
@@ -149,9 +143,13 @@ const config = {
     // Airdrop Distribution     | 15min      | 2min          | SOL distribution
     // KOTH Evaluation          | 30min      | varies        | King selection
     // =====================================================
-    FEE_COLLECTION_INTERVAL: 150000, // v25.13: Rewards claim every 2.5 minutes
+    // v30.2: 10 minutes (was 2.5). Fees only need collecting once they pass FEE_THRESHOLD_SOL;
+    // surveying four times as often just spent RPC calls.
+    FEE_COLLECTION_INTERVAL: parseInt(process.env.FEE_COLLECTION_INTERVAL) || 600000,
     AIRDROP_INTERVAL: 900000, // v25.13: Airdrop processing every 15 minutes
-    HOLDER_UPDATE_INTERVAL: parseInt(process.env.HOLDER_UPDATE_INTERVAL) || 300000, // v25.13: 5 minutes (points recalc)
+    // v30.2: 10 minutes (was 5). Tokens near a payout are still rescanned every run, and every
+    // airdrop force-rescans the tokens it pays; the rest only feed UI estimates.
+    HOLDER_UPDATE_INTERVAL: parseInt(process.env.HOLDER_UPDATE_INTERVAL) || 600000,
     METADATA_PRICE_INTERVAL: 60000, // v25.13: Price updates for top tokens every 1 minute
     METADATA_FULL_INTERVAL: 300000, // v25.13: Full price updates for all tokens every 5 minutes
     ASDF_UPDATE_INTERVAL: 300000, // v25.13: 5 minutes
@@ -168,8 +166,11 @@ const config = {
     // PostgreSQL (v13.0 - Render Database)
     // SCALABILITY FIX: Increased default pool size for better concurrency
     DATABASE_URL: process.env.DATABASE_URL || null,
-    DB_POOL_MIN: parseInt(process.env.DB_POOL_MIN) || 5,   // Increased from 2
-    DB_POOL_MAX: parseInt(process.env.DB_POOL_MAX) || 50,  // L-5: Increased from 25 for scalability
+    // v30.2: 1-10 per process (was 5-50). Three services share one Postgres; at 50 each they
+    // could together exceed the database's connection limit, and the work here is a handful
+    // of concurrent queries, not hundreds. Raise per service with DB_POOL_MAX if needed.
+    DB_POOL_MIN: parseInt(process.env.DB_POOL_MIN) || 1,
+    DB_POOL_MAX: parseInt(process.env.DB_POOL_MAX) || 10,
     DB_IDLE_TIMEOUT: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
     DB_CONNECTION_TIMEOUT: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 10000, // Increased from 5000
     // v24.0: SSL configuration options

@@ -57,6 +57,10 @@ services:
     plan: starter
     buildCommand: npm ci --omit=dev
     startCommand: node src/index.js
+    # Launches run in this process. On a redeploy the old instance finishes any in-flight launch
+    # before exiting (see SHUTDOWN_TIMEOUT_MS in src/index.js); Render's default grace period is
+    # shorter than a launch, so without this a deploy could kill one mid-send.
+    maxShutdownDelaySeconds: 180
     # /api/version is a static response; /api/health runs real database queries and is
     # far too heavy to use as a liveness probe.
     healthCheckPath: /api/version
@@ -104,6 +108,8 @@ services:
     plan: starter
     buildCommand: npm ci --omit=dev
     startCommand: node src/worker.js
+    # Lets an airdrop batch or fee sweep in flight finish before the old instance exits.
+    maxShutdownDelaySeconds: 180
     envVars:
       - fromGroup: asdev-shared
       - key: SERVER_MODE
@@ -174,6 +180,9 @@ services:
       # HOST's cores, so on a small plan set this explicitly to avoid thrashing.
       - key: VANITY_GRINDER_THREADS
         value: "2"
+      # It runs a few queries a minute; keep its share of Postgres connections small.
+      - key: DB_POOL_MAX
+        value: "3"
 
   # ---------------------------------------------------------------------------
   # ShitPad static site

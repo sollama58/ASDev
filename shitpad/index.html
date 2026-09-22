@@ -11,7 +11,12 @@
     <meta name="shitpad-backend" content="https://asdev-1kvy.onrender.com">
 
     <!-- Pinned rather than @latest: a silent major bump here would break signing for every visitor. -->
-    <script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
+    <!-- Pinned by hash: this page builds the launch-fee payment, so a tampered copy of the
+         library could redirect it. The hash is of the npm-published file, which jsdelivr serves
+         byte-for-byte; bumping the version means recomputing it. -->
+    <script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.3/lib/index.iife.min.js"
+            integrity="sha384-xo1g+ODR6i1cxIVZeALc/apXFHeaJHO1j1whMO3dhtdBChWeaihnDs7UnXs9ch78"
+            crossorigin="anonymous"></script>
 
     <style>
         :root {
@@ -1774,7 +1779,7 @@
                 </div>
                 <div class="lookup-calc-row">
                     <span class="lookup-calc-icon">➕</span>
-                    <span><strong>Total</strong> = token pool shares + central pool share. Must be ≥ 0.01 SOL per cycle to receive a payout — smaller amounts accumulate until the threshold is met.</span>
+                    <span><strong>Total</strong> = token pool shares + central pool share. Must be ≥ 0.01 SOL per cycle to receive a payout — a smaller share is not sent to anyone else; it stays in the token's pool and is paid out in a later cycle.</span>
                 </div>
             </div>
 
@@ -2080,7 +2085,8 @@
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 const BACKEND_URL  = (document.querySelector('meta[name="shitpad-backend"]')?.content || '').replace(/\/+$/, '');
-const WS_URL       = BACKEND_URL.replace(/^https/, 'wss') + '/ws';
+// Empty BACKEND_URL means same-origin (the API serving this page itself).
+const WS_URL       = (BACKEND_URL || location.origin).replace(/^http/, 'ws') + '/ws';
 const POLL_HEALTH  = 30_000;
 const POLL_LB      = 60_000;
 const TOP_N        = 10;
@@ -2531,8 +2537,12 @@ function applyHealth(d) {
     if (d.tokenPoolThresholdSol)   tokenPoolThreshold   = parseFloat(d.tokenPoolThresholdSol);
     updateCentralPoolThresholdBar(centralSol, centralPoolThreshold);
 
-    const totalDrop = parseFloat(d.totalSolAirdropped) || 0;
-    document.getElementById('stat-airdropped').textContent = totalDrop.toFixed(2) + ' SOL';
+    // Only when present: WebSocket 'update' messages carry the pool figures but not this one,
+    // and must not reset it to zero between health polls.
+    if (d.totalSolAirdropped != null) {
+        const totalDrop = parseFloat(d.totalSolAirdropped) || 0;
+        document.getElementById('stat-airdropped').textContent = totalDrop.toFixed(2) + ' SOL';
+    }
     if (d.airdropIntervalMs) {
         document.getElementById('stat-interval').textContent = fmt.interval(d.airdropIntervalMs);
     }
@@ -3037,8 +3047,8 @@ async function launchToken() {
 
     launching = true;
     document.getElementById('launch-result').style.display = 'none';
-    setLaunchBtn('Preparing metadata…', true);
-    setMsg('Uploading token metadata…', 'info');
+    setLaunchBtn('Checking…', true);
+    setMsg('Checking your image and details…', 'info');
 
     try {
         const prepR = await fetch(`${BACKEND_URL}/api/prepare-metadata`, {
@@ -3047,12 +3057,12 @@ async function launchToken() {
             body:    JSON.stringify(form),
         });
         const prepD = await prepR.json();
-        if (!prepR.ok || !prepD.metadataUri) {
-            throw new Error(prepD.error || 'Metadata upload failed.');
+        if (!prepR.ok || !prepD.validated) {
+            throw new Error(prepD.error || 'Launch details could not be validated.');
         }
 
         setLaunchBtn('Waiting for signature…', true);
-        setMsg('Metadata ready. Approve the launch fee in your wallet…', 'info');
+        setMsg('Looks good. Approve the launch fee in your wallet…', 'info');
 
         const bhR = await fetch(`${BACKEND_URL}/api/blockhash`);
         if (!bhR.ok) throw new Error('Could not fetch a recent blockhash.');
@@ -3081,7 +3091,6 @@ async function launchToken() {
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({
                 ...form,
-                metadataUri: prepD.metadataUri,
                 userTx,
                 userPubkey: walletPubkey,
                 quoteMint: readQuoteMint(),

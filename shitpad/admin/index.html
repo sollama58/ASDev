@@ -571,7 +571,8 @@
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 const BACKEND_URL = (document.querySelector('meta[name="shitpad-backend"]')?.content || '').replace(/\/+$/, '');
-const WS_URL      = BACKEND_URL.replace(/^https/, 'wss') + '/ws';
+// Empty BACKEND_URL means same-origin (the API serving this page itself).
+const WS_URL      = (BACKEND_URL || location.origin).replace(/^http/, 'ws') + '/ws';
 
 // ── Auth state ─────────────────────────────────────────────────────────────────
 let adminKey = sessionStorage.getItem('shitpad_admin_key') || '';

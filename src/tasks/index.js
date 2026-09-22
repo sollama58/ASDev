@@ -8,7 +8,6 @@
  */
 const holderScanner = require('./holderScanner');
 const metadataUpdater = require('./metadataUpdater');
-const asdfSync = require('./asdfSync');
 const flywheel = require('./flywheel');
 const workers = require('./workers');
 const { logger } = require('../services');
@@ -119,13 +118,22 @@ function registerInterval(intervalId) {
     return intervalId;
 }
 
+/**
+ * v30.2: Register a BullMQ worker created outside startAll() (the api-only deploy and social
+ * workers) so stopAll() closes it gracefully.
+ */
+function registerWorker(worker) {
+    if (worker) activeWorkers.push(worker);
+    return worker;
+}
+
 module.exports = {
     holderScanner,
     metadataUpdater,
-    asdfSync,
     flywheel,
     workers,
     startAll,
     stopAll,
     registerInterval,
+    registerWorker,
 };

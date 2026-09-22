@@ -18,7 +18,7 @@
  * Both are read in batches and cached for a long TTL: a mint's symbol does not change.
  */
 const { PublicKey } = require('@solana/web3.js');
-const { getTokenMetadata, TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
+const { unpackMint, getExtensionData, ExtensionType, TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
 const logger = require('./logger');
 
 const METAPLEX_PROGRAM = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
@@ -64,6 +64,36 @@ function decodeMetaplex(data) {
         const symbol = readString();
         if (!name && !symbol) return null;
         return { name, symbol };
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * v30.2: read name/symbol straight out of a Token-2022 mint's TokenMetadata extension, from
+ * account data we already fetched. This used to call getTokenMetadata per mint, which fetches
+ * the very same account again -- up to ~90 extra RPC calls each time the labels refreshed.
+ *
+ * The extension's layout is update_authority (32) | mint (32) | name | symbol | uri | ...,
+ * with borsh strings (u32 length, then utf-8).
+ */
+function decodeToken2022Metadata(address, info) {
+    try {
+        const mint = unpackMint(address, info, TOKEN_2022_PROGRAM_ID);
+        const data = getExtensionData(ExtensionType.TokenMetadata, mint.tlvData);
+        if (!data) return null;
+        let off = 64;
+        const readString = () => {
+            const len = data.readUInt32LE(off);
+            off += 4;
+            if (len > 256 || off + len > data.length) throw new Error('bad string length');
+            const str = data.slice(off, off + len).toString('utf8');
+            off += len;
+            return str.replace(/\0+$/, '').trim();
+        };
+        const name = readString();
+        const symbol = readString();
+        return name || symbol ? { name, symbol } : null;
     } catch (e) {
         return null;
     }
@@ -117,8 +147,8 @@ async function resolveSymbols(connection, mints) {
     }
     if (!unresolved.length) return out;
 
-    // Pass 2: the Token-2022 metadata extension, which lives on the mint account. Read the
-    // mint accounts first so only genuine Token-2022 mints cost a getTokenMetadata call.
+    // Pass 2: the Token-2022 metadata extension, which lives on the mint account itself, so the
+    // one batch read of the mint accounts is all this pass costs.
     for (let i = 0; i < unresolved.length; i += BATCH) {
         const slice = unresolved.slice(i, i + BATCH);
         let infos;
@@ -135,16 +165,9 @@ async function resolveSymbols(connection, mints) {
                 cache.set(s, { value: null, at: Date.now() });
                 continue;
             }
-            try {
-                const md = await getTokenMetadata(connection, new PublicKey(s), 'confirmed', TOKEN_2022_PROGRAM_ID);
-                const value = md && (md.name || md.symbol)
-                    ? { name: (md.name || '').trim(), symbol: (md.symbol || '').trim() }
-                    : null;
-                cache.set(s, { value, at: Date.now() });
-                if (value) out.set(s, value);
-            } catch (e) {
-                cache.set(s, { value: null, at: Date.now() });
-            }
+            const value = decodeToken2022Metadata(new PublicKey(s), info);
+            cache.set(s, { value, at: Date.now() });
+            if (value) out.set(s, value);
         }
     }
 
@@ -155,4 +178,4 @@ function resetCache() {
     cache.clear();
 }
 
-module.exports = { resolveSymbols, resetCache, decodeMetaplex, metadataPda };
+module.exports = { resolveSymbols, resetCache, decodeMetaplex, decodeToken2022Metadata, metadataPda };

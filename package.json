@@ -5,9 +5,7 @@
   "scripts": {
     "start": "node src/index.js",
     "start:grinder": "SERVER_MODE=grinder node src/grinder.js",
-    "dev": "node --watch src/index.js",
-    "backfill": "node scripts/backfillTokens.js",
-    "backfill:dry": "node scripts/backfillTokens.js --dry-run"
+    "dev": "node --watch src/index.js"
   },
   "overrides": {
     "bigint-buffer": "^1.1.5"

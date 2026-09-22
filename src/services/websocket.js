@@ -255,7 +255,8 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
                 airdropPoolSol,
                 tokenPoolsSol,
                 centralPoolSol,
-                totalPoints: globalState.totalPoints || 0,
+                // v30.2: from Redis -- in the API process globalState is never written.
+                totalPoints: await redis.getTotalPoints().catch(() => 0),
 
                 // Leaderboard — platform-launched tokens by 24h volume
                 leaderboard: resolvedLeaderboard,

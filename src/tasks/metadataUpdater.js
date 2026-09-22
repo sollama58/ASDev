@@ -234,6 +234,97 @@ async function fetchGeckoTerminalBatch(mints) {
 }
 
 /**
+ * v30.2: Market data from the pairs where OUR creator fee is actually charged.
+ *
+ * A coin's 24h volume decides what share of ALL platform creator fees its holders receive, so
+ * it must measure trading that generated those fees. DexScreener lists every pool for a
+ * token, and we used to take whichever pair had the most liquidity. Anyone can open their own
+ * low-fee pool for a ShitPad coin (Meteora, Raydium), out-fund the pump curve's liquidity and
+ * wash-trade in it -- collecting most of the swap fees back as that pool's LP -- to inflate
+ * the coin's "volume" and pull a large slice of every other coin's fees to its holders.
+ * Volume on those pools pays us nothing, so it now counts for nothing.
+ *
+ * Only pairs whose dexId is in FEE_BEARING_DEX_IDS (default: the pump.fun bonding curve and
+ * PumpSwap) contribute. Their volume is summed; price, market cap and liquidity come from
+ * the deepest of them. A token whose only pairs are elsewhere is reported in `foreignOnly` and
+ * treated by callers as a miss, so a rename of DexScreener's dexIds degrades slowly (via the
+ * miss threshold) and loudly (via the warning) rather than zeroing everything at once.
+ *
+ * `imageUrl` may come from any pair: an image is cosmetic and carries no money.
+ */
+const FEE_BEARING_DEX_IDS = new Set(
+    (process.env.FEE_BEARING_DEX_IDS || 'pumpfun,pumpswap').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+);
+
+function extractMarketData(pairs) {
+    const updates = new Map();
+    const imageByMint = new Map();
+    const foreignDexIds = new Map(); // mint -> Set(dexId) for pairs not in the allowlist
+
+    for (const pair of pairs || []) {
+        const mint = pair.baseToken?.address;
+        if (!mint) continue;
+
+        const img = pair.info?.imageUrl || pair.info?.header || pair.baseToken?.info?.imageUrl || null;
+        if (img && !imageByMint.has(mint)) imageByMint.set(mint, img);
+
+        const dexId = String(pair.dexId || '').toLowerCase();
+        if (!FEE_BEARING_DEX_IDS.has(dexId)) {
+            if (!foreignDexIds.has(mint)) foreignDexIds.set(mint, new Set());
+            foreignDexIds.get(mint).add(dexId);
+            continue;
+        }
+
+        const liquidity = validateNumericValue(pair.liquidity?.usd, MAX_MARKET_CAP_USD, 'liquidity');
+        const volume = validateNumericValue(pair.volume?.h24, MAX_VOLUME_USD, 'volume24h');
+        const existing = updates.get(mint);
+        if (!existing) {
+            updates.set(mint, {
+                marketCap: validateNumericValue(pair.fdv || pair.marketCap, MAX_MARKET_CAP_USD, 'marketCap'),
+                volume24h: volume,
+                priceUsd: validateNumericValue(pair.priceUsd, MAX_PRICE_USD, 'priceUsd'),
+                liquidity,
+                name: pair.baseToken?.name || null,
+                ticker: pair.baseToken?.symbol || null,
+            });
+        } else {
+            existing.volume24h = Math.min(MAX_VOLUME_USD, existing.volume24h + volume);
+            if (liquidity > existing.liquidity) {
+                existing.marketCap = validateNumericValue(pair.fdv || pair.marketCap, MAX_MARKET_CAP_USD, 'marketCap');
+                existing.priceUsd = validateNumericValue(pair.priceUsd, MAX_PRICE_USD, 'priceUsd');
+                existing.liquidity = liquidity;
+            }
+        }
+    }
+
+    const foreignOnly = new Set();
+    for (const [mint, ids] of foreignDexIds) {
+        if (!updates.has(mint)) {
+            foreignOnly.add(mint);
+            logger.warn('[MetadataUpdater] Token has pairs but none where our creator fee is charged; volume not counted', {
+                mint: mint.slice(0, 8), dexIds: [...ids].join(',')
+            });
+        }
+    }
+    for (const [mint, data] of updates) data.imageUrl = imageByMint.get(mint) || null;
+    return { updates, foreignOnly };
+}
+
+/**
+ * v30.2: one DexScreener miss no longer zeroes a coin's volume. A transient empty or partial
+ * response used to drop the coin out of the very next fee split (volume 0 is below the
+ * eligibility floor), handing its holders' share to other coins. Volume is zeroed only after
+ * this many consecutive misses; until then the last good figure stands.
+ */
+const ZERO_VOLUME_AFTER_MISSES = 3;
+
+function recordMiss(mint) {
+    const n = (dexMissCount.get(mint) || 0) + 1;
+    dexMissCount.set(mint, n);
+    return n >= ZERO_VOLUME_AFTER_MISSES;
+}
+
+/**
  * v25.13: Update prices for specific tokens (no image/metadata updates)
  *         Also sets volume to 0 for tokens without data from DexScreener
  * Used for frequent top token updates
@@ -254,24 +345,7 @@ async function updatePricesOnly(deps, tokens) {
             { timeout: 8000 }
         );
 
-        const pairs = dexRes.data?.pairs || [];
-        const updates = new Map();
-
-        for (const pair of pairs) {
-            const mint = pair.baseToken?.address;
-            if (!mint) continue;
-
-            const existing = updates.get(mint);
-            if (!existing || (pair.liquidity?.usd > existing.liquidity)) {
-                // v25.22 SECURITY: Validate all numeric values from external API
-                updates.set(mint, {
-                    marketCap: validateNumericValue(pair.fdv || pair.marketCap, MAX_MARKET_CAP_USD, 'marketCap'),
-                    volume24h: validateNumericValue(pair.volume?.h24, MAX_VOLUME_USD, 'volume24h'),
-                    priceUsd: validateNumericValue(pair.priceUsd, MAX_PRICE_USD, 'priceUsd'),
-                    liquidity: validateNumericValue(pair.liquidity?.usd, MAX_MARKET_CAP_USD, 'liquidity')
-                });
-            }
-        }
+        const { updates } = extractMarketData(dexRes.data?.pairs);
 
         // v25.65: Update tokens with proper table reference
         for (const t of tokens) {
@@ -279,13 +353,13 @@ async function updatePricesOnly(deps, tokens) {
             const table = t.table_name || 'tokens'; // Default to 'tokens' for backwards compatibility
 
             if (data) {
+                dexMissCount.delete(t.mint);
                 await db.run(
                     `UPDATE ${table} SET volume24h = $1, "marketCap" = $2, "priceUsd" = $3, "lastUpdated" = $4 WHERE mint = $5`,
                     [data.volume24h, data.marketCap, data.priceUsd, Date.now(), t.mint]
                 );
                 updated++;
-            } else {
-                // v25.65 BUGFIX: Also update tokens with 0 volume
+            } else if (recordMiss(t.mint)) {
                 await db.run(
                     `UPDATE ${table} SET volume24h = 0, "lastUpdated" = $1 WHERE mint = $2`,
                     [Date.now(), t.mint]
@@ -384,24 +458,7 @@ async function updateAllTokenPrices(deps) {
                 { timeout: 8000 }
             );
 
-            const pairs = dexRes.data?.pairs || [];
-            const updates = new Map();
-
-            for (const pair of pairs) {
-                const mint = pair.baseToken?.address;
-                if (!mint) continue;
-
-                const existing = updates.get(mint);
-                if (!existing || (pair.liquidity?.usd > existing.liquidity)) {
-                    // v25.22 SECURITY: Validate all numeric values from external API
-                    updates.set(mint, {
-                        marketCap: validateNumericValue(pair.fdv || pair.marketCap, MAX_MARKET_CAP_USD, 'marketCap'),
-                        volume24h: validateNumericValue(pair.volume?.h24, MAX_VOLUME_USD, 'volume24h'),
-                        priceUsd: validateNumericValue(pair.priceUsd, MAX_PRICE_USD, 'priceUsd'),
-                        liquidity: validateNumericValue(pair.liquidity?.usd, MAX_MARKET_CAP_USD, 'liquidity')
-                    });
-                }
-            }
+            const { updates } = extractMarketData(dexRes.data?.pairs);
 
             // IMPORTANT: Also update tokens with 0 volume (not just those with data)
             for (const t of chunk) {
@@ -417,14 +474,15 @@ async function updateAllTokenPrices(deps) {
                     );
                     totalUpdated++;
                 } else {
-                    // v25.65 BUGFIX: Token has NO data from DexScreener - set volume to 0
-                    dexMissCount.set(t.mint, (dexMissCount.get(t.mint) || 0) + 1);
-                    await db.run(
-                        `UPDATE ${table} SET volume24h = 0, "lastUpdated" = $1 WHERE mint = $2`,
-                        [Date.now(), t.mint]
-                    );
-                    totalUpdated++;
-                    totalWithZeroVolume++;
+                    // No fee-bearing data this time. Zeroed only after repeated misses.
+                    if (recordMiss(t.mint)) {
+                        await db.run(
+                            `UPDATE ${table} SET volume24h = 0, "lastUpdated" = $1 WHERE mint = $2`,
+                            [Date.now(), t.mint]
+                        );
+                        totalUpdated++;
+                        totalWithZeroVolume++;
+                    }
                     missTable.set(t.mint, table);
                     allMisses.push(t.mint);
                 }
@@ -524,37 +582,7 @@ async function updateMetadata(deps) {
                 logger.debug(`[MetadataUpdater] DexScreener: Got ${pairs.length} pairs for ${chunk.length} tokens`);
             }
 
-            const updates = new Map();
-
-            for (const pair of pairs) {
-                const mint = pair.baseToken?.address;
-                if (!mint) continue;
-
-                const existing = updates.get(mint);
-
-                // Logic: Keep best pair (highest liquidity)
-                if (!existing || (pair.liquidity?.usd > existing.liquidity)) {
-                    const imageUrl = pair.info?.imageUrl ||
-                                    pair.info?.header ||
-                                    pair.baseToken?.info?.imageUrl ||
-                                    null;
-
-                    // v25.22 SECURITY: Validate all numeric values from external API
-                    updates.set(mint, {
-                        marketCap: validateNumericValue(pair.fdv || pair.marketCap, MAX_MARKET_CAP_USD, 'marketCap'),
-                        volume24h: validateNumericValue(pair.volume?.h24, MAX_VOLUME_USD, 'volume24h'),
-                        priceUsd: validateNumericValue(pair.priceUsd, MAX_PRICE_USD, 'priceUsd'),
-                        liquidity: validateNumericValue(pair.liquidity?.usd, MAX_MARKET_CAP_USD, 'liquidity'),
-                        imageUrl: imageUrl,
-                        name: pair.baseToken?.name || null,
-                        ticker: pair.baseToken?.symbol || null
-                    });
-
-                    if (DEBUG_METADATA && imageUrl) {
-                        logger.debug(`[MetadataUpdater] DexScreener found image for ${mint.slice(0,8)}...`);
-                    }
-                }
-            }
+            const { updates } = extractMarketData(pairs);
 
             if (DEBUG_METADATA) {
                 const withData = updates.size;
@@ -914,15 +942,50 @@ function start(deps) {
     setTimeout(() => updateTopTokenPrices(deps), 10000);
     setTimeout(() => updateAllMissingImages(deps), 90000);
 
-    // Set up intervals
+    // Set up intervals. v30.2: the full-price pass is NOT scheduled here -- the BullMQ metadata
+    // worker (workers.initMetadataUpdaterWorker) already runs it every METADATA_FULL_INTERVAL,
+    // and in full mode both were scheduled, so every token was priced twice every 5 minutes.
     setInterval(() => updateTopTokenPrices(deps), priceInterval);
-    setInterval(() => updateAllTokenPrices(deps), fullInterval);
     setInterval(() => updateAllMissingImages(deps), imageInterval); // v25.46: Periodic image updates
 
-    logger.info(`[MetadataUpdater] Started - Top tokens: ${priceInterval/1000}s, All tokens: ${fullInterval/1000}s, Images: ${imageInterval/1000}s`);
+    logger.info(`[MetadataUpdater] Started - Top tokens: ${priceInterval/1000}s, Images: ${imageInterval/1000}s (full pass: metadata worker, ${fullInterval/1000}s)`);
+}
+
+/**
+ * v30.2: fresh market data for a few mints, for the admin refresh routes. Replaces their use
+ * of the 1,800-line mintExtractor service, whose own DexScreener lookup took volume from any
+ * pair -- the same attribution hole extractMarketData closes. DexScreener first (fee-bearing
+ * pairs only), Helius getAssetBatch for anything it misses.
+ *
+ * @returns {Promise<Map<string, {name, ticker, image, marketCap, volume24h}>>}
+ */
+async function fetchFreshMarketData(mints) {
+    const out = new Map();
+    for (const chunk of chunkArray(mints, 30)) {
+        try {
+            const dexRes = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`, { timeout: 8000 });
+            const { updates } = extractMarketData(dexRes.data?.pairs);
+            for (const [mint, d] of updates) {
+                out.set(mint, { name: d.name, ticker: d.ticker, image: d.imageUrl, marketCap: d.marketCap, volume24h: d.volume24h });
+            }
+        } catch (e) {
+            logger.debug(`[MetadataUpdater] fetchFreshMarketData DexScreener error: ${e.message}`);
+        }
+    }
+    const misses = mints.filter(m => !out.has(m));
+    if (misses.length) {
+        const helius = await fetchHeliusMarketDataBatch(misses);
+        for (const m of misses) {
+            const d = helius.get(m);
+            if (d) out.set(m, { name: null, ticker: null, image: d.image || null, marketCap: d.marketCap || 0, volume24h: 0 });
+        }
+    }
+    return out;
 }
 
 module.exports = {
+    fetchFreshMarketData,
+    extractMarketData,
     updateMetadata,
     updateTopTokenPrices,
     updateAllTokenPrices,

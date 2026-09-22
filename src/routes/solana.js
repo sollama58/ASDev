@@ -4,6 +4,7 @@
  */
 const express = require('express');
 const { PublicKey } = require('@solana/web3.js');
+const adminAuth = require('./adminAuth');
 
 const router = express.Router();
 
@@ -56,7 +57,10 @@ function init(deps) {
     const { connection } = deps;
 
     // Get balance
-    router.get('/balance', async (req, res) => {
+    // v30.2: admin-only. The ShitPad pages never call it, and as a public endpoint it looked up
+    // any address on request -- random addresses defeat the cache, so it was an open proxy to
+    // the platform's RPC quota.
+    router.get('/balance', adminAuth, async (req, res) => {
         try {
             const { pubkey } = req.query;
             if (!pubkey) {
