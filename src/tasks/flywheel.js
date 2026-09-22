@@ -28,15 +28,11 @@
  *           Fixed airdrop_logs.amount and user_airdrop_history to reflect reality
  * This eliminates the need to fund token accounts (ATAs) for recipients
  */
-const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
-const {
-    getAssociatedTokenAddress, getAccount, createAssociatedTokenAccountInstruction,
-    createCloseAccountInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-} = require('@solana/spl-token');
 const config = require('../config/env');
-const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, pump, solana, jupiter, redis, mutex, mintExtractor, claudeKoth, twitter } = require('../services');
+const { WALLETS } = require('../config/constants');
+const { logger, solana, jupiter, redis, mutex, mintExtractor, claudeKoth, twitter } = require('../services');
 
 // RACE CONDITION FIX: Use mutex for atomic lock/unlock instead of boolean flags
 const buybackMutex = mutex.getMutex('flywheel_buyback');
@@ -1243,108 +1239,164 @@ async function getAiSelectedKoth(db) {
 }
 
 /**
- * Claim creator fees from bonding curve and AMM
+ * Every quote mint our own coins were launched in.
+ *
+ * Needed because de-listing a mint from QuoteControl stops new creates but does not stop the
+ * curves already quoted in it: they keep trading and keep accruing creator fees, and pump.fun's
+ * own sweep only walks the currently-listed mints. Passing these explicitly is what keeps a
+ * de-listed quote's fees reachable.
  */
-async function claimCreatorFees(deps) {
-    const { connection, devKeypair } = deps;
-    const { bcVault, ammVaultAuth, ammVaultAta } = pump.getCreatorFeeVaults(devKeypair.publicKey);
-
-    const tx = new Transaction();
-    solana.addPriorityFee(tx);
-
-    let claimedSomething = false;
-    let totalClaimed = 0;
-
-    // Claim Bonding Curve Fees
+async function ourQuoteMints(db) {
     try {
-        const bcInfo = await connection.getAccountInfo(bcVault);
-        if (bcInfo && bcInfo.lamports > 0) {
-            // v29.2: the vault is a live account, so a claim can only move the lamports ABOVE
-            // its rent-exempt minimum -- the rest has to stay behind to keep the account alive.
-            // Crediting bcInfo.lamports in full therefore over-credited every claim by that
-            // minimum, and since the split below is what fills holder pools, the platform was
-            // promising holders slightly more than it had actually received. Deliberately
-            // computed rather than measured from a wallet balance delta: in `full` mode the
-            // deploy worker spends from the same wallet concurrently, so a delta would be
-            // polluted by unrelated activity.
-            const bcRentExempt = await solana.getRentExemptMinimum(bcInfo.data?.length || 0);
-            const claimable = Math.max(0, bcInfo.lamports - bcRentExempt);
-            if (claimable === 0) {
-                logger.debug('BC vault holds only its rent-exempt minimum, nothing to claim', {
-                    lamports: bcInfo.lamports, rentExempt: bcRentExempt
-                });
-            }
-            const discriminator = pump.buildClaimFeesData();
-            const [eventAuthority] = PublicKey.findProgramAddressSync(
-                [Buffer.from("__event_authority")], PROGRAMS.PUMP
-            );
-
-            const keys = [
-                { pubkey: devKeypair.publicKey, isSigner: false, isWritable: true },
-                { pubkey: bcVault, isSigner: false, isWritable: true },
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-            ];
-
-            if (claimable > 0) {
-                tx.add(new TransactionInstruction({ keys, programId: PROGRAMS.PUMP, data: discriminator }));
-                claimedSomething = true;
-                totalClaimed += claimable;
-            }
-        }
+        const rows = await db.all('SELECT DISTINCT quote_mint FROM tokens WHERE quote_mint IS NOT NULL');
+        return rows.map(r => r.quote_mint).filter(Boolean);
     } catch (e) {
-        logger.debug('Failed to claim BC fees', { error: e.message });
+        logger.debug('[FeeCollection] Could not list our quote mints', { error: e.message });
+        return [];
     }
+}
 
-    // Claim AMM Fees
-    try {
-        const myWsolAta = await getAssociatedTokenAddress(TOKENS.WSOL, devKeypair.publicKey);
+/**
+ * What is waiting to be claimed, per quote mint, priced in lamports.
+ *
+ * v30.1: replaces the two hand-rolled vault reads. Custom Pairs mean a coin quoted in a
+ * tokenised asset accrues its creator fees in that asset, so a SOL-only probe reported a
+ * pending balance of zero while real fees piled up in vault ATAs, and the claim never fired.
+ *
+ * Everything downstream -- the threshold, the 50/25/24.5/0.5 split, the per-token pools -- is
+ * lamport-denominated, so each token balance is priced through Jupiter. A quote with no route
+ * is reported with `lamports: null` and left out of the total rather than counted as zero:
+ * unknown is not the same as nothing, and treating it as nothing would be a silent hole.
+ */
+async function surveyCreatorFees(deps) {
+    const { connection, devKeypair, db } = deps;
+    const pumpLaunch = require('../services/pumpLaunch');
+
+    const balances = await pumpLaunch.fetchCollectableFees({
+        connection,
+        creator: devKeypair.publicKey,
+        extraQuoteMints: await ourQuoteMints(db),
+    });
+
+    let totalLamports = 0;
+    const entries = [];
+
+    for (const b of balances) {
+        if (b.isSol) {
+            const lamports = b.total.toNumber();
+            totalLamports += lamports;
+            entries.push({ ...b, lamports });
+            continue;
+        }
+        let lamports = null;
         try {
-            await getAccount(connection, myWsolAta);
-        } catch {
-            tx.add(createAssociatedTokenAccountInstruction(
-                devKeypair.publicKey, myWsolAta, devKeypair.publicKey, TOKENS.WSOL
-            ));
+            lamports = await jupiter.quoteTokenToSol(b.mint, b.total.toString());
+        } catch (e) {
+            logger.debug('[FeeCollection] Could not price a quote asset', { mint: b.mint, error: e.message });
         }
-
-        const ammVaultAtaKey = await ammVaultAta;
-        const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-
-        if (new BN(bal.value.amount).gt(new BN(0))) {
-            const ammDiscriminator = Buffer.from([160, 57, 89, 42, 181, 139, 43, 66]);
-            const [eventAuthority] = PublicKey.findProgramAddressSync(
-                [Buffer.from("__event_authority")], PROGRAMS.PUMP_AMM
-            );
-
-            const keys = [
-                { pubkey: TOKENS.WSOL, isSigner: false, isWritable: false },
-                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                { pubkey: devKeypair.publicKey, isSigner: true, isWritable: false },
-                { pubkey: ammVaultAuth, isSigner: false, isWritable: false },
-                { pubkey: ammVaultAtaKey, isSigner: false, isWritable: true },
-                { pubkey: myWsolAta, isSigner: false, isWritable: true },
-                { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.PUMP_AMM, isSigner: false, isWritable: false }
-            ];
-
-            tx.add(new TransactionInstruction({ keys, programId: PROGRAMS.PUMP_AMM, data: ammDiscriminator }));
-            tx.add(createCloseAccountInstruction(myWsolAta, devKeypair.publicKey, devKeypair.publicKey));
-            claimedSomething = true;
-            // The AMM side needs no rent adjustment: this is a token-account balance, moved in
-            // full, and the account is closed on the next line so its own rent comes back too.
-            totalClaimed += Number(bal.value.amount);
-        }
-    } catch (e) {
-        logger.debug('Failed to claim AMM fees', { error: e.message });
+        if (lamports !== null) totalLamports += lamports;
+        else logger.warn('[FeeCollection] No SOL route for a quote asset holding fees', { mint: b.mint, amount: b.total.toString() });
+        entries.push({ ...b, lamports });
     }
 
-    if (claimedSomething) {
+    return { totalLamports, entries };
+}
+
+// A collect leg costs well under this; the budget is per transaction, and requesting more
+// than a transaction uses costs nothing beyond a marginally higher priority-fee base.
+const CU_PER_FEE_INSTRUCTION = 60_000;
+const CU_MAX_PER_TX = 1_400_000;
+
+/**
+ * Claim creator fees in every quote mint and convert the proceeds to SOL.
+ *
+ * Returns the total in lamports, measured rather than assumed: the vault balances are
+ * surveyed before and after the sweep, and only the difference is credited. That is what
+ * makes a partial sweep safe -- if the third of five transactions fails, the quotes it would
+ * have collected still show a full balance afterwards and contribute nothing -- and it is why
+ * this does not use a wallet balance delta, which in `full` mode is polluted by the deploy
+ * worker spending from the same wallet concurrently.
+ */
+async function claimCreatorFees(deps, survey = null) {
+    const { connection, devKeypair, db } = deps;
+    const pumpLaunch = require('../services/pumpLaunch');
+
+    const before = survey || await surveyCreatorFees(deps);
+    if (!before.entries.length) return 0;
+
+    const extraQuoteMints = await ourQuoteMints(db);
+    const instructions = await pumpLaunch.buildCollectAllFeesInstructions({
+        connection,
+        creator: devKeypair.publicKey,
+        feePayer: devKeypair.publicKey,
+        extraQuoteMints,
+    });
+    if (!instructions.length) return 0;
+
+    const groups = pumpLaunch.planFeeTransactions(instructions, devKeypair.publicKey, CU_MAX_PER_TX);
+    logger.info('[FeeCollection] Sweeping creator fees', {
+        quotes: before.entries.length, instructions: instructions.length, transactions: groups.length,
+    });
+
+    // Sent strictly in order and abandoned on the first failure: the SDK emits each quote's
+    // instructions contiguously as [create-ATA-if-missing, collect, collect], so a group can
+    // begin with a collect whose destination ATA the previous group creates.
+    let sent = 0;
+    for (const group of groups) {
+        const tx = new Transaction();
+        solana.addPriorityFee(tx, { units: Math.min(CU_MAX_PER_TX, CU_PER_FEE_INSTRUCTION * group.length) });
+        for (const ix of group) tx.add(ix);
         tx.feePayer = devKeypair.publicKey;
-        await solana.sendTxWithRetry(tx, [devKeypair]);
-        return totalClaimed;
+        try {
+            await solana.sendTxWithRetry(tx, [devKeypair]);
+            sent++;
+        } catch (e) {
+            logger.warn('[FeeCollection] Fee sweep stopped part-way', {
+                sentTransactions: sent, ofTransactions: groups.length, error: e.message,
+            });
+            break;
+        }
     }
-    return 0;
+    if (sent === 0) return 0;
+
+    // Raw balances, not a priced survey: what is left is only needed to work out how much
+    // each quote moved, and pricing it would spend a Jupiter quote per mint for nothing.
+    const after = await pumpLaunch.fetchCollectableFees({
+        connection,
+        creator: devKeypair.publicKey,
+        extraQuoteMints,
+    });
+    const remaining = new Map(after.map(e => [e.mint, e.total]));
+
+    let totalLamports = 0;
+    for (const entry of before.entries) {
+        const left = remaining.get(entry.mint) || new BN(0);
+        const moved = entry.total.sub(left);
+        // Fees keep accruing while the sweep runs, so a quote can end up holding more than it
+        // started with. Nothing was lost; there is simply nothing to credit for it this cycle.
+        if (moved.lten(0)) continue;
+
+        if (entry.isSol) {
+            totalLamports += moved.toNumber();
+            continue;
+        }
+
+        // The tokens are now sitting in our quote ATA. Only the amount this sweep actually
+        // moved is swapped -- the wallet may hold the same asset on purpose, to seed launches
+        // quoted in it, and swapping that away would break those launches.
+        const swap = await jupiter.swapTokenToSol(moved.toString(), entry.mint, devKeypair, connection);
+        if (swap && swap.outAmount > 0) {
+            totalLamports += swap.outAmount;
+        } else {
+            // Claimed but unconverted. The tokens are safe in the ATA and the next cycle's
+            // sweep will not see them again, so this is logged loudly rather than swallowed.
+            logger.warn('[FeeCollection] Claimed fees could not be converted to SOL and are held as tokens', {
+                mint: entry.mint, amount: moved.toString(),
+            });
+        }
+    }
+
+    return totalLamports;
 }
 
 /**
@@ -2065,32 +2117,24 @@ async function runPurchaseAndFees(deps) {
     };
 
     try {
-        const { bcVault, ammVaultAta } = pump.getCreatorFeeVaults(devKeypair.publicKey);
-        let totalPendingFees = new BN(0);
-
+        // v30.1: surveyed across every quote mint rather than read off the two SOL vaults --
+        // a coin quoted in a tokenised asset accrues its creator fees in that asset.
+        let survey = { totalLamports: 0, entries: [] };
         try {
-            const bcInfo = await connection.getAccountInfo(bcVault);
-            if (bcInfo) totalPendingFees = totalPendingFees.add(new BN(bcInfo.lamports));
+            survey = await surveyCreatorFees(deps);
         } catch (e) {
-            logger.debug('Failed to fetch BC fees', { error: e.message });
+            logger.debug('Failed to survey creator fees', { error: e.message });
         }
+        const totalPendingFees = new BN(survey.totalLamports);
 
-        try {
-            const ammVaultAtaKey = await ammVaultAta;
-            const bal = await connection.getTokenAccountBalance(ammVaultAtaKey);
-            if (bal.value.amount) totalPendingFees = totalPendingFees.add(new BN(bal.value.amount));
-        } catch (e) {
-            logger.debug('Failed to fetch AMM fees', { error: e.message });
-        }
+        logData.feesCollected = survey.totalLamports / LAMPORTS_PER_SOL;
 
-        logData.feesCollected = totalPendingFees.toNumber() / LAMPORTS_PER_SOL;
-
-        const threshold = new BN(config.FEE_THRESHOLD_SOL * LAMPORTS_PER_SOL);
+        const threshold = new BN(Math.round(config.FEE_THRESHOLD_SOL * LAMPORTS_PER_SOL));
         let claimedAmount = 0;
 
         if (totalPendingFees.gte(threshold)) {
             logger.info("Claiming fees...");
-            claimedAmount = await claimCreatorFees(deps);
+            claimedAmount = await claimCreatorFees(deps, survey);
 
             if (claimedAmount > 0) {
                 await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [claimedAmount, 'lifetimeCreatorFeesLamports']);
@@ -2231,45 +2275,28 @@ async function runFeeCollection(deps) {
     }
 
     try {
-        const { bcVault, ammVaultAuth, ammVaultAta } = pump.getCreatorFeeVaults(devKeypair.publicKey);
-
-        // Check pending platform fees (both BC and AMM)
-        let platformPendingFees = new BN(0);
+        // v30.1: one survey across every quote mint, priced in lamports. The rent-exempt
+        // minimum a live SOL vault can never release is already excluded by the survey, so
+        // pending fees no longer include lamports the platform cannot actually collect.
+        let survey = { totalLamports: 0, entries: [] };
         try {
-            const bcInfo = await connection.getAccountInfo(bcVault);
-            if (bcInfo) {
-                // v29.2: same rent adjustment as claimCreatorFees below. The rent-exempt
-                // minimum can never be claimed, so counting it here reported pending fees the
-                // platform could not actually collect.
-                const bcRentExempt = await solana.getRentExemptMinimum(bcInfo.data?.length || 0);
-                platformPendingFees = platformPendingFees.add(
-                    new BN(Math.max(0, bcInfo.lamports - bcRentExempt))
-                );
-            }
+            survey = await surveyCreatorFees(deps);
         } catch (e) {
-            // v25.14 ROBUSTNESS: Log RPC errors instead of silently ignoring
-            logger.debug('[FeeCollection] BC vault check failed', { error: e.message });
+            logger.debug('[FeeCollection] Creator fee survey failed', { error: e.message });
         }
 
-        try {
-            const ammVaultAtaKey = await ammVaultAta;
-            const bal = await connection.getTokenAccountBalance(ammVaultAtaKey).catch(() => ({ value: { amount: "0" } }));
-            platformPendingFees = platformPendingFees.add(new BN(bal.value.amount));
-        } catch (e) {
-            // v25.14 ROBUSTNESS: Log RPC errors instead of silently ignoring
-            logger.debug('[FeeCollection] AMM vault check failed', { error: e.message });
-        }
-
-        const totalPendingFees = platformPendingFees;
-        logger.info(`[FeeCollection] Platform pending fees: ${(platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+        const totalPendingFees = new BN(survey.totalLamports);
+        const tokenQuotes = survey.entries.filter(e => !e.isSol);
+        logger.info(`[FeeCollection] Platform pending fees: ${(survey.totalLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL`
+            + (tokenQuotes.length ? ` (across SOL and ${tokenQuotes.length} token quote${tokenQuotes.length === 1 ? '' : 's'})` : ''));
 
         // v17.0: Fee threshold is 0.05 SOL
-        const threshold = new BN((config.FEE_THRESHOLD_SOL || 0.05) * LAMPORTS_PER_SOL);
+        const threshold = new BN(Math.round((config.FEE_THRESHOLD_SOL || 0.05) * LAMPORTS_PER_SOL));
 
         if (totalPendingFees.gte(threshold)) {
             logger.info(`[FeeCollection] Claiming ${(totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4)} SOL in fees...`);
 
-            let claimedAmount = await claimCreatorFees(deps);
+            let claimedAmount = await claimCreatorFees(deps, survey);
 
             if (claimedAmount > 0) {
                 await db.run('UPDATE stats SET value = value + $1 WHERE key = $2', [claimedAmount, 'lifetimeCreatorFeesLamports']);
@@ -2341,9 +2368,13 @@ async function runFeeCollection(deps) {
                     await logPurchase('FEE_CLAIM', {
                         status: 'SUCCESS',
                         feesClaimedSol: (claimedAmount / LAMPORTS_PER_SOL).toFixed(4),
-                        platformFeeSol: ((claimedAmount * 0.05) / LAMPORTS_PER_SOL).toFixed(4),
+                        // v30.1: was hard-coded at 5%, which stopped being the platform's cut
+                        // when the split became 50/25/24.5/0.5. Read it from the splitter so
+                        // the figure the frontend shows cannot drift from the one it books.
+                        platformFeeSol: ((splitClaimedFees(claimedAmount).buybackBurn
+                            + splitClaimedFees(claimedAmount).upkeep) / LAMPORTS_PER_SOL).toFixed(4),
                         pendingBeforeClaimSol: (totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
-                        platformPendingSol: (platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
+                        quoteAssetsPending: survey.entries.length,
                         thresholdSol: (config.FEE_THRESHOLD_SOL || 0.05).toFixed(2)
                     });
                 }
@@ -2355,7 +2386,7 @@ async function runFeeCollection(deps) {
                 await logPurchase('FEE_CHECK', {
                     status: 'BELOW_THRESHOLD',
                     pendingSol: (totalPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
-                    platformPendingSol: (platformPendingFees.toNumber() / LAMPORTS_PER_SOL).toFixed(4),
+                    quoteAssetsPending: survey.entries.length,
                     thresholdSol: (config.FEE_THRESHOLD_SOL || 0.05).toFixed(2),
                     progressPercent: Math.min(100, Math.round((totalPendingFees.toNumber() / threshold.toNumber()) * 100)),
                     reason: totalPendingFees.toNumber() === 0 ? 'No pending fees' : 'Below threshold'
@@ -2429,4 +2460,4 @@ async function start(deps) {
     setTimeout(() => evaluateKothCandidates(db).catch(e => logger.warn('[KOTH] Startup evaluation failed', { error: e.message })), 10000);
 }
 
-module.exports = { claimCreatorFees, processAirdrop, processTokenAirdrops, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, start, getAiSelectedKoth, resetKothCache, splitClaimedFees, processPlatformFeeSweep, FEE_SPLIT };
+module.exports = { claimCreatorFees, surveyCreatorFees, processAirdrop, processTokenAirdrops, sendSolAirdropBatch, runPurchaseAndFees, runFeeCollection, start, getAiSelectedKoth, resetKothCache, splitClaimedFees, processPlatformFeeSweep, FEE_SPLIT };

@@ -62,12 +62,14 @@ function init(deps) {
             const offset = Math.min(Math.max(0, rawOffset), 50000); // Min 0, Max 50000
 
             // Cache per page (limit + offset combo)
-            const cacheKey = `all_launches_v2600_${limit}_${offset}`;
+            // v30.1: bumped for the added quote_mint field -- a cached page from the old
+            // shape would render every coin as SOL-quoted until the TTL expired.
+            const cacheKey = `all_launches_v3010_${limit}_${offset}`;
             const { rows, total } = await redis.smartCache(cacheKey, 15, async () => {
                 // v27.1: Include pending_airdrop_lamports for threshold display
                 const combinedQuery = `
                     SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete,
-                           'platform' as source, 1 as "isActive",
+                           'platform' as source, 1 as "isActive", quote_mint,
                            COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports
                     FROM tokens
                     ORDER BY volume24h DESC
@@ -119,7 +121,10 @@ function init(deps) {
                 // v25.89: Whether token is active (fee sharing confirmed on-chain)
                 isActive: r.isActive !== 0,
                 // v27.1: Individual token pending pool
-                pendingAirdropSol: ((r.pending_airdrop_lamports || 0) / 1e9).toFixed(6)
+                pendingAirdropSol: ((r.pending_airdrop_lamports || 0) / 1e9).toFixed(6),
+                // v30.1: null means SOL-quoted, which is every coin launched before Custom
+                // Pairs. The frontend resolves the mint to a symbol from /api/quote-assets.
+                quoteMint: r.quote_mint || null
             }));
             res.json({
                 tokens: allLaunches,

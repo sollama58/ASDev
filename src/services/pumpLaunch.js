@@ -38,8 +38,12 @@ const {
     normalizeQuoteMint,
     getBuyTokenAmountFromSolAmount,
     UnsupportedQuoteMintError,
+    creatorVaultPda,
+    ammCreatorVaultPda,
+    quoteAta,
 } = require('@pump-fun/pump-sdk');
 const logger = require('./logger');
+const tokenMeta = require('./tokenMeta');
 const config = require('../config/env');
 
 // Instruction building is offline; only account reads need a connection.
@@ -87,13 +91,36 @@ async function getSupportedQuoteMints(connection, { force = false } = {}) {
         return quoteMintCache.value;
     }
     const mints = await online(connection).fetchSupportedQuoteMints();
-    const value = mints.map(m => ({
-        mint: m.mint.toBase58(),
-        source: String(m.source),
-        isSol: isSolLikeQuoteMint(m.mint),
-    }));
+
+    // The SDK returns addresses only. A picker of ~90 base58 blobs is unusable, so decorate
+    // each one with its on-chain symbol. Cosmetic, hence best-effort: a failure here must
+    // still leave a working (if unlabelled) list rather than break the launcher.
+    let symbols = new Map();
+    try {
+        symbols = await tokenMeta.resolveSymbols(connection, mints.map(m => m.mint));
+    } catch (e) {
+        logger.debug('[PumpLaunch] Quote asset labels unavailable', { error: e.message });
+    }
+
+    const value = mints.map(m => {
+        const mint = m.mint.toBase58();
+        const isSol = isSolLikeQuoteMint(m.mint);
+        const meta = symbols.get(mint);
+        return {
+            mint,
+            source: String(m.source),
+            isSol,
+            // SOL is reported as the wrapped-SOL mint, whose on-chain symbol is "SOL"
+            // already, but it is the default and must be labelled even if the read failed.
+            symbol: isSol ? 'SOL' : (meta?.symbol || ''),
+            name: isSol ? 'Solana' : (meta?.name || ''),
+        };
+    });
     quoteMintCache = { value, at: Date.now() };
-    logger.info('[PumpLaunch] Supported quote mints refreshed', { count: value.length });
+    logger.info('[PumpLaunch] Supported quote mints refreshed', {
+        count: value.length,
+        labelled: value.filter(v => v.symbol).length,
+    });
     return value;
 }
 
@@ -399,18 +426,125 @@ async function buildCollectAllFeesInstructions({ connection, creator, feePayer, 
 }
 
 /**
- * What is waiting to be collected, per quote mint. Used to decide whether a claim is worth
- * sending at all.
+ * What is waiting to be collected, per quote mint, as
+ * `[{ mint, isSol, quoteTokenProgram, total: BN }]` with `total` in the mint's base units.
+ * Used to decide whether a claim is worth sending, and to know how much of each quote asset
+ * a claim will land in our ATAs so exactly that much can be swapped back to SOL afterwards.
+ *
+ * Two sources, because the SDK's reader only knows about currently-listed mints:
+ *
+ *   - `getCreatorVaultQuoteBalances` for every mint on Global or QuoteControl.
+ *   - the vault ATAs read directly for `extraQuoteMints`, which is how a de-listed mint is
+ *     still seen: de-listing stops new creates, but curves already quoted in it keep trading
+ *     and keep accruing creator fees. Callers should pass the distinct `quote_mint` values of
+ *     our own launched tokens.
+ *
+ * Entries with nothing waiting are omitted.
  */
 async function fetchCollectableFees({ connection, creator, extraQuoteMints = [] }) {
+    const o = online(connection);
+    const seen = new Set();
+    const out = [];
+
+    for (const b of await o.getCreatorVaultQuoteBalances(creator)) {
+        const mint = b.mint.toBase58();
+        seen.add(mint);
+        const total = b.pumpVault.add(b.ammVault);
+        if (total.lten(0)) continue;
+        out.push({
+            mint,
+            isSol: isSolLikeQuoteMint(b.mint),
+            quoteTokenProgram: b.quoteTokenProgram,
+            total,
+        });
+    }
+
     const extras = extraQuoteMints
         .filter(Boolean)
         .map(m => { try { return new PublicKey(m); } catch (e) { return null; } })
-        .filter(Boolean);
+        .filter(k => k && !isSolLikeQuoteMint(k) && !seen.has(k.toBase58()));
+    if (!extras.length) return out;
 
-    const o = online(connection);
-    if (typeof o.fetchCreatorVaultQuoteBalances !== 'function') return null;
-    return o.fetchCreatorVaultQuoteBalances(creator, extras);
+    // De-listed mints: derive both vault ATAs and read their balances in one batch. A mint
+    // whose owning program cannot be read is skipped rather than guessed at — deriving the
+    // ATA with the wrong token program yields an address that simply does not exist, which
+    // would silently report zero.
+    const pumpVault = creatorVaultPda(creator);
+    const ammVault = ammCreatorVaultPda(creator);
+    const mintInfos = await connection.getMultipleAccountsInfo(extras);
+    const atas = [];
+    const owners = [];
+    extras.forEach((k, i) => {
+        const info = mintInfos[i];
+        if (!info) return;
+        owners.push({ mint: k, program: info.owner });
+        atas.push(quoteAta(pumpVault, k, info.owner), quoteAta(ammVault, k, info.owner));
+    });
+    if (!atas.length) return out;
+
+    for (let i = 0; i < atas.length; i += 100) {
+        const slice = atas.slice(i, i + 100);
+        const infos = await connection.getMultipleAccountsInfo(slice);
+        for (let n = 0; n < slice.length; n++) {
+            const globalIdx = i + n;
+            const { mint, program } = owners[Math.floor(globalIdx / 2)];
+            const info = infos[n];
+            // A token account's `amount` is a u64 at offset 64; anything shorter, or owned by
+            // a different program, is not a token account of this quote and counts as zero.
+            if (!info || !info.owner.equals(program) || info.data.length < 72) continue;
+            const amount = new BN(info.data.slice(64, 72), 'le');
+            if (amount.lten(0)) continue;
+            const existing = out.find(e => e.mint === mint.toBase58());
+            if (existing) existing.total = existing.total.add(amount);
+            else out.push({ mint: mint.toBase58(), isSol: false, quoteTokenProgram: program, total: amount });
+        }
+    }
+
+    return out;
+}
+
+/**
+ * Pack fee-collection instructions into as few transactions as will fit.
+ *
+ * A sweep across every supported quote runs to hundreds of instructions — far past one
+ * legacy transaction — so it has to be split, and the split has to be measured rather than
+ * guessed at because each quote contributes a different number of accounts.
+ *
+ * Order is preserved, which is what keeps a split safe: the SDK emits each quote's
+ * instructions contiguously as [create-ATA-if-missing, pump leg, AMM leg], and an ATA
+ * creation landing one transaction ahead of the collect that needs it is fine as long as the
+ * transactions are sent in order. Callers must stop on the first failure for that reason.
+ */
+function planFeeTransactions(instructions, feePayer, computeUnitLimit) {
+    const fits = (group) =>
+        measureTxBytes(group, feePayer, computeUnitLimit) + TX_SIZE_MARGIN <= MAX_TX_BYTES;
+
+    const groups = [];
+    let current = [];
+
+    for (const ix of instructions) {
+        if (current.length) {
+            const candidate = [...current, ix];
+            if (fits(candidate)) {
+                current = candidate;
+                continue;
+            }
+            groups.push(current);
+            current = [];
+        }
+        if (!fits([ix])) {
+            // One instruction alone overflows, so there is no split that helps. Skipping it
+            // leaves the rest of the sweep working, which beats failing the whole cycle.
+            logger.warn('[PumpLaunch] Skipping an oversized fee instruction', {
+                programId: ix.programId.toBase58(), accounts: ix.keys.length,
+            });
+            continue;
+        }
+        current = [ix];
+    }
+    if (current.length) groups.push(current);
+
+    return groups;
 }
 
 function resetCaches() {
@@ -425,6 +559,7 @@ module.exports = {
     buildSeedSellInstructions,
     buildCollectAllFeesInstructions,
     fetchCollectableFees,
+    planFeeTransactions,
     getSupportedQuoteMints,
     resolveQuote,
     computeBudgetInstruction,

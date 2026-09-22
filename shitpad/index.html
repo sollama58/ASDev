@@ -1012,6 +1012,33 @@
             box-shadow: 0 0 0 3px var(--accent-glow);
         }
         .launch-input.mono { font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace; font-size: 12px; }
+        /* A <select> ignores most of the text-input styling above and paints its own control,
+           so the appearance is reset and the arrow drawn as a background image. */
+        select.launch-input {
+            appearance: none;
+            -webkit-appearance: none;
+            cursor: pointer;
+            padding-right: 32px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='%23888' d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 10px;
+        }
+        select.launch-input option { background: var(--surface2); color: var(--text); }
+        .launch-hint { font-size: 10px; color: var(--muted); line-height: 1.4; }
+        .quote-badge {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: .4px;
+            color: var(--accent);
+            background: var(--accent-glow);
+            border: 1px solid var(--border2);
+            vertical-align: middle;
+        }
         .char-count { font-size: 10px; color: var(--muted); align-self: flex-end; }
         .char-count.over { color: #fca5a5; }
 
@@ -1840,6 +1867,13 @@
                     <input class="launch-input" id="launch-desc" type="text" maxlength="75" placeholder="The one launchpad that pays you back." autocomplete="off">
                     <span class="char-count" id="desc-count">0 / 75</span>
                 </div>
+                <div class="launch-field full" id="quote-field" style="display:none">
+                    <label class="launch-label" for="launch-quote">Quote Asset <span class="opt">(what your coin trades against)</span></label>
+                    <select class="launch-input" id="launch-quote">
+                        <option value="">SOL</option>
+                    </select>
+                    <span class="launch-hint" id="quote-hint">Anything other than SOL pairs your coin to that asset on Pump.fun. Fees and holder rewards are unaffected.</span>
+                </div>
                 <div class="launch-field">
                     <label class="launch-label" for="launch-twitter">X / Twitter <span class="opt">(optional)</span></label>
                     <input class="launch-input" id="launch-twitter" type="text" placeholder="https://x.com/yourhandle" autocomplete="off" spellcheck="false">
@@ -2061,6 +2095,10 @@ let DEV_WALLET            = null;  // platform wallet, from /api/health
 let DEPLOY_FEE_SOL        = 0;     // launch fee in SOL, from /api/health
 let centralPoolThreshold  = 5.0;   // SOL — updated from health
 let tokenPoolThreshold    = 1.0;   // SOL — updated from health
+// Quote assets (Custom Pairs), from /api/quote-assets. quoteSymbols doubles as the lookup
+// that turns a launched coin's quoteMint into a label on the leaderboard.
+let quoteAssets           = [];
+let quoteSymbols          = new Map();
 
 // Filter state — low vol shown by default so newly launched tokens are visible
 const filters = { showDeactivated: false, showLowVol: true };
@@ -2111,6 +2149,19 @@ function esc(s) {
 
 // Escape a URL for safe use in single-quoted HTML attribute JS strings (e.g. onerror='...')
 function escUrl(u) { return esc(u).replace(/'/g, '%27'); }
+
+/**
+ * What a coin is quoted in, as a short label — '' for SOL.
+ *
+ * A null quoteMint means SOL, which is every coin launched before Custom Pairs, so the
+ * common case renders nothing at all. An unrecognised mint (de-listed since launch, or the
+ * quote-asset list failed to load) falls back to a truncated address rather than vanishing:
+ * the coin really is quoted in something other than SOL and the row must not imply otherwise.
+ */
+function quoteLabel(quoteMint) {
+    if (!quoteMint) return '';
+    return quoteSymbols.get(quoteMint) || (quoteMint.slice(0, 4) + '…' + quoteMint.slice(-4));
+}
 
 // ── Ecosystem dropdown ─────────────────────────────────────────────────────────
 function toggleEcosystem(e) {
@@ -2320,13 +2371,18 @@ async function openTokenModal(token) {
         ? `◎ ${parseFloat(token.pendingAirdropSol).toFixed(4)}`
         : '—';
 
+    const modalQuote = quoteLabel(token.quoteMint);
+    const modalQuoteTag = modalQuote
+        ? `<span class="quote-badge" title="Quoted in ${esc(modalQuote)}">/${esc(modalQuote)}</span>`
+        : '';
+
     const body = document.getElementById('token-modal-body');
 
     body.innerHTML = `
         <div class="token-detail-header">
             ${avatar}
             <div class="token-detail-info">
-                <div class="token-detail-ticker">$${esc(token.ticker || '?')} ${statusBadge}</div>
+                <div class="token-detail-ticker">$${esc(token.ticker || '?')}${modalQuoteTag} ${statusBadge}</div>
                 <div class="token-detail-name">${esc(token.name || '')}</div>
                 <div class="token-detail-mint">${mintShort}</div>
             </div>
@@ -2721,6 +2777,11 @@ function buildTokenRow(t, i) {
     const vol = t.volume24h ?? t.volume;
     const idx = allTokensCache.indexOf(t);
 
+    // Only shown for a non-SOL pair: SOL is the default and tagging every row with it would
+    // be noise.
+    const q = quoteLabel(t.quoteMint);
+    const quoteTag = q ? `<span class="quote-badge" title="Quoted in ${esc(q)}">/${esc(q)}</span>` : '';
+
     return `
         <tr onclick="openTokenModal(allTokensCache[${idx}])" style="cursor:pointer">
             <td><span class="rank-num">${i + 1}</span></td>
@@ -2728,7 +2789,7 @@ function buildTokenRow(t, i) {
                 <div class="token-cell">
                     ${avatar}
                     <div>
-                        <div class="token-ticker">$${esc(t.ticker || '?')}</div>
+                        <div class="token-ticker">$${esc(t.ticker || '?')}${quoteTag}</div>
                         <div class="token-name-sub">${esc(t.name || '')}</div>
                     </div>
                 </div>
@@ -2875,6 +2936,47 @@ function setLaunchBtn(label, disabled) {
 const IMGUR_RE = /^https:\/\/i\.imgur\.com\/[A-Za-z0-9]+\.(png|jpe?g|gif|webp)$/i;
 const URL_RE   = /^https?:\/\/[^\s]+$/i;
 
+/**
+ * Fill the quote-asset picker from the backend.
+ *
+ * The picker stays hidden unless there is a real choice to make: the endpoint degrades to an
+ * empty list when the RPC is unreachable, and showing a dropdown whose only entry is SOL just
+ * adds a decision nobody has to make. Either way the launch still works — an empty selection
+ * is a SOL launch, which is what the field defaults to.
+ */
+async function loadQuoteAssets() {
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/quote-assets`);
+        if (!r.ok) return;
+        const d = await r.json();
+        quoteAssets = Array.isArray(d.assets) ? d.assets : [];
+    } catch {
+        quoteAssets = [];
+    }
+
+    quoteSymbols = new Map(quoteAssets.filter(a => a.symbol).map(a => [a.mint, a.symbol]));
+
+    // The leaderboard loads in parallel with this and may already have painted its rows with
+    // raw mint addresses where a symbol belongs. Repaint from cache now that the labels exist.
+    if (allTokensCache.length) renderLeaderboardFromCache();
+
+    const sel   = document.getElementById('launch-quote');
+    const field = document.getElementById('quote-field');
+    const others = quoteAssets.filter(a => !a.isSol);
+    if (!others.length) { field.style.display = 'none'; return; }
+
+    // A mint with no on-chain symbol still has to be selectable, so it falls back to a
+    // truncated address rather than being dropped from the list.
+    const label = a => a.symbol || (a.mint.slice(0, 4) + '…' + a.mint.slice(-4));
+    others.sort((a, b) => label(a).localeCompare(label(b)));
+
+    sel.innerHTML = '<option value="">SOL</option>' + others.map(a => {
+        const name = a.name && a.name !== a.symbol ? ` — ${a.name}` : '';
+        return `<option value="${esc(a.mint)}">${esc(label(a) + name)}</option>`;
+    }).join('');
+    field.style.display = '';
+}
+
 function readLaunchForm() {
     return {
         name:        document.getElementById('launch-name').value.trim(),
@@ -2884,6 +2986,12 @@ function readLaunchForm() {
         website:     document.getElementById('launch-website').value.trim(),
         imageUrl:    document.getElementById('launch-image').value.trim(),
     };
+}
+
+/** '' for a SOL launch; the backend treats a missing quoteMint as SOL. */
+function readQuoteMint() {
+    const sel = document.getElementById('launch-quote');
+    return sel && sel.value ? sel.value : '';
 }
 
 function validateLaunchForm(f) {
@@ -2971,7 +3079,13 @@ async function launchToken() {
         const depR = await fetch(`${BACKEND_URL}/api/deploy`, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ ...form, metadataUri: prepD.metadataUri, userTx, userPubkey: walletPubkey }),
+            body:    JSON.stringify({
+                ...form,
+                metadataUri: prepD.metadataUri,
+                userTx,
+                userPubkey: walletPubkey,
+                quoteMint: readQuoteMint(),
+            }),
         });
         const depD = await depR.json();
         if (!depR.ok || !depD.success || !depD.jobId) {
@@ -3025,6 +3139,7 @@ function pollLaunch(jobId) {
                 toast('Token launched!', 'success');
                 ['launch-name','launch-ticker','launch-desc','launch-twitter','launch-website','launch-image']
                     .forEach(id => { document.getElementById(id).value = ''; });
+                document.getElementById('launch-quote').value = '';
                 updateDescCount();
                 setTimeout(() => loadLeaderboard(true), 1500);
 
@@ -3141,6 +3256,7 @@ function toast(msg, type = 'success') {
 // ── Boot ───────────────────────────────────────────────────────────────────────
 loadHealth();
 loadLeaderboard();
+loadQuoteAssets();
 startCountdown();
 connectWS();
 
