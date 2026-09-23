@@ -8,9 +8,25 @@
  * which is not secret.
  */
 const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 const logger = require('../services/logger');
 
-function adminAuth(req, res, next) {
+/**
+ * v30.2: failed-attempt limiter for every admin route. The lockout used to exist only on
+ * /admin/verify, the login form; the X-Admin-Key header on any other admin endpoint could be
+ * guessed at the general API rate limit. Only failed attempts count (skipSuccessfulRequests),
+ * so an operator using the console is never throttled.
+ */
+const adminFailureLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    skipSuccessfulRequests: true,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many failed admin attempts. Try again later.' },
+});
+
+function checkAdminKey(req, res, next) {
     const apiKey = req.headers['x-admin-key'];
     const expectedKey = process.env.ADMIN_API_KEY;
 
@@ -51,4 +67,8 @@ function adminAuth(req, res, next) {
     next();
 }
 
+// Used as route middleware: router.get(path, adminAuth, handler). Express accepts an array.
+const adminAuth = [adminFailureLimiter, checkAdminKey];
+
 module.exports = adminAuth;
+module.exports.checkAdminKey = checkAdminKey;

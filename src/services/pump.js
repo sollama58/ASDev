@@ -108,34 +108,31 @@ function getPumpPDAs(mint) {
 }
 
 /**
- * Get Pump AMM PDAs for a token
+ * Get Pump AMM (PumpSwap) PDAs for a token.
+ *
+ * v30.2: derived through the official SDK. The hand-written derivation here was wrong twice
+ * over -- it seeded the pool authority under the AMM program instead of the pump program, and
+ * it left the u16 pool index out of the pool seed -- so `pool` never matched any real pool.
+ * Its only consumers are the holder scans, which use it to keep a graduated coin's pool out
+ * of the holder list; with the wrong address the pool (usually a coin's largest "holder") was
+ * paid airdrops as if it were a person, and SOL sent to a program-owned account is gone.
+ *
+ * @param {PublicKey} mint
+ * @param {PublicKey|string|null} [quoteMint] - the coin's quote asset; SOL when omitted.
+ *        Custom Pairs coins graduate into a pool keyed on their own quote, not on WSOL.
  */
-function getPumpAmmPDAs(mint) {
-    const [poolAuthority] = PublicKey.findProgramAddressSync(
-        [Buffer.from("pool-authority"), mint.toBuffer()],
-        PROGRAMS.PUMP_AMM
-    );
-
-    const [pool] = PublicKey.findProgramAddressSync(
-        [Buffer.from("pool"), poolAuthority.toBuffer(), mint.toBuffer(), TOKENS.WSOL.toBuffer()],
-        PROGRAMS.PUMP_AMM
-    );
+function getPumpAmmPDAs(mint, quoteMint = null) {
+    const { canonicalPumpPoolPdaWithQuote, pumpPoolAuthorityPda } = require('@pump-fun/pump-sdk');
+    const quote = quoteMint ? new PublicKey(quoteMint) : TOKENS.WSOL;
+    const poolAuthority = pumpPoolAuthorityPda(mint);
+    const pool = canonicalPumpPoolPdaWithQuote(mint, quote);
 
     const [lpMint] = PublicKey.findProgramAddressSync(
         [Buffer.from("pool_lp_mint"), pool.toBuffer()],
         PROGRAMS.PUMP_AMM
     );
 
-    const poolBaseTokenAccount = getATA(mint, pool, PROGRAMS.TOKEN_2022);
-    const poolQuoteTokenAccount = getATA(TOKENS.WSOL, pool, TOKEN_PROGRAM_ID);
-
-    return {
-        pool,
-        poolAuthority,
-        lpMint,
-        poolBaseTokenAccount,
-        poolQuoteTokenAccount
-    };
+    return { pool, poolAuthority, lpMint };
 }
 
 /**

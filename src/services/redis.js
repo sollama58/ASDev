@@ -348,6 +348,9 @@ async function addSocialJob(data, options = {}) {
     return socialQueue.add('postTweet', data, {
         attempts: 5,
         backoff: { type: 'exponential', delay: 10000 },
+        // v30.2: every other queue trims finished jobs; this one kept one per launch forever.
+        removeOnComplete: 50,
+        removeOnFail: 25,
         ...options
     });
 }
@@ -431,6 +434,39 @@ async function getAnsemTop1000Holders() {
     if (!redisConnection) return new Set();
     const members = await redisConnection.smembers(GLOBAL_STATE_KEYS.ANSEM_TOP1000_HOLDERS);
     return new Set(members);
+}
+
+/**
+ * v30.2: Platform snapshot -- figures the worker already has in hand (wallet balance, pending
+ * creator fees, conservation status, total points) published for the API process.
+ *
+ * /api/health used to fetch the wallet balance and both fee vaults over RPC itself on every
+ * cache refresh, and read total points and conservation status from its OWN process memory,
+ * which in the split api/worker deployment is never written -- so it reported zeros. One JSON
+ * blob, merged field by field, read by the API at zero RPC cost.
+ */
+const PLATFORM_SNAPSHOT_KEY = 'platform:snapshot';
+
+async function setPlatformSnapshot(fields) {
+    if (!redisConnection || !fields) return;
+    try {
+        const raw = await redisConnection.get(PLATFORM_SNAPSHOT_KEY);
+        const current = raw ? JSON.parse(raw) : {};
+        const next = { ...current, ...fields, updatedAt: Date.now() };
+        await redisConnection.set(PLATFORM_SNAPSHOT_KEY, JSON.stringify(next), 'EX', 24 * 3600);
+    } catch (e) {
+        logger.debug('[Redis] setPlatformSnapshot failed', { error: e.message });
+    }
+}
+
+async function getPlatformSnapshot() {
+    if (!redisConnection) return {};
+    try {
+        const raw = await redisConnection.get(PLATFORM_SNAPSHOT_KEY);
+        return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+        return {};
+    }
 }
 
 /**
@@ -760,4 +796,6 @@ module.exports = {
     clearUserPoints,
     setAllUserPoints,
     getGlobalStateSnapshot,
+    setPlatformSnapshot,
+    getPlatformSnapshot,
 };

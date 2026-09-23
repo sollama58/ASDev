@@ -160,8 +160,20 @@ async function initDB() {
         logger.info('[PostgreSQL] Connection established');
         client.release();
 
-        // Create schema
-        await createSchema();
+        // Create schema.
+        // v30.2: serialised across processes with an advisory lock. The API, worker and grinder
+        // all run this at boot, and on a blueprint deploy they boot together; concurrent
+        // CREATE TABLE/INDEX IF NOT EXISTS on the same names can fail with a duplicate-key
+        // error in pg_class and take a service down at startup. The lock is session-scoped, so
+        // it is held on one dedicated client while the DDL itself runs through the pool.
+        const lockClient = await pool.connect();
+        try {
+            await lockClient.query('SELECT pg_advisory_lock($1)', [SCHEMA_LOCK_KEY]);
+            await createSchema();
+        } finally {
+            await lockClient.query('SELECT pg_advisory_unlock($1)', [SCHEMA_LOCK_KEY]).catch(() => {});
+            lockClient.release();
+        }
 
         logger.info(`[PostgreSQL] Database initialized (Pool: ${config.DB_POOL_MIN}-${config.DB_POOL_MAX} connections)`);
     } catch (e) {
@@ -169,6 +181,9 @@ async function initDB() {
         throw e;
     }
 }
+
+// Arbitrary constant identifying "schema migration" among advisory locks.
+const SCHEMA_LOCK_KEY = 7302_2026;
 
 /**
  * Create database schema (PostgreSQL syntax)
@@ -390,6 +405,20 @@ async function createSchema() {
             END IF;
         END $$;
     `);
+    // v30.0: Custom Pairs. A coin may be quoted in a token rather than SOL, and its creator
+    // fees then accrue in that asset. Stored per token so fee collection can sweep the right
+    // vaults even after a quote is de-listed from QuoteControl, which stops new creates but
+    // leaves existing curves trading. NULL means SOL.
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tokens' AND column_name = 'quote_mint') THEN
+                ALTER TABLE tokens ADD COLUMN quote_mint TEXT;
+            END IF;
+        END $$;
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_tokens_quote_mint ON tokens(quote_mint) WHERE quote_mint IS NOT NULL`);
+
     // v26.0: Migration - Track mint in airdrop_logs and user_airdrop_history for per-token accountability
     await pool.query(`
         DO $$
@@ -545,15 +574,32 @@ async function createSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_flywheel_logs_timestamp ON flywheel_logs(timestamp DESC)`);
 
-    // v25.22 SCALABILITY: Materialized views for pre-computed aggregations
-    // This eliminates expensive GROUP BY subqueries in /check-holder and /all-eligible-users
+    // v30.2: the token_total_balances materialized view was refreshed after every holder scan
+    // but read by nothing -- a full aggregation of token_holders every few minutes for no
+    // consumer. Dropped.
+    await pool.query(`DROP MATERIALIZED VIEW IF EXISTS token_total_balances`);
+
+    // v30.2: refund bookkeeping on the payment record. A refund is claimed here atomically
+    // before it is sent, so no code path -- a job retry, a stalled-job reconciliation, an
+    // operator re-running something -- can refund the same payment twice.
+    await pool.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refund_sig TEXT`);
+    await pool.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_at BIGINT`);
+
+    // v30.2: every seed position the platform opens (the first buy on a real launch, and on
+    // each decoy). The sell used to be a detached setTimeout, so a restart in that window left
+    // the position in the platform wallet forever -- where the holder scanner would count it
+    // and the airdrop would pay the platform its own share. A reconciler retries unsold rows.
     await pool.query(`
-        CREATE MATERIALIZED VIEW IF NOT EXISTS token_total_balances AS
-        SELECT mint, SUM(CAST(balance AS BIGINT)) as total_balance, COUNT(*) as holder_count
-        FROM token_holders
-        GROUP BY mint
+        CREATE TABLE IF NOT EXISTS seed_positions (
+            mint TEXT PRIMARY KEY,
+            is_decoy BOOLEAN DEFAULT FALSE,
+            created_at BIGINT,
+            sold_at BIGINT,
+            attempts INTEGER DEFAULT 0,
+            last_error TEXT
+        )
     `);
-    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_token_total_balances_mint ON token_total_balances(mint)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_seed_positions_unsold ON seed_positions(created_at) WHERE sold_at IS NULL`);
 
     // v25.22: Index for faster mint lookups in GROUP BY queries
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_token_holders_mint_only ON token_holders(mint)`);
@@ -622,26 +668,6 @@ async function createSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_announcements_created ON announcements("createdAt" DESC)`);
 
     logger.info('[PostgreSQL] Schema created successfully');
-}
-
-/**
- * v25.22 SCALABILITY: Refresh the materialized view
- * Should be called after holder scanner updates
- */
-async function refreshMaterializedViews() {
-    if (!pool) return;
-    try {
-        await pool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY token_total_balances');
-        logger.debug('[PostgreSQL] Materialized view refreshed');
-    } catch (e) {
-        // CONCURRENTLY requires unique index - fall back to regular refresh
-        try {
-            await pool.query('REFRESH MATERIALIZED VIEW token_total_balances');
-            logger.debug('[PostgreSQL] Materialized view refreshed (non-concurrent)');
-        } catch (err) {
-            logger.debug('[PostgreSQL] Materialized view refresh error', { error: err.message });
-        }
-    }
 }
 
 // ===========================================
@@ -885,8 +911,8 @@ async function saveTokenData(pubkey, mint, metadata) {
 
     try {
         const result = await db.run(`
-            INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            INSERT INTO tokens ("userPubkey", mint, ticker, name, description, twitter, website, "metadataUri", image, "isMayhemMode", timestamp, quote_mint)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (mint) DO UPDATE SET
                 ticker = EXCLUDED.ticker,
                 name = EXCLUDED.name,
@@ -895,10 +921,12 @@ async function saveTokenData(pubkey, mint, metadata) {
                 website = EXCLUDED.website,
                 "metadataUri" = EXCLUDED."metadataUri",
                 image = EXCLUDED.image,
-                "isMayhemMode" = EXCLUDED."isMayhemMode"
+                "isMayhemMode" = EXCLUDED."isMayhemMode",
+                quote_mint = COALESCE(EXCLUDED.quote_mint, tokens.quote_mint)
         `, [pubkey, mint, metadata.ticker, metadata.name, metadata.description || '',
             metadata.twitter || '', metadata.website || '', metadata.metadataUri || '',
-            imageValue, metadata.isMayhemMode ? 1 : 0, Date.now()]);
+            imageValue, metadata.isMayhemMode ? 1 : 0, Date.now(),
+            metadata.quoteMint || null]);
 
         logger.info("[PostgreSQL] Token saved successfully", { mint, ticker: metadata.ticker, hasImage: !!imageValue, changes: result.changes });
         return result;
@@ -937,7 +965,6 @@ module.exports = {
     logPurchase,
     saveTokenData,
     healthCheck,
-    refreshMaterializedViews, // v25.22 SCALABILITY
     // For backwards compatibility
     DATA_DIR: config.DISK_ROOT || './data',
     DB_PATH: 'PostgreSQL (Render)',

@@ -8,9 +8,10 @@
  *         against an allowlist instead of being written to the chain verbatim.
  */
 const express = require('express');
-const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const rateLimit = require('express-rate-limit');
+const { LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const config = require('../config/env');
-const { pinata, redis, logger, sanitizer, imageUtils } = require('../services');
+const { redis, logger, sanitizer, imageUtils } = require('../services');
 const { isValidPubkey } = require('./solana');
 
 const router = express.Router();
@@ -43,43 +44,47 @@ function isValidImageUrl(url) {
 }
 
 /**
- * v29.1: Validate a token's metadata URI.
- *
- * /api/deploy passes this string straight into the Pump.fun create instruction, where it
- * becomes the token's permanent metadata pointer. It was previously accepted unchecked, so
- * a caller who paid the launch fee could have the platform mint a token whose metadata
- * pointed anywhere, bypassing the Imgur-only image rule and the description footer that
- * /api/prepare-metadata applies. An oversized value instead pushed the transaction past the
- * packet limit, failing the launch after payment and burning a pre-ground vanity address.
- *
- * Accepts only an https URL on a known IPFS gateway, short enough to leave room in the
- * transaction. That is stateless, so it cannot fail a legitimate launch because a cache
- * expired or Redis restarted.
+ * v30.2: a transaction signature is 64 bytes, base58-encoded (87-88 chars). Checked before any
+ * RPC call so a junk value cannot buy fifteen status polls.
  */
-function isValidMetadataUri(uri) {
-    if (!uri || typeof uri !== 'string') return false;
-    if (uri.length > config.METADATA_URI_MAX_LENGTH) return false;
-
-    let parsed;
+function isValidSignature(sig) {
+    if (typeof sig !== 'string' || sig.length < 80 || sig.length > 90) return false;
     try {
-        parsed = new URL(uri);
+        const bs58lib = require('bs58');
+        const bs58 = bs58lib.default || bs58lib;
+        return bs58.decode(sig).length === 64;
     } catch (e) {
         return false;
     }
-
-    if (parsed.protocol !== 'https:') return false;
-    if (parsed.username || parsed.password) return false;
-
-    const host = parsed.hostname.toLowerCase();
-    const allowed = config.METADATA_URI_ALLOWED_HOSTS.some(
-        h => host === h || host.endsWith('.' + h)
-    );
-    if (!allowed) return false;
-
-    // Gateways serve content at /ipfs/<cid>; anything else is not a metadata document
-    // we could have produced.
-    return /^\/ipfs\/[A-Za-z0-9]+\/?$/.test(parsed.pathname);
 }
+
+/**
+ * v30.2: the image checks shared by /prepare-metadata (the pre-payment preview) and /deploy
+ * (which cannot trust that the client called the preview first).
+ * @returns {Promise<{ok: true, url: string, contentType, bytes}|{ok: false, error: string}>}
+ */
+async function checkImage(imageUrl) {
+    if (!isValidImageUrl(imageUrl)) {
+        return { ok: false, error: "Invalid image URL. Please use Imgur (i.imgur.com)." };
+    }
+    const normalized = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
+    const check = await imageUtils.verifyImageUrl(normalized, {
+        maxBytes: config.IMAGE_MAX_BYTES,
+        timeoutMs: config.IMAGE_FETCH_TIMEOUT_MS
+    });
+    if (!check.ok) return { ok: false, error: check.reason };
+    return { ok: true, url: normalized, contentType: check.contentType, bytes: check.bytes };
+}
+
+// v30.2: /prepare-metadata fetches an image from Imgur on every call. It no longer pins
+// anything, but it is still unauthenticated outbound work, so it gets its own tight limit.
+const prepareLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    message: { error: 'Too many requests, please wait a moment' },
+    standardHeaders: true,
+    legacyHeaders: false
+});
 
 /**
  * Initialize routes with dependencies
@@ -90,80 +95,37 @@ function init(deps) {
     // Prepare metadata
     // v24.0: Added input sanitization for all user-provided content
     // v25.1: Now accepts imageUrl from Imgur (user uploads there first)
-    router.post('/prepare-metadata', async (req, res) => {
+    /**
+     * Validate a launch before the user pays.
+     *
+     * v30.2: this no longer pins anything. It used to upload the metadata JSON to our Pinata
+     * account for anyone who asked, paid or not, and hand back a URI that /deploy then trusted
+     * -- and /deploy accepted ANY IPFS URI on an allowed gateway, so a paying user could launch
+     * a ShitPad coin whose metadata (and image) was any document they had pinned themselves,
+     * sidestepping the Imgur-only rule. The metadata is now built and pinned by the launch job,
+     * after payment, from the same sanitised fields. This endpoint just runs the checks, so a
+     * bad image is still caught before the user pays.
+     */
+    router.post('/prepare-metadata', prepareLimiter, async (req, res) => {
         try {
-            // v24.0 SECURITY: Sanitize all user inputs
             const name = sanitizer.sanitizeName(req.body.name);
             const ticker = sanitizer.sanitizeTicker(req.body.ticker);
             const description = sanitizer.sanitizeDescription(req.body.description || '');
-            const twitter = sanitizer.sanitizeTwitterHandle(req.body.twitter);
-            const website = sanitizer.sanitizeUrl(req.body.website);
-
-            // v25.1: Accept imageUrl from Imgur
-            // User uploads to Imgur themselves - Imgur handles content moderation
             const imageUrl = req.body.imageUrl;
-
-            // Log if suspicious patterns were detected (for monitoring)
-            if (sanitizer.hasSuspiciousPatterns(req.body.name) ||
-                sanitizer.hasSuspiciousPatterns(req.body.description)) {
-                logger.warn('[Deploy] Suspicious patterns in metadata request', {
-                    ip: req.ip
-                });
-            }
 
             if (description.length > 75) return res.status(400).json({ error: "Description too long." });
             if (!name || !ticker || !imageUrl) return res.status(400).json({ error: "Missing fields." });
 
-            // v25.1: Validate imageUrl is from allowed domain (Imgur, etc.)
-            if (!isValidImageUrl(imageUrl)) {
-                logger.warn('[Deploy] Invalid image URL rejected', { imageUrl: typeof imageUrl === 'string' ? imageUrl.substring(0, 50) : String(imageUrl) });
-                return res.status(400).json({ error: "Invalid image URL. Please use Imgur (i.imgur.com)." });
+            const image = await checkImage(imageUrl);
+            if (!image.ok) {
+                logger.warn('[Deploy] Image rejected before payment', { ip: req.ip, reason: image.error });
+                return res.status(400).json({ error: image.error });
             }
 
-            // v25.15: Normalize image URL before storing in metadata
-            // This converts imgur.com/xxx -> i.imgur.com/xxx.png
-            const normalizedImageUrl = imageUtils.normalizeImageUrl(imageUrl) || imageUrl;
-
-            // v29.3: confirm the image is really there before anything is minted against it.
-            // The metadata document is immutable once pinned and the on-chain URI cannot be
-            // changed, so this is the last point at which a dead or mistyped link can be
-            // caught. It also bounds what the normaliser guessed at: an Imgur page URL that
-            // was rewritten into a direct link which does not exist fails here rather than
-            // silently producing a token with no picture.
-            const imageCheck = await imageUtils.verifyImageUrl(normalizedImageUrl, {
-                maxBytes: config.IMAGE_MAX_BYTES,
-                timeoutMs: config.IMAGE_FETCH_TIMEOUT_MS
-            });
-            if (!imageCheck.ok) {
-                logger.warn('[Deploy] Image rejected before mint', {
-                    ip: req.ip,
-                    url: normalizedImageUrl.substring(0, 80),
-                    reason: imageCheck.reason
-                });
-                return res.status(400).json({ error: imageCheck.reason });
-            }
-
-            const DESCRIPTION_FOOTER = " Launched via ShitPad.";
-            const finalDescription = description + DESCRIPTION_FOOTER;
-
-            // v25.1: No server-side moderation - Imgur handles it
-            // Just upload metadata with the normalized Imgur image URL
-            const result = await pinata.uploadMetadata(name, ticker, finalDescription, twitter, website, normalizedImageUrl);
-
-            logger.info('[Deploy] Metadata prepared', {
-                name,
-                ticker,
-                originalImage: imageUrl.substring(0, 50),
-                normalizedImage: normalizedImageUrl.substring(0, 50),
-                imageType: imageCheck.contentType,
-                imageBytes: imageCheck.bytes
-            });
-
-            res.json({ success: true, ...result });
+            res.json({ success: true, validated: true, imageUrl: image.url });
         } catch (err) {
-            logger.error("Metadata Prep Error", { error: err.message, stack: err.stack });
-            // SECURITY FIX: Don't expose internal error messages
-            res.status(500).json({ error: "Failed to prepare metadata. Please try again." });
+            logger.error("Metadata Prep Error", { error: err.message });
+            res.status(500).json({ error: "Failed to validate the launch. Please try again." });
         }
     });
 
@@ -174,25 +136,40 @@ function init(deps) {
         try {
             // v24.0 SECURITY: Sanitize user inputs
             const sanitized = sanitizer.sanitizeDeploymentRequest(req.body);
-            const { metadataUri, userTx, userPubkey, isMayhemMode } = sanitized;
+            const { userTx, userPubkey } = sanitized;
 
-            if (!metadataUri) return res.status(400).json({ error: "Missing metadata URI" });
-            if (!isValidMetadataUri(metadataUri)) {
-                logger.warn('[Deploy] Rejected metadata URI', {
-                    userPubkey,
-                    uri: String(metadataUri).substring(0, 80),
-                    length: String(metadataUri).length
-                });
-                return res.status(400).json({ error: "Invalid metadata URI. Use the URI returned by /api/prepare-metadata." });
-            }
             if (!userPubkey || !isValidPubkey(userPubkey)) return res.status(400).json({ error: "Invalid Address" });
-            if (!userTx || typeof userTx !== 'string') return res.status(400).json({ error: "Invalid transaction signature" });
+            if (!isValidSignature(userTx)) return res.status(400).json({ error: "Invalid transaction signature" });
 
             // v29.1: /api/prepare-metadata rejected a blank name or ticker, but this route did
             // not, and this route is what sets the on-chain name. A token could therefore be
             // minted with empty strings for both.
             if (!sanitized.name) return res.status(400).json({ error: "Token name is required." });
             if (!sanitized.ticker) return res.status(400).json({ error: "Ticker is required." });
+            if ((sanitized.description || '').length > 75) return res.status(400).json({ error: "Description too long." });
+
+            // v30.2: the image is re-checked here -- the launch job builds the metadata from it,
+            // and a client need not have called /prepare-metadata at all.
+            const image = await checkImage(sanitized.imageUrl || sanitized.image);
+            if (!image.ok) return res.status(400).json({ error: image.error });
+
+            // v30.0: Custom Pairs. Validated here, before the payment is verified, so an
+            // unsupported quote costs the user nothing. Absent or SOL takes the SOL path.
+            const requestedQuote = typeof req.body.quoteMint === 'string' ? req.body.quoteMint.trim() : null;
+            let resolvedQuoteMint = null;
+            if (requestedQuote) {
+                try {
+                    const pumpLaunch = require('../services/pumpLaunch');
+                    const quote = await pumpLaunch.resolveQuote(connection, requestedQuote);
+                    resolvedQuoteMint = quote ? quote.mint.toBase58() : null;
+                } catch (quoteErr) {
+                    if (quoteErr.userFacing) {
+                        return res.status(400).json({ error: quoteErr.message });
+                    }
+                    logger.error('[Deploy] Quote asset check failed', { error: quoteErr.message });
+                    return res.status(503).json({ error: "Could not check that quote asset. Please try again." });
+                }
+            }
 
             // v25.4: Payment verification loop (runs BEFORE inserting transaction record)
             // H-2 FIX: Insert only after confirmed payment to prevent orphaned records on crash
@@ -277,18 +254,6 @@ function init(deps) {
                 throw dbErr;
             }
 
-            // v25.15: Normalize image URL before passing to worker
-            // This handles imgur.com/xxx -> i.imgur.com/xxx.png conversion
-            const rawImageUrl = sanitized.imageUrl || sanitized.image;
-            const imageToSend = rawImageUrl ? (imageUtils.normalizeImageUrl(rawImageUrl) || rawImageUrl) : null;
-
-            logger.info('[Deploy] Image URL debug', {
-                rawImageUrl: req.body.imageUrl ? req.body.imageUrl.substring(0, 80) : 'NULL',
-                sanitizedImageUrl: sanitized.imageUrl ? sanitized.imageUrl.substring(0, 80) : 'NULL',
-                normalizedImage: imageToSend ? imageToSend.substring(0, 80) : 'NULL',
-                wasNormalized: rawImageUrl !== imageToSend
-            });
-
             // Add job with sanitized data
             //
             // v28.2 MONEY: if enqueueing fails (Redis blip, queue not initialised), the user
@@ -305,10 +270,12 @@ function init(deps) {
                     description: sanitized.description,
                     twitter: sanitized.twitter,
                     website: sanitized.website,
-                    image: imageToSend, // Pass the direct URL
+                    image: image.url,
                     userPubkey,
-                    isMayhemMode,
-                    metadataUri
+                    // v30.2: the payment signature travels with the job so a refund can be
+                    // claimed against it exactly once.
+                    userTx,
+                    quoteMint: resolvedQuoteMint,
                 });
             } catch (queueErr) {
                 await db.run('DELETE FROM transactions WHERE signature = $1', [userTx]).catch(() => {});
@@ -321,12 +288,31 @@ function init(deps) {
             // Record the fee
             await addFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL);
 
-            logger.info('[Deploy] Job queued', { jobId: job.id, userPubkey, name: sanitized.name, hasImage: !!imageToSend });
+            logger.info('[Deploy] Job queued', { jobId: job.id, userPubkey, name: sanitized.name });
             res.json({ success: true, jobId: job.id, message: "Queued" });
         } catch (err) {
             logger.error("Deploy API Error", { error: err.message, stack: err.stack });
             // SECURITY FIX: Don't expose internal error messages
             res.status(500).json({ error: "Deployment failed. Please try again." });
+        }
+    });
+
+    /**
+     * v30.0: the quote assets a launch may be priced in right now.
+     *
+     * Read live from Global and the QuoteControl PDA rather than hardcoded, because pump.fun
+     * adds and removes them: a stale list would offer a quote the program then rejects, after
+     * the user had already paid.
+     */
+    router.get('/quote-assets', async (req, res) => {
+        try {
+            const pumpLaunch = require('../services/pumpLaunch');
+            const assets = await pumpLaunch.getSupportedQuoteMints(connection);
+            res.json({ assets, count: assets.length });
+        } catch (e) {
+            logger.warn('[Deploy] Could not list quote assets', { error: e.message });
+            // A launch can still proceed in SOL, so degrade rather than fail.
+            res.json({ assets: [], count: 0, unavailable: true });
         }
     });
 

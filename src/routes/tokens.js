@@ -12,7 +12,7 @@
 const express = require('express');
 const axios = require('axios');
 const { isValidPubkey } = require('./solana');
-const { redis, mintExtractor, logger, circuitBreaker, imageUtils } = require('../services');
+const { redis, logger, circuitBreaker, imageUtils } = require('../services');
 const { safeBalance } = require('../utils');
 const crypto = require('crypto');
 const config = require('../config/env');
@@ -62,12 +62,14 @@ function init(deps) {
             const offset = Math.min(Math.max(0, rawOffset), 50000); // Min 0, Max 50000
 
             // Cache per page (limit + offset combo)
-            const cacheKey = `all_launches_v2600_${limit}_${offset}`;
+            // v30.1: bumped for the added quote_mint field -- a cached page from the old
+            // shape would render every coin as SOL-quoted until the TTL expired.
+            const cacheKey = `all_launches_v3010_${limit}_${offset}`;
             const { rows, total } = await redis.smartCache(cacheKey, 15, async () => {
                 // v27.1: Include pending_airdrop_lamports for threshold display
                 const combinedQuery = `
                     SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete,
-                           'platform' as source, 1 as "isActive",
+                           'platform' as source, 1 as "isActive", quote_mint,
                            COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports
                     FROM tokens
                     ORDER BY volume24h DESC
@@ -119,7 +121,10 @@ function init(deps) {
                 // v25.89: Whether token is active (fee sharing confirmed on-chain)
                 isActive: r.isActive !== 0,
                 // v27.1: Individual token pending pool
-                pendingAirdropSol: ((r.pending_airdrop_lamports || 0) / 1e9).toFixed(6)
+                pendingAirdropSol: ((r.pending_airdrop_lamports || 0) / 1e9).toFixed(6),
+                // v30.1: null means SOL-quoted, which is every coin launched before Custom
+                // Pairs. The frontend resolves the mint to a symbol from /api/quote-assets.
+                quoteMint: r.quote_mint || null
             }));
             res.json({
                 tokens: allLaunches,
@@ -271,7 +276,7 @@ function init(deps) {
     // Proxy for token price data (uses DexScreener API)
     // v24.0: Added caching (10s TTL) and circuit breaker for external API resilience
     // v25.22 SECURITY: Added price bounds validation to prevent oracle manipulation
-    router.get('/pump-proxy/:mint', async (req, res) => {
+    router.get('/pump-proxy/:mint', adminAuth, async (req, res) => {
         try {
             const { mint } = req.params;
             if (!isValidPubkey(mint)) {
@@ -785,7 +790,7 @@ function init(deps) {
      * - metadata: { name, symbol, image, description }
      * - metadataUri: The raw metadata URI from on-chain
      */
-    router.get('/token-metadata/:mint', async (req, res) => {
+    router.get('/token-metadata/:mint', adminAuth, async (req, res) => {
         try {
             const { mint } = req.params;
 
@@ -969,7 +974,7 @@ function init(deps) {
             // Fetch fresh metadata from all sources
             logger.info(`[MetadataRefresh] Refreshing metadata for ${mint}`);
 
-            const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
+            const validTokens = [...(await require('../tasks/metadataUpdater').fetchFreshMarketData([mint])).values()];
 
             // Start with external API data or empty object
             const freshData = validTokens.length > 0 ? validTokens[0] : {};
@@ -1091,7 +1096,7 @@ function init(deps) {
                     });
 
                     // v25.5: First try to fetch from external APIs (DexScreener, Helius)
-                    const validTokens = await mintExtractor.validateMintsBatch([token.mint], { fetchMarketData: true });
+                    const validTokens = [...(await require('../tasks/metadataUpdater').fetchFreshMarketData([token.mint])).values()];
                     if (validTokens.length > 0) {
                         const freshData = validTokens[0];
                         if (freshData.image) imageToUse = freshData.image;
@@ -1200,7 +1205,7 @@ function init(deps) {
             // Fallback to external APIs
             if (!newImage) {
                 logger.info(`[RefreshTokenImage] Trying external APIs...`);
-                const validTokens = await mintExtractor.validateMintsBatch([mint], { fetchMarketData: true });
+                const validTokens = [...(await require('../tasks/metadataUpdater').fetchFreshMarketData([mint])).values()];
                 if (validTokens.length > 0 && validTokens[0].image) {
                     newImage = validTokens[0].image;
                     logger.info(`[RefreshTokenImage] Got image from external API: ${newImage.substring(0, 60)}`);
@@ -1238,7 +1243,9 @@ function init(deps) {
         try {
             // v26.0: Per-token pool system
             const totalPoints = await redis.getTotalPoints();
-            const totalPendingSol = globalState.availableSolForAirdrop || 0; // sum of all token pending pools
+            // v30.2: from the database; globalState is not written in the API process.
+            const pendingRow = await db.get('SELECT COALESCE(SUM(pending_airdrop_lamports), 0) AS total FROM tokens');
+            const totalPendingSol = Number(pendingRow?.total || 0) / 1e9; // sum of all token pending pools
 
             // Get top 10 expected airdrops for verification
             const allAirdrops = await redis.getAllUserExpectedAirdrops();

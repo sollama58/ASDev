@@ -13,6 +13,10 @@ const logger = require('./logger');
 const connection = new Connection(config.RPC_URL, {
     commitment: "confirmed",
     confirmTransactionInitialTimeout: config.RPC_TIMEOUT_MS,
+    // v30.2: web3.js otherwise retries every 429 itself (up to 5 times), silently multiplying
+    // request volume exactly when the provider is asking us to slow down. Callers here already
+    // treat a failed read as "try next cycle".
+    disableRetryOnRateLimit: true,
     fetch: (url, options) => {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), config.RPC_TIMEOUT_MS);
@@ -31,9 +35,17 @@ if (devKeypair) {
 /**
  * Add priority fee instructions to a transaction
  */
-function addPriorityFee(tx) {
+/**
+ * Add the compute-budget instructions.
+ *
+ * v30.0: the unit limit is a parameter. A transaction may carry only ONE SetComputeUnitLimit
+ * instruction -- a second is rejected outright -- so a caller that needs a different budget
+ * has to say so here rather than adding its own alongside this one. Token-quoted launches
+ * need roughly 500k against the 300k that suits everything else.
+ */
+function addPriorityFee(tx, { units = 300000 } = {}) {
     tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: config.PRIORITY_FEE_MICRO_LAMPORTS }));
-    tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 300000 }));
+    tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units }));
     return tx;
 }
 
@@ -44,6 +56,31 @@ const REBROADCAST_INTERVAL_MS = 2500;
 // Re-broadcasting is free of correctness risk but not of RPC cost, so the authoritative
 // "has this blockhash expired yet" check runs once every Nth poll rather than every poll.
 const HEIGHT_CHECK_EVERY = 4;
+
+/**
+ * Status of a transaction whose blockhash has already expired: 'landed', or 'absent'. Throws
+ * if it landed but failed, matching confirmOrExpire. searchTransactionHistory covers the case
+ * where the transaction has already aged out of the recent status cache. If the lookup itself
+ * keeps failing, we cannot prove absence, so we refuse to report it as absent: throwing makes
+ * the caller stop rather than re-send.
+ */
+async function finalStatus(signature) {
+    let lastErr = null;
+    for (let i = 0; i < 3; i++) {
+        try {
+            const { value } = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+            const st = value?.[0];
+            if (!st) return 'absent';
+            if (st.err) throw new Error(`Transaction ${signature} failed on-chain: ${JSON.stringify(st.err)}`);
+            return 'landed';
+        } catch (e) {
+            if (e.message && e.message.includes('failed on-chain')) throw e;
+            lastErr = e;
+            await sleep(1000);
+        }
+    }
+    throw new Error(`Could not determine whether ${signature} landed (${lastErr?.message}); not re-sending`);
+}
 
 /**
  * Wait for a specific, already-signed transaction to either confirm or provably expire.
@@ -76,11 +113,23 @@ async function confirmOrExpire(signature, rawTx, lastValidBlockHeight) {
         }
 
         if (poll > 0 && poll % HEIGHT_CHECK_EVERY === 0) {
+            let expired = false;
             try {
                 const height = await connection.getBlockHeight('confirmed');
-                if (height > lastValidBlockHeight) return null;
+                expired = height > lastValidBlockHeight;
             } catch (e) {
                 logger.debug('Block height check failed', { error: e.message });
+            }
+            if (expired) {
+                // v30.2: one last look before declaring the transaction dead. The status check
+                // at the top of this iteration ran BEFORE the height check, so a transaction
+                // that landed in one of the final valid blocks in between would otherwise be
+                // reported as expired -- and the caller would re-sign and send it again, which
+                // on an airdrop or refund is a second real payment. Once the height is past
+                // lastValidBlockHeight nothing new can land, so this answer is final.
+                const final = await finalStatus(signature);
+                if (final === 'landed') return signature;
+                return null;
             }
         }
 
@@ -114,7 +163,9 @@ async function sendTxWithRetry(tx, signers, retries = 5) {
     let lastErr = null;
 
     for (let attempt = 0; attempt < retries; attempt++) {
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+        // 'confirmed', not 'finalized': a finalized blockhash is already ~32 slots old, which
+        // throws away a fifth of the ~150-block validity window for no safety benefit here.
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
         tx.recentBlockhash = blockhash;
         tx.lastValidBlockHeight = lastValidBlockHeight;
         if (!tx.feePayer) tx.feePayer = signers[0].publicKey;
@@ -157,22 +208,44 @@ async function sendTxWithRetry(tx, signers, retries = 5) {
 /**
  * Refund a user whose launch failed.
  *
- * v29.2: the single implementation. This previously existed three times: this copy, which
- * refunded the FULL deployment fee and which nothing ever called, plus byte-identical local
- * copies in index.js and worker.js that refunded the fee minus 0.001 SOL. The two that ran
- * agreed with each other, so the dead one here was the odd one out and would have silently
- * changed refund amounts had anyone wired it up. index.js and worker.js now delegate here.
- *
+ * v29.2: the single implementation (index.js and worker.js delegate here).
  * The 0.001 SOL held back covers the network cost of the refund transfer itself, so a failed
  * launch does not also cost the platform the fee to undo it.
  *
- * @returns {Promise<string|null>} the refund signature, or null if the refund failed
+ * v30.2: idempotent. When the payment signature is known, the refund is first CLAIMED on that
+ * payment's row in `transactions` with a conditional UPDATE; only the caller that wins the
+ * claim sends. A launch job that is retried, reconciled after a stall, or failed twice by
+ * different code paths can therefore refund at most once. A refund whose send fails releases
+ * the claim so it can be retried. Callers without a payment signature (none in the launch
+ * path) keep the old unguarded behaviour.
+ *
+ * @param {string} userPubkeyStr
+ * @param {string} reason
+ * @param {string|null} [paymentSig] - the user's launch-fee transaction signature
+ * @returns {Promise<string|null>} the refund signature, 'already-refunded', or null on failure
  */
-async function refundUser(userPubkeyStr, reason) {
+async function refundUser(userPubkeyStr, reason, paymentSig = null) {
+    const pg = require('./postgres');
+    const db = pg.getDB && pg.getDB();
+
+    if (paymentSig && db) {
+        const claim = await db.run(
+            `UPDATE transactions SET refund_sig = 'pending', refunded_at = $2
+              WHERE signature = $1 AND refund_sig IS NULL`,
+            [paymentSig, Date.now()]
+        ).catch(e => ({ changes: 0, error: e }));
+        if (!claim.changes) {
+            logger.warn('Refund skipped: already refunded or payment unknown', {
+                user: userPubkeyStr, payment: String(paymentSig).slice(0, 16), error: claim.error?.message
+            });
+            return 'already-refunded';
+        }
+    }
+
     try {
         const userPubkey = new PublicKey(userPubkeyStr);
         const tx = new Transaction();
-        addPriorityFee(tx);
+        addPriorityFee(tx, { units: 10_000 });
         tx.add(SystemProgram.transfer({
             fromPubkey: devKeypair.publicKey,
             toPubkey: userPubkey,
@@ -180,20 +253,28 @@ async function refundUser(userPubkeyStr, reason) {
         }));
         const sig = await sendTxWithRetry(tx, [devKeypair]);
 
-        // v29.1: the deployment fee was credited to the lifetime counters the moment the
-        // launch was queued. The user has just been made whole, so reverse it -- otherwise
-        // reported revenue keeps every refunded fee. Only on a confirmed refund: if the
-        // transfer above throws, the user still has not been paid back.
-        //
-        // Required lazily: postgres does not depend on this module, but resolving it at call
-        // time keeps the two services independent of each other's load order.
-        await require('./postgres').subtractFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL)
+        if (paymentSig && db) {
+            await db.run('UPDATE transactions SET refund_sig = $2 WHERE signature = $1', [paymentSig, sig]).catch(() => {});
+        }
+
+        // v29.1: reverse the fee in the lifetime counters -- only on a confirmed refund.
+        await pg.subtractFees(config.DEPLOYMENT_FEE_SOL * LAMPORTS_PER_SOL)
             .catch(e => logger.warn('Refund sent but fee counters not reversed', { error: e.message }));
 
         logger.info(`REFUNDED ${userPubkeyStr}: ${sig} (Reason: ${reason})`);
         return sig;
     } catch (e) {
         logger.error(`REFUND FAILED: ${e.message}`, { user: userPubkeyStr, reason });
+        if (paymentSig && db) {
+            // Release the claim so the refund can be retried. If the failure was ambiguous
+            // (sendTxWithRetry could not tell whether it landed) keep the claim: an operator
+            // must check the chain rather than risk paying twice.
+            const ambiguous = /Could not determine/.test(e.message || '');
+            if (!ambiguous) {
+                await db.run(`UPDATE transactions SET refund_sig = NULL, refunded_at = NULL
+                               WHERE signature = $1 AND refund_sig = 'pending'`, [paymentSig]).catch(() => {});
+            }
+        }
         return null;
     }
 }

@@ -18,12 +18,10 @@ const pump = require('./pump');
 const twitter = require('./twitter');
 const jupiter = require('./jupiter');
 const mutex = require('./mutex');
-const mintExtractor = require('./mintExtractor');
 const imageUtils = require('./imageUtils');
 const circuitBreaker = require('./circuitBreaker');
 const sanitizer = require('./sanitizer');
 const websocket = require('./websocket');
-const signatureVerifier = require('./signatureVerifier');
 const claudeKoth = require('./claudeKoth');
 const heliusDAS = require('./heliusDAS');
 
@@ -41,12 +39,10 @@ module.exports = {
     twitter,
     jupiter,
     mutex,
-    mintExtractor,
     imageUtils,
     circuitBreaker,
     sanitizer,
     websocket,
-    signatureVerifier,
     claudeKoth,
     heliusDAS,
 };

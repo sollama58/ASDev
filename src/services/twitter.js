@@ -81,7 +81,15 @@ async function postKothTweet(name, ticker, mint, reasoning) {
 
         // Truncate reasoning if too long (Twitter 280 char limit)
         const maxReasoningLength = 120;
-        let shortReasoning = reasoning || 'Top performer by volume and market metrics';
+        // v30.2: the reasoning is model output over a prompt that contains user-chosen token
+        // names, so a name crafted as an instruction can steer it. It is posted from the
+        // platform's account: anything that looks like a link, a mention or a cashtag is
+        // dropped in favour of a fixed line rather than published.
+        const DEFAULT_REASONING = 'Top performer by volume and market metrics';
+        let shortReasoning = String(reasoning || DEFAULT_REASONING).replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+        if (/https?:|www\.|\.[a-z]{2,}\/|@\w|\$[A-Za-z]|t\.me|discord/i.test(shortReasoning)) {
+            shortReasoning = DEFAULT_REASONING;
+        }
         if (shortReasoning.length > maxReasoningLength) {
             shortReasoning = shortReasoning.slice(0, maxReasoningLength - 3) + '...';
         }

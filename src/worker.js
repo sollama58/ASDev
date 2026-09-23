@@ -136,7 +136,10 @@ async function startWorker() {
 
     // Initialize Twitter (needed for social worker)
     // v25.22: Now async to fetch username for proper tweet URLs
-    if (enabledTasks.includes('social')) {
+    // v30.2: the flywheel posts the KOTH tweet from this process. This used to test for a
+    // 'social' task that is not a valid WORKER_TASKS option, so Twitter was never initialised
+    // here and the KOTH tweet silently never went out.
+    if (enabledTasks.includes('flywheel')) {
         await twitter.init();
     }
 
@@ -145,6 +148,10 @@ async function startWorker() {
     const connection = new Connection(config.RPC_URL, {
         commitment: "confirmed",
         confirmTransactionInitialTimeout: config.RPC_TIMEOUT_MS,
+        // v30.2: web3.js otherwise retries every 429 itself (up to 5 times), silently multiplying
+        // request volume exactly when the provider is asking us to slow down. Callers here already
+        // treat a failed read as "try next cycle".
+        disableRetryOnRateLimit: true,
         fetch: (url, options) => {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), config.RPC_TIMEOUT_MS);
@@ -193,18 +200,24 @@ async function startWorker() {
     const workers = tasks.workers;
 
     if (enabledTasks.includes('holders')) {
-        workers.initHolderScannerWorker(deps);
+        tasks.registerWorker(workers.initHolderScannerWorker(deps));
         logger.info('[Worker] Holder scanner started');
     }
 
     if (enabledTasks.includes('metadata')) {
-        workers.initMetadataUpdaterWorker(deps);
+        tasks.registerWorker(workers.initMetadataUpdaterWorker(deps));
+        // v30.2: the minute-by-minute top-token prices and the missing-image backfill only ran
+        // in single-process mode; the split deployment never started them.
+        tasks.metadataUpdater.start(deps);
         logger.info('[Worker] Metadata updater started');
     }
 
     if (enabledTasks.includes('asdf')) {
         workers.initAsdfSyncWorker(deps);
-        logger.info('[Worker] ASDF sync started');
+        // v30.2: the ANSEM Top 1000 list (2x airdrop weight) was only ever synced in
+        // single-process mode, so in production the advertised bonus applied to nobody.
+        workers.initAnsemSyncWorker(deps);
+        logger.info('[Worker] ASDF + ANSEM sync started');
     }
 
     if (enabledTasks.includes('flywheel')) {
@@ -243,10 +256,20 @@ async function startWorker() {
 // Graceful shutdown
 let memoryMonitorInterval = null; // Tracked for cleanup in shutdown
 
+let shuttingDown = false;
 const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info(`${signal} received, shutting down worker gracefully...`);
+    const forceExit = setTimeout(() => process.exit(1), 170000);
+    forceExit.unref();
     try {
         if (memoryMonitorInterval) clearInterval(memoryMonitorInterval);
+        // v30.2: let an airdrop or fee sweep that is mid-flight finish before the database
+        // goes away -- previously the pool was closed under it, between sends and bookkeeping.
+        const drained = await tasks.flywheel.drain(160000);
+        if (!drained) logger.error('[Worker] Flywheel still busy at shutdown deadline');
+        await tasks.stopAll();
         const db = database.getDB();
         if (db) await db.close();
         redis.getConnection()?.disconnect();

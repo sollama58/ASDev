@@ -4,16 +4,31 @@
  * v13.0 - Added holder scanner and metadata updater workers
  * v25.4 - Added worker event handlers for debugging job processing issues
  */
-const { PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { PublicKey, Transaction, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { BN } = require('@coral-xyz/anchor');
-const { createCloseAccountInstruction, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } = require('@solana/spl-token');
 const config = require('../config/env');
 const { PROGRAMS, WALLETS, TOKENS } = require('../config/constants');
-const { logger, redis, pump, solana, twitter, imageUtils, pinata } = require('../services');
+const { logger, redis, pump, solana, twitter, pinata } = require('../services');
 
 /**
  * Initialize deploy worker
+ *
+ * v30.2 - Launch safety:
+ *   - Metadata is pinned HERE, after payment, from the sanitised fields in the job. The API
+ *     no longer accepts a metadata URI from the client, so a paying user can no longer point
+ *     a ShitPad coin at any IPFS document they like (and at any image), and nobody can use
+ *     /prepare-metadata to pin content to our Pinata account without paying.
+ *   - A job that stalls (its process died mid-launch) is never silently re-run. BullMQ's
+ *     default re-runs a stalled job once, which could launch a paid coin twice. Stalled jobs
+ *     now fail, and a reconciler decides from the chain whether the coin was created (record
+ *     it) or not (refund).
+ *   - A failure after the create was broadcast is resolved against the chain before any
+ *     refund: if the mint exists the launch succeeded, and the user keeps the coin without
+ *     also getting the fee back.
+ *   - Refunds are idempotent per payment (solana.refundUser claims them on the payment row).
  */
+const LAUNCH_DESCRIPTION_FOOTER = ' Launched via ShitPad.';
+
 function initDeployWorker(deps) {
     const { connection, devKeypair, db, saveTokenData, refundUser } = deps;
 
@@ -23,17 +38,49 @@ function initDeployWorker(deps) {
     const DUD_IMAGE = 'https://i.imgur.com/dBRNdzu.png';
     const DUD_DESCRIPTION = '';
 
-    /**
-     * Build and send a token create+buy transaction on-chain
-     * Reusable for both real tokens and anti-bundling duds
-     */
-    async function launchTokenOnChain({ tokenName, tokenTicker, tokenMetadataUri, useMayhemMode, isDud = false }) {
-        const { Keypair } = require('@solana/web3.js');
+    /** True once the mint account exists on chain. Retries a few times: a missing answer is
+     * not the same as "absent" when the RPC is flaky, and a wrong "absent" means a refund for
+     * a coin that exists. Throws if it can never get an answer. */
+    async function mintExists(mintStr) {
+        let lastErr = null;
+        for (let i = 0; i < 4; i++) {
+            try {
+                const info = await connection.getAccountInfo(new PublicKey(mintStr), 'confirmed');
+                return !!info;
+            } catch (e) {
+                lastErr = e;
+                await new Promise(r => setTimeout(r, 1500 * (i + 1)));
+            }
+        }
+        throw new Error(`Could not check whether mint ${mintStr} exists: ${lastErr?.message}`);
+    }
 
-        // v28.1: real launches draw a pre-ground vanity mint from the pool; anti-bundling
-        // duds are throwaway tokens and must never burn one. getMintKeypair falls back to a
-        // random mint whenever the pool is empty or unavailable, so this cannot block a
-        // launch -- vanityId is null on that path and the release/markUsed calls below no-op.
+    /** Record a seed position so the reconciler can sell it if the scheduled sell never runs. */
+    async function recordSeedPosition(mintStr, isDecoy) {
+        await db.run(
+            `INSERT INTO seed_positions (mint, is_decoy, created_at) VALUES ($1, $2, $3)
+             ON CONFLICT (mint) DO NOTHING`,
+            [mintStr, !!isDecoy, Date.now()]
+        ).catch(e => logger.warn('[Deploy] Could not record seed position', { mint: mintStr, error: e.message }));
+    }
+
+    /**
+     * Build and send a token create (+ seed buy) on-chain.
+     * Reusable for both real tokens and anti-bundling duds.
+     *
+     * Throws on failure. An error thrown AFTER the create was broadcast carries
+     * `broadcastMint` so the caller can check the chain before deciding to refund.
+     */
+    async function launchTokenOnChain({
+        tokenName, tokenTicker, tokenMetadataUri,
+        quoteMint = null,      // null = SOL; otherwise a supported quote mint (Custom Pairs)
+        isDud = false,
+        onBroadcast = null,    // async (mintStr) => void, called just before the create is sent
+    }) {
+        const { Keypair } = require('@solana/web3.js');
+        const pumpLaunch = require('../services/pumpLaunch');
+
+        // v28.1: real launches draw a pre-ground vanity mint from the pool; duds never burn one.
         const vanity = require('../services/vanity');
         const { keypair: mintKeypair, isVanity, id: vanityId } = isDud
             ? { keypair: Keypair.generate(), isVanity: false, id: null }
@@ -42,172 +89,109 @@ function initDeployWorker(deps) {
         const mint = mintKeypair.publicKey;
         const creator = devKeypair.publicKey;
 
-        // Tracks whether we reached the point of no return (see the send block below).
-        // The try wrapping the rest of this function exists solely so a claimed vanity address
-        // can be returned to the pool on failure; its body is left at the original indentation
-        // to keep this diff reviewable rather than reflowing ~120 unrelated lines.
+        // Decoys are always SOL-quoted. Token-quoted launches get no seed buy (see
+        // pumpLaunch.buildLaunchInstructions `seedBuy`).
+        const effectiveQuoteMint = isDud ? null : quoteMint;
+        const seedBuy = !effectiveQuoteMint;
+
         let broadcastAttempted = false;
         try {
+            const built = await pumpLaunch.buildLaunchInstructions({
+                connection,
+                mint,
+                name: tokenName,
+                symbol: tokenTicker,
+                uri: tokenMetadataUri,
+                creator,
+                user: creator,
+                quoteAmount: new BN(Math.floor(0.01 * LAMPORTS_PER_SOL)),
+                // v30.2: mayhem mode is never enabled. The UI does not offer it, and the holder
+                // and fee maths here (1B supply, platform as sole creator) are unverified for it.
+                mayhemMode: false,
+                quoteMint: effectiveQuoteMint,
+                seedBuy,
+            });
 
-        const { global, bondingCurve, bondingCurveV2, associatedBondingCurve, eventAuthority, feeConfig, globalVolumeAccumulator } = pump.getPumpPDAs(mint);
-        const [mintAuthority] = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], PROGRAMS.PUMP);
-        const [metadata] = PublicKey.findProgramAddressSync([Buffer.from("metadata"), PROGRAMS.METADATA.toBuffer(), mint.toBuffer()], PROGRAMS.METADATA);
-        const [creatorVault] = PublicKey.findProgramAddressSync([Buffer.from("creator-vault"), creator.toBuffer()], PROGRAMS.PUMP);
-        const [userVolumeAccumulator] = PublicKey.findProgramAddressSync([Buffer.from("user_volume_accumulator"), creator.toBuffer()], PROGRAMS.PUMP);
-        const [mayhemState] = PublicKey.findProgramAddressSync([Buffer.from("mayhem-state"), mint.toBuffer()], PROGRAMS.MAYHEM);
-        const mayhemTokenVault = pump.getATA(mint, WALLETS.SOL_VAULT, PROGRAMS.TOKEN_2022);
+            let sig = null;
+            for (const [n, group] of built.transactions.entries()) {
+                const tx = new Transaction();
+                // One SetComputeUnitLimit per transaction.
+                solana.addPriorityFee(tx, { units: built.computeUnitLimit });
+                for (const ix of group.instructions) tx.add(ix);
+                tx.feePayer = creator;
 
-        const createData = pump.buildCreateInstructionData(tokenName, tokenTicker, tokenMetadataUri, creator, useMayhemMode);
-        const createKeys = [
-            { pubkey: mint, isSigner: true, isWritable: true },
-            { pubkey: mintAuthority, isSigner: false, isWritable: false },
-            { pubkey: bondingCurve, isSigner: false, isWritable: true },
-            { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-            { pubkey: global, isSigner: false, isWritable: false },
-            { pubkey: creator, isSigner: true, isWritable: true },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-            { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.MAYHEM, isSigner: false, isWritable: true },
-            { pubkey: WALLETS.GLOBAL_PARAMS, isSigner: false, isWritable: false },
-            { pubkey: WALLETS.SOL_VAULT, isSigner: false, isWritable: true },
-            { pubkey: mayhemState, isSigner: false, isWritable: true },
-            { pubkey: mayhemTokenVault, isSigner: false, isWritable: true },
-            { pubkey: eventAuthority, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false }
-        ];
-        const createIx = new TransactionInstruction({ keys: createKeys, programId: PROGRAMS.PUMP, data: createData });
+                const signers = group.needsMintSignature ? [devKeypair, mintKeypair] : [devKeypair];
 
-        const feeRecipient = useMayhemMode ? WALLETS.MAYHEM_FEE : WALLETS.FEE_STANDARD;
-        const associatedUser = pump.getATA(mint, creator, PROGRAMS.TOKEN_2022);
-        const solBuyAmount = Math.floor(0.01 * LAMPORTS_PER_SOL);
-        const tokenBuyAmount = pump.calculateTokensForSol(solBuyAmount);
-        const buyData = pump.buildBuyInstructionData(tokenBuyAmount, new BN(Math.floor(solBuyAmount * 1.05)));
-        const buyKeys = [
-            { pubkey: global, isSigner: false, isWritable: false },
-            { pubkey: feeRecipient, isSigner: false, isWritable: true },
-            { pubkey: mint, isSigner: false, isWritable: false },
-            { pubkey: bondingCurve, isSigner: false, isWritable: true },
-            { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-            { pubkey: associatedUser, isSigner: false, isWritable: true },
-            { pubkey: creator, isSigner: true, isWritable: true },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-            { pubkey: creatorVault, isSigner: false, isWritable: true },
-            { pubkey: eventAuthority, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-            { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: false },
-            { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },
-            { pubkey: feeConfig, isSigner: false, isWritable: false },
-            { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false },
-            // v25.47: bondingCurveV2 trailing account — required to prevent 6024 Overflow
-            { pubkey: bondingCurveV2, isSigner: false, isWritable: false }
-        ];
-        const buyIx = new TransactionInstruction({ keys: buyKeys, programId: PROGRAMS.PUMP, data: buyData });
-
-        const createATAIx = new TransactionInstruction({
-            keys: [
-                { pubkey: creator, isSigner: true, isWritable: true },
-                { pubkey: associatedUser, isSigner: false, isWritable: true },
-                { pubkey: creator, isSigner: false, isWritable: false },
-                { pubkey: mint, isSigner: false, isWritable: false },
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-            ],
-            programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-            data: Buffer.alloc(0),
-        });
-
-        const tx = new Transaction();
-        solana.addPriorityFee(tx);
-        tx.add(createIx).add(createATAIx).add(buyIx);
-        tx.feePayer = creator;
-
-        // v28.1: the point of no return for a claimed vanity address. Once we have entered
-        // sendTxWithRetry the mint may exist on-chain, so the address can never be handed to
-        // another launch -- a second create against the same mint could never succeed.
-        // Anything that threw *before* this line left the mint untouched, and the catch at
-        // the end of this function puts the address back in the pool.
-        broadcastAttempted = true;
-        const sig = await solana.sendTxWithRetry(tx, [devKeypair, mintKeypair]);
-        if (vanityId) await vanity.markUsed(db, vanityId);
-        if (isVanity) logger.info(`Launched ${tokenTicker} on vanity mint ${mint.toString()}`);
-
-        // Fire-and-forget sell to recoup SOL
-        setTimeout(async () => {
-            try {
-                const bal = await connection.getTokenAccountBalance(associatedUser);
-                if (bal.value?.uiAmount > 0) {
-                    const sellData = pump.buildSellInstructionData(new BN(bal.value.amount));
-                    const sellKeys = [
-                        { pubkey: global, isSigner: false, isWritable: false },
-                        { pubkey: feeRecipient, isSigner: false, isWritable: true },
-                        { pubkey: mint, isSigner: false, isWritable: false },
-                        { pubkey: bondingCurve, isSigner: false, isWritable: true },
-                        { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-                        { pubkey: associatedUser, isSigner: false, isWritable: true },
-                        { pubkey: creator, isSigner: true, isWritable: true },
-                        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                        { pubkey: creatorVault, isSigner: false, isWritable: true },
-                        { pubkey: PROGRAMS.TOKEN_2022, isSigner: false, isWritable: false },
-                        { pubkey: eventAuthority, isSigner: false, isWritable: false },
-                        { pubkey: PROGRAMS.PUMP, isSigner: false, isWritable: false },
-                        { pubkey: feeConfig, isSigner: false, isWritable: false },
-                        { pubkey: PROGRAMS.FEE, isSigner: false, isWritable: false },
-                        // v25.47: bondingCurveV2 trailing account — required to prevent 6024 Overflow
-                        { pubkey: bondingCurveV2, isSigner: false, isWritable: false }
-                    ];
-                    const sellIx = new TransactionInstruction({ keys: sellKeys, programId: PROGRAMS.PUMP, data: sellData });
-                    const closeIx = createCloseAccountInstruction(associatedUser, creator, creator, [], PROGRAMS.TOKEN_2022);
-                    const sellTx = new Transaction();
-                    solana.addPriorityFee(sellTx);
-                    sellTx.add(sellIx).add(closeIx);
-                    await solana.sendTxWithRetry(sellTx, [devKeypair]);
-                    logger.info(`Sold & Closed Account for ${tokenTicker} (${mint.toString().substring(0, 8)}...)`);
+                if (group.critical) {
+                    // The point of no return: once we are inside sendTxWithRetry the mint may
+                    // exist on-chain.
+                    if (onBroadcast) await onBroadcast(mint.toString());
+                    broadcastAttempted = true;
+                    sig = await solana.sendTxWithRetry(tx, signers);
+                } else {
+                    // The coin already exists and trades. A failed seed buy is not a failed launch.
+                    try {
+                        await solana.sendTxWithRetry(tx, signers);
+                    } catch (seedErr) {
+                        logger.warn('[Deploy] Seed buy failed; the coin is live without one', {
+                            ticker: tokenTicker, mint: mint.toString(), group: n, error: seedErr.message
+                        });
+                    }
                 }
-            } catch (e) { logger.error("Sell error", { ticker: tokenTicker, msg: e.message }); }
-        }, 1500);
-
-        return { mint, mintKeypair, sig };
-
-        } catch (launchErr) {
-            // A failure before broadcast means this mint was never created, so the ground
-            // address is still good — return it to the pool rather than wasting it. After a
-            // broadcast attempt it is retired instead, because the mint may now exist.
-            if (vanityId) {
-                if (broadcastAttempted) await vanity.markUsed(db, vanityId);
-                else await vanity.release(db, vanityId);
             }
+
+            // Nothing below may throw: the coin exists, and a throw here would reach the
+            // refund path for a launch that succeeded.
+            if (vanityId) await vanity.markUsed(db, vanityId).catch(e => logger.warn('[Deploy] markUsed failed', { error: e.message }));
+            if (isVanity) logger.info(`Launched ${tokenTicker} on vanity mint ${mint.toString()}`);
+
+            if (built.seedBuy) {
+                await recordSeedPosition(mint.toString(), isDud);
+                // Sell the seed position back. Detached, and backed by the seed_positions
+                // reconciler if this process dies before it runs.
+                setTimeout(() => {
+                    sellSeedPosition({ connection, devKeypair, db }, mint.toString())
+                        .catch(e => logger.error('Seed sell error', { ticker: tokenTicker, msg: e.message }));
+                }, 1500);
+            }
+
+            return { mint, mintKeypair, sig, quoteMint: built.quoteMint, isTokenQuoted: built.isTokenQuoted };
+        } catch (launchErr) {
+            if (vanityId) {
+                if (broadcastAttempted) await vanity.markUsed(db, vanityId).catch(() => {});
+                else await vanity.release(db, vanityId).catch(() => {});
+            }
+            if (broadcastAttempted) launchErr.broadcastMint = mint.toString();
             throw launchErr;
         }
     }
 
+    // v30.2: the decoy metadata never changes, so it is pinned once per process, not per job.
+    let dudMetadataUri = null;
+
     /**
      * Launch anti-bundling dud tokens before the real token.
      *
-     * v29.1: the count is configurable and may be zero. Each dud is a full create plus buy,
-     * and a create allocates mint, bonding-curve and metadata accounts whose rent the
-     * sell-and-close below does NOT recover -- so this runs at a real per-launch cost set
-     * against a 0.02 SOL deployment fee. It was a hardcoded random 1 to 5, which made that
-     * cost invisible. Set ANTI_BUNDLE_MAX to 0 to turn decoys off.
+     * Each dud is a full create plus buy, and the rent a create allocates is not recovered by
+     * the sell that follows, so this is a real per-launch cost against a 0.02 SOL fee. Default
+     * is now 0-1 decoys (was 1-5); set ANTI_BUNDLE_MAX=0 to turn decoys off.
      */
     async function launchDudTokens(job) {
-        // ANTI_BUNDLE_MAX is the off switch: setting it to 0 disables decoys whatever the
-        // minimum says, so an operator cannot half-disable them by touching only one value.
         const hi = config.ANTI_BUNDLE_MAX;
         const lo = Math.min(config.ANTI_BUNDLE_MIN, hi);
         const dudCount = hi === 0 ? 0 : lo + Math.floor(Math.random() * (hi - lo + 1));
 
         if (dudCount === 0) {
-            logger.debug(`[Anti-Bundle] Disabled, skipping decoys for job ${job.id}`);
+            logger.debug(`[Anti-Bundle] No decoys for job ${job.id}`);
             return;
         }
 
         logger.info(`[Anti-Bundle] Launching ${dudCount} dud token(s) for job ${job.id}`);
 
-        // Upload dud metadata once (reuse for all duds)
-        const dudMeta = await pinata.uploadMetadata(DUD_NAME, DUD_TICKER, DUD_DESCRIPTION, '', '', DUD_IMAGE);
-        const dudMetadataUri = dudMeta.metadataUri;
+        if (!dudMetadataUri) {
+            const dudMeta = await pinata.uploadMetadata(DUD_NAME, DUD_TICKER, DUD_DESCRIPTION, '', '', DUD_IMAGE);
+            dudMetadataUri = dudMeta.metadataUri;
+        }
 
         for (let i = 0; i < dudCount; i++) {
             await job.updateProgress({ phase: 'anti-bundle', current: i + 1, total: dudCount });
@@ -216,132 +200,146 @@ function initDeployWorker(deps) {
                     tokenName: DUD_NAME,
                     tokenTicker: DUD_TICKER,
                     tokenMetadataUri: dudMetadataUri,
-                    useMayhemMode: false,
                     isDud: true
                 });
                 logger.info(`[Anti-Bundle] Dud ${i + 1}/${dudCount} launched: ${result.mint.toString().substring(0, 12)}...`);
             } catch (dudErr) {
-                // Dud failure is non-fatal - log and continue
                 logger.warn(`[Anti-Bundle] Dud ${i + 1}/${dudCount} failed (non-fatal)`, { error: dudErr.message });
             }
         }
+    }
 
-        logger.info(`[Anti-Bundle] Dud phase complete for job ${job.id}`);
+    /** Persist a launched coin. Never throws: the coin exists whatever happens here. */
+    async function recordLaunchedToken(data, mintStr, quoteMint) {
+        const { name, ticker, description, twitter: twitterHandle, website, image, userPubkey, metadataUri } = data;
+        try {
+            const existing = await db.get('SELECT mint FROM tokens WHERE mint = $1', [mintStr]);
+            if (existing) return;
+            await saveTokenData(userPubkey, mintStr, {
+                name, ticker, description, twitter: twitterHandle,
+                website, image,
+                isMayhemMode: false, metadataUri,
+                quoteMint: quoteMint || null,
+            });
+            logger.info(`[Deploy] Token saved to database: ${ticker} (${mintStr})`);
+        } catch (dbError) {
+            logger.error(`[Deploy] FAILED to save token to database`, { error: dbError.message, mint: mintStr, ticker });
+        }
     }
 
     const worker = redis.createWorker('deployQueue', async (job) => {
         logger.info(`STARTING JOB ${job.id}: ${job.data.ticker}`);
-
-        // Image here is now the URL passed from deploy route, NOT base64
-        const { name, ticker, description, twitter: twitterHandle, website, image, userPubkey, isMayhemMode, metadataUri } = job.data;
-
-        // v25.4: Debug logging for image URL tracking
-        logger.info(`[Deploy] Job ${job.id} image debug`, {
-            ticker,
-            imageReceived: !!image,
-            imageValue: image ? image.substring(0, 80) : 'NULL/UNDEFINED',
-            imageType: typeof image
-        });
+        const { name, ticker, description, twitter: twitterHandle, website, image, userPubkey, quoteMint, userTx } = job.data;
 
         try {
-            if (!metadataUri) throw new Error("Metadata URI missing");
+            // Pin the metadata. Kept on the job so nothing re-pins it.
+            let metadataUri = job.data.metadataUri;
+            if (!metadataUri) {
+                await job.updateProgress({ phase: 'metadata', message: 'Uploading metadata...' });
+                const pinned = await pinata.uploadMetadata(
+                    name, ticker, (description || '') + LAUNCH_DESCRIPTION_FOOTER, twitterHandle, website, image
+                );
+                metadataUri = pinned.metadataUri;
+                if (!metadataUri) throw new Error('Metadata upload failed');
+                await job.updateData({ ...job.data, metadataUri });
+            }
 
-            // Anti-bundling: Launch dud tokens first
             await launchDudTokens(job);
 
-            // Now launch the real token
             await job.updateProgress({ phase: 'deploying', message: 'Launching your token...' });
             logger.info(`[Deploy] Launching real token: ${ticker}`);
 
-            const { mint, sig } = await launchTokenOnChain({
+            const launched = await launchTokenOnChain({
                 tokenName: name,
                 tokenTicker: ticker,
                 tokenMetadataUri: metadataUri,
-                useMayhemMode: isMayhemMode
+                quoteMint: quoteMint || null,
+                // Recorded before the send, so a reconciler can find the mint if this process
+                // dies mid-send.
+                onBroadcast: (mintStr) => job.updateProgress({ phase: 'broadcast', mint: mintStr }),
             });
+            const mintStr = launched.mint.toString();
+            logger.info(`[Deploy] Real token confirmed: ${ticker} ${mintStr} sig=${launched.sig}`);
 
-            logger.info(`[Deploy] Real token confirmed: ${ticker} ${mint.toString()} sig=${sig}`);
-
-            // CRITICAL: Ensure we have the image URL
-            // v25.6: If image is missing, fetch it from the metadataUri (IPFS)
-            let finalImageUrl = image;
-            if (!finalImageUrl || finalImageUrl === '' || finalImageUrl === 'null' || finalImageUrl === 'undefined') {
-                logger.info(`[Deploy] Image missing, fetching from metadataUri...`, { ticker, metadataUri: metadataUri?.substring(0, 50) });
-                try {
-                    const metadataImage = await imageUtils.fetchImageFromMetadataUri(metadataUri, 5000);
-                    if (metadataImage) {
-                        finalImageUrl = metadataImage;
-                        logger.info(`[Deploy] Successfully fetched image from metadataUri`, { ticker, image: metadataImage.substring(0, 50) });
-                    } else {
-                        logger.warn(`[Deploy] Could not fetch image from metadataUri`, { ticker });
-                    }
-                } catch (metaErr) {
-                    logger.warn(`[Deploy] Failed to fetch metadataUri`, { ticker, error: metaErr.message });
-                }
-            }
-
-            logger.info(`[Deploy] Saving token to database...`, {
-                mint: mint.toString(),
-                ticker,
-                name,
-                userPubkey,
-                hasImage: !!finalImageUrl,
-                imageSource: image ? 'direct' : (finalImageUrl ? 'metadataUri' : 'none'),
-                hasMetadataUri: !!metadataUri
-            });
+            await recordLaunchedToken({ ...job.data, metadataUri }, mintStr, launched.quoteMint);
 
             try {
-                await saveTokenData(userPubkey, mint.toString(), {
-                    name, ticker, description, twitter: twitterHandle,
-                    website, image: finalImageUrl, // v25.6: Use resolved image URL
-                    isMayhemMode, metadataUri
-                });
-                logger.info(`[Deploy] Token saved to database successfully: ${ticker} (${mint.toString()})`);
-            } catch (dbError) {
-                logger.error(`[Deploy] FAILED to save token to database`, {
-                    error: dbError.message,
-                    mint: mint.toString(),
-                    ticker
-                });
-                // Don't throw - token was created on-chain, we don't want to refund
-                // But log it prominently for debugging
-            }
-
-            // Queue social post
-            // v28.3 MONEY: non-fatal. This was the last unguarded await inside the catch-all
-            // below, which refunds the user on ANY error — so a Redis blip here, AFTER the token
-            // had launched on-chain and the user had it, paid them the deployment fee back and
-            // marked the job failed. A missed tweet is not a failed launch.
-            try {
-                await redis.addSocialJob({ name, ticker, mint: mint.toString() });
+                await redis.addSocialJob({ name, ticker, mint: mintStr });
             } catch (socialErr) {
-                logger.warn('[Deploy] Launch succeeded but social post could not be queued', { mint: mint.toString(), error: socialErr.message });
+                logger.warn('[Deploy] Launch succeeded but social post could not be queued', { mint: mintStr, error: socialErr.message });
             }
 
-            return { mint: mint.toString(), signature: sig };
+            return { mint: mintStr, signature: launched.sig };
 
         } catch (jobError) {
             logger.error(`Job Failed: ${jobError.message}`);
-            if (userPubkey) await refundUser(userPubkey, "Deployment Failed: " + jobError.message);
+
+            // Did the coin get created anyway? Only the chain can say.
+            if (jobError.broadcastMint) {
+                let exists = null;
+                try {
+                    exists = await mintExists(jobError.broadcastMint);
+                } catch (checkErr) {
+                    // Cannot tell. Refunding could pay for a coin that exists; not refunding
+                    // could keep a fee for one that does not. Fail without refunding and say
+                    // so loudly -- this needs a human.
+                    logger.error('[Deploy] LAUNCH OUTCOME UNKNOWN - not refunding; check the mint on chain', {
+                        job: job.id, mint: jobError.broadcastMint, userPubkey, userTx, error: checkErr.message
+                    });
+                    throw jobError;
+                }
+                if (exists) {
+                    logger.warn('[Deploy] Launch reported an error but the mint exists; treating as launched', {
+                        job: job.id, mint: jobError.broadcastMint
+                    });
+                    await recordLaunchedToken(job.data, jobError.broadcastMint, quoteMint);
+                    return { mint: jobError.broadcastMint, signature: null };
+                }
+            }
+
+            if (userPubkey) await refundUser(userPubkey, "Deployment Failed: " + jobError.message, userTx || null);
             throw jobError;
         }
-    }, { concurrency: 1 });
+    }, {
+        concurrency: 1,
+        // v30.2: a stalled launch is never re-run automatically (see header).
+        maxStalledCount: 0,
+        // Launches run for a while (decoys + confirmation polling); give the lock room.
+        lockDuration: 120000,
+    });
 
-    // v25.4: Add error handlers for debugging worker issues
+    /**
+     * A job that stalled failed without its handler running to completion. Decide from the
+     * chain what actually happened.
+     */
+    async function reconcileStalledLaunch(job) {
+        const { userPubkey, userTx } = job.data || {};
+        const mintStr = job.progress && job.progress.mint;
+        logger.warn('[DeployWorker] Reconciling stalled launch', { job: job.id, mint: mintStr || null });
+        try {
+            if (mintStr && await mintExists(mintStr)) {
+                await recordLaunchedToken(job.data, mintStr, job.data.quoteMint);
+                return;
+            }
+        } catch (e) {
+            logger.error('[DeployWorker] STALLED LAUNCH OUTCOME UNKNOWN - not refunding; check the mint on chain', {
+                job: job.id, mint: mintStr, userPubkey, userTx, error: e.message
+            });
+            return;
+        }
+        if (userPubkey) await refundUser(userPubkey, 'Launch interrupted before the coin was created', userTx || null);
+    }
+
     if (worker) {
         worker.on('completed', (job, result) => {
-            logger.info(`[DeployWorker] Job ${job.id} completed`, {
-                ticker: job.data.ticker,
-                mint: result?.mint
-            });
+            logger.info(`[DeployWorker] Job ${job.id} completed`, { ticker: job.data.ticker, mint: result?.mint });
         });
 
         worker.on('failed', (job, err) => {
-            logger.error(`[DeployWorker] Job ${job?.id} failed`, {
-                ticker: job?.data?.ticker,
-                error: err.message,
-                stack: err.stack
-            });
+            logger.error(`[DeployWorker] Job ${job?.id} failed`, { ticker: job?.data?.ticker, error: err.message });
+            if (job && /stalled/i.test(err?.message || '')) {
+                reconcileStalledLaunch(job).catch(e => logger.error('[DeployWorker] Stall reconciliation failed', { error: e.message }));
+            }
         });
 
         worker.on('error', (err) => {
@@ -358,6 +356,56 @@ function initDeployWorker(deps) {
     }
 
     return worker;
+}
+
+/**
+ * Sell the platform's seed position in `mintStr`, whatever the coin is quoted in, and mark it
+ * sold. Shared by the post-launch timer and the reconciler.
+ */
+async function sellSeedPosition({ connection, devKeypair, db }, mintStr) {
+    const pumpLaunch = require('../services/pumpLaunch');
+    const seedSell = await pumpLaunch.buildSeedSellInstructions({
+        connection,
+        mint: new PublicKey(mintStr),
+        user: devKeypair.publicKey,
+        tokenProgram: PROGRAMS.TOKEN_2022,
+    });
+    if (seedSell) {
+        const sellTx = new Transaction();
+        solana.addPriorityFee(sellTx, {
+            units: seedSell.isTokenQuoted ? pumpLaunch.CU_LIMIT_TOKEN_LAUNCH : pumpLaunch.CU_LIMIT_SOL_LAUNCH,
+        });
+        for (const ix of seedSell.instructions) sellTx.add(ix);
+        sellTx.feePayer = devKeypair.publicKey;
+        await solana.sendTxWithRetry(sellTx, [devKeypair]);
+        logger.info(`Sold seed position ${mintStr.substring(0, 8)}...`, { tokenQuoted: seedSell.isTokenQuoted });
+    }
+    // Null means nothing is held: either sold already or the buy never filled. Done either way.
+    await db.run('UPDATE seed_positions SET sold_at = $2 WHERE mint = $1', [mintStr, Date.now()]).catch(() => {});
+}
+
+/**
+ * v30.2: sell any seed position whose post-launch sell never ran (process restarted, RPC
+ * failure). Positions older than a minute and still unsold are retried, with a cap so one
+ * permanently unsellable mint cannot be retried forever.
+ */
+async function reconcileSeedPositions(deps) {
+    const { db } = deps;
+    const rows = await db.all(
+        `SELECT mint FROM seed_positions
+          WHERE sold_at IS NULL AND created_at < $1 AND attempts < 10
+          ORDER BY created_at ASC LIMIT 20`,
+        [Date.now() - 60_000]
+    ).catch(() => []);
+    for (const { mint } of rows) {
+        await db.run('UPDATE seed_positions SET attempts = attempts + 1 WHERE mint = $1', [mint]).catch(() => {});
+        try {
+            await sellSeedPosition(deps, mint);
+        } catch (e) {
+            await db.run('UPDATE seed_positions SET last_error = $2 WHERE mint = $1', [mint, String(e.message).slice(0, 300)]).catch(() => {});
+            logger.warn('[SeedReconcile] Sell failed', { mint, error: e.message });
+        }
+    }
 }
 
 function initSocialWorker(deps) {
@@ -496,6 +544,8 @@ function initMetadataUpdaterWorker(deps) {
  * Initialize ASDF Sync Worker
  * Updates Top 100 ASDF holders for the 2x multiplier
  */
+const HOLDER_LIST_SYNC_MS = parseInt(process.env.HOLDER_LIST_SYNC_MS, 10) || 30 * 60 * 1000;
+
 function initAsdfSyncWorker(deps) {
     const { connection } = deps;
     const { fetchTopHoldersByBalance } = require('../services/heliusDAS');
@@ -548,9 +598,9 @@ function initAsdfSyncWorker(deps) {
     // Run immediately
     updateAsdfHolders();
 
-    // v27.6: 5 minutes, matching the ANSEM worker. The previous 2-minute cadence was tuned
-    // for a holder list that barely moves, and it now drives paginated DAS scans.
-    setInterval(updateAsdfHolders, 5 * 60 * 1000);
+    // v30.2: 30 minutes (was 5). A top-100 list barely moves, and each refresh is a paginated
+    // Helius DAS scan of every holder -- up to 20 paid pages a time.
+    setInterval(updateAsdfHolders, HOLDER_LIST_SYNC_MS);
 
     logger.info('[Worker] ASDF sync worker initialized');
 }
@@ -602,12 +652,14 @@ function initAnsemSyncWorker(deps) {
     }
 
     updateAnsemHolders();
-    setInterval(updateAnsemHolders, 5 * 60 * 1000); // every 5 minutes
+    setInterval(updateAnsemHolders, HOLDER_LIST_SYNC_MS); // v30.2: 30 minutes (was 5)
     logger.info('[Worker] ANSEM sync worker initialized');
 }
 
 module.exports = {
     initDeployWorker,
+    reconcileSeedPositions,
+    sellSeedPosition,
     initSocialWorker,
     // v13.0: New workers
     initHolderScannerWorker,

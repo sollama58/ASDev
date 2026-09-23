@@ -15,13 +15,13 @@
  * v25.112 - KOTH selection now reads AI-selected KOTH from Redis to match flywheel
  */
 const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
-const { getAssociatedTokenAddress } = require('@solana/spl-token');
 const { BN } = require('@coral-xyz/anchor');
 const axios = require('axios');
 const config = require('../config/env');
-const { TOKENS, PROGRAMS, WALLETS } = require('../config/constants');
-const { logger, mutex, postgres, redis, pump } = require('../services');
+const { PROGRAMS, WALLETS } = require('../config/constants');
+const { logger, mutex, redis, pump } = require('../services');
 const { fetchTokenAccountsHeliusDAS } = require('../services/heliusDAS');
+const { payableSet } = require('../services/recipientFilter');
 
 // v25.22 SCALABILITY: Mutex to prevent overlapping holder scans
 const holderScannerMutex = mutex.getMutex('holder_scanner');
@@ -109,8 +109,15 @@ setInterval(() => {
 // whatever holder data is already in the DB, but its on-chain getProgramAccounts rescan is
 // throttled to once per SLOW_TIER_RESCAN_MS — cutting RPC volume for the long tail of
 // low-volume eligible tokens without staling out the tokens that matter most.
-const FAST_TIER_SIZE = 10; // top N tokens by 24h volume scanned every cycle
-const SLOW_TIER_RESCAN_MS = 20 * 60 * 1000; // 20 minutes
+// v30.2 RPC: the fast tier is now "about to be paid" rather than "most traded". Holder lists
+// only move money at airdrop time; everywhere else they feed UI estimates, which do not need
+// five-minute freshness. So a token is rescanned every cycle only when its pool is at least
+// half way to the payout threshold (plus the top few by volume, so the busiest coins' UI
+// stays current); everything else rescans every SLOW_TIER_RESCAN_MS. processTokenAirdrops
+// additionally forces a fresh scan of exactly the tokens it is about to pay.
+const FAST_TIER_SIZE = 5; // top N tokens by 24h volume scanned every cycle
+const FAST_TIER_POOL_FRACTION = 0.5; // ...and any token whose pool is this close to paying out
+const SLOW_TIER_RESCAN_MS = 30 * 60 * 1000; // 30 minutes
 
 // v27.5 EFFICIENCY: On top of the tier cadence, skip the rescan entirely (regardless of tier)
 // when a token's 24h volume hasn't moved at all since its last scan — zero volume change means
@@ -168,13 +175,25 @@ setInterval(() => {
  * - Points are informational only; airdrop share determined by token supply ownership
  * - KOTH is now an AI spotlight (no fee allocation)
  */
-async function updateGlobalState(deps) {
+async function updateGlobalState(deps, opts = {}) {
     const { connection, devKeypair, db, globalState } = deps;
+    // v30.2: `forceMints` are rescanned regardless of the throttles below -- the airdrop passes
+    // the tokens it is about to pay, and it passes `wait` so that a scan already in flight
+    // delays the payout instead of letting it proceed on stale holder data.
+    const forceMints = new Set(opts.forceMints || []);
 
     // v25.22 SCALABILITY: Prevent overlapping holder scans
-    // If previous scan still running, skip this one
     // C-1 FIX: Return { scanCompleted: false } so callers know whether fresh data was written
-    const release = await holderScannerMutex.tryAcquire();
+    let release = null;
+    if (opts.wait) {
+        try {
+            release = await holderScannerMutex.acquire(10 * 60 * 1000, 20 * 60 * 1000);
+        } catch (e) {
+            release = null;
+        }
+    } else {
+        release = await holderScannerMutex.tryAcquire(20 * 60 * 1000);
+    }
     if (!release) {
         logger.info('[HolderScanner] Skipping - previous scan still in progress');
         return { scanCompleted: false, skipped: true };
@@ -183,36 +202,40 @@ async function updateGlobalState(deps) {
     try {
         // v18.0: Get all tokens with >$100 24hr volume (no limit)
         // v25.4: Include volume24h for dynamic volume weighting
+        // v30.2: also every token with a pending pool, whatever its volume -- those are the
+        // tokens that can actually be paid, so their holder lists must exist and be current.
         const eligibleTokens = await db.all(
-            'SELECT mint, "userPubkey", volume24h, ticker FROM tokens WHERE volume24h >= $1 ORDER BY volume24h DESC',
+            `SELECT mint, "userPubkey", volume24h, ticker, quote_mint,
+                    COALESCE(pending_airdrop_lamports, 0) AS pending_airdrop_lamports
+               FROM tokens
+              WHERE volume24h >= $1 OR pending_airdrop_lamports > 0
+              ORDER BY volume24h DESC NULLS LAST`,
             [MIN_VOLUME_USD]
         );
-        const eligibleMints = eligibleTokens.map(t => t.mint);
+        const eligibleMints = eligibleTokens
+            .filter(t => (parseFloat(t.volume24h) || 0) >= MIN_VOLUME_USD)
+            .map(t => t.mint);
 
-        // v27.5 EFFICIENCY: Fast tier = top N by volume (already sorted DESC by the query above)
-        const fastTierMints = new Set(eligibleTokens.slice(0, FAST_TIER_SIZE).map(t => t.mint));
+        const payoutThreshold = Math.round((config.TOKEN_AIRDROP_THRESHOLD_SOL || 1) * LAMPORTS_PER_SOL);
+        const fastTierMints = new Set([
+            ...eligibleTokens.slice(0, FAST_TIER_SIZE).map(t => t.mint),
+            ...eligibleTokens
+                .filter(t => Number(t.pending_airdrop_lamports) >= payoutThreshold * FAST_TIER_POOL_FRACTION)
+                .map(t => t.mint),
+            ...forceMints,
+        ]);
 
         logger.info(`[HolderScanner] Found ${eligibleTokens.length} eligible tokens with >${MIN_VOLUME_USD} USD volume`);
 
-        // v17.0: Get actual SOL balance (for wallet monitoring)
+        // v30.2: the wallet balance is published for /api/health, which used to fetch it
+        // itself on every cache refresh. The PUMP-token holdings lookup that sat here fed a
+        // feature that no longer exists and cost an RPC call every scan, so it is gone.
         try {
             const solBalance = await connection.getBalance(devKeypair.publicKey);
             globalState.devSolBalance = solBalance / LAMPORTS_PER_SOL;
+            await redis.setPlatformSnapshot({ walletBalanceLamports: solBalance });
         } catch (e) {
-            globalState.devSolBalance = 0;
-        }
-
-        // v27.3: Cache dev wallet PUMP holdings in Redis for the stats API.
-        // This used to live in workers.js's now-removed duplicate holder scanner.
-        try {
-            const devPumpAta = await getAssociatedTokenAddress(
-                TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
-            );
-            const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
-            await redis.setDevPumpHoldings(tokenBal.value.uiAmount || 0);
-        } catch (e) {
-            // Non-critical — leave the last cached value in Redis (it has its own TTL)
-            logger.debug('[HolderScanner] Failed to fetch dev PUMP holdings', { error: e.message });
+            logger.debug('[HolderScanner] Wallet balance lookup failed', { error: e.message });
         }
 
         // 2. Identify KOTH Token (for expected airdrop calculation)
@@ -265,14 +288,15 @@ async function updateGlobalState(deps) {
                 const lastScan = lastScannedAt.get(token.mint) || 0;
                 const timeSinceLastScan = Date.now() - lastScan;
                 const isFastTier = fastTierMints.has(token.mint);
+                const forced = forceMints.has(token.mint);
 
-                if (!isFastTier && timeSinceLastScan < SLOW_TIER_RESCAN_MS) {
+                if (!forced && !isFastTier && timeSinceLastScan < SLOW_TIER_RESCAN_MS) {
                     return;
                 }
 
                 const lastVolume = lastScannedVolume.get(token.mint);
                 const volumeUnchanged = lastScan > 0 && lastVolume === token.volume24h;
-                if (volumeUnchanged && timeSinceLastScan < INACTIVE_TOKEN_FORCE_RESCAN_MS) {
+                if (!forced && volumeUnchanged && timeSinceLastScan < INACTIVE_TOKEN_FORCE_RESCAN_MS) {
                     return;
                 }
 
@@ -284,8 +308,17 @@ async function updateGlobalState(deps) {
 
                 const holdersToInsert = [];
                 const bondingCurvePDAStr = bondingCurvePDA.toString();
-                // Exclude the Pump AMM pool PDA — after graduation, pool holds tokens as LP
-                const ammPoolStr = pump.getPumpAmmPDAs(tokenMintPublicKey).pool.toString();
+                // Exclude the Pump AMM pool PDA — after graduation, pool holds tokens as LP.
+                // v30.2: keyed on the coin's own quote asset (Custom Pairs), and derived through
+                // the SDK; the old derivation never matched a real pool.
+                const ammPoolStr = pump.getPumpAmmPDAs(tokenMintPublicKey, token.quote_mint).pool.toString();
+                const devWalletStr = devKeypair.publicKey.toString();
+                const isExcludedOwner = (owner) =>
+                    owner === WALLETS.PUMP_LIQUIDITY || owner === bondingCurvePDAStr ||
+                    owner === ammPoolStr || owner === devWalletStr;
+                // Candidates are taken with headroom over TOP_HOLDERS_LIMIT because some will be
+                // dropped by the payable-owner check below.
+                const CANDIDATE_LIMIT = TOP_HOLDERS_LIMIT + 50;
                 const threshold = new BN(1000000); // Minimum balance threshold (dust filter)
                 let scanSucceeded = false;
                 let usedFallback = false;
@@ -393,10 +426,10 @@ async function updateGlobalState(deps) {
                     .sort((a, b) => b.amount.cmp(a.amount));
 
                     for (const acc of parsedAccounts) {
-                        if (holdersToInsert.length >= TOP_HOLDERS_LIMIT) break;
+                        if (holdersToInsert.length >= CANDIDATE_LIMIT) break;
                         if (acc.amount.lte(threshold)) continue;
 
-                        if (acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr && acc.owner !== ammPoolStr) {
+                        if (!isExcludedOwner(acc.owner)) {
                             holdersToInsert.push({
                                 mint: token.mint,
                                 owner: acc.owner,
@@ -423,14 +456,14 @@ async function updateGlobalState(deps) {
                         const sortedAccounts = dasAccounts
                             .filter(acc => {
                                 const bal = new BN(acc.balance);
-                                return bal.gt(threshold) && acc.owner !== WALLETS.PUMP_LIQUIDITY && acc.owner !== bondingCurvePDAStr && acc.owner !== ammPoolStr;
+                                return bal.gt(threshold) && !isExcludedOwner(acc.owner);
                             })
                             .sort((a, b) => {
                                 const balA = new BN(a.balance);
                                 const balB = new BN(b.balance);
                                 return balB.cmp(balA);
                             })
-                            .slice(0, TOP_HOLDERS_LIMIT);
+                            .slice(0, CANDIDATE_LIMIT);
 
                         for (const acc of sortedAccounts) {
                             holdersToInsert.push({
@@ -452,6 +485,23 @@ async function updateGlobalState(deps) {
                     return;
                 }
 
+                // v30.2: keep only owners that can actually receive SOL. A token account can be
+                // owned by a program -- a pool, a vault, a locker -- and SOL paid to one is
+                // stranded. Dropping them here, rather than only at payout time, also keeps them
+                // out of every share's denominator, so real holders' shares are not diluted.
+                if (holdersToInsert.length > 0) {
+                    const payable = await payableSet(connection, holdersToInsert.map(h => h.owner));
+                    const before = holdersToInsert.length;
+                    const kept = holdersToInsert.filter(h => payable.has(h.owner)).slice(0, TOP_HOLDERS_LIMIT);
+                    if (kept.length < Math.min(before, TOP_HOLDERS_LIMIT)) {
+                        logger.debug(`[HolderScanner] ${token.ticker || token.mint.slice(0, 8)}: dropped non-payable owners`, {
+                            candidates: before, kept: kept.length
+                        });
+                    }
+                    holdersToInsert.length = 0;
+                    holdersToInsert.push(...kept);
+                }
+
                 // v27.5: Record a successful on-chain rescan so the throttles above measure
                 // from the last time we actually fetched fresh holder data, not just the last
                 // time this function ran.
@@ -469,16 +519,23 @@ async function updateGlobalState(deps) {
                 // error after DELETE cannot leave the token with zero holders.
                 try {
                     if (holdersToInsert.length > 0) {
+                        // v30.2: one multi-row INSERT instead of one statement per holder (up to
+                        // 250 round-trips per token per scan). Owners are de-duplicated first:
+                        // one wallet can hold several token accounts of the same mint, and a
+                        // single INSERT may not touch the same conflict key twice.
+                        const seenOwners = new Set();
+                        const rows = holdersToInsert.filter(h => !seenOwners.has(h.owner) && seenOwners.add(h.owner));
+                        const now = Date.now();
                         await db.transaction(async (tx) => {
                             await tx.run('DELETE FROM token_holders WHERE mint = $1', [token.mint]);
-                            let rank = 1;
-                            for (const h of holdersToInsert) {
-                                await tx.run(
-                                    'INSERT INTO token_holders (mint, "holderPubkey", rank, balance, "lastUpdated") VALUES ($1, $2, $3, $4, $5) ON CONFLICT (mint, "holderPubkey") DO UPDATE SET rank = $3, balance = $4, "lastUpdated" = $5',
-                                    [h.mint, h.owner, rank, h.balance, Date.now()]
-                                );
-                                rank++;
-                            }
+                            const values = rows.map((_, i) =>
+                                `($${i * 5 + 1}, $${i * 5 + 2}, $${i * 5 + 3}, $${i * 5 + 4}, $${i * 5 + 5})`).join(', ');
+                            const params = rows.flatMap((h, i) => [h.mint, h.owner, i + 1, h.balance, now]);
+                            await tx.run(
+                                `INSERT INTO token_holders (mint, "holderPubkey", rank, balance, "lastUpdated") VALUES ${values}
+                                 ON CONFLICT (mint, "holderPubkey") DO UPDATE SET rank = EXCLUDED.rank, balance = EXCLUDED.balance, "lastUpdated" = EXCLUDED."lastUpdated"`,
+                                params
+                            );
                         });
                     } else if (hadExistingHolders) {
                         // v25.65: RPC returned 0 but we had holders - preserve existing, log warning
@@ -495,14 +552,6 @@ async function updateGlobalState(deps) {
         for (const batch of tokenBatches) {
             await Promise.allSettled(batch.map(processToken));
             await new Promise(r => setTimeout(r, 200)); // 200ms between batches (was 2s per token)
-        }
-
-        // v25.22 SCALABILITY: Refresh materialized views after holder updates
-        try {
-            await postgres.refreshMaterializedViews();
-            logger.debug('[HolderScanner] Materialized views refreshed');
-        } catch (mvErr) {
-            logger.warn('[HolderScanner] Failed to refresh materialized views', { error: mvErr.message });
         }
 
         // v26.2: Points = pure supply ownership — (balance / 1B supply) × BASE_POINTS_PER_TOKEN

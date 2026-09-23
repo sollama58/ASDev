@@ -248,12 +248,11 @@ function sanitizeDeploymentRequest(body) {
         twitter: sanitizeTwitterHandle(body.twitter),
         website: sanitizeUrl(body.website),
         // Don't sanitize these - they're validated separately
-        metadataUri: body.metadataUri,
+        // (v30.2: metadataUri and isMayhemMode are no longer accepted from clients.)
         imageUrl: body.imageUrl,
         image: body.image,
         userTx: body.userTx,
         userPubkey: body.userPubkey,
-        isMayhemMode: body.isMayhemMode,
     };
 }
 

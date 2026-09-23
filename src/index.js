@@ -129,6 +129,10 @@ async function main() {
     const connection = new Connection(config.RPC_URL, {
         commitment: "confirmed",
         confirmTransactionInitialTimeout: config.RPC_TIMEOUT_MS,
+        // v30.2: web3.js otherwise retries every 429 itself (up to 5 times), silently multiplying
+        // request volume exactly when the provider is asking us to slow down. Callers here already
+        // treat a failed read as "try next cycle".
+        disableRetryOnRateLimit: true,
         fetch: (url, options) => {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), config.RPC_TIMEOUT_MS);
@@ -170,7 +174,9 @@ async function main() {
         contentSecurityPolicy: {
             directives: {
                 defaultSrc: ["'self'"],
-                scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline for frontend
+                // v30.2: the page loads web3.js from jsdelivr (pinned by SRI hash in the page);
+                // without this the API-served copy of the launcher could not launch at all.
+                scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
                 styleSrc: ["'self'", "'unsafe-inline'"],
                 imgSrc: ["'self'", "data:", "https:"], // Allow external images
                 connectSrc: ["'self'", "https://api.dexscreener.com", "https://mainnet.helius-rpc.com"],
@@ -247,12 +253,10 @@ async function main() {
         message: { error: 'Too many requests, please try again later' },
         standardHeaders: true,
         legacyHeaders: false,
-        skip: (req) => {
-            // Skip rate limiting for health checks and static data
-            return req.path === '/api/health' ||
-                   req.path === '/api/version' ||
-                   req.path === '/api/stats';
-        }
+        // v30.2: the old `skip` list compared req.path against '/api/health' etc., but under
+        // app.use('/api/', ...) req.path is mount-relative ('/health'), so it never matched.
+        // Only the static version probe is exempt; /health has its own limiter as well.
+        skip: (req) => req.path === '/version'
     });
 
     const deployLimiter = rateLimit({
@@ -272,12 +276,25 @@ async function main() {
     // route exists for single-service deployments and as a sane landing page on the API
     // host itself. The `/` handler sends the page; `/admin` sends the admin console.
     const SHITPAD_DIR = path.join(__dirname, '..', 'shitpad');
-    app.get('/', (req, res) => {
-        res.sendFile(path.join(SHITPAD_DIR, 'index.html'));
-    });
-    app.get('/admin', (req, res) => {
-        res.sendFile(path.join(SHITPAD_DIR, 'admin', 'index.html'));
-    });
+    // v30.2: served with the backend meta tag blanked, so this copy talks to the API that
+    // served it (same origin) rather than to whatever host the static build points at --
+    // which the Content-Security-Policy above would block anyway.
+    const sameOriginPage = (file) => {
+        let cached = null;
+        return (req, res) => {
+            try {
+                if (!cached) {
+                    cached = fs.readFileSync(file, 'utf8')
+                        .replace(/(<meta name="shitpad-backend" content=")[^"]*(")/, '$1$2');
+                }
+                res.type('html').send(cached);
+            } catch (e) {
+                res.status(500).send('Page unavailable');
+            }
+        };
+    };
+    app.get('/', sameOriginPage(path.join(SHITPAD_DIR, 'index.html')));
+    app.get('/admin', sameOriginPage(path.join(SHITPAD_DIR, 'admin', 'index.html')));
 
 
     // v29.2: delegate to the one implementation in services/solana.js. This was a local copy
@@ -314,8 +331,10 @@ async function main() {
         logger.info('[Server] Use a separate worker server (SERVER_MODE=worker node src/worker.js) for background tasks');
         // v25.4: Still initialize deploy and social workers in API-only mode
         // These are essential for processing deployment requests
-        tasks.workers.initDeployWorker(deps);
-        tasks.workers.initSocialWorker(deps);
+        // v30.2: registered so shutdown() closes them, which waits for an in-flight launch to
+        // finish instead of killing it mid-send (a killed launch used to be re-run by BullMQ).
+        tasks.registerWorker(tasks.workers.initDeployWorker(deps));
+        tasks.registerWorker(tasks.workers.initSocialWorker(deps));
         logger.info('[Server] Deploy and social workers initialized for API-only mode');
     } else {
         // Start background tasks
@@ -329,10 +348,10 @@ async function main() {
     // Initialize WebSocket server
     websocket.init(server);
 
-    // Start periodic WebSocket broadcasts (only if not API-only mode)
-    if (serverMode !== 'api-only') {
-        websocket.startBroadcasting(deps);
-    }
+    // v30.2: broadcast in every mode. The broadcast reads only the database, so it works in
+    // the API process, and api-only is how production runs -- where it used to be switched
+    // off, leaving every connected page showing "Live" while receiving nothing.
+    websocket.startBroadcasting(deps);
 
     // Start server
     server.listen(config.PORT, () => {
@@ -345,7 +364,9 @@ async function main() {
 // v25.20: Added WebSocket cleanup
 // v27.6: how long cleanup gets before we exit anyway. Render sends SIGKILL after its own
 // grace period, so a shutdown that hangs on a stuck query must not eat the whole window.
-const SHUTDOWN_TIMEOUT_MS = 15000;
+// v30.2: long enough for an in-flight launch (decoys + confirmation) to finish. Pair with
+// maxShutdownDelaySeconds on the Render service, which must be at least this long.
+const SHUTDOWN_TIMEOUT_MS = 170000;
 
 let shuttingDown = false;
 const shutdown = async (signal) => {
@@ -360,27 +381,25 @@ const shutdown = async (signal) => {
     forceExit.unref();
 
     try {
-        // v27.6: stop accepting new connections and let in-flight requests finish before
-        // anything they depend on is torn down. Previously the process went straight to
-        // process.exit(0), severing responses mid-write.
-        if (server) {
-            await new Promise((resolve) => {
-                server.close(() => resolve());
-                // closeAllConnections exists on Node 18.2+; without it a keep-alive socket
-                // can hold server.close() open until the force-exit timer fires.
-                if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
-            });
-        }
-
-        // Stop all background tasks first
-        await tasks.stopAll();
-
-        // v25.20: Close WebSocket connections
+        // v30.2: WebSockets first -- an open WS keeps server.close() waiting indefinitely.
         try {
             websocket.close();
         } catch (wsErr) {
             logger.debug('WebSocket cleanup error', { error: wsErr.message });
         }
+
+        // v27.6: stop accepting new connections and let in-flight requests finish before
+        // anything they depend on is torn down.
+        if (server) {
+            await new Promise((resolve) => {
+                server.close(() => resolve());
+                if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+            });
+        }
+
+        // Stop background tasks. This waits for an in-flight launch job to finish, while the
+        // database and Redis are still up for it.
+        await tasks.stopAll();
 
         // Close database connection
         const db = database.getDB();

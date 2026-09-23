@@ -5,11 +5,9 @@
  */
 const express = require('express');
 const rateLimit = require('express-rate-limit');
-const { PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
-const { getAssociatedTokenAddress } = require('@solana/spl-token');
+const { LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const config = require('../config/env');
-const { TOKENS, PROGRAMS } = require('../config/constants');
-const { pump, logger, imageUtils, circuitBreaker, redis, claudeKoth, sanitizer } = require('../services');
+const { logger, redis, claudeKoth, sanitizer } = require('../services');
 
 const router = express.Router();
 
@@ -159,7 +157,10 @@ function init(deps) {
     // Health check
     router.get('/health', healthRateLimiter, async (req, res) => {
         try {
-            const cachedHealth = await redis.smartCache('health_data', 10, async () => {
+            // v30.2: 30s and zero RPC. The wallet balance and pending fees come from the snapshot
+            // the worker publishes each cycle; this used to make four RPC calls on every
+            // refresh (two of them for a PUMP-token balance no feature uses any more).
+            const cachedHealth = await redis.smartCache('health_data_v302', 30, async () => {
                 const stats = await getStats();
                 const launches = await getTotalLaunches();
                 // v25.12: Added try-catch for logs query to prevent health endpoint failure
@@ -177,40 +178,17 @@ function init(deps) {
                 const airdropRes = await db.get('SELECT SUM(CAST(amount AS REAL)) as total FROM airdrop_logs');
                 const totalAirdropped = airdropRes?.total || 0;
 
-                // Get SOL-specific airdrops (v11.0)
-                const solAirdropRes = await db.get(`SELECT SUM(CAST(amount AS REAL)) as total FROM airdrop_logs WHERE details LIKE '%"currency":"SOL"%'`);
-                const totalSolAirdropped = solAirdropRes?.total || 0;
+                // v30.2: every airdrop is in SOL now. This used to filter on a
+                // '"currency":"SOL"' marker that no current airdrop writes, so the headline
+                // "Total Airdropped" figure stayed at zero.
+                const totalSolAirdropped = totalAirdropped;
 
-                const currentBalance = await connection.getBalance(devKeypair.publicKey);
-
-                const { bcVault, ammVaultAta } = pump.getCreatorFeeVaults(devKeypair.publicKey);
-                let totalPendingFees = 0;
-
-                try {
-                    const bcInfo = await connection.getAccountInfo(bcVault);
-                    if (bcInfo) totalPendingFees += bcInfo.lamports;
-                } catch (e) {
-                    logger.debug('Failed to fetch bonding curve info', { error: e.message });
-                }
-
-                try {
-                    const ammVaultAtaKey = await ammVaultAta;
-                    const wsolBal = await connection.getTokenAccountBalance(ammVaultAtaKey);
-                    if (wsolBal.value.amount) totalPendingFees += Number(wsolBal.value.amount);
-                } catch (e) {
-                    logger.debug('Failed to fetch AMM vault balance', { error: e.message });
-                }
-
-                let pumpHoldings = 0;
-                try {
-                    const devPumpAta = await getAssociatedTokenAddress(
-                        TOKENS.PUMP, devKeypair.publicKey, false, PROGRAMS.TOKEN_2022
-                    );
-                    const tokenBal = await connection.getTokenAccountBalance(devPumpAta);
-                    if (tokenBal.value.uiAmount) pumpHoldings = tokenBal.value.uiAmount;
-                } catch (e) {
-                    logger.debug('Failed to fetch PUMP holdings', { error: e.message });
-                }
+                const snapshot = await redis.getPlatformSnapshot();
+                const currentBalance = snapshot.walletBalanceLamports ?? null;
+                const totalPendingFees = snapshot.pendingFeesLamports ?? 0;
+                const pumpHoldings = 0;
+                const totalPoints = await redis.getTotalPoints().catch(() => 0);
+                const conservationStatus = snapshot.conservationStatus || null;
 
                 // v26.0: Sum of all per-token pending airdrop lamports (replaces balance-based pool calc)
                 let totalPendingAirdropLamports = 0;
@@ -241,7 +219,9 @@ function init(deps) {
                     stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped, totalSolAirdropped,
                     totalPendingAirdropLamports,
                     centralPoolLamports,
-                    vanityPool
+                    vanityPool,
+                    totalPoints,
+                    conservationStatus
                 };
             });
 
@@ -255,7 +235,9 @@ function init(deps) {
                 totalPumpBought: (cachedHealth.stats.totalPumpBoughtLamports / LAMPORTS_PER_SOL).toFixed(4),
                 totalPumpTokensBought: (cachedHealth.stats.totalPumpTokensBought || 0).toLocaleString('en-US', {maximumFractionDigits: 0}),
                 pumpHoldings: cachedHealth.pumpHoldings,
-                totalPoints: globalState.totalPoints,
+                // v30.2: from Redis. globalState here is the API process's own memory, which the
+                // worker's holder scan never writes in the split deployment -- it always read 0.
+                totalPoints: cachedHealth.totalPoints || 0,
                 totalLaunches: cachedHealth.launches,
                 recentLogs: (cachedHealth.logs || []).map(l => {
                     try {
@@ -304,7 +286,7 @@ function init(deps) {
                 // M-8 FIX: Expose deployment fee so frontend stays in sync with backend config
                 deploymentFee: config.DEPLOYMENT_FEE_SOL,
                 // Pass dynamic conservation status to frontend
-                conservationStatus: globalState.conservationStatus || null
+                conservationStatus: cachedHealth.conservationStatus || null
             });
         } catch (e) {
             logger.error('[Health] Endpoint error', { error: e.message, stack: e.stack });
@@ -319,7 +301,9 @@ function init(deps) {
     // dependency check, so an unauthenticated caller could read connection-failure messages
     // that name the database host, port, user and database, or the RPC endpoint. It now
     // reports reachability and latency only; the detail goes to the log.
-    router.get('/services-status', async (req, res) => {
+    // v30.2: admin-only. Each call made an uncached RPC request, so as a public endpoint it was a
+    // free way to spend the platform's RPC quota. Nothing public uses it.
+    router.get('/services-status', adminAuth, async (req, res) => {
         const services = {
             database: { status: 'unknown', latency: null },
             redis: { status: 'unknown', latency: null },
@@ -528,24 +512,14 @@ function init(deps) {
         try {
             const flywheel = require('../tasks/flywheel');
 
-            // Check current balance first
-            const currentBalance = await connection.getBalance(devKeypair.publicKey);
-            // v25.78: Safety reserve is 0.1 SOL for operations
-            const SAFETY_RESERVE = 0.1 * LAMPORTS_PER_SOL;
-            const MIN_AIRDROP_POOL = (config.AIRDROP_THRESHOLD_SOL || 1.0) * LAMPORTS_PER_SOL;
-            const availableForAirdrop = currentBalance - SAFETY_RESERVE;
-
-            if (availableForAirdrop < MIN_AIRDROP_POOL) {
-                return res.json({
-                    success: false,
-                    message: `Insufficient balance for airdrop. Available: ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL, Required: ${config.AIRDROP_THRESHOLD_SOL || 1.0} SOL`
-                });
-            }
-
+            // v30.2: runs the real per-token + central-pool distribution. This button used to
+            // call the retired v11 points airdrop, which paid out the wallet's ENTIRE balance
+            // above a 0.1 SOL reserve by points -- per-token pools, the central pool and the
+            // platform's accrued cut included -- without debiting any of those ledgers, so the
+            // database went on owing everything it had just sent. The per-token run reserves
+            // each pool before sending, and shares the airdrop lock with the scheduled run.
             logger.info('[Admin] Triggering manual airdrop...');
-
-            // Run the airdrop (async, don't wait for completion)
-            flywheel.processAirdrop(deps).then(() => {
+            flywheel.processTokenAirdrops(deps).then(() => {
                 logger.info('[Admin] Manual airdrop completed');
             }).catch(e => {
                 logger.error('[Admin] Manual airdrop failed', { error: e.message });
@@ -553,11 +527,10 @@ function init(deps) {
 
             res.json({
                 success: true,
-                message: `Airdrop triggered with ${(availableForAirdrop / LAMPORTS_PER_SOL).toFixed(4)} SOL available. Check logs for progress.`
+                message: 'Airdrop run triggered for every pool above its threshold. Check logs for progress.'
             });
         } catch (e) {
             logger.error('[Admin] Trigger airdrop error', { error: e.message });
-            // v22.0: Don't expose internal error details
             res.status(500).json({ error: 'Failed to trigger airdrop' });
         }
     });
@@ -697,15 +670,6 @@ function init(deps) {
                 }
             }
             logger.info(`[Admin] Cleared ${clearedKeys} API cache keys`);
-
-            // Step 4: Refresh materialized views for accurate balance totals
-            logger.info('[Admin] Refreshing materialized views...');
-            try {
-                await postgres.refreshMaterializedViews();
-                logger.info('[Admin] Materialized views refreshed');
-            } catch (e) {
-                logger.warn('[Admin] Materialized view refresh failed (non-fatal)', { error: e.message });
-            }
 
             // Step 5: Trigger full holder scan to recalculate points
             logger.info('[Admin] Triggering holder scan for point recalculation...');
