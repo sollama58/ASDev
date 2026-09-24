@@ -23,6 +23,10 @@ if (process.env.NODE_ENV === 'production' && fs.existsSync('.env')) {
 // builds it). Check here only that one of them is configured, so a bad deploy dies at boot with
 // a message instead of at the first payout.
 const IS_GRINDER = process.env.SERVER_MODE === 'grinder';
+// v30.4: the API process may run with no key at all (it then verifies payments and reports the
+// wallet address from constants, while the worker service does every signing job). Whether it
+// does is decided in src/index.js by whether a key is configured; here it just is not an error.
+const IS_API_ONLY = process.env.SERVER_MODE === 'api-only';
 const WALLET_SIGNER = String(process.env.WALLET_SIGNER || 'local').toLowerCase();
 // WALLET_CHECK=skip is set by scripts/wallet-key.js, which explains a missing key itself.
 if (!IS_GRINDER && process.env.WALLET_CHECK !== 'skip') {
@@ -31,7 +35,7 @@ if (!IS_GRINDER && process.env.WALLET_CHECK !== 'skip') {
         const missing = ['VAULT_ADDR', 'VAULT_TOKEN', 'VAULT_TRANSIT_KEY'].filter(v => !process.env[v]);
         if (missing.length) problem = `WALLET_SIGNER=vault needs ${missing.join(', ')}`;
     } else if (WALLET_SIGNER === 'local') {
-        if (!process.env.DEV_WALLET_KEY_FILE && !process.env.DEV_WALLET_PRIVATE_KEY) {
+        if (!process.env.DEV_WALLET_KEY_FILE && !process.env.DEV_WALLET_PRIVATE_KEY && !IS_API_ONLY) {
             problem = 'set DEV_WALLET_KEY_FILE (a secret file) or DEV_WALLET_PRIVATE_KEY, or WALLET_SIGNER=vault';
         }
     } else {
@@ -63,8 +67,10 @@ const config = {
     SOLANA_NETWORK: process.env.SOLANA_NETWORK || 'mainnet',
     // v25.47 STABILITY: RPC timeout to prevent hanging requests
     RPC_TIMEOUT_MS: parseInt(process.env.RPC_TIMEOUT_MS) || 30000,
+    // v30.4: captured once; a custom RPC URL usually embeds an API key, so it is scrubbed below.
+    RPC_URL_OVERRIDE: process.env.RPC_URL || null,
     get RPC_URL() {
-        if (process.env.RPC_URL) return process.env.RPC_URL;
+        if (this.RPC_URL_OVERRIDE) return this.RPC_URL_OVERRIDE;
         if (this.SOLANA_NETWORK === 'devnet') return "https://api.devnet.solana.com";
         return this.HELIUS_API_KEY
             ? `https://mainnet.helius-rpc.com/?api-key=${this.HELIUS_API_KEY}`
@@ -86,6 +92,18 @@ const config = {
     TREASURY_WALLET: process.env.TREASURY_WALLET?.trim() || null,
     HOT_WALLET_FLOAT_SOL: Math.max(0.1, parseFloat(process.env.HOT_WALLET_FLOAT_SOL) || 1.0),
     HOT_WALLET_SWEEP_MIN_SOL: Math.max(0.01, parseFloat(process.env.HOT_WALLET_SWEEP_MIN_SOL) || 0.25),
+
+    // v30.4: signing policy (services/signingPolicy.js). enforce | warn | off. Outflow caps
+    // apply to SOL leaving the wallet for anything but the treasury and fee wallets; a
+    // refused payout batch fails and retries next cycle, so size the hourly cap at roughly
+    // twice the busiest hour of payouts you expect.
+    SIGNING_POLICY: ['enforce', 'warn', 'off'].includes(String(process.env.SIGNING_POLICY || '').toLowerCase())
+        ? String(process.env.SIGNING_POLICY).toLowerCase() : 'enforce',
+    SIGNING_MAX_OUTFLOW_SOL_PER_TX: parseFloat(process.env.SIGNING_MAX_OUTFLOW_SOL_PER_TX) >= 0 ? parseFloat(process.env.SIGNING_MAX_OUTFLOW_SOL_PER_TX) : 20,
+    SIGNING_MAX_OUTFLOW_SOL_PER_HOUR: parseFloat(process.env.SIGNING_MAX_OUTFLOW_SOL_PER_HOUR) >= 0 ? parseFloat(process.env.SIGNING_MAX_OUTFLOW_SOL_PER_HOUR) : 60,
+    SIGNING_MAX_BUY_SOL: parseFloat(process.env.SIGNING_MAX_BUY_SOL) >= 0 ? parseFloat(process.env.SIGNING_MAX_BUY_SOL) : 0.5,
+    SIGNING_EXTRA_PROGRAMS: process.env.SIGNING_EXTRA_PROGRAMS || '',
+    SIGNING_EXEMPT_DESTINATIONS: process.env.SIGNING_EXEMPT_DESTINATIONS || '',
 
     // Fees & Transactions
     PRIORITY_FEE_MICRO_LAMPORTS: 100000,
@@ -257,9 +275,14 @@ const config = {
 for (const k of [
     'ADMIN_API_KEY', 'PINATA_JWT', 'HELIUS_API_KEY', 'ANTHROPIC_API_KEY', 'VANITY_ENCRYPTION_KEY',
     'TWITTER_APP_KEY', 'TWITTER_APP_SECRET', 'TWITTER_ACCESS_TOKEN', 'TWITTER_ACCESS_SECRET',
+    'DATABASE_URL', 'REDIS_URL', 'RPC_URL', // connection strings carry credentials too
 ]) {
     delete process.env[k];
 }
+// Node's diagnostic reports (--report-on-fatalerror and friends) include the environment
+// unless told otherwise. Nothing secret is left in it by now, but there is no reason to
+// write it to disk either.
+if (process.report && 'excludeEnv' in process.report) process.report.excludeEnv = true;
 
 // Warn at startup if admin key not configured
 if (!config.ADMIN_API_KEY) {

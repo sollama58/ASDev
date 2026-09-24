@@ -143,7 +143,8 @@ npm run dev             # Same, with --watch for local development
 
 # Split background tasks onto a separate process (e.g. a second Render service)
 SERVER_MODE=worker node src/worker.js
-SERVER_MODE=worker WORKER_TASKS=holders,metadata node src/worker.js   # subset of tasks
+SERVER_MODE=worker WORKER_TASKS=holders,metadata,deploy node src/worker.js   # subset of tasks
+# In production start through scripts/boot.sh (see "The platform wallet key")
 ```
 
 ## Scripts
@@ -186,6 +187,13 @@ touches it; the rest of the codebase gets a *signer* that can sign and reveal it
 and nothing else. The key (and every other API secret) is deleted from `process.env` at
 boot, a wrong key refuses to start in production, and builds run with npm lifecycle scripts
 disabled.
+
+Layout in `render.yaml`: the key lives on the **worker service only**; the API runs key-free
+(it verifies launch payments against the wallet address and queues launches for the worker's
+`deploy` task). Both start through `scripts/boot.sh`, which keeps the key out of the process's
+`/proc/<pid>/environ`. A signing policy (`SIGNING_POLICY`, on by default) lets the key sign
+only the transaction shapes the platform actually produces, with per-transaction and hourly
+caps on SOL leaving the wallet.
 
 Where to keep it, weakest to strongest — details, setup steps and the rotation procedure in
 [docs/KEY-MANAGEMENT.md](docs/KEY-MANAGEMENT.md):

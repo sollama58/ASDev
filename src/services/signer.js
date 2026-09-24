@@ -51,7 +51,7 @@ const SCRYPT = { N: 1 << 16, r: 8, p: 1, maxmem: 128 * 1024 * 1024 };
 // The env vars that hold key material or unlock it. Deleted from process.env once the signer
 // exists (see scrubSecretsFromEnv), so no later code path, dependency or child process can
 // read them back. They are only ever needed once, at boot.
-const SECRET_ENV_KEYS = ['DEV_WALLET_PRIVATE_KEY', 'DEV_WALLET_KEY_PASSPHRASE', 'VAULT_TOKEN'];
+const SECRET_ENV_KEYS = ['DEV_WALLET_PRIVATE_KEY', 'DEV_WALLET_KEY_PASSPHRASE', 'VAULT_TOKEN', 'DEV_WALLET_KEY_FILE_EPHEMERAL'];
 
 /* ────────────────────────────────────────────────────────────────────────────
    Key material parsing
@@ -174,13 +174,20 @@ function decryptEnvelope(env, passphrase) {
  */
 function makeSigner(kind, publicKey, signBytes, extra = {}) {
     const pubkeyStr = publicKey.toBase58();
+    const { policy = null, ...rest } = extra;
     const signer = {
         kind,
         publicKey,
-        ...extra,
+        policyMode: policy ? policy.mode : 'off',
+        ...rest,
 
-        /** Detached ed25519 signature over arbitrary bytes. */
+        /**
+         * Detached ed25519 signature over a transaction message. With a policy attached
+         * (services/signingPolicy.js) the bytes must be a transaction the policy accepts;
+         * there is no way to sign around it.
+         */
         async signMessage(bytes) {
+            if (policy) policy.check(bytes, publicKey);
             const sig = await signBytes(Uint8Array.from(bytes));
             if (!(sig instanceof Uint8Array) || sig.length !== 64) {
                 throw new Error(`${kind} signer returned a ${sig?.length}-byte signature, expected 64`);
@@ -219,12 +226,30 @@ function makeSigner(kind, publicKey, signBytes, extra = {}) {
  * A signer holding the secret key in this process.
  * @param {Uint8Array} secretKey 64 bytes; zeroed by this function once copied
  */
-function createLocalSigner(secretKey, source = 'memory') {
+function createLocalSigner(secretKey, source = 'memory', policy = null) {
     const kp = nacl.sign.keyPair.fromSecretKey(Uint8Array.from(secretKey));
     secretKey.fill(0);
     const sk = kp.secretKey; // the only reference; captured by the closure below
     const publicKey = new PublicKey(kp.publicKey);
-    return makeSigner('local', publicKey, async (bytes) => nacl.sign.detached(bytes, sk), { source });
+    return makeSigner('local', publicKey, async (bytes) => nacl.sign.detached(bytes, sk), { source, policy });
+}
+
+/**
+ * A signer that knows the platform's address and cannot sign. The API process runs on this
+ * when it holds no key (SERVER_MODE=api-only with nothing configured): it needs the address
+ * to verify launch payments and to report it, and nothing more. Launches, refunds and payouts
+ * all happen in the worker.
+ */
+function createPublicOnlySigner(publicKey) {
+    return makeSigner('public-only', publicKey, async () => {
+        throw new Error('this process holds no wallet key (public-only signer)');
+    }, { source: 'constants' });
+}
+
+/** Whether the environment names a key at all (as opposed to relying on the public-only signer). */
+function hasKeyConfigured(env = process.env) {
+    return String(env.WALLET_SIGNER || 'local').toLowerCase() === 'vault'
+        || !!env.DEV_WALLET_KEY_FILE || !!env.DEV_WALLET_PRIVATE_KEY;
 }
 
 /**
@@ -233,7 +258,7 @@ function createLocalSigner(secretKey, source = 'memory') {
  * The token is captured here and deleted from the environment by the caller; it is never
  * attached to the signer object or included in an error message.
  */
-async function createVaultSigner({ addr, token, key, mount = 'transit', namespace = null, timeoutMs = 10000 }) {
+async function createVaultSigner({ addr, token, key, mount = 'transit', namespace = null, timeoutMs = 10000, policy = null }) {
     if (!addr || !token || !key) throw new Error('vault signer needs VAULT_ADDR, VAULT_TOKEN and VAULT_TRANSIT_KEY');
     const base = String(addr).replace(/\/+$/, '');
     const headers = { 'X-Vault-Token': token, 'Content-Type': 'application/json' };
@@ -278,7 +303,7 @@ async function createVaultSigner({ addr, token, key, mount = 'transit', namespac
         const m = /^vault:v\d+:(.+)$/.exec(sigStr);
         if (!m) throw new Error('vault returned no signature');
         return Uint8Array.from(Buffer.from(m[1], 'base64'));
-    }, { source: `${base} ${mount}/${key}` });
+    }, { source: `${base} ${mount}/${key}`, policy });
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -304,8 +329,13 @@ function checkKeyFilePermissions(file) {
  * Build the platform signer from the environment. Throws with a specific message when the
  * configuration is incomplete, so a bad deploy fails at boot rather than at the first payout.
  */
-async function createSignerFromEnv(env = process.env) {
+async function createSignerFromEnv(env = process.env, policy = undefined) {
     const backend = String(env.WALLET_SIGNER || 'local').toLowerCase();
+    if (policy === undefined) {
+        // The production policy. Required lazily: config loads the logger, which this module
+        // also loads, and neither needs the policy until a signer exists.
+        policy = require('./signingPolicy').fromConfig(require('../config/env'));
+    }
 
     if (backend === 'vault') {
         const signer = await createVaultSigner({
@@ -314,6 +344,7 @@ async function createSignerFromEnv(env = process.env) {
             key: env.VAULT_TRANSIT_KEY,
             mount: env.VAULT_TRANSIT_MOUNT || 'transit',
             namespace: env.VAULT_NAMESPACE || null,
+            policy,
         });
         logger.info('[Signer] Using Vault Transit remote signer', { key: env.VAULT_TRANSIT_KEY, wallet: signer.publicKey.toBase58() });
         return signer;
@@ -332,6 +363,17 @@ async function createSignerFromEnv(env = process.env) {
             throw new Error(`could not read DEV_WALLET_KEY_FILE (${env.DEV_WALLET_KEY_FILE}): ${e.code || e.message}`);
         }
         source = 'file';
+        if (env.DEV_WALLET_KEY_FILE_EPHEMERAL === '1') {
+            // scripts/boot.sh parked the key here for the boot second, so that the running
+            // process has it neither in its environment nor on disk. Overwrite, then remove.
+            try {
+                fs.writeFileSync(env.DEV_WALLET_KEY_FILE, Buffer.alloc(Buffer.byteLength(text)));
+                fs.unlinkSync(env.DEV_WALLET_KEY_FILE);
+            } catch (e) {
+                logger.warn('[Signer] Could not remove the ephemeral key file', { error: e.code || e.message });
+            }
+            source = 'boot-file';
+        }
     } else if (env.DEV_WALLET_PRIVATE_KEY) {
         text = env.DEV_WALLET_PRIVATE_KEY;
         source = 'env';
@@ -341,8 +383,8 @@ async function createSignerFromEnv(env = process.env) {
 
     const encrypted = text.trim()[0] === '{';
     const secretKey = parseKeyMaterial(text, env.DEV_WALLET_KEY_PASSPHRASE);
-    const signer = createLocalSigner(secretKey, encrypted ? `${source}+passphrase` : source);
-    logger.info('[Signer] Using local signer', { source: signer.source, wallet: signer.publicKey.toBase58() });
+    const signer = createLocalSigner(secretKey, encrypted ? `${source}+passphrase` : source, policy);
+    logger.info('[Signer] Using local signer', { source: signer.source, wallet: signer.publicKey.toBase58(), policy: signer.policyMode });
     if (!encrypted && env.NODE_ENV === 'production') {
         logger.warn('[Signer] The wallet key is stored in the clear. See docs/KEY-MANAGEMENT.md for the encrypted envelope and remote-signer options.');
     }
@@ -383,6 +425,8 @@ module.exports = {
     createSignerFromEnv,
     createLocalSigner,
     createVaultSigner,
+    createPublicOnlySigner,
+    hasKeyConfigured,
     makeSigner,
     parseKeyMaterial,
     encryptEnvelope,

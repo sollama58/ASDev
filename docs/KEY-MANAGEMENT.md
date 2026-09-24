@@ -31,6 +31,10 @@ the key.
 | Operators can check without looking | `node scripts/wallet-key.js verify` builds the signer exactly as the server does, signs a test message and confirms which wallet it controls. Nothing in that script prints key material. |
 | What is at stake is capped | With `TREASURY_WALLET` set, the flywheel sweeps anything the hot wallet holds beyond its obligations (the holder pools, the accrued platform cut) plus `HOT_WALLET_FLOAT_SOL` to a treasury address every fee-collection cycle (§5). |
 
+| The key is only ever in memory | `scripts/boot.sh` (the blueprint's start command) parks `DEV_WALLET_PRIVATE_KEY` in a private tmpfs file, drops the variable and `exec`s node; the signer reads and deletes the file as its first act. Deleting a variable from `process.env` does *not* remove it from `/proc/<pid>/environ`, which any code running as the same user can read for the life of the process — `exec` is what clears it. |
+| The internet-facing process has no key | `SERVER_MODE=api-only` with no key configured runs on a *public-only* signer: it verifies launch payments and reports the address, and the worker's `deploy` task (no inbound network) runs every launch and refund. A remote-code-execution bug in the API finds nothing to sign with (§2.5). |
+| The key only signs what the platform does | `src/services/signingPolicy.js` checks every message before a signature is produced — including raw bytes handed to `signMessage`. Unknown programs, `Assign`, nonce and token `Approve`/`Transfer`/`SetAuthority` instructions are refused; Pump buys are capped; SOL leaving the wallet for anything but the treasury and fee wallets is capped per transaction and per rolling hour (§2.6). |
+
 What the code **cannot** do: keep the key out of this process's memory when the `local` backend
 is used. A process that can be debugged, core-dumped or read by another process on the same host
 can be read for the key. That is what the remote-signer backend is for.
@@ -148,7 +152,55 @@ implement `signBytes(bytes) -> Promise<Uint8Array(64)>` with the vendor SDK and 
 `makeSigner('turnkey', publicKey, signBytes)` in `src/services/signer.js`; add a
 `WALLET_SIGNER=turnkey` branch in `createSignerFromEnv`. The rest of the codebase does not change.
 
-### 2.5 Multisig for the treasury (not for the hot wallet)
+### 2.5 Keep the key out of the API process (env var, hardened)
+
+Two Render services already exist: the API (HTTP + WebSocket) and the worker. Only the worker
+needs to sign — launches, refunds, fee claims, payouts and sweeps are all queue or timer driven.
+The API needs the wallet's *address* to verify that a launch payment went to it, and nothing
+more. So the blueprint now puts `DEV_WALLET_PRIVATE_KEY` on **the worker only**:
+
+- The API boots with `[Signer] No wallet key in this process` and does not start the deploy
+  worker; `/api/deploy` verifies the payment against `WALLETS.PLATFORM_DEV` and queues the job.
+- The worker runs the `deploy` task (on by default) and consumes that queue with the key.
+- The API keeps the social (tweet) worker; it needs Twitter credentials, not the wallet.
+
+The attack surface that matters most — code reachable from the internet — no longer has a key
+to steal. Running launches in the API is still supported: set `DEV_WALLET_PRIVATE_KEY` on the
+API service and it starts the deploy worker itself, as before.
+
+Both services start through `scripts/boot.sh`, which keeps the variable out of the process's
+`/proc/<pid>/environ` (see §1). With that, a shell in the running container shows no key in
+`env`, none in `/proc`, none on disk.
+
+### 2.6 Let the key sign only what the platform does
+
+Everything the platform signs is one of a short list of shapes, and the signer refuses the rest
+(`src/services/signingPolicy.js`). What that buys: an attacker who gets code execution *inside*
+the worker can call the signer, but cannot use it to sign a drain — not a transfer of the whole
+balance, not a token-account `Approve` to themselves, not an `Assign` of the wallet to a program,
+not a swap through an unknown program. They are limited to what the platform itself would do, at
+the rate the platform itself would do it. Combined with the treasury sweep (§5), the worst case
+is the float plus the pools of the moment, paid out only as fast as the hourly cap allows.
+
+```
+SIGNING_POLICY=enforce                 # enforce | warn (log only, for tuning) | off
+SIGNING_MAX_OUTFLOW_SOL_PER_TX=20      # SOL to non-exempt destinations in one transaction
+SIGNING_MAX_OUTFLOW_SOL_PER_HOUR=60    # …and per rolling hour, per process
+SIGNING_MAX_BUY_SOL=0.5                # max spend encoded in a Pump / Pump AMM buy
+SIGNING_EXTRA_PROGRAMS=                # comma-separated program ids to allow beyond the built-in list
+SIGNING_EXEMPT_DESTINATIONS=           # addresses transfers to which are uncapped, beyond treasury + fee wallets
+```
+
+Built-in allowed programs: System, ComputeBudget, Token, Token-2022, Associated Token, Pump,
+Pump AMM, Jupiter v6, Memo. Exempt destinations: `TREASURY_WALLET`, `BUYBACK_BURN_WALLET`, the
+upkeep wallet.
+
+Sizing: a refused payout batch fails, is credited back to its pool, and retries next cycle, so
+set the hourly cap at roughly twice the busiest hour of payouts you expect and watch for
+`[SigningPolicy] REFUSED` in the worker log. Run a week on `SIGNING_POLICY=warn` first if you
+are unsure; it logs what it *would* refuse and signs anyway. `off` disables the policy.
+
+### 2.7 Multisig for the treasury (not for the hot wallet)
 
 The hot wallet must sign unattended, so it cannot be a multisig. The **treasury** can and should
 be: a [Squads](https://squads.so) vault, or a hardware wallet that never touches a server. Set it as
@@ -164,9 +216,12 @@ For this platform, in order of effort:
 
 1. **Today, ten minutes:** `TREASURY_WALLET` = a Squads vault or hardware wallet;
    `HOT_WALLET_FLOAT_SOL=1`. The hot wallet's contents stop growing.
-2. **This week:** move the key into a Secret File as an encrypted envelope (§2.2). Remove
-   `DEV_WALLET_PRIVATE_KEY` from the dashboard.
-3. **When the wallet is worth it:** a fresh wallet in Vault Transit (§2.3) or Turnkey (§2.4),
+2. **With the env var (the blueprint's default):** the key on the worker service only, the API
+   key-free, both started through `scripts/boot.sh`, signing policy on `enforce` (§2.5, §2.6).
+   This is what `render.yaml` describes.
+3. **Optional:** move the key into a Secret File as an encrypted envelope (§2.2), so a dashboard
+   reader gets the passphrase but not the key.
+4. **When the wallet is worth it:** a fresh wallet in Vault Transit (§2.3) or Turnkey (§2.4),
    deployed with a wallet rotation (§6).
 
 Whichever layout: 2FA on the Render team, the smallest possible team, and no key in any chat,

@@ -8,12 +8,13 @@
 #
 # Two things are deliberately NOT in here and must be set by hand in the Render dashboard
 # after the first apply (they are secrets, so `sync: false` leaves them blank):
-#   The platform hot wallet, on the API and worker. Preferred: a Secret File holding the
-#     encrypted envelope from `node scripts/wallet-key.js encrypt`, mounted at
-#     /etc/secrets/wallet.enc.json, with DEV_WALLET_KEY_FILE pointing at it and
-#     DEV_WALLET_KEY_PASSPHRASE set. Fallback: DEV_WALLET_PRIVATE_KEY. Or WALLET_SIGNER=vault
-#     with the VAULT_* variables and no key on Render at all. See docs/KEY-MANAGEMENT.md.
-#   PINATA_JWT               — IPFS uploads for token metadata
+#   The platform hot wallet -- on the WORKER ONLY. The API service holds no key: it verifies
+#     launch payments and reports the wallet address from constants, and the worker's `deploy`
+#     task runs every launch and refund. The one process reachable from the internet has
+#     nothing to steal. Set DEV_WALLET_PRIVATE_KEY on asdev-worker (scripts/boot.sh keeps it
+#     out of the process environment), or a Secret File + DEV_WALLET_KEY_FILE /
+#     DEV_WALLET_KEY_PASSPHRASE, or WALLET_SIGNER=vault. See docs/KEY-MANAGEMENT.md.
+#   PINATA_JWT               — IPFS uploads for token metadata, on the worker
 # Everything else is either generated, linked between services, or has a working default.
 #
 # Builds run `npm ci --ignore-scripts`: Render exposes every env var to the build as well as
@@ -64,7 +65,7 @@ services:
     runtime: node
     plan: starter
     buildCommand: npm ci --omit=dev --ignore-scripts
-    startCommand: node src/index.js
+    startCommand: sh scripts/boot.sh src/index.js
     # Launches run in this process. On a redeploy the old instance finishes any in-flight launch
     # before exiting (see SHUTDOWN_TIMEOUT_MS in src/index.js); Render's default grace period is
     # shorter than a launch, so without this a deploy could kill one mid-send.
@@ -89,19 +90,9 @@ services:
           type: redis
           name: asdev-redis
           property: connectionString
-      # Set by hand after the first apply. Use the secret-file pair OR the raw key, not both;
-      # the file wins if both are present.
-      - key: DEV_WALLET_KEY_FILE
-        sync: false
-      - key: DEV_WALLET_KEY_PASSPHRASE
-        sync: false
-      - key: DEV_WALLET_PRIVATE_KEY
-        sync: false
-      # Where surplus SOL goes (a Squads vault or hardware wallet). Leave blank to disable.
-      - key: TREASURY_WALLET
-        sync: false
-      - key: PINATA_JWT
-        sync: false
+      # No wallet key here on purpose (see the header). If you must run launches in the API
+      # process, add DEV_WALLET_PRIVATE_KEY to this service and it will start the deploy
+      # worker itself.
       - key: HELIUS_API_KEY
         sync: false
       # Production CORS refuses a wildcard, so set this to the exact origin(s) serving
@@ -123,7 +114,7 @@ services:
     runtime: node
     plan: starter
     buildCommand: npm ci --omit=dev --ignore-scripts
-    startCommand: node src/worker.js
+    startCommand: sh scripts/boot.sh src/worker.js
     # Lets an airdrop batch or fee sweep in flight finish before the old instance exits.
     maxShutdownDelaySeconds: 180
     envVars:
@@ -141,24 +132,28 @@ services:
           type: redis
           name: asdev-redis
           property: connectionString
+      # The wallet key lives here. Set the raw key, OR the secret-file pair (the file wins if
+      # both are present), OR the VAULT_* variables with WALLET_SIGNER=vault.
+      - key: DEV_WALLET_PRIVATE_KEY
+        sync: false
       - key: DEV_WALLET_KEY_FILE
         sync: false
       - key: DEV_WALLET_KEY_PASSPHRASE
         sync: false
-      - key: DEV_WALLET_PRIVATE_KEY
-        sync: false
+      # Where surplus SOL goes (a Squads vault or hardware wallet). Leave blank to disable.
       - key: TREASURY_WALLET
         sync: false
+      # Launches pin metadata from here now.
       - key: PINATA_JWT
         sync: false
       - key: HELIUS_API_KEY
         sync: false
       - key: SOLANA_NETWORK
         value: mainnet
-      # Optional: comma-separated subset of holders,metadata,asdf,flywheel.
-      # Leave unset to run them all.
+      # Optional: comma-separated subset of holders,metadata,asdf,flywheel,deploy.
+      # Leave unset to run them all. `deploy` must run somewhere that holds the key.
       # - key: WORKER_TASKS
-      #   value: holders,metadata,asdf,flywheel
+      #   value: holders,metadata,asdf,flywheel,deploy
 
   # ---------------------------------------------------------------------------
   # Grinder — pre-grinds mint addresses ending in "shit"
