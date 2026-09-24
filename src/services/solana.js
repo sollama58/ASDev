@@ -3,7 +3,6 @@
  * Connection, transaction helpers, and wallet management
  */
 const { Connection, ComputeBudgetProgram, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram } = require('@solana/web3.js');
-const { Wallet } = require('@coral-xyz/anchor');
 const bs58 = require('bs58');
 const config = require('../config/env');
 const logger = require('./logger');
@@ -25,11 +24,17 @@ const connection = new Connection(config.RPC_URL, {
     }
 });
 
-// Dev wallet keypair is decoded once in config/env.js and redacted there
-const devKeypair = config.devKeypair;
-const wallet = devKeypair ? new Wallet(devKeypair) : null;
-if (devKeypair) {
+// v30.4: the platform signer (services/signer.js) is injected by the entrypoint once it has
+// been built -- it may be a remote signer, so it cannot be constructed at require time. Nothing
+// in this module holds key material.
+let signer = null;
+function setSigner(s) {
+    signer = s;
     logger.info(`RPC: ${config.HELIUS_API_KEY ? 'Helius' : 'Public'}`);
+}
+function getSigner() {
+    if (!signer) throw new Error('Platform signer not initialised: call solana.setSigner() at boot');
+    return signer;
 }
 
 /**
@@ -159,7 +164,8 @@ async function confirmOrExpire(signature, rawTx, lastValidBlockHeight) {
  * confirms or its blockhash provably expires. Only an expired blockhash -- which guarantees the
  * signed transaction can never land -- permits re-signing with a new one.
  */
-async function sendTxWithRetry(tx, signers, retries = 5) {
+async function sendTxWithRetry(tx, extraSigners = [], retries = 5) {
+    const platform = getSigner();
     let lastErr = null;
 
     for (let attempt = 0; attempt < retries; attempt++) {
@@ -168,11 +174,13 @@ async function sendTxWithRetry(tx, signers, retries = 5) {
         const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
         tx.recentBlockhash = blockhash;
         tx.lastValidBlockHeight = lastValidBlockHeight;
-        if (!tx.feePayer) tx.feePayer = signers[0].publicKey;
+        if (!tx.feePayer) tx.feePayer = platform.publicKey;
 
-        // Transaction.sign() rebuilds the signature list from scratch, so this is safe to
-        // call again on a transaction that was signed under a previous (now expired) blockhash.
-        tx.sign(...signers);
+        // v30.4: the platform signs through the signer (the key may not be in this process);
+        // extraSigners are ephemeral keypairs such as a launch's mint. Every signature is
+        // replaced, so this is safe to call again on a transaction that was signed under a
+        // previous (now expired) blockhash.
+        await platform.signTransaction(tx, extraSigners);
 
         const rawTx = tx.serialize();
         const signature = bs58.encode(tx.signature);
@@ -247,11 +255,11 @@ async function refundUser(userPubkeyStr, reason, paymentSig = null) {
         const tx = new Transaction();
         addPriorityFee(tx, { units: 10_000 });
         tx.add(SystemProgram.transfer({
-            fromPubkey: devKeypair.publicKey,
+            fromPubkey: getSigner().publicKey,
             toPubkey: userPubkey,
             lamports: Math.floor((config.DEPLOYMENT_FEE_SOL - 0.001) * LAMPORTS_PER_SOL)
         }));
-        const sig = await sendTxWithRetry(tx, [devKeypair]);
+        const sig = await sendTxWithRetry(tx);
 
         if (paymentSig && db) {
             await db.run('UPDATE transactions SET refund_sig = $2 WHERE signature = $1', [paymentSig, sig]).catch(() => {});
@@ -329,8 +337,9 @@ async function getRentExemptMinimum(dataLength = 0, fallbackLamports = 5000) {
 
 module.exports = {
     connection,
-    devKeypair,
-    wallet,
+    setSigner,
+    getSigner,
+    get signer() { return signer; },
     addPriorityFee,
     sendTxWithRetry,
     refundUser,

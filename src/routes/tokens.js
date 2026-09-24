@@ -34,7 +34,7 @@ const adminAuth = require('./adminAuth'); // v28.6: shared middleware
  * Initialize routes with dependencies
  */
 function init(deps) {
-    const { db, globalState, devKeypair } = deps;
+    const { db, globalState, signer } = deps;
 
     // Bust the listing caches after any write that changes what tokens appear
     async function bustListingCaches() {
@@ -582,7 +582,7 @@ function init(deps) {
     // Now a simple SELECT instead of complex aggregation - much faster and consistent
     router.get('/all-eligible-users', async (req, res) => {
         try {
-            const devPubkey = devKeypair.publicKey.toString();
+            const devPubkey = signer.publicKey.toString();
             const limit = Math.min(parseInt(req.query.limit) || 500, 1000);
             const offset = Math.min(Math.max(parseInt(req.query.offset) || 0, 0), 100000);
 

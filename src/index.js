@@ -24,7 +24,6 @@ const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const { Connection } = require('@solana/web3.js');
-const { Wallet } = require('@coral-xyz/anchor');
 const fs = require('fs');
 const path = require('path');
 
@@ -32,6 +31,7 @@ const path = require('path');
 const config = require('./config/env');
 const { WALLETS } = require('./config/constants');
 const { logger, database, redis, twitter, solana, websocket, claudeKoth } = require('./services');
+const signerService = require('./services/signer');
 const routes = require('./routes');
 const tasks = require('./tasks');
 
@@ -140,18 +140,12 @@ async function main() {
                 .finally(() => clearTimeout(timeout));
         }
     });
-    const devKeypair = config.devKeypair;
-    const wallet = new Wallet(devKeypair);
-
-    // Validate wallet matches expected platform dev wallet
-    const actualWallet = devKeypair.publicKey.toString();
-    const expectedWallet = WALLETS.PLATFORM_DEV.toString();
-    if (actualWallet !== expectedWallet) {
-        logger.error(`CRITICAL: Wallet mismatch! Expected: ${expectedWallet}, Got: ${actualWallet}`);
-        logger.error('Check DEV_WALLET_PRIVATE_KEY environment variable. Server will continue but functionality may be impaired.');
-    } else {
-        logger.info(`Wallet verified: ${actualWallet}`);
-    }
+    // v30.4: the platform signer replaces the raw Keypair that used to travel on `deps`. The
+    // key material (or the Vault token) is consumed here and scrubbed from the environment.
+    const signer = await signerService.createSignerFromEnv();
+    signerService.scrubSecretsFromEnv();
+    solana.setSigner(signer);
+    signerService.verifyPlatformWallet(signer, WALLETS.PLATFORM_DEV, config);
 
     logger.info(`Network: ${config.SOLANA_NETWORK.toUpperCase()} | RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : (config.HELIUS_API_KEY ? 'Helius' : 'Public Mainnet')}`);
 
@@ -310,8 +304,7 @@ async function main() {
     // Dependencies object for modules
     const deps = {
         connection,
-        devKeypair,
-        wallet,
+        signer,
         db,
         redis,
         globalState,

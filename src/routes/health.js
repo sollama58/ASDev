@@ -148,7 +148,7 @@ const adminAuth = require('./adminAuth'); // v28.6: shared middleware
  * Initialize routes with dependencies
  */
 function init(deps) {
-    const { connection, devKeypair, db, redis, getStats, getTotalLaunches, globalState } = deps;
+    const { connection, signer, db, redis, getStats, getTotalLaunches, globalState } = deps;
 
     // Version endpoint
     router.get('/version', (req, res) => {
@@ -263,7 +263,7 @@ function init(deps) {
 
             res.json({
                 status: "online",
-                wallet: devKeypair.publicKey.toString(),
+                wallet: signer.publicKey.toString(),
                 lifetimeFees: (totalFeesLamports / LAMPORTS_PER_SOL).toFixed(4),
                 totalPumpBought: (cachedHealth.stats.totalPumpBoughtLamports / LAMPORTS_PER_SOL).toFixed(4),
                 totalPumpTokensBought: (cachedHealth.stats.totalPumpTokensBought || 0).toLocaleString('en-US', {maximumFractionDigits: 0}),

@@ -40,7 +40,7 @@ async function getSwapTransaction(quoteResponse, userPublicKey, wrapAndUnwrapSol
 /**
  * Swap SOL to a specific Token
  */
-async function swapSolToToken(amountLamports, outputMint, wallet, connection) {
+async function swapSolToToken(amountLamports, outputMint, signer, connection) {
     try {
         // 1. Get Quote (SOL -> Token)
         // Input is always WSOL for SOL swaps
@@ -55,13 +55,13 @@ async function swapSolToToken(amountLamports, outputMint, wallet, connection) {
         // 2. Get Transaction
         const swapTransactionBase64 = await getSwapTransaction(
             quoteResponse,
-            wallet.publicKey
+            signer.publicKey
         );
 
         // 3. Sign and Send
         const swapTransactionBuf = Buffer.from(swapTransactionBase64, 'base64');
         const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-        transaction.sign([wallet]);
+        await signer.signVersionedTransaction(transaction);
 
         const sig = await connection.sendTransaction(transaction, {
             skipPreflight: true,
@@ -82,8 +82,8 @@ async function swapSolToToken(amountLamports, outputMint, wallet, connection) {
 /**
  * Legacy wrapper for backward compatibility if needed
  */
-async function swapSolToUsdc(amountLamports, wallet, connection) {
-    return swapSolToToken(amountLamports, TOKENS.USDC, wallet, connection);
+async function swapSolToUsdc(amountLamports, signer, connection) {
+    return swapSolToToken(amountLamports, TOKENS.USDC, signer, connection);
 }
 
 const WSOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -127,7 +127,7 @@ async function quoteTokenToSol(inputMint, amount, slippageBps = 100) {
  * platform under-crediting itself is recoverable, promising holders SOL it never received is
  * not.
  */
-async function swapTokenToSol(amountBaseUnits, inputMint, wallet, connection, slippageBps = 100) {
+async function swapTokenToSol(amountBaseUnits, inputMint, signer, connection, slippageBps = 100) {
     try {
         const amt = typeof amountBaseUnits === 'string' ? amountBaseUnits : String(amountBaseUnits);
         if (!amt || amt === '0') return null;
@@ -135,10 +135,10 @@ async function swapTokenToSol(amountBaseUnits, inputMint, wallet, connection, sl
         const quoteResponse = await getQuote(inputMint.toString(), WSOL_MINT, amt, slippageBps);
         if (!quoteResponse) throw new Error('Failed to get Jupiter quote');
 
-        const swapTransactionBase64 = await getSwapTransaction(quoteResponse, wallet.publicKey, true);
+        const swapTransactionBase64 = await getSwapTransaction(quoteResponse, signer.publicKey, true);
 
         const transaction = VersionedTransaction.deserialize(Buffer.from(swapTransactionBase64, 'base64'));
-        transaction.sign([wallet]);
+        await signer.signVersionedTransaction(transaction);
 
         const sig = await connection.sendTransaction(transaction, {
             skipPreflight: true,

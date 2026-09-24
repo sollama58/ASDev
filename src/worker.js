@@ -22,12 +22,12 @@ process.stdout.write(`[${new Date().toISOString()}] [INFO] ASDev Worker process 
 require('dotenv').config();
 
 const { Connection } = require('@solana/web3.js');
-const { Wallet } = require('@coral-xyz/anchor');
 
 // Internal imports
 const config = require('./config/env');
 const { WALLETS } = require('./config/constants');
 const { logger, database, redis, twitter, solana, claudeKoth } = require('./services');
+const signerService = require('./services/signer');
 const tasks = require('./tasks');
 
 // Check if running in worker mode
@@ -159,17 +159,11 @@ async function startWorker() {
                 .finally(() => clearTimeout(timeout));
         }
     });
-    const devKeypair = config.devKeypair;
-    const wallet = new Wallet(devKeypair);
-
-    // Validate wallet
-    const actualWallet = devKeypair.publicKey.toString();
-    const expectedWallet = WALLETS.PLATFORM_DEV.toString();
-    if (actualWallet !== expectedWallet) {
-        logger.error(`CRITICAL: Wallet mismatch! Expected: ${expectedWallet}, Got: ${actualWallet}`);
-    } else {
-        logger.info(`Wallet verified: ${actualWallet}`);
-    }
+    // v30.4: see src/index.js -- same signer, same checks.
+    const signer = await signerService.createSignerFromEnv();
+    signerService.scrubSecretsFromEnv();
+    solana.setSigner(signer);
+    signerService.verifyPlatformWallet(signer, WALLETS.PLATFORM_DEV, config);
 
     logger.info(`Network: ${config.SOLANA_NETWORK.toUpperCase()} | RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : (config.HELIUS_API_KEY ? 'Helius' : 'Public Mainnet')}`);
 
@@ -181,8 +175,7 @@ async function startWorker() {
     // Dependencies object for modules
     const deps = {
         connection,
-        devKeypair,
-        wallet,
+        signer,
         db,
         redis,
         globalState,

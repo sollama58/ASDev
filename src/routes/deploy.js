@@ -90,7 +90,7 @@ const prepareLimiter = rateLimit({
  * Initialize routes with dependencies
  */
 function init(deps) {
-    const { connection, devKeypair, db, addFees } = deps;
+    const { connection, signer, db, addFees } = deps;
 
     // Prepare metadata
     // v24.0: Added input sanitization for all user-provided content
@@ -228,7 +228,7 @@ function init(deps) {
                                 // Only the destination and amount were checked before, so anyone
                                 // watching the chain could take a launch someone else had paid for.
                                 return ix.parsed.info.source === userPubkey &&
-                                       ix.parsed.info.destination === devKeypair.publicKey.toString() &&
+                                       ix.parsed.info.destination === signer.publicKey.toString() &&
                                        ix.parsed.info.lamports >= minLamports;
                             });
                         }

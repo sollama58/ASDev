@@ -6,6 +6,7 @@
  */
 const { TwitterApi } = require('twitter-api-v2');
 const logger = require('./logger');
+const config = require('../config/env');
 
 let twitterClient = null;
 let authenticatedUsername = null; // v25.22: Cache the bot's Twitter username
@@ -21,17 +22,17 @@ const REGISTRATION_TWEET_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes minimum betwe
  * Initialize Twitter client and fetch authenticated user's username
  */
 async function init() {
-    if (!process.env.TWITTER_APP_KEY) {
+    if (!config.TWITTER_APP_KEY) {
         logger.warn("Twitter credentials not configured");
         return false;
     }
 
     try {
         twitterClient = new TwitterApi({
-            appKey: process.env.TWITTER_APP_KEY,
-            appSecret: process.env.TWITTER_APP_SECRET,
-            accessToken: process.env.TWITTER_ACCESS_TOKEN,
-            accessSecret: process.env.TWITTER_ACCESS_SECRET,
+            appKey: config.TWITTER_APP_KEY,
+            appSecret: config.TWITTER_APP_SECRET,
+            accessToken: config.TWITTER_ACCESS_TOKEN,
+            accessSecret: config.TWITTER_ACCESS_SECRET,
         });
 
         // v25.22 FIX: Fetch and cache the authenticated user's username
@@ -42,7 +43,7 @@ async function init() {
             logger.info(`Twitter client initialized for @${authenticatedUsername}`);
         } catch (meErr) {
             // Fallback to env var if API call fails
-            authenticatedUsername = process.env.TWITTER_USERNAME || null;
+            authenticatedUsername = config.TWITTER_USERNAME || null;
             logger.warn("Could not fetch Twitter username from API, using fallback", {
                 fallback: authenticatedUsername,
                 error: meErr.message

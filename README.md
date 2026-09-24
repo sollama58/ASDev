@@ -101,7 +101,7 @@ cd ASDev
 
 npm install
 cp .env.example .env
-# edit .env — at minimum set DEV_WALLET_PRIVATE_KEY, DATABASE_URL, REDIS_URL
+# edit .env — at minimum set the wallet key (see "The platform wallet key"), DATABASE_URL, REDIS_URL
 
 npm start
 ```
@@ -112,7 +112,7 @@ See `.env.example` for the full list with comments. The essentials:
 
 ```env
 # Required
-DEV_WALLET_PRIVATE_KEY=your-base58-private-key   # Platform wallet
+DEV_WALLET_PRIVATE_KEY=your-base58-private-key   # Platform wallet -- or DEV_WALLET_KEY_FILE / WALLET_SIGNER=vault, see below
 DATABASE_URL=postgres://user:pass@host:5432/db    # PostgreSQL connection string
 REDIS_URL=redis://127.0.0.1:6379
 
@@ -152,6 +152,7 @@ SERVER_MODE=worker WORKER_TASKS=holders,metadata node src/worker.js   # subset o
 |---|---|
 | `node scripts/show-points.js` | Dump current point distribution and eligibility |
 | `node scripts/test-airdrop.js` | Simulate/test the point → airdrop distribution flow |
+| `node scripts/wallet-key.js encrypt\|pubkey\|verify` | Encrypt the wallet key for a secret file; show or verify the configured signer's wallet |
 
 ## API
 
@@ -176,6 +177,29 @@ endpoints in total, including a large admin/debug surface gated behind
 | `POST /api/deploy` | Verify the fee payment and queue a launch; the launch job pins the metadata |
 | `GET /api/job-status/:id` | Poll a deployment job |
 | `GET /api/admin/*`, `GET /api/debug/*` | Operational/admin endpoints (trigger scans, view logs, manage tokens/announcements, simulate airdrops, etc.) — requires `x-admin-key` header |
+
+## The platform wallet key
+
+The platform wallet signs launches, fee claims and payouts unattended, so its key is the
+most sensitive thing in the deployment. `src/services/signer.js` is the only code that
+touches it; the rest of the codebase gets a *signer* that can sign and reveal its public key
+and nothing else. The key (and every other API secret) is deleted from `process.env` at
+boot, a wrong key refuses to start in production, and builds run with npm lifecycle scripts
+disabled.
+
+Where to keep it, weakest to strongest — details, setup steps and the rotation procedure in
+[docs/KEY-MANAGEMENT.md](docs/KEY-MANAGEMENT.md):
+
+| Option | Env | What a dashboard reader gets |
+|---|---|---|
+| Env var | `DEV_WALLET_PRIVATE_KEY` | the key |
+| Secret File holding a passphrase-encrypted envelope | `DEV_WALLET_KEY_FILE` + `DEV_WALLET_KEY_PASSPHRASE` | the passphrase, not the key |
+| Remote signer (HashiCorp Vault Transit) | `WALLET_SIGNER=vault` + `VAULT_*` | a revocable token; the key never leaves Vault |
+
+`node scripts/wallet-key.js encrypt` makes the envelope; `node scripts/wallet-key.js verify`
+proves the configured signer controls the expected wallet without printing anything secret.
+Set `TREASURY_WALLET` (a multisig or hardware wallet) and the flywheel keeps only
+`HOT_WALLET_FLOAT_SOL` plus the holder pools in the hot wallet, sweeping the rest.
 
 ## Security
 
@@ -249,7 +273,7 @@ still warming up never blocks a launch.
 
 **Server won't start?**
 - Check `DATABASE_URL` — the server exits immediately without a working Postgres connection
-- Check `DEV_WALLET_PRIVATE_KEY` is set and valid base58
+- Check the wallet key: `node scripts/wallet-key.js verify` says which signer is configured and whether it works
 - Check Redis is reachable: `redis-cli -u "$REDIS_URL" ping`
 - Check the port isn't already in use
 

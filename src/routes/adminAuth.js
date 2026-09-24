@@ -10,6 +10,7 @@
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const logger = require('../services/logger');
+const config = require('../config/env');
 
 /**
  * v30.2: failed-attempt limiter for every admin route. The lockout used to exist only on
@@ -28,7 +29,7 @@ const adminFailureLimiter = rateLimit({
 
 function checkAdminKey(req, res, next) {
     const apiKey = req.headers['x-admin-key'];
-    const expectedKey = process.env.ADMIN_API_KEY;
+    const expectedKey = config.ADMIN_API_KEY; // v30.4: scrubbed from process.env at boot
 
     // SECURITY: Always require admin key - no environment exceptions
     if (!expectedKey) {

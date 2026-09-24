@@ -8,9 +8,17 @@
 #
 # Two things are deliberately NOT in here and must be set by hand in the Render dashboard
 # after the first apply (they are secrets, so `sync: false` leaves them blank):
-#   DEV_WALLET_PRIVATE_KEY   — the platform hot wallet, on the API and worker
+#   The platform hot wallet, on the API and worker. Preferred: a Secret File holding the
+#     encrypted envelope from `node scripts/wallet-key.js encrypt`, mounted at
+#     /etc/secrets/wallet.enc.json, with DEV_WALLET_KEY_FILE pointing at it and
+#     DEV_WALLET_KEY_PASSPHRASE set. Fallback: DEV_WALLET_PRIVATE_KEY. Or WALLET_SIGNER=vault
+#     with the VAULT_* variables and no key on Render at all. See docs/KEY-MANAGEMENT.md.
 #   PINATA_JWT               — IPFS uploads for token metadata
 # Everything else is either generated, linked between services, or has a working default.
+#
+# Builds run `npm ci --ignore-scripts`: Render exposes every env var to the build as well as
+# the runtime, and without this every dependency's install hook would run with the wallet
+# key in its environment. All runtime dependencies ship prebuilt binaries or a JS fallback.
 #
 # Secrets that must MATCH across services live in the shared env var group below, so Render
 # generates each once and every service reads the same value. That removes the failure mode
@@ -55,7 +63,7 @@ services:
     name: asdev-api
     runtime: node
     plan: starter
-    buildCommand: npm ci --omit=dev
+    buildCommand: npm ci --omit=dev --ignore-scripts
     startCommand: node src/index.js
     # Launches run in this process. On a redeploy the old instance finishes any in-flight launch
     # before exiting (see SHUTDOWN_TIMEOUT_MS in src/index.js); Render's default grace period is
@@ -81,8 +89,16 @@ services:
           type: redis
           name: asdev-redis
           property: connectionString
-      # Set by hand after the first apply.
+      # Set by hand after the first apply. Use the secret-file pair OR the raw key, not both;
+      # the file wins if both are present.
+      - key: DEV_WALLET_KEY_FILE
+        sync: false
+      - key: DEV_WALLET_KEY_PASSPHRASE
+        sync: false
       - key: DEV_WALLET_PRIVATE_KEY
+        sync: false
+      # Where surplus SOL goes (a Squads vault or hardware wallet). Leave blank to disable.
+      - key: TREASURY_WALLET
         sync: false
       - key: PINATA_JWT
         sync: false
@@ -106,7 +122,7 @@ services:
     name: asdev-worker
     runtime: node
     plan: starter
-    buildCommand: npm ci --omit=dev
+    buildCommand: npm ci --omit=dev --ignore-scripts
     startCommand: node src/worker.js
     # Lets an airdrop batch or fee sweep in flight finish before the old instance exits.
     maxShutdownDelaySeconds: 180
@@ -125,7 +141,13 @@ services:
           type: redis
           name: asdev-redis
           property: connectionString
+      - key: DEV_WALLET_KEY_FILE
+        sync: false
+      - key: DEV_WALLET_KEY_PASSPHRASE
+        sync: false
       - key: DEV_WALLET_PRIVATE_KEY
+        sync: false
+      - key: TREASURY_WALLET
         sync: false
       - key: PINATA_JWT
         sync: false
@@ -149,7 +171,7 @@ services:
     name: shitpad-grinder
     runtime: node
     plan: starter
-    buildCommand: npm ci --omit=dev
+    buildCommand: npm ci --omit=dev --ignore-scripts
     startCommand: node src/grinder.js
     envVars:
       - fromGroup: asdev-shared
