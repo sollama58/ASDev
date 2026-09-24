@@ -542,18 +542,18 @@ function initMetadataUpdaterWorker(deps) {
 
 /**
  * Initialize ASDF Sync Worker
- * Updates Top 100 ASDF holders for the 2x multiplier
+ * Keeps the ASDF top-holder list (config.ASDF_BONUS_TOP_N wallets) that receives the airdrop
+ * bonus. v30.3: Top 250 (was 100); the parallel ANSEM Top 1000 list was removed.
  */
 const HOLDER_LIST_SYNC_MS = parseInt(process.env.HOLDER_LIST_SYNC_MS, 10) || 30 * 60 * 1000;
 
 function initAsdfSyncWorker(deps) {
     const { connection } = deps;
     const { fetchTopHoldersByBalance } = require('../services/heliusDAS');
+    const topN = config.ASDF_BONUS_TOP_N;
 
-    // Pre-compute ASDF LP exclusion addresses once at worker init (fixed mint).
-    // v27.6: this worker previously had no exclusions at all, unlike its twin in
-    // tasks/asdfSync.js, so the pump bonding curve and AMM pool occupied top slots and
-    // pushed real holders out of the Top 100.
+    // Pre-compute ASDF LP exclusion addresses once at worker init (fixed mint). Without them
+    // the bonding curve and AMM pool occupy top slots and push real holders out of the list.
     const asdfMintPubkey = new PublicKey(TOKENS.ASDF);
     const [asdfBondingCurve] = PublicKey.findProgramAddressSync(
         [Buffer.from("bonding-curve"), asdfMintPubkey.toBuffer()],
@@ -569,91 +569,36 @@ function initAsdfSyncWorker(deps) {
                 return;
             }
 
-            const top100 = await fetchTopHoldersByBalance(asdfMintPubkey.toBase58(), {
-                topN: 100,
+            const top = await fetchTopHoldersByBalance(asdfMintPubkey.toBase58(), {
+                topN,
                 exclude: [WALLETS.PUMP_LIQUIDITY, ASDF_BONDING_CURVE_STR, ASDF_AMM_POOL_STR],
                 caller: 'Worker ASDF Sync',
                 connection
             });
 
-            // v27.6: never overwrite a good list with a bad scan.
-            if (top100 === null) {
-                logger.warn('[Worker] ASDF Sync: holder scan failed, keeping previous Top 100 list');
+            // Never overwrite a good list with a bad scan.
+            if (top === null) {
+                logger.warn(`[Worker] ASDF Sync: holder scan failed, keeping previous Top ${topN} list`);
                 return;
             }
-            if (top100.length === 0) {
-                logger.warn('[Worker] ASDF Sync: holder scan returned no holders, keeping previous Top 100 list');
+            if (top.length === 0) {
+                logger.warn(`[Worker] ASDF Sync: holder scan returned no holders, keeping previous Top ${topN} list`);
                 return;
             }
 
-            // Update Redis
-            await redis.setAsdfTop100Holders(top100);
-            logger.info(`[Worker] ASDF Sync: Updated Top 100 Holders. Tracking ${top100.length}.`);
-
+            await redis.setAsdfTopHolders(top);
+            logger.info(`[Worker] ASDF Sync: Updated Top ${topN} holders. Tracking ${top.length}.`);
         } catch (e) {
             logger.error("[Worker] ASDF Sync Failed", { error: e.message });
         }
     }
 
-    // Run immediately
     updateAsdfHolders();
-
-    // v30.2: 30 minutes (was 5). A top-100 list barely moves, and each refresh is a paginated
+    // v30.2: 30 minutes. A top-holder list barely moves, and each refresh is a paginated
     // Helius DAS scan of every holder -- up to 20 paid pages a time.
     setInterval(updateAsdfHolders, HOLDER_LIST_SYNC_MS);
 
-    logger.info('[Worker] ASDF sync worker initialized');
-}
-
-function initAnsemSyncWorker(deps) {
-    const { fetchTopHoldersByBalance } = require('../services/heliusDAS');
-
-    // Pre-compute ANSEM LP exclusion addresses once at worker init (fixed mint)
-    const ansemMintPubkey = new PublicKey(TOKENS.ANSEM);
-    const [ansemBondingCurve] = PublicKey.findProgramAddressSync(
-        [Buffer.from("bonding-curve"), ansemMintPubkey.toBuffer()],
-        PROGRAMS.PUMP
-    );
-    const ANSEM_BONDING_CURVE_STR = ansemBondingCurve.toString();
-    const ANSEM_AMM_POOL_STR = pump.getPumpAmmPDAs(ansemMintPubkey).pool.toString();
-
-    async function updateAnsemHolders() {
-        try {
-            const mint = TOKENS.ANSEM;
-            if (!mint) {
-                logger.warn('[Worker] ANSEM token address not configured');
-                return;
-            }
-
-            // v27.6: scan well past 1000 before ranking. DAS getTokenAccounts does not return
-            // accounts in balance order, so capping the *fetch* at 1000 and then sorting those
-            // ranked an arbitrary 1000 accounts rather than the actual top 1000.
-            const sorted = await fetchTopHoldersByBalance(mint, {
-                topN: 1000,
-                exclude: [WALLETS.PUMP_LIQUIDITY, ANSEM_BONDING_CURVE_STR, ANSEM_AMM_POOL_STR],
-                caller: 'Worker ANSEM Sync',
-                connection: deps.connection
-            });
-
-            if (sorted === null) {
-                logger.warn('[Worker] ANSEM Sync: holder scan failed, keeping previous Top 1000 list');
-                return;
-            }
-            if (sorted.length === 0) {
-                logger.warn('[Worker] ANSEM Sync: holder scan returned no holders, keeping previous Top 1000 list');
-                return;
-            }
-
-            await redis.setAnsemTop1000Holders(sorted);
-            logger.info(`[Worker] ANSEM Sync: Updated Top 1000 Holders. Tracking ${sorted.length}.`);
-        } catch (e) {
-            logger.error('[Worker] ANSEM Sync Failed', { error: e.message });
-        }
-    }
-
-    updateAnsemHolders();
-    setInterval(updateAnsemHolders, HOLDER_LIST_SYNC_MS); // v30.2: 30 minutes (was 5)
-    logger.info('[Worker] ANSEM sync worker initialized');
+    logger.info(`[Worker] ASDF sync worker initialized (top ${topN})`);
 }
 
 module.exports = {
@@ -665,5 +610,4 @@ module.exports = {
     initHolderScannerWorker,
     initMetadataUpdaterWorker,
     initAsdfSyncWorker,
-    initAnsemSyncWorker,
 };

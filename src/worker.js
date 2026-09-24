@@ -59,10 +59,10 @@ const globalState = {
         redis.setLastBackendUpdate(val).catch(e => logger.debug('Redis setLastBackendUpdate failed', { error: e.message }));
     },
 
-    get asdfTop50Holders() { return this._asdfTop50Holders || new Set(); },
-    set asdfTop50Holders(val) {
-        this._asdfTop50Holders = val;
-        redis.setAsdfTop100Holders([...val]).catch(e => logger.debug('Redis setAsdfTop100Holders failed', { error: e.message }));
+    get asdfTopHolders() { return this._asdfTopHolders || new Set(); },
+    set asdfTopHolders(val) {
+        this._asdfTopHolders = val;
+        redis.setAsdfTopHolders([...val]).catch(e => logger.debug('Redis setAsdfTopHolders failed', { error: e.message }));
     },
 
     get totalPoints() { return this._totalPoints || 0; },
@@ -90,7 +90,7 @@ const globalState = {
     },
 
     _lastBackendUpdate: Date.now(),
-    _asdfTop50Holders: new Set(),
+    _asdfTopHolders: new Set(),
     _totalPoints: 0,
     _devPumpHoldings: 0,
     _userExpectedAirdrops: new Map(),
@@ -214,10 +214,7 @@ async function startWorker() {
 
     if (enabledTasks.includes('asdf')) {
         workers.initAsdfSyncWorker(deps);
-        // v30.2: the ANSEM Top 1000 list (2x airdrop weight) was only ever synced in
-        // single-process mode, so in production the advertised bonus applied to nobody.
-        workers.initAnsemSyncWorker(deps);
-        logger.info('[Worker] ASDF + ANSEM sync started');
+        logger.info('[Worker] ASDF sync started');
     }
 
     if (enabledTasks.includes('flywheel')) {

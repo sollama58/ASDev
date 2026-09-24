@@ -681,11 +681,10 @@ async function processTokenAirdrops(deps) {
 
         logger.info(`[TokenAirdrop] Processing ${allToDistribute.length} token pools`);
 
-        // Fetch bonus-holder sets once — ASDF Top 100 and ANSEM Top 1000 each receive 2× weight
-        const [asdfTop100, ansemTop1000] = await Promise.all([
-            redis.getAsdfTop100Holders().catch(() => new Set()),
-            redis.getAnsemTop1000Holders().catch(() => new Set()),
-        ]);
+        // Fetch the bonus set once. v30.3: ASDF Top 250 holders receive ASDF_BONUS_MULTIPLIER
+        // weight; the ANSEM bonus is gone.
+        const asdfTop = await redis.getAsdfTopHolders().catch(() => new Set());
+        const asdfMultBig = BigInt(config.ASDF_BONUS_MULTIPLIER);
 
         for (const token of allToDistribute) {
             if (availableBalance < TOKEN_AIRDROP_THRESHOLD_LAMPORTS) {
@@ -720,12 +719,11 @@ async function processTokenAirdrops(deps) {
                 const devWallet = devKeypair.publicKey.toString();
                 const payableHolders = holders.filter(h => h.holderPubkey !== devWallet && payable.has(h.holderPubkey));
 
-                // Build weighted holder list — ASDF Top 100 and ANSEM Top 1000 each get 2× (stack to 4× if both)
+                // Build weighted holder list — ASDF top holders get the bonus multiplier.
                 const weightedHolders = payableHolders.map(h => {
                     const bal = BigInt(h.balance || '0');
-                    const asdfMult  = asdfTop100.has(h.holderPubkey)  ? BigInt(2) : BigInt(1);
-                    const ansemMult = ansemTop1000.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
-                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * asdfMult * ansemMult };
+                    const mult = asdfTop.has(h.holderPubkey) ? asdfMultBig : BigInt(1);
+                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * mult };
                 });
 
                 const totalEffectiveBal = weightedHolders.reduce((sum, h) => sum + h.effectiveBal, BigInt(0));
@@ -736,7 +734,7 @@ async function processTokenAirdrops(deps) {
 
                 const bonusCount = weightedHolders.filter(h => h.effectiveBal > h.balance).length;
                 if (bonusCount > 0) {
-                    logger.debug(`[TokenAirdrop] ${token.ticker}: ${bonusCount} holders with bonus weight (ASDF Top 100 and/or ANSEM Top 1000)`);
+                    logger.debug(`[TokenAirdrop] ${token.ticker}: ${bonusCount} holders with the ASDF bonus`);
                 }
 
                 // Share proportional to weighted effective balance
@@ -981,15 +979,14 @@ async function processCentralPoolAirdrop(deps) {
     // Fetch all holders and bonus sets in parallel
     const platformMints  = eligiblePlatform.map(t => t.mint).filter(Boolean);
 
-    const [platformHolders, asdfTop100, ansemTop1000] = await Promise.all([
+    const [platformHolders, asdfTop] = await Promise.all([
         platformMints.length > 0
             ? db.all('SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)', [platformMints])
             : [],
-        redis.getAsdfTop100Holders().catch(() => new Set()),
-        redis.getAnsemTop1000Holders().catch(() => new Set()),
+        redis.getAsdfTopHolders().catch(() => new Set()),
     ]);
 
-    // Build user score map: mcap-weighted ownership, with 2× bonus for ASDF Top 100 and ANSEM Top 1000
+    // Build user score map: mcap-weighted ownership, with the ASDF bonus
     // At avg mcap (1/N share) → 1.0×; at 0 mcap → 0.5×; at 2× avg → 1.5× (capped).
     const N = allEligible.length;
     const userScores = new Map();
@@ -1000,9 +997,8 @@ async function processCentralPoolAirdrop(deps) {
         const mcapRatio      = mcap / totalMcap;
         const mcapMultiplier = Math.min(1.5, Math.max(0.5, 0.5 + mcapRatio * N * 0.5));
         const balanceRatio   = Number(balance * BigInt(1e9) / PUMP_FUN_TOTAL_SUPPLY_BIG) / 1e9;
-        const asdfMult       = asdfTop100.has(h.holderPubkey)  ? 2 : 1;
-        const ansemMult      = ansemTop1000.has(h.holderPubkey) ? 2 : 1;
-        const contribution   = balanceRatio * mcapMultiplier * asdfMult * ansemMult;
+        const asdfMult       = asdfTop.has(h.holderPubkey) ? config.ASDF_BONUS_MULTIPLIER : 1;
+        const contribution   = balanceRatio * mcapMultiplier * asdfMult;
         if (contribution > 0) {
             userScores.set(h.holderPubkey, (userScores.get(h.holderPubkey) || 0) + contribution);
         }
@@ -1052,7 +1048,7 @@ async function processCentralPoolAirdrop(deps) {
         return;
     }
 
-    logger.info(`[CentralPool] Distributing ${(distributable / LAMPORTS_PER_SOL).toFixed(4)} SOL central pool to ${recipients.length} holders across ${allEligible.length} tokens (mcap-weighted, ASDF/ANSEM 2× bonus)`);
+    logger.info(`[CentralPool] Distributing ${(distributable / LAMPORTS_PER_SOL).toFixed(4)} SOL central pool to ${recipients.length} holders across ${allEligible.length} tokens (mcap-weighted, ASDF bonus)`);
 
     const airdropId = `central_${Date.now()}`;
     const allSignatures = [];

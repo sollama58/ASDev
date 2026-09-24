@@ -7,6 +7,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const config = require('../config/env');
+const { TOKENS } = require('../config/constants');
 const { logger, redis, claudeKoth, sanitizer } = require('../services');
 
 const router = express.Router();
@@ -160,7 +161,7 @@ function init(deps) {
             // v30.2: 30s and zero RPC. The wallet balance and pending fees come from the snapshot
             // the worker publishes each cycle; this used to make four RPC calls on every
             // refresh (two of them for a PUMP-token balance no feature uses any more).
-            const cachedHealth = await redis.smartCache('health_data_v302', 30, async () => {
+            const cachedHealth = await redis.smartCache('health_data_v303', 30, async () => {
                 const stats = await getStats();
                 const launches = await getTotalLaunches();
                 // v25.12: Added try-catch for logs query to prevent health endpoint failure
@@ -215,13 +216,45 @@ function init(deps) {
                     vanityPool = await require('../services/vanity').getPoolStats(db);
                 } catch (e) { /* ignore — table may not exist until migration runs */ }
 
+                // v30.3: the most recent payout and how many token pools are ready to fire, for
+                // the page's pool card. Two cheap queries on tables that change every 15 minutes.
+                let lastAirdrop = null;
+                let tokenPoolsReady = 0;
+                try {
+                    const row = await db.get(`
+                        SELECT a.amount, a.recipients, a.timestamp, a.mint, a.token_source, a.details, t.ticker
+                          FROM airdrop_logs a LEFT JOIN tokens t ON t.mint = a.mint
+                         ORDER BY a.id DESC LIMIT 1`);
+                    if (row) {
+                        let details = {};
+                        try { details = row.details ? JSON.parse(row.details) : {}; } catch (e) { /* legacy */ }
+                        const ts = isNaN(Number(row.timestamp)) ? Date.parse(row.timestamp) : Number(row.timestamp);
+                        lastAirdrop = {
+                            amountSol: parseFloat(row.amount) || 0,
+                            recipients: row.recipients || 0,
+                            timestamp: Number.isFinite(ts) ? ts : null,
+                            source: row.token_source === 'central_pool' || details.source === 'central_pool' ? 'central_pool' : 'token',
+                            ticker: row.ticker || details.ticker || null,
+                        };
+                    }
+                    const ready = await db.get(
+                        'SELECT COUNT(*) AS n FROM tokens WHERE pending_airdrop_lamports >= $1',
+                        [Math.round(config.TOKEN_AIRDROP_THRESHOLD_SOL * LAMPORTS_PER_SOL)]
+                    );
+                    tokenPoolsReady = parseInt(ready?.n || 0);
+                } catch (e) {
+                    logger.debug('[Health] Airdrop summary unavailable', { error: e.message });
+                }
+
                 return {
                     stats, launches, logs, currentBalance, pumpHoldings, totalPendingFees, totalVolume, totalAirdropped, totalSolAirdropped,
                     totalPendingAirdropLamports,
                     centralPoolLamports,
                     vanityPool,
                     totalPoints,
-                    conservationStatus
+                    conservationStatus,
+                    lastAirdrop,
+                    tokenPoolsReady
                 };
             });
 
@@ -285,6 +318,16 @@ function init(deps) {
                     : null,
                 // M-8 FIX: Expose deployment fee so frontend stays in sync with backend config
                 deploymentFee: config.DEPLOYMENT_FEE_SOL,
+                // v30.3: the rules the page explains, as data, so copy cannot drift from code.
+                asdfBonus: {
+                    topN: config.ASDF_BONUS_TOP_N,
+                    multiplier: config.ASDF_BONUS_MULTIPLIER,
+                    mint: TOKENS.ASDF.toString(),
+                },
+                eligibilityThresholdUsd: config.AIRDROP_MIN_VOLUME_USD,
+                minRecipientSol: 0.01,
+                lastAirdrop: cachedHealth.lastAirdrop || null,
+                tokenPoolsReady: cachedHealth.tokenPoolsReady || 0,
                 // Pass dynamic conservation status to frontend
                 conservationStatus: cachedHealth.conservationStatus || null
             });
@@ -1477,15 +1520,13 @@ function init(deps) {
             // v27.4 BUGFIX: This simulation previously divided each holder's share by the fixed
             // 1B-token PUMP_FUN_TOTAL_SUPPLY, while the real distributor (flywheel.js
             // processTokenAirdrops) divides by the sum of *tracked* holder balances (99% of pool,
-            // weighted 2x for ASDF Top 100 / ANSEM Top 1000 holders). Since tracked holder supply
+            // weighted for ASDF top holders). Since tracked holder supply
             // is almost always far less than the full 1B supply, this made every simulated payout
             // look much smaller than what actually gets sent, and never reflected the bonus
             // weighting at all — defeating the endpoint's purpose of previewing real payouts.
             // Mirror the real formula here instead.
-            const [asdfTop100Sim, ansemTop1000Sim] = await Promise.all([
-                redis.getAsdfTop100Holders().catch(() => new Set()),
-                redis.getAnsemTop1000Holders().catch(() => new Set()),
-            ]);
+            const asdfTopSim = await redis.getAsdfTopHolders().catch(() => new Set());
+            const asdfMultSim = BigInt(config.ASDF_BONUS_MULTIPLIER);
 
             // Query all tokens with pending airdrop pools
             const pendingRows = await db.all(`
@@ -1511,13 +1552,12 @@ function init(deps) {
                 );
 
                 // Match flywheel.js processTokenAirdrops: 99% distributed (1% dust buffer),
-                // weighted by effective balance (2x for ASDF Top 100 / ANSEM Top 1000, stacking to 4x)
+                // weighted by effective balance (ASDF top holders get the bonus multiplier)
                 const distributableBig = BigInt(Math.floor(pendingLamports * 0.99));
                 const weightedHolders = holders.map(h => {
                     const bal = BigInt(h.balance || '0');
-                    const asdfMult = asdfTop100Sim.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
-                    const ansemMult = ansemTop1000Sim.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
-                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * asdfMult * ansemMult };
+                    const mult = asdfTopSim.has(h.holderPubkey) ? asdfMultSim : BigInt(1);
+                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * mult };
                 });
                 const totalEffectiveBal = weightedHolders.reduce((sum, h) => sum + h.effectiveBal, BigInt(0));
 

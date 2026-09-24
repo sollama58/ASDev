@@ -19,8 +19,8 @@ Tokens are minted with ShitPad already wired in as a fee recipient, so a
 creator never configures fee sharing by hand. Where the grinder has one ready,
 the contract address ends in `shit`.
 
-Two tracked tokens (`ASDF`, `ANSEM`) give their top holders a 2× multiplier
-on airdrop weight, stacking to 4× if you hold both.
+The top 250 holders of `ASDF` receive a 2× multiplier on their airdrop weight
+in every pool (`ASDF_BONUS_TOP_N` to change the cut-off).
 
 > Note: the old vanity grinder (mint addresses ending in `ASDF`) was an external
 > HTTP service and was decommissioned. It has been replaced by an in-repo
@@ -35,7 +35,7 @@ src/
 ├── worker.js            # Same background tasks, no HTTP server (SERVER_MODE=worker)
 ├── config/
 │   ├── env.js            # All environment variables / config, validated on boot
-│   └── constants.js       # Program IDs, wallet addresses, token mints (incl. ASDF/ANSEM)
+│   └── constants.js       # Program IDs, wallet addresses, token mints (incl. ASDF)
 ├── services/             # Integrations & shared logic used by routes and tasks
 │   ├── postgres.js         # The only database layer (PostgreSQL)
 │   ├── redis.js            # Caching, BullMQ queues, cross-process state, distributed locks
@@ -52,7 +52,6 @@ src/
 │   ├── holderScanner.js     # Core points/airdrop-eligibility engine (on-chain holder scans)
 │   ├── flywheel.js          # Fee collection + SOL airdrop distribution (central + per-token pools)
 │   ├── metadataUpdater.js   # Price/image refresh (DexScreener → GeckoTerminal → Helius)
-│   ├── asdfSync.js          # Top 100 ASDF holder sync (2× multiplier)
 │   └── workers.js           # BullMQ worker wrappers around the above
 └── utils/                # Small shared helpers (bigint math, etc.)
 
@@ -168,7 +167,9 @@ endpoints in total, including a large admin/debug surface gated behind
 | `GET /api/all-launches` | All launched tokens (paginated) |
 | `GET /api/recent-launches` | Recent-launches ticker feed |
 | `GET /api/token-holders/:mint` | Top holders for a token |
-| `GET /api/check-holder?userPubkey=…` | A wallet's points + expected airdrop |
+| `GET /api/check-holder?userPubkey=…` | A wallet's expected airdrop, split by pool, and whether the ASDF bonus applies |
+| `GET /api/user-airdrop-stats/:pubkey` | What a wallet has received so far, with its rank |
+| `GET /api/airdrop-logs` | The 30 most recent payouts (amount, wallets, pool, tx) |
 | `GET /api/user-holdings?userPubkey=…` | Per-token holdings breakdown for a wallet |
 | `GET /api/all-eligible-users` | All wallets with a pending airdrop |
 | `POST /api/prepare-metadata` | Validate a launch (image reachable and an image) before the user pays; pins nothing |

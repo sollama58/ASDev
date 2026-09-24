@@ -13,6 +13,7 @@ const redis = require('./redis');
 
 let wss = null;
 let broadcastInterval = null;
+let lastAirdropLogId = null; // v30.3: last airdrop_logs id announced over the socket
 let lastBroadcastData = null;
 
 // Track connected clients
@@ -268,6 +269,34 @@ function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30
                 serverTime: Date.now()
             };
 
+            // v30.3: announce new payouts. The distributor runs in the worker process and cannot
+            // reach this server's sockets, so broadcastAirdrop() was never called and the page's
+            // "Airdrop!" toast never fired. Detect a new airdrop_logs row here instead.
+            try {
+                const latest = await db.get(`
+                    SELECT a.id, a.amount, a.recipients, a.timestamp, a.token_source, a.details, t.ticker
+                      FROM airdrop_logs a LEFT JOIN tokens t ON t.mint = a.mint
+                     ORDER BY a.id DESC LIMIT 1`);
+                if (latest) {
+                    if (lastAirdropLogId === null) {
+                        lastAirdropLogId = latest.id; // first pass: learn the current id, announce nothing
+                    } else if (latest.id > lastAirdropLogId) {
+                        lastAirdropLogId = latest.id;
+                        let details = {};
+                        try { details = latest.details ? JSON.parse(latest.details) : {}; } catch (e) { /* legacy */ }
+                        broadcastAirdrop({
+                            amount: parseFloat(latest.amount) || 0,
+                            recipients: latest.recipients || 0,
+                            ticker: latest.ticker || details.ticker || null,
+                            source: latest.token_source === 'central_pool' || details.source === 'central_pool' ? 'central_pool' : 'token',
+                            timestamp: Date.now(),
+                        });
+                    }
+                }
+            } catch (e) {
+                logger.debug('[WebSocket] Airdrop announce check failed', { error: e.message });
+            }
+
             // H-1: Cache payload in Redis for 15s so rapid reconnects reuse it
             if (redisConn) {
                 try {
@@ -312,6 +341,8 @@ function broadcastAirdrop(airdrop) {
     broadcast('airdrop', {
         amount: airdrop.amount,
         recipients: airdrop.recipients,
+        ticker: airdrop.ticker || null,
+        source: airdrop.source || 'token',
         timestamp: airdrop.timestamp || Date.now()
     });
 }

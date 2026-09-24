@@ -96,8 +96,8 @@ async function fetchTokenAccountsHeliusDAS(mint, limit = 250, caller = 'DAS') {
  *
  * DAS getTokenAccounts is program-agnostic, so it is the primary path. It also does not
  * return accounts in balance order, which is why this helper scans up to `maxScan` accounts
- * and sorts them itself rather than trusting the first page -- the previous ANSEM code took
- * whatever arbitrary 1000 accounts DAS happened to return first and called them the top 1000.
+ * and sorts them itself rather than trusting the first page -- an earlier version took
+ * whatever arbitrary accounts DAS happened to return first and called them the top N.
  *
  * @param {string} mint - Token mint address
  * @param {object} opts

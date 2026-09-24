@@ -75,6 +75,13 @@ const config = {
     ANTI_BUNDLE_MIN: Math.max(0, parseInt(process.env.ANTI_BUNDLE_MIN ?? '0', 10) || 0),
     ANTI_BUNDLE_MAX: Math.max(0, parseInt(process.env.ANTI_BUNDLE_MAX ?? '1', 10) || 0),
 
+    // v30.3: The ASDF holder bonus. Wallets ranked in the top ASDF_BONUS_TOP_N ASDF holders
+    // have their effective balance multiplied by ASDF_BONUS_MULTIPLIER in every airdrop
+    // (per-token pools and the central pool). It is the only bonus: the ANSEM bonus that
+    // used to sit beside it, stacking to 4x, was removed.
+    ASDF_BONUS_TOP_N: Math.max(1, parseInt(process.env.ASDF_BONUS_TOP_N, 10) || 250),
+    ASDF_BONUS_MULTIPLIER: 2,
+
     // v29.1: A payment older than this cannot be redeemed for a launch. Without a bound,
     // any historical transfer to the platform wallet of at least the fee could be handed
     // to /api/deploy once for a free launch.

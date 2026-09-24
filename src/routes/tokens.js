@@ -16,6 +16,7 @@ const { redis, logger, circuitBreaker, imageUtils } = require('../services');
 const { safeBalance } = require('../utils');
 const crypto = require('crypto');
 const config = require('../config/env');
+const { TOKENS } = require('../config/constants');
 const router = express.Router();
 
 // Hash a pubkey to a safe Redis key component (prevents key injection)
@@ -64,12 +65,14 @@ function init(deps) {
             // Cache per page (limit + offset combo)
             // v30.1: bumped for the added quote_mint field -- a cached page from the old
             // shape would render every coin as SOL-quoted until the TTL expired.
-            const cacheKey = `all_launches_v3010_${limit}_${offset}`;
+            const cacheKey = `all_launches_v3030_${limit}_${offset}`;
             const { rows, total } = await redis.smartCache(cacheKey, 15, async () => {
                 // v27.1: Include pending_airdrop_lamports for threshold display
                 const combinedQuery = `
                     SELECT mint, "userPubkey", name, ticker, image, "metadataUri", "marketCap", volume24h, complete,
                            'platform' as source, 1 as "isActive", quote_mint,
+                           description, twitter, website, timestamp,
+                           COALESCE(lifetime_airdrop_lamports, 0) as lifetime_airdrop_lamports,
                            COALESCE(pending_airdrop_lamports, 0) as pending_airdrop_lamports
                     FROM tokens
                     ORDER BY volume24h DESC
@@ -122,6 +125,13 @@ function init(deps) {
                 isActive: r.isActive !== 0,
                 // v27.1: Individual token pending pool
                 pendingAirdropSol: ((r.pending_airdrop_lamports || 0) / 1e9).toFixed(6),
+                // v30.3: what this token's holders have been paid so far, and the details the
+                // token modal shows, so it needs no second request.
+                lifetimeAirdropSol: ((r.lifetime_airdrop_lamports || 0) / 1e9).toFixed(6),
+                description: r.description || '',
+                twitter: r.twitter || '',
+                website: r.website || '',
+                launchedAt: r.timestamp ? Number(r.timestamp) : null,
                 // v30.1: null means SOL-quoted, which is every coin launched before Custom
                 // Pairs. The frontend resolves the mint to a symbol from /api/quote-assets.
                 quoteMint: r.quote_mint || null
@@ -365,9 +375,12 @@ function init(deps) {
     // Points are calculated by the worker and stored in the database
     router.get('/check-holder', async (req, res) => {
         const { userPubkey } = req.query;
+        // v30.3: the bonus parameters travel with every answer so the page can describe the
+        // bonus from data rather than from copy that goes stale when the cut-off changes.
+        const asdfBonus = { topN: config.ASDF_BONUS_TOP_N, multiplier: config.ASDF_BONUS_MULTIPLIER, mint: TOKENS.ASDF.toString() };
         if (!userPubkey) {
             return res.json({
-                isHolder: false, isAsdfTop50: false, points: 0,
+                isHolder: false, isAsdfTopHolder: false, asdfBonus, points: 0,
                 multiplier: 1, heldPositionsCount: 0,
                 basePoints: 0,
                 expectedAirdrop: 0, expectedAirdropCurrency: 'SOL'
@@ -378,6 +391,10 @@ function init(deps) {
         }
 
         try {
+            // Read straight from the bonus set: user_points only covers wallets that hold a
+            // ShitPad token, and a wallet's ASDF rank is worth knowing before it does.
+            const isAsdfTopHolder = await redis.isAsdfTopHolder(userPubkey).catch(() => false);
+
             // v25.33: Read from user_points table (single source of truth)
             const userPoints = await db.get(`
                 SELECT
@@ -402,14 +419,15 @@ function init(deps) {
                         'SELECT COUNT(*) as count FROM token_holders WHERE "holderPubkey" = $1',
                         [userPubkey]
                     );
-                    return row?.count || 0;
+                    return parseInt(row?.count, 10) || 0; // COUNT(*) arrives as a string from pg
                 });
 
                 return res.json({
                     isHolder: (holdingsCount || 0) > 0,
-                    isAsdfTop50: false,
+                    isAsdfTopHolder,
+                    asdfBonus,
                     points: 0,
-                    multiplier: 1,
+                    multiplier: isAsdfTopHolder ? asdfBonus.multiplier : 1,
                     heldPositionsCount: holdingsCount || 0,
                     basePoints: 0,
                     expectedAirdrop: 0,
@@ -424,7 +442,8 @@ function init(deps) {
             const MIN_AIRDROP_SOL = 0.01;
             res.json({
                 isHolder: true,
-                isAsdfTop50: userPoints.is_asdf_holder || false,
+                isAsdfTopHolder: isAsdfTopHolder || !!userPoints.is_asdf_holder,
+                asdfBonus,
                 points: Math.round((userPoints.total_points || 0) * 100) / 100,
                 multiplier: userPoints.multiplier || 1,
                 heldPositionsCount: userPoints.positions_count || 0,
@@ -593,7 +612,7 @@ function init(deps) {
                     users: users.map(user => ({
                         pubkey: user.pubkey,
                         positions: user.positions_count || 0,
-                        isAsdfTop50: user.is_asdf_holder || false,
+                        isAsdfTopHolder: user.is_asdf_holder || false,
                         expectedAirdrop: user.expected_airdrop_sol || 0,
                         expectedAirdropCurrency: 'SOL'
                     })),
@@ -617,9 +636,37 @@ function init(deps) {
     // Airdrop logs
     router.get('/airdrop-logs', async (req, res) => {
         try {
-            // M-4: Cache airdrop logs for 10s — they change infrequently
-            const logs = await redis.smartCache('airdrop_logs_recent', 10, async () => {
-                return await db.all('SELECT * FROM airdrop_logs ORDER BY timestamp DESC LIMIT 20');
+            // v30.3: shaped for the page's "Recent Airdrops" list rather than returned raw.
+            // Cached for 30s — a row is added at most every fifteen minutes.
+            const logs = await redis.smartCache('airdrop_logs_recent_v2', 30, async () => {
+                const rows = await db.all(`
+                    SELECT a.id, a.amount, a.recipients, a.signatures, a.details, a.timestamp, a.mint, a.token_source,
+                           t.ticker, t.name, t.image
+                      FROM airdrop_logs a
+                      LEFT JOIN tokens t ON t.mint = a.mint
+                     ORDER BY a.id DESC
+                     LIMIT 30
+                `);
+                return rows.map(r => {
+                    let details = {};
+                    try { details = r.details ? JSON.parse(r.details) : {}; } catch (e) { /* legacy rows */ }
+                    const sigs = String(r.signatures || '').split(',').map(s => s.trim()).filter(Boolean);
+                    const ts = isNaN(Number(r.timestamp)) ? Date.parse(r.timestamp) : Number(r.timestamp);
+                    return {
+                        id: r.id,
+                        amountSol: parseFloat(r.amount) || 0,
+                        recipients: r.recipients || 0,
+                        timestamp: Number.isFinite(ts) ? ts : null,
+                        // 'central_pool' rows have no mint: the central pool pays holders of every token.
+                        source: r.token_source === 'central_pool' || details.source === 'central_pool' ? 'central_pool' : 'token',
+                        mint: r.mint || null,
+                        ticker: r.ticker || details.ticker || null,
+                        name: r.name || null,
+                        image: r.image || null,
+                        txCount: sigs.length,
+                        firstSignature: sigs[0] || null,
+                    };
+                });
             });
             res.json(logs);
         } catch (e) {

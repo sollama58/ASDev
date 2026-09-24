@@ -50,10 +50,10 @@ const globalState = {
         redis.setLastBackendUpdate(val).catch(e => logger.debug('Redis setLastBackendUpdate failed', { error: e.message }));
     },
 
-    get asdfTop50Holders() { return this._asdfTop50Holders || new Set(); },
-    set asdfTop50Holders(val) {
-        this._asdfTop50Holders = val;
-        redis.setAsdfTop100Holders([...val]).catch(e => logger.debug('Redis setAsdfTop100Holders failed', { error: e.message }));
+    get asdfTopHolders() { return this._asdfTopHolders || new Set(); },
+    set asdfTopHolders(val) {
+        this._asdfTopHolders = val;
+        redis.setAsdfTopHolders([...val]).catch(e => logger.debug('Redis setAsdfTopHolders failed', { error: e.message }));
     },
 
     get totalPoints() { return this._totalPoints || 0; },
@@ -82,7 +82,7 @@ const globalState = {
 
     // Internal storage
     _lastBackendUpdate: Date.now(),
-    _asdfTop50Holders: new Set(),
+    _asdfTopHolders: new Set(),
     _totalPoints: 0,
     _devPumpHoldings: 0,
     _userExpectedAirdrops: new Map(),
@@ -177,6 +177,10 @@ async function main() {
                 // v30.2: the page loads web3.js from jsdelivr (pinned by SRI hash in the page);
                 // without this the API-served copy of the launcher could not launch at all.
                 scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+                // v30.3: helmet's default script-src-attr 'none' silently disabled every
+                // onclick= in the admin console when the API serves it at /admin. The launcher
+                // page itself carries no inline handlers and does not need this.
+                scriptSrcAttr: ["'unsafe-inline'"],
                 styleSrc: ["'self'", "'unsafe-inline'"],
                 imgSrc: ["'self'", "data:", "https:"], // Allow external images
                 connectSrc: ["'self'", "https://api.dexscreener.com", "https://mainnet.helius-rpc.com"],
