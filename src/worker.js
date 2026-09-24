@@ -13,7 +13,7 @@
  *
  * Usage:
  *   SERVER_MODE=worker node src/worker.js
- *   SERVER_MODE=worker WORKER_TASKS=holders,metadata node src/worker.js
+ *   SERVER_MODE=worker WORKER_TASKS=holders,metadata,deploy node src/worker.js
  */
 
 // v25.26: Immediate stdout write to verify process starts (before any imports)
@@ -22,12 +22,12 @@ process.stdout.write(`[${new Date().toISOString()}] [INFO] ASDev Worker process 
 require('dotenv').config();
 
 const { Connection } = require('@solana/web3.js');
-const { Wallet } = require('@coral-xyz/anchor');
 
 // Internal imports
 const config = require('./config/env');
 const { WALLETS } = require('./config/constants');
 const { logger, database, redis, twitter, solana, claudeKoth } = require('./services');
+const signerService = require('./services/signer');
 const tasks = require('./tasks');
 
 // Check if running in worker mode
@@ -38,7 +38,9 @@ if (process.env.SERVER_MODE !== 'worker') {
 }
 
 // Parse which tasks to run (defaults to all)
-const TASK_OPTIONS = ['holders', 'metadata', 'asdf', 'flywheel'];
+// v30.4: 'deploy' runs the launch queue here so the API service can run without the wallet
+// key. Harmless alongside an API that still holds one: BullMQ hands each job to one consumer.
+const TASK_OPTIONS = ['holders', 'metadata', 'asdf', 'flywheel', 'deploy'];
 const enabledTasks = process.env.WORKER_TASKS
     ? process.env.WORKER_TASKS.split(',').map(t => t.trim().toLowerCase())
     : TASK_OPTIONS;
@@ -102,6 +104,12 @@ const globalState = {
  */
 async function startWorker() {
     logger.info(`Starting ASDev Worker ${config.VERSION}...`);
+
+    // v30.4: see src/index.js -- same signer, same checks, and first for the same reason. The worker always holds the key.
+    const signer = await signerService.createSignerFromEnv();
+    signerService.scrubSecretsFromEnv();
+    solana.setSigner(signer);
+    signerService.verifyPlatformWallet(signer, WALLETS.PLATFORM_DEV, config);
     logger.info(`Enabled tasks: ${enabledTasks.join(', ')}`);
 
     // v25.25: Log memory usage at startup for debugging OOM issues
@@ -159,17 +167,6 @@ async function startWorker() {
                 .finally(() => clearTimeout(timeout));
         }
     });
-    const devKeypair = config.devKeypair;
-    const wallet = new Wallet(devKeypair);
-
-    // Validate wallet
-    const actualWallet = devKeypair.publicKey.toString();
-    const expectedWallet = WALLETS.PLATFORM_DEV.toString();
-    if (actualWallet !== expectedWallet) {
-        logger.error(`CRITICAL: Wallet mismatch! Expected: ${expectedWallet}, Got: ${actualWallet}`);
-    } else {
-        logger.info(`Wallet verified: ${actualWallet}`);
-    }
 
     logger.info(`Network: ${config.SOLANA_NETWORK.toUpperCase()} | RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : (config.HELIUS_API_KEY ? 'Helius' : 'Public Mainnet')}`);
 
@@ -181,8 +178,7 @@ async function startWorker() {
     // Dependencies object for modules
     const deps = {
         connection,
-        devKeypair,
-        wallet,
+        signer,
         db,
         redis,
         globalState,
@@ -220,6 +216,11 @@ async function startWorker() {
     if (enabledTasks.includes('flywheel')) {
         tasks.flywheel.start(deps);
         logger.info('[Worker] Flywheel started');
+    }
+
+    if (enabledTasks.includes('deploy')) {
+        tasks.registerWorker(workers.initDeployWorker(deps));
+        logger.info('[Worker] Deploy worker started (launches, refunds)');
     }
 
     logger.info(`Worker ${config.VERSION} running with ${enabledTasks.length} tasks`);

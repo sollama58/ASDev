@@ -30,7 +30,7 @@ const { logger, redis, pump, solana, twitter, pinata } = require('../services');
 const LAUNCH_DESCRIPTION_FOOTER = ' Launched via ShitPad.';
 
 function initDeployWorker(deps) {
-    const { connection, devKeypair, db, saveTokenData, refundUser } = deps;
+    const { connection, signer, db, saveTokenData, refundUser } = deps;
 
     // Anti-bundling dud token constants
     const DUD_NAME = 'ASDFGHJKL';
@@ -87,7 +87,7 @@ function initDeployWorker(deps) {
             : await vanity.getMintKeypair(db);
 
         const mint = mintKeypair.publicKey;
-        const creator = devKeypair.publicKey;
+        const creator = signer.publicKey;
 
         // Decoys are always SOL-quoted. Token-quoted launches get no seed buy (see
         // pumpLaunch.buildLaunchInstructions `seedBuy`).
@@ -120,7 +120,7 @@ function initDeployWorker(deps) {
                 for (const ix of group.instructions) tx.add(ix);
                 tx.feePayer = creator;
 
-                const signers = group.needsMintSignature ? [devKeypair, mintKeypair] : [devKeypair];
+                const signers = group.needsMintSignature ? [mintKeypair] : [];
 
                 if (group.critical) {
                     // The point of no return: once we are inside sendTxWithRetry the mint may
@@ -150,7 +150,7 @@ function initDeployWorker(deps) {
                 // Sell the seed position back. Detached, and backed by the seed_positions
                 // reconciler if this process dies before it runs.
                 setTimeout(() => {
-                    sellSeedPosition({ connection, devKeypair, db }, mint.toString())
+                    sellSeedPosition({ connection, signer, db }, mint.toString())
                         .catch(e => logger.error('Seed sell error', { ticker: tokenTicker, msg: e.message }));
                 }, 1500);
             }
@@ -362,12 +362,12 @@ function initDeployWorker(deps) {
  * Sell the platform's seed position in `mintStr`, whatever the coin is quoted in, and mark it
  * sold. Shared by the post-launch timer and the reconciler.
  */
-async function sellSeedPosition({ connection, devKeypair, db }, mintStr) {
+async function sellSeedPosition({ connection, signer, db }, mintStr) {
     const pumpLaunch = require('../services/pumpLaunch');
     const seedSell = await pumpLaunch.buildSeedSellInstructions({
         connection,
         mint: new PublicKey(mintStr),
-        user: devKeypair.publicKey,
+        user: signer.publicKey,
         tokenProgram: PROGRAMS.TOKEN_2022,
     });
     if (seedSell) {
@@ -376,8 +376,8 @@ async function sellSeedPosition({ connection, devKeypair, db }, mintStr) {
             units: seedSell.isTokenQuoted ? pumpLaunch.CU_LIMIT_TOKEN_LAUNCH : pumpLaunch.CU_LIMIT_SOL_LAUNCH,
         });
         for (const ix of seedSell.instructions) sellTx.add(ix);
-        sellTx.feePayer = devKeypair.publicKey;
-        await solana.sendTxWithRetry(sellTx, [devKeypair]);
+        sellTx.feePayer = signer.publicKey;
+        await solana.sendTxWithRetry(sellTx);
         logger.info(`Sold seed position ${mintStr.substring(0, 8)}...`, { tokenQuoted: seedSell.isTokenQuoted });
     }
     // Null means nothing is held: either sold already or the buy never filled. Done either way.

@@ -159,7 +159,7 @@ function broadcast(type, data) {
  * @param {number} intervalMs - Broadcast interval in milliseconds (default from config)
  */
 function startBroadcasting(deps, intervalMs = config.WS_BROADCAST_INTERVAL || 30000) {
-    const { db, globalState, connection, devKeypair } = deps;
+    const { db, globalState, connection, signer } = deps;
 
     const doBroadcast = async () => {
         try {

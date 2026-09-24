@@ -24,7 +24,6 @@ const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const { Connection } = require('@solana/web3.js');
-const { Wallet } = require('@coral-xyz/anchor');
 const fs = require('fs');
 const path = require('path');
 
@@ -32,6 +31,7 @@ const path = require('path');
 const config = require('./config/env');
 const { WALLETS } = require('./config/constants');
 const { logger, database, redis, twitter, solana, websocket, claudeKoth } = require('./services');
+const signerService = require('./services/signer');
 const routes = require('./routes');
 const tasks = require('./tasks');
 
@@ -95,6 +95,26 @@ const globalState = {
 async function main() {
     logger.info(`Starting ASDev ${config.VERSION}...`);
 
+    // v30.4: the platform signer replaces the raw Keypair that used to travel on `deps`. Built
+    // first, before anything can fail: the key material (or the Vault token) is consumed here
+    // and scrubbed from the environment -- and the ephemeral key file scripts/boot.sh may have
+    // parked is deleted -- before Redis or Postgres get a chance to abort the boot.
+    //
+    // An API-only process with no key configured runs on a public-only signer: it verifies
+    // launch payments and reports the wallet address, and the worker service -- which has no
+    // inbound network -- does every signing job. The process facing the internet then has
+    // nothing to steal.
+    let signer;
+    if (signerService.hasKeyConfigured()) {
+        signer = await signerService.createSignerFromEnv();
+        signerService.scrubSecretsFromEnv();
+        signerService.verifyPlatformWallet(signer, WALLETS.PLATFORM_DEV, config);
+    } else {
+        signer = signerService.createPublicOnlySigner(WALLETS.PLATFORM_DEV);
+        logger.info(`[Signer] No wallet key in this process; launches and refunds run in the worker service (wallet ${signer.publicKey.toBase58()})`);
+    }
+    solana.setSigner(signer);
+
     // v24.0: Initialize Redis first (needed for globalState) with connection validation
     // v25.20: CRITICAL - Redis is required for BullMQ job queues. Fail startup if unavailable.
     const redisInitSuccess = await redis.init();
@@ -140,18 +160,6 @@ async function main() {
                 .finally(() => clearTimeout(timeout));
         }
     });
-    const devKeypair = config.devKeypair;
-    const wallet = new Wallet(devKeypair);
-
-    // Validate wallet matches expected platform dev wallet
-    const actualWallet = devKeypair.publicKey.toString();
-    const expectedWallet = WALLETS.PLATFORM_DEV.toString();
-    if (actualWallet !== expectedWallet) {
-        logger.error(`CRITICAL: Wallet mismatch! Expected: ${expectedWallet}, Got: ${actualWallet}`);
-        logger.error('Check DEV_WALLET_PRIVATE_KEY environment variable. Server will continue but functionality may be impaired.');
-    } else {
-        logger.info(`Wallet verified: ${actualWallet}`);
-    }
 
     logger.info(`Network: ${config.SOLANA_NETWORK.toUpperCase()} | RPC: ${config.RPC_URL.includes('devnet') ? 'Devnet' : (config.HELIUS_API_KEY ? 'Helius' : 'Public Mainnet')}`);
 
@@ -310,8 +318,7 @@ async function main() {
     // Dependencies object for modules
     const deps = {
         connection,
-        devKeypair,
-        wallet,
+        signer,
         db,
         redis,
         globalState,
@@ -337,9 +344,15 @@ async function main() {
         // These are essential for processing deployment requests
         // v30.2: registered so shutdown() closes them, which waits for an in-flight launch to
         // finish instead of killing it mid-send (a killed launch used to be re-run by BullMQ).
-        tasks.registerWorker(tasks.workers.initDeployWorker(deps));
+        // v30.4: only when this process holds the key. Without one, the worker service's
+        // `deploy` task consumes the same queue.
+        if (signer.kind === 'public-only') {
+            logger.info('[Server] Deploy worker not started here (no wallet key); the worker service processes launches');
+        } else {
+            tasks.registerWorker(tasks.workers.initDeployWorker(deps));
+        }
         tasks.registerWorker(tasks.workers.initSocialWorker(deps));
-        logger.info('[Server] Deploy and social workers initialized for API-only mode');
+        logger.info('[Server] Social worker initialized for API-only mode');
     } else {
         // Start background tasks
         tasks.startAll(deps);

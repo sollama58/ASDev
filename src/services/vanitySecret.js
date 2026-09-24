@@ -15,6 +15,7 @@
  */
 const crypto = require('crypto');
 const logger = require('./logger');
+const config = require('../config/env');
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // GCM standard nonce length
@@ -26,14 +27,14 @@ const IV_LENGTH = 12; // GCM standard nonce length
  * keypairs nobody will be able to read back.
  */
 function isConfigured() {
-    return !!(process.env.VANITY_ENCRYPTION_KEY && process.env.VANITY_ENCRYPTION_KEY.length >= 16);
+    return !!(config.VANITY_ENCRYPTION_KEY && config.VANITY_ENCRYPTION_KEY.length >= 16);
 }
 
 function getKey() {
     if (!isConfigured()) {
         throw new Error('VANITY_ENCRYPTION_KEY is not set (or is shorter than 16 characters)');
     }
-    return crypto.createHash('sha256').update(process.env.VANITY_ENCRYPTION_KEY).digest();
+    return crypto.createHash('sha256').update(config.VANITY_ENCRYPTION_KEY).digest();
 }
 
 /**

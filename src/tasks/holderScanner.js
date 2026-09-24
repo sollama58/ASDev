@@ -176,7 +176,7 @@ setInterval(() => {
  * - KOTH is now an AI spotlight (no fee allocation)
  */
 async function updateGlobalState(deps, opts = {}) {
-    const { connection, devKeypair, db, globalState } = deps;
+    const { connection, signer, db, globalState } = deps;
     // v30.2: `forceMints` are rescanned regardless of the throttles below -- the airdrop passes
     // the tokens it is about to pay, and it passes `wait` so that a scan already in flight
     // delays the payout instead of letting it proceed on stale holder data.
@@ -231,7 +231,7 @@ async function updateGlobalState(deps, opts = {}) {
         // itself on every cache refresh. The PUMP-token holdings lookup that sat here fed a
         // feature that no longer exists and cost an RPC call every scan, so it is gone.
         try {
-            const solBalance = await connection.getBalance(devKeypair.publicKey);
+            const solBalance = await connection.getBalance(signer.publicKey);
             globalState.devSolBalance = solBalance / LAMPORTS_PER_SOL;
             await redis.setPlatformSnapshot({ walletBalanceLamports: solBalance });
         } catch (e) {
@@ -312,7 +312,7 @@ async function updateGlobalState(deps, opts = {}) {
                 // v30.2: keyed on the coin's own quote asset (Custom Pairs), and derived through
                 // the SDK; the old derivation never matched a real pool.
                 const ammPoolStr = pump.getPumpAmmPDAs(tokenMintPublicKey, token.quote_mint).pool.toString();
-                const devWalletStr = devKeypair.publicKey.toString();
+                const devWalletStr = signer.publicKey.toString();
                 const isExcludedOwner = (owner) =>
                     owner === WALLETS.PUMP_LIQUIDITY || owner === bondingCurvePDAStr ||
                     owner === ammPoolStr || owner === devWalletStr;
@@ -587,7 +587,7 @@ async function updateGlobalState(deps, opts = {}) {
 
         // Calculate final points including ASDF multiplier
         for (const [pubkey, data] of rawPointsMap.entries()) {
-            if (pubkey === devKeypair.publicKey.toString()) continue;
+            if (pubkey === signer.publicKey.toString()) continue;
 
             const isAsdfTop = asdfTopHolders.has(pubkey);
 
@@ -703,7 +703,7 @@ async function updateGlobalState(deps, opts = {}) {
                     if (cpTotalScore > 0) {
                         const cpDistributable = centralPoolLamports * 0.99;
                         for (const [pubkey, score] of cpUserScores.entries()) {
-                            if (pubkey === devKeypair.publicKey.toString()) continue;
+                            if (pubkey === signer.publicKey.toString()) continue;
                             const expectedCentralSol = (cpDistributable * score / cpTotalScore) / LAMPORTS_PER_SOL;
                             centralPoolExpectedMap.set(pubkey, expectedCentralSol);
                             const prev = userExpectedAirdropMap.get(pubkey) || 0;
@@ -724,7 +724,7 @@ async function updateGlobalState(deps, opts = {}) {
 
         const userPointsData = [];
         for (const [pubkey, data] of rawPointsMap.entries()) {
-            if (pubkey === devKeypair.publicKey.toString()) continue;
+            if (pubkey === signer.publicKey.toString()) continue;
 
             const isAsdfTop = asdfTopHolders.has(pubkey);
             const multiplier = isAsdfTop ? ASDF_MULT : 1;
@@ -754,7 +754,7 @@ async function updateGlobalState(deps, opts = {}) {
 
         // v26.0: Include users with expected airdrops but zero points (e.g. token holders of pending tokens with no eligible volume)
         for (const [pubkey, expected] of userExpectedAirdropMap.entries()) {
-            if (pubkey === devKeypair.publicKey.toString()) continue;
+            if (pubkey === signer.publicKey.toString()) continue;
             if (!globalState.userExpectedAirdrops.has(pubkey) && expected > 0) {
                 globalState.userExpectedAirdrops.set(pubkey, expected);
                 userPointsData.push({

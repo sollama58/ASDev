@@ -501,7 +501,7 @@ async function accruePlatformFees(db, { buybackBurn = 0, upkeep = 0 }) {
  * the next claim -- rather than paying it twice, which is not.
  */
 async function processPlatformFeeSweep(deps) {
-    const { devKeypair, db } = deps;
+    const { signer, db } = deps;
 
     let pendingBurn = 0;
     let pendingUpkeep = 0;
@@ -523,7 +523,7 @@ async function processPlatformFeeSweep(deps) {
 
     // Never try to send more than the wallet actually holds.
     try {
-        const balance = await deps.connection.getBalance(devKeypair.publicKey);
+        const balance = await deps.connection.getBalance(signer.publicKey);
         const SAFETY_RESERVE = Math.round(0.05 * LAMPORTS_PER_SOL);
         if (balance - SAFETY_RESERVE < total) {
             logger.warn('[PlatformFees] Wallet balance below accrued platform cut, deferring sweep', {
@@ -561,16 +561,16 @@ async function processPlatformFeeSweep(deps) {
         solana.addPriorityFee(feeTx, { units: 10_000 }); // two transfers
         if (pendingBurn > 0) {
             feeTx.add(SystemProgram.transfer({
-                fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.BUYBACK_BURN, lamports: pendingBurn
+                fromPubkey: signer.publicKey, toPubkey: WALLETS.BUYBACK_BURN, lamports: pendingBurn
             }));
         }
         if (pendingUpkeep > 0) {
             feeTx.add(SystemProgram.transfer({
-                fromPubkey: devKeypair.publicKey, toPubkey: WALLETS.FEE_05, lamports: pendingUpkeep
+                fromPubkey: signer.publicKey, toPubkey: WALLETS.FEE_05, lamports: pendingUpkeep
             }));
         }
-        feeTx.feePayer = devKeypair.publicKey;
-        const sig = await solana.sendTxWithRetry(feeTx, [devKeypair]);
+        feeTx.feePayer = signer.publicKey;
+        const sig = await solana.sendTxWithRetry(feeTx);
 
         await db.run(
             `INSERT INTO stats (key, value) VALUES ($2, $1)
@@ -611,8 +611,111 @@ async function processPlatformFeeSweep(deps) {
  * Distribution is per-token and independent — no cross-token pooling.
  * KOTH bonus is removed; each token's holders are rewarded by their own token's fees.
  */
+/**
+ * v30.4: Hot-wallet exposure cap.
+ *
+ * The platform wallet is a hot wallet by necessity: it signs launches, fee claims and payouts
+ * unattended. Everything it holds beyond what those jobs need is pure exposure -- months of
+ * launch fees and rounding remainders sitting behind one key. When TREASURY_WALLET is set,
+ * anything above the wallet's obligations plus HOT_WALLET_FLOAT_SOL is moved there, so a
+ * leaked key can take the float and the pools of the moment, and no more.
+ *
+ * Obligations are the SOL the wallet holds for others: every token's pending pool, the central
+ * pool, and the accrued platform cut awaiting its own sweep. The airdrop mutex is taken so the
+ * count cannot race a distribution that has already reserved a pool but not yet sent it.
+ *
+ * The treasury must be a plain system-owned account (a multisig vault or a cold wallet); a
+ * token account or program address would swallow the transfer, so anything else is refused.
+ */
+async function processTreasurySweep(deps) {
+    const { connection, signer, db } = deps;
+    if (!config.TREASURY_WALLET) return null;
+
+    let treasury;
+    try {
+        treasury = new PublicKey(config.TREASURY_WALLET);
+    } catch (e) {
+        logger.error('[Treasury] TREASURY_WALLET is not a valid address; sweep disabled');
+        return null;
+    }
+    if (treasury.equals(signer.publicKey)) {
+        logger.error('[Treasury] TREASURY_WALLET is the hot wallet itself; sweep disabled');
+        return null;
+    }
+
+    const release = await airdropMutex.tryAcquire();
+    if (!release) {
+        logger.debug('[Treasury] Airdrop in progress, deferring sweep');
+        return null;
+    }
+    try {
+        let obligations = 0;
+        try {
+            const pools = await db.get(
+                'SELECT COALESCE(SUM(pending_airdrop_lamports), 0) AS total FROM tokens WHERE pending_airdrop_lamports > 0'
+            );
+            const stats = await db.all(
+                "SELECT key, value FROM stats WHERE key IN ('centralPoolLamports','pendingBuybackBurnLamports','pendingUpkeepLamports')"
+            );
+            obligations = Math.floor(Number(pools?.total || 0))
+                + stats.reduce((sum, r) => sum + Math.max(0, Math.floor(Number(r.value) || 0)), 0);
+        } catch (e) {
+            logger.warn('[Treasury] Could not read obligations, skipping sweep', { error: e.message });
+            return null;
+        }
+
+        let balance;
+        try {
+            balance = await connection.getBalance(signer.publicKey);
+        } catch (e) {
+            logger.warn('[Treasury] Balance check failed, skipping sweep', { error: e.message });
+            return null;
+        }
+
+        const float = Math.round(config.HOT_WALLET_FLOAT_SOL * LAMPORTS_PER_SOL);
+        const surplus = balance - obligations - float;
+        const minSweep = Math.round(config.HOT_WALLET_SWEEP_MIN_SOL * LAMPORTS_PER_SOL);
+        if (surplus < minSweep) {
+            logger.debug('[Treasury] No surplus to sweep', {
+                balanceSol: balance / LAMPORTS_PER_SOL, obligationsSol: obligations / LAMPORTS_PER_SOL,
+                floatSol: config.HOT_WALLET_FLOAT_SOL,
+            });
+            return null;
+        }
+
+        const payable = await payableSet(connection, [treasury.toBase58()]).catch(() => null);
+        if (!payable || !payable.has(treasury.toBase58())) {
+            logger.error('[Treasury] TREASURY_WALLET is not a system-owned account; sweep refused', { treasury: treasury.toBase58() });
+            return null;
+        }
+
+        const tx = new Transaction();
+        solana.addPriorityFee(tx, { units: 5_000 });
+        tx.add(SystemProgram.transfer({ fromPubkey: signer.publicKey, toPubkey: treasury, lamports: surplus }));
+        tx.feePayer = signer.publicKey;
+        const sig = await solana.sendTxWithRetry(tx);
+
+        await db.run(
+            `INSERT INTO stats (key, value) VALUES ('lifetimeTreasurySweptLamports', $1)
+             ON CONFLICT (key) DO UPDATE SET value = stats.value + $1`,
+            [surplus]
+        ).catch(() => {});
+        logger.info(`[Treasury] Swept ${(surplus / LAMPORTS_PER_SOL).toFixed(4)} SOL surplus to treasury`, {
+            signature: sig, treasury: treasury.toBase58(),
+            keptSol: ((balance - surplus) / LAMPORTS_PER_SOL).toFixed(4),
+            obligationsSol: (obligations / LAMPORTS_PER_SOL).toFixed(4),
+        });
+        return { signature: sig, lamports: surplus };
+    } catch (e) {
+        logger.error('[Treasury] Sweep failed', { error: e.message });
+        return null;
+    } finally {
+        await release();
+    }
+}
+
 async function processTokenAirdrops(deps) {
-    const { connection, devKeypair, db } = deps;
+    const { connection, signer, db } = deps;
 
     const release = await airdropMutex.tryAcquire();
     if (!release) {
@@ -629,7 +732,7 @@ async function processTokenAirdrops(deps) {
 
     try {
         const SAFETY_RESERVE = 0.1 * LAMPORTS_PER_SOL;
-        const walletBalance = await connection.getBalance(devKeypair.publicKey);
+        const walletBalance = await connection.getBalance(signer.publicKey);
         let availableBalance = walletBalance - SAFETY_RESERVE;
 
         if (availableBalance <= 0) {
@@ -716,7 +819,7 @@ async function processTokenAirdrops(deps) {
                 // written before that change, or by an older process, must not be able to pay
                 // the platform wallet itself or a program-owned account (where SOL is stranded).
                 const payable = await payableSet(connection, holders.map(h => h.holderPubkey));
-                const devWallet = devKeypair.publicKey.toString();
+                const devWallet = signer.publicKey.toString();
                 const payableHolders = holders.filter(h => h.holderPubkey !== devWallet && payable.has(h.holderPubkey));
 
                 // Build weighted holder list — ASDF top holders get the bonus multiplier.
@@ -940,7 +1043,7 @@ async function processTokenAirdrops(deps) {
  * of each token they own.
  */
 async function processCentralPoolAirdrop(deps) {
-    const { connection, devKeypair, db } = deps;
+    const { connection, signer, db } = deps;
 
     const poolRow = await db.get("SELECT value FROM stats WHERE key = 'centralPoolLamports'");
     const centralPoolLamports = Number(poolRow?.value || 0);
@@ -951,7 +1054,7 @@ async function processCentralPoolAirdrop(deps) {
     }
 
     const SAFETY_RESERVE = 0.1 * LAMPORTS_PER_SOL;
-    const walletBalance = await connection.getBalance(devKeypair.publicKey);
+    const walletBalance = await connection.getBalance(signer.publicKey);
     const availableBalance = walletBalance - SAFETY_RESERVE;
 
     if (availableBalance < CENTRAL_POOL_THRESHOLD_LAMPORTS) {
@@ -1017,7 +1120,7 @@ async function processCentralPoolAirdrop(deps) {
 
     // v30.2: never pay the platform wallet itself or a program-owned account.
     const cpPayable = await payableSet(connection, [...userScores.keys()]);
-    const cpDevWallet = devKeypair.publicKey.toString();
+    const cpDevWallet = signer.publicKey.toString();
     for (const pubkey of [...userScores.keys()]) {
         if (pubkey === cpDevWallet || !cpPayable.has(pubkey)) userScores.delete(pubkey);
     }
@@ -1288,12 +1391,12 @@ async function ourQuoteMints(db) {
  * unknown is not the same as nothing, and treating it as nothing would be a silent hole.
  */
 async function surveyCreatorFees(deps) {
-    const { connection, devKeypair, db } = deps;
+    const { connection, signer, db } = deps;
     const pumpLaunch = require('../services/pumpLaunch');
 
     const balances = await pumpLaunch.fetchCollectableFees({
         connection,
-        creator: devKeypair.publicKey,
+        creator: signer.publicKey,
         extraQuoteMints: await ourQuoteMints(db),
     });
 
@@ -1337,7 +1440,7 @@ const CU_MAX_PER_TX = 1_400_000;
  * worker spending from the same wallet concurrently.
  */
 async function claimCreatorFees(deps, survey = null) {
-    const { connection, devKeypair, db } = deps;
+    const { connection, signer, db } = deps;
     const pumpLaunch = require('../services/pumpLaunch');
 
     const before = survey || await surveyCreatorFees(deps);
@@ -1346,13 +1449,13 @@ async function claimCreatorFees(deps, survey = null) {
     const extraQuoteMints = await ourQuoteMints(db);
     const instructions = await pumpLaunch.buildCollectAllFeesInstructions({
         connection,
-        creator: devKeypair.publicKey,
-        feePayer: devKeypair.publicKey,
+        creator: signer.publicKey,
+        feePayer: signer.publicKey,
         extraQuoteMints,
     });
     if (!instructions.length) return 0;
 
-    const groups = pumpLaunch.planFeeTransactions(instructions, devKeypair.publicKey, CU_MAX_PER_TX);
+    const groups = pumpLaunch.planFeeTransactions(instructions, signer.publicKey, CU_MAX_PER_TX);
     logger.info('[FeeCollection] Sweeping creator fees', {
         quotes: before.entries.length, instructions: instructions.length, transactions: groups.length,
     });
@@ -1365,9 +1468,9 @@ async function claimCreatorFees(deps, survey = null) {
         const tx = new Transaction();
         solana.addPriorityFee(tx, { units: Math.min(CU_MAX_PER_TX, CU_PER_FEE_INSTRUCTION * group.length) });
         for (const ix of group) tx.add(ix);
-        tx.feePayer = devKeypair.publicKey;
+        tx.feePayer = signer.publicKey;
         try {
-            await solana.sendTxWithRetry(tx, [devKeypair]);
+            await solana.sendTxWithRetry(tx);
             sent++;
         } catch (e) {
             logger.warn('[FeeCollection] Fee sweep stopped part-way', {
@@ -1382,7 +1485,7 @@ async function claimCreatorFees(deps, survey = null) {
     // each quote moved, and pricing it would spend a Jupiter quote per mint for nothing.
     const after = await pumpLaunch.fetchCollectableFees({
         connection,
-        creator: devKeypair.publicKey,
+        creator: signer.publicKey,
         extraQuoteMints,
     });
     const remaining = new Map(after.map(e => [e.mint, e.total]));
@@ -1403,7 +1506,7 @@ async function claimCreatorFees(deps, survey = null) {
         // The tokens are now sitting in our quote ATA. Only the amount this sweep actually
         // moved is swapped -- the wallet may hold the same asset on purpose, to seed launches
         // quoted in it, and swapping that away would break those launches.
-        const swap = await jupiter.swapTokenToSol(moved.toString(), entry.mint, devKeypair, connection);
+        const swap = await jupiter.swapTokenToSol(moved.toString(), entry.mint, signer, connection);
         if (swap && swap.outAmount > 0) {
             totalLamports += swap.outAmount;
         } else {
@@ -1423,14 +1526,14 @@ async function claimCreatorFees(deps, survey = null) {
  * v11.0 - Simplified: No ATA creation needed, just native SOL transfers
  *
  * @param {Array} batch - Array of {user: PublicKey, amount: number (lamports)}
- * @param {Object} deps - Dependencies including connection and devKeypair
+ * @param {Object} deps - Dependencies including connection and signer
  * @returns {{signature: string, actualLamports: number}|{signature: null, actualLamports: 0}|null}
  *          Object with signature and actual lamports on success,
  *          {signature: null, actualLamports: 0} if all items were dust-filtered (not a failure),
  *          null on actual transaction failure
  */
 async function sendSolAirdropBatch(batch, deps) {
-    const { connection, devKeypair } = deps;
+    const { connection, signer } = deps;
 
     // v27.4 BUGFIX: Hoisted out of the try block. It was declared with `const` inside
     // try{}, which made it inaccessible in catch{} (separate block scope) — every
@@ -1473,13 +1576,13 @@ async function sendSolAirdropBatch(batch, deps) {
         // Add SOL transfer instructions for each valid recipient
         for (const item of validItems) {
             tx.add(SystemProgram.transfer({
-                fromPubkey: devKeypair.publicKey,
+                fromPubkey: signer.publicKey,
                 toPubkey: item.user,
                 lamports: item.amount
             }));
         }
 
-        const sig = await solana.sendTxWithRetry(tx, [devKeypair]);
+        const sig = await solana.sendTxWithRetry(tx);
         // v25.112: Return actual lamports sent (only valid items, excludes dust-filtered)
         const actualLamports = validItems.reduce((sum, item) => sum + item.amount, 0);
         return { signature: sig, actualLamports };
@@ -1508,7 +1611,7 @@ async function sendSolAirdropBatch(batch, deps) {
  * v25.4: Added logging to frontend logs for visibility
  */
 async function runFeeCollection(deps) {
-    const { connection, devKeypair, db, globalState, logPurchase } = deps;
+    const { connection, signer, db, globalState, logPurchase } = deps;
 
     // RACE CONDITION FIX: Use mutex for atomic locking
     const release = await buybackMutex.tryAcquire();
@@ -1605,6 +1708,8 @@ async function runFeeCollection(deps) {
             // an accrual left just under the threshold cannot sit stranded waiting for a claim
             // large enough to push it over.
             await processPlatformFeeSweep(deps);
+            // v30.4: then move anything the wallet does not need to the treasury.
+            await processTreasurySweep(deps);
 
             if (claimedAmount > 0) {
                 // v25.4: Log to frontend
@@ -1751,4 +1856,4 @@ async function start(deps) {
     setTimeout(() => evaluateKothCandidates(db).catch(e => logger.warn('[KOTH] Startup evaluation failed', { error: e.message })), 10000);
 }
 
-module.exports = { claimCreatorFees, surveyCreatorFees, processTokenAirdrops, sendSolAirdropBatch, runFeeCollection, start, drain, getAiSelectedKoth, resetKothCache, splitClaimedFees, processPlatformFeeSweep, FEE_SPLIT };
+module.exports = { claimCreatorFees, surveyCreatorFees, processTokenAirdrops, sendSolAirdropBatch, runFeeCollection, start, drain, getAiSelectedKoth, resetKothCache, splitClaimedFees, processPlatformFeeSweep, processTreasurySweep, FEE_SPLIT };
