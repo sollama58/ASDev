@@ -157,7 +157,7 @@ setInterval(() => {
  * v14.0 - New proportional point system:
  * - Track top 250 holders of each eligible token
  * - Each token contributes 1000 base points distributed proportionally among holders
- * - ASDF multiplier: 2x total points if top 100 ASDF holder
+ * - ASDF multiplier: bonus weight for the top ASDF_BONUS_TOP_N ASDF holders
  * - KOTH: informational AI spotlight only (v26.0: no fee allocation)
  *
  * v18.0 - Eligibility now based on volume threshold:
@@ -579,21 +579,21 @@ async function updateGlobalState(deps, opts = {}) {
             }
         }
 
-        // Fetch ASDF Top 100 holders from Redis (single source of truth)
-        // globalState.asdfTop50Holders may be empty if asdfSync.start() was never called
-        const asdfTop100Holders = await redis.getAsdfTop100Holders();
-        logger.info(`[HolderScanner] ASDF Top 100: ${asdfTop100Holders.size} holders loaded from Redis`);
+        // Fetch the ASDF top-holder set from Redis (single source of truth)
+        const asdfTopHolders = await redis.getAsdfTopHolders();
+        const ASDF_MULT = config.ASDF_BONUS_MULTIPLIER;
+        const ASDF_MULT_BIG = BigInt(ASDF_MULT);
+        logger.info(`[HolderScanner] ASDF Top ${config.ASDF_BONUS_TOP_N}: ${asdfTopHolders.size} holders loaded from Redis`);
 
         // Calculate final points including ASDF multiplier
         for (const [pubkey, data] of rawPointsMap.entries()) {
             if (pubkey === devKeypair.publicKey.toString()) continue;
 
-            // CHECK ASDF MULTIPLIER (Top 100)
-            const isAsdfTop100 = asdfTop100Holders.has(pubkey);
+            const isAsdfTop = asdfTopHolders.has(pubkey);
 
             // Total base points from all sources (v23.0: removed creatorBonus)
             const basePoints = data.basePoints;
-            const totalPoints = basePoints * (isAsdfTop100 ? 2 : 1);
+            const totalPoints = basePoints * (isAsdfTop ? ASDF_MULT : 1);
 
             if (totalPoints > 0) {
                 tempTotalPoints += totalPoints;
@@ -605,9 +605,7 @@ async function updateGlobalState(deps, opts = {}) {
         globalState.kothPot = 0; // v26.0: KOTH is now informational only
         logger.info(`[HolderScanner] Global Points: ${globalState.totalPoints.toFixed(2)}`);
 
-        // v27.1: Build per-user expected airdrop using ASDF + ANSEM weighted formula
-        // ASDF Top 100 and ANSEM Top 1000 each receive 2× weight (4× if holding both)
-        const ansemTop1000Holders = await redis.getAnsemTop1000Holders().catch(() => new Set());
+        // v27.1: Build per-user expected airdrop using the ASDF-weighted formula
 
         const userExpectedAirdropMap = new Map();
         let totalPendingAirdropLamports = 0;
@@ -637,12 +635,11 @@ async function updateGlobalState(deps, opts = {}) {
                 const distributable = pendingLamports * BigInt(99) / BigInt(100);
                 const holders = holdersByMint.get(row.mint) || [];
 
-                // ASDF Top 100 and ANSEM Top 1000 each get 2× effective balance (4× if both)
+                // ASDF top holders get the bonus multiplier on their effective balance
                 const weightedHolders = holders.map(h => {
                     const bal = BigInt(h.balance || '0');
-                    const asdfMult  = asdfTop100Holders.has(h.holderPubkey)   ? BigInt(2) : BigInt(1);
-                    const ansemMult = ansemTop1000Holders.has(h.holderPubkey) ? BigInt(2) : BigInt(1);
-                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * asdfMult * ansemMult };
+                    const mult = asdfTopHolders.has(h.holderPubkey) ? ASDF_MULT_BIG : BigInt(1);
+                    return { holderPubkey: h.holderPubkey, balance: bal, effectiveBal: bal * mult };
                 });
                 const totalEffectiveBal = weightedHolders.reduce((sum, h) => sum + h.effectiveBal, BigInt(0));
                 if (totalEffectiveBal === BigInt(0)) continue;
@@ -655,7 +652,7 @@ async function updateGlobalState(deps, opts = {}) {
                 }
             }
             globalState.availableSolForAirdrop = totalPendingAirdropLamports / LAMPORTS_PER_SOL;
-            logger.info(`[HolderScanner] Per-token expected airdrops (ASDF+ANSEM weighted): ${userExpectedAirdropMap.size} users, total pending: ${globalState.availableSolForAirdrop.toFixed(4)} SOL`);
+            logger.info(`[HolderScanner] Per-token expected airdrops (ASDF weighted): ${userExpectedAirdropMap.size} users, total pending: ${globalState.availableSolForAirdrop.toFixed(4)} SOL`);
         } catch (e) {
             logger.error('[HolderScanner] Failed to compute per-token expected airdrops', { error: e.message });
             globalState.availableSolForAirdrop = 0;
@@ -684,7 +681,7 @@ async function updateGlobalState(deps, opts = {}) {
                         ? await db.all('SELECT "holderPubkey", balance, mint FROM token_holders WHERE mint = ANY($1)', [cpPlatformMints])
                         : [];
 
-                    // Build mcap-weighted score per user, with ASDF Top 100 and ANSEM Top 1000 2× bonus
+                    // Build mcap-weighted score per user, with the ASDF bonus
                     const cpN = cpAllEligible.length;
                     const cpUserScores = new Map();
                     for (const h of cpPlatformHolders) {
@@ -695,9 +692,8 @@ async function updateGlobalState(deps, opts = {}) {
                         // ±50% mcap scaling matching actual distribution formula
                         const mcapMultiplier = Math.min(1.5, Math.max(0.5, 0.5 + (mcap / cpTotalMcap) * cpN * 0.5));
                         const balanceRatio   = Number(balance * BigInt(1e9) / PUMP_SUPPLY) / 1e9;
-                        const asdfMult       = asdfTop100Holders.has(h.holderPubkey)   ? 2 : 1;
-                        const ansemMult      = ansemTop1000Holders.has(h.holderPubkey) ? 2 : 1;
-                        const contribution   = balanceRatio * mcapMultiplier * asdfMult * ansemMult;
+                        const asdfMult       = asdfTopHolders.has(h.holderPubkey) ? ASDF_MULT : 1;
+                        const contribution   = balanceRatio * mcapMultiplier * asdfMult;
                         if (contribution > 0) {
                             cpUserScores.set(h.holderPubkey, (cpUserScores.get(h.holderPubkey) || 0) + contribution);
                         }
@@ -730,8 +726,8 @@ async function updateGlobalState(deps, opts = {}) {
         for (const [pubkey, data] of rawPointsMap.entries()) {
             if (pubkey === devKeypair.publicKey.toString()) continue;
 
-            const isAsdfTop100 = asdfTop100Holders.has(pubkey);
-            const multiplier = isAsdfTop100 ? 2 : 1;
+            const isAsdfTop = asdfTopHolders.has(pubkey);
+            const multiplier = isAsdfTop ? ASDF_MULT : 1;
             const basePoints = data.basePoints;
             const points = basePoints * multiplier;
 
@@ -751,7 +747,7 @@ async function updateGlobalState(deps, opts = {}) {
                     expectedAirdropSol: expected,
                     centralPoolExpectedSol: centralPoolExpectedMap.get(pubkey) || 0,
                     positionsCount: data.positionsCount || 0,
-                    isAsdfHolder: isAsdfTop100
+                    isAsdfHolder: isAsdfTop
                 });
             }
         }

@@ -31,7 +31,6 @@ function startAll(deps) {
     const holderWorker = workers.initHolderScannerWorker(deps);
     const metadataWorker = workers.initMetadataUpdaterWorker(deps);
     workers.initAsdfSyncWorker(deps);
-    workers.initAnsemSyncWorker(deps);
 
     // Track workers for graceful shutdown
     if (holderWorker) activeWorkers.push(holderWorker);

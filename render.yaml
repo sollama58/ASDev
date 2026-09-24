@@ -100,7 +100,7 @@ services:
         value: mainnet
 
   # ---------------------------------------------------------------------------
-  # Worker — holder scans, metadata, ASDF/ANSEM sync, the fee flywheel
+  # Worker — holder scans, metadata, ASDF top-holder sync, the fee flywheel
   # ---------------------------------------------------------------------------
   - type: worker
     name: asdev-worker
