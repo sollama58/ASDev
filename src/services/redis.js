@@ -14,6 +14,7 @@ let redisConnection = null;
 let deployQueue = null;
 let socialQueue = null;
 let holderScannerQueue = null;
+let flywheelQueue = null;
 let metadataUpdaterQueue = null;
 let isConnected = false;
 
@@ -121,11 +122,16 @@ async function init() {
         // v13.0: New worker queues for background tasks
         holderScannerQueue = new Queue('holderScannerQueue', { connection: redisConnection });
         metadataUpdaterQueue = new Queue('metadataUpdaterQueue', { connection: redisConnection });
+        // v30.4: admin "run it now" requests for the flywheel. Consumed by whichever process
+        // runs the flywheel (the worker service in the split layout), so an API process that
+        // holds no wallet key never has to sign a payout itself.
+        flywheelQueue = new Queue('flywheelQueue', { connection: redisConnection });
 
         deployQueue.resume();
         socialQueue.resume();
         holderScannerQueue.resume();
         metadataUpdaterQueue.resume();
+        flywheelQueue.resume();
 
         logger.info("Redis Queues Initialized (v24.0 - with connection validation)");
         return true;
@@ -635,12 +641,26 @@ async function addMetadataUpdaterJob(data = {}) {
 }
 
 /**
+ * v30.4: Queue a flywheel run for the process that owns the flywheel.
+ * @param {'feeCollection'|'tokenAirdrops'} name
+ */
+async function addFlywheelJob(name, data = {}) {
+    if (!flywheelQueue) {
+        throw new Error("Flywheel queue not initialized");
+    }
+    return flywheelQueue.add(name, data, {
+        removeOnComplete: 5,
+        removeOnFail: 3,
+    });
+}
+
+/**
  * v25.27: Clean up old completed and failed jobs from all queues
  * v25.28: More aggressive cleanup - 10 min for completed, 1 hour for failed
  * This helps prevent Redis memory buildup from BullMQ job history
  */
 async function cleanupOldJobs() {
-    const queues = [deployQueue, socialQueue, holderScannerQueue, metadataUpdaterQueue];
+    const queues = [deployQueue, socialQueue, holderScannerQueue, metadataUpdaterQueue, flywheelQueue];
     let totalCleaned = 0;
 
     for (const queue of queues) {
@@ -709,6 +729,26 @@ async function invalidateCache(key) {
 }
 
 /**
+ * v30.4: Delete every cache key with a prefix (SCAN, never KEYS). For paginated caches such
+ * as all-launches, whose keys embed the page, so a write can bust every page at once.
+ */
+async function invalidateCachePrefix(prefix) {
+    if (!redisConnection) return 0;
+    let cursor = '0', deleted = 0;
+    try {
+        do {
+            const [next, keys] = await redisConnection.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 200);
+            cursor = next;
+            if (keys.length) deleted += await redisConnection.del(...keys);
+        } while (cursor !== '0');
+        if (deleted) logger.debug(`[Redis] Cache invalidated: ${deleted} keys with prefix ${prefix}`);
+    } catch (e) {
+        logger.error(`[Redis] Failed to invalidate cache prefix [${prefix}]`, { error: e.message });
+    }
+    return deleted;
+}
+
+/**
  * v25.42: Simple get wrapper for Redis
  * Returns null if Redis unavailable or key doesn't exist
  */
@@ -751,6 +791,9 @@ module.exports = {
     getMetadataUpdaterQueue: () => metadataUpdaterQueue,
     addHolderScannerJob,
     addMetadataUpdaterJob,
+    addFlywheelJob,
+    getFlywheelQueue: () => flywheelQueue,
+    invalidateCachePrefix,
 
     // v13.0: GlobalState operations
     GLOBAL_STATE_KEYS,

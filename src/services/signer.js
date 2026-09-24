@@ -51,7 +51,53 @@ const SCRYPT = { N: 1 << 16, r: 8, p: 1, maxmem: 128 * 1024 * 1024 };
 // The env vars that hold key material or unlock it. Deleted from process.env once the signer
 // exists (see scrubSecretsFromEnv), so no later code path, dependency or child process can
 // read them back. They are only ever needed once, at boot.
-const SECRET_ENV_KEYS = ['DEV_WALLET_PRIVATE_KEY', 'DEV_WALLET_KEY_PASSPHRASE', 'VAULT_TOKEN', 'DEV_WALLET_KEY_FILE_EPHEMERAL'];
+const SECRET_ENV_KEYS = [
+    'DEV_WALLET_PRIVATE_KEY', 'DEV_WALLET_KEY_PASSPHRASE', 'VAULT_TOKEN',
+    'DEV_WALLET_KEY_PASSPHRASE_FILE', 'VAULT_TOKEN_FILE', 'DEV_WALLET_SECRETS_EPHEMERAL',
+];
+
+/**
+ * A secret from NAME, or from the file NAME_FILE names (scripts/boot.sh parks each secret in a
+ * private tmpfs file so it never sits in the process environment). With
+ * DEV_WALLET_SECRETS_EPHEMERAL=1 the file is overwritten and removed once read.
+ */
+function secretFromEnv(env, name) {
+    if (env[name]) return env[name];
+    const file = env[`${name}_FILE`];
+    if (!file) return null;
+    let text;
+    try {
+        text = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+        throw new Error(`could not read ${name}_FILE (${file}): ${e.code || e.message}`);
+    }
+    if (env.DEV_WALLET_SECRETS_EPHEMERAL === '1') shredFile(file, text.length);
+    return text.replace(/\r?\n$/, '');
+}
+
+/**
+ * Whatever scripts/boot.sh parked that this boot did not consume (a passphrase beside a clear
+ * key, a Vault token on the local backend) must not outlive the boot either.
+ */
+function shredUnusedSecretFiles(env) {
+    if (env.DEV_WALLET_SECRETS_EPHEMERAL !== '1') return;
+    for (const name of ['DEV_WALLET_KEY_FILE', 'DEV_WALLET_KEY_PASSPHRASE_FILE', 'VAULT_TOKEN_FILE']) {
+        const file = env[name];
+        if (!file || !fs.existsSync(file)) continue;
+        let size = 0;
+        try { size = fs.statSync(file).size; } catch (e) { /* shred with a zero-length write */ }
+        shredFile(file, size);
+    }
+}
+
+function shredFile(file, length) {
+    try {
+        fs.writeFileSync(file, Buffer.alloc(length));
+        fs.unlinkSync(file);
+    } catch (e) {
+        logger.warn('[Signer] Could not remove an ephemeral secret file', { file, error: e.code || e.message });
+    }
+}
 
 /* ────────────────────────────────────────────────────────────────────────────
    Key material parsing
@@ -340,12 +386,13 @@ async function createSignerFromEnv(env = process.env, policy = undefined) {
     if (backend === 'vault') {
         const signer = await createVaultSigner({
             addr: env.VAULT_ADDR,
-            token: env.VAULT_TOKEN,
+            token: secretFromEnv(env, 'VAULT_TOKEN'),
             key: env.VAULT_TRANSIT_KEY,
             mount: env.VAULT_TRANSIT_MOUNT || 'transit',
             namespace: env.VAULT_NAMESPACE || null,
             policy,
         });
+        shredUnusedSecretFiles(env);
         logger.info('[Signer] Using Vault Transit remote signer', { key: env.VAULT_TRANSIT_KEY, wallet: signer.publicKey.toBase58() });
         return signer;
     }
@@ -363,15 +410,10 @@ async function createSignerFromEnv(env = process.env, policy = undefined) {
             throw new Error(`could not read DEV_WALLET_KEY_FILE (${env.DEV_WALLET_KEY_FILE}): ${e.code || e.message}`);
         }
         source = 'file';
-        if (env.DEV_WALLET_KEY_FILE_EPHEMERAL === '1') {
+        if (env.DEV_WALLET_SECRETS_EPHEMERAL === '1') {
             // scripts/boot.sh parked the key here for the boot second, so that the running
             // process has it neither in its environment nor on disk. Overwrite, then remove.
-            try {
-                fs.writeFileSync(env.DEV_WALLET_KEY_FILE, Buffer.alloc(Buffer.byteLength(text)));
-                fs.unlinkSync(env.DEV_WALLET_KEY_FILE);
-            } catch (e) {
-                logger.warn('[Signer] Could not remove the ephemeral key file', { error: e.code || e.message });
-            }
+            shredFile(env.DEV_WALLET_KEY_FILE, Buffer.byteLength(text));
             source = 'boot-file';
         }
     } else if (env.DEV_WALLET_PRIVATE_KEY) {
@@ -382,7 +424,10 @@ async function createSignerFromEnv(env = process.env, policy = undefined) {
     }
 
     const encrypted = text.trim()[0] === '{';
-    const secretKey = parseKeyMaterial(text, env.DEV_WALLET_KEY_PASSPHRASE);
+    // The passphrase is only read when the key needs it, so a clear key with a stale
+    // passphrase setting still boots.
+    const secretKey = parseKeyMaterial(text, encrypted ? secretFromEnv(env, 'DEV_WALLET_KEY_PASSPHRASE') : null);
+    shredUnusedSecretFiles(env);
     const signer = createLocalSigner(secretKey, encrypted ? `${source}+passphrase` : source, policy);
     logger.info('[Signer] Using local signer', { source: signer.source, wallet: signer.publicKey.toBase58(), policy: signer.policyMode });
     if (!encrypted && env.NODE_ENV === 'production') {

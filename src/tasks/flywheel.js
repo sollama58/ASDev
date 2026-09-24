@@ -1854,6 +1854,10 @@ async function start(deps) {
     // Run KOTH evaluation early so Redis has a valid selection before holderScanner first reads it.
     // would be excluded from KOTH during that window.
     setTimeout(() => evaluateKothCandidates(db).catch(e => logger.warn('[KOTH] Startup evaluation failed', { error: e.message })), 10000);
+
+    // v30.4: admin triggers arrive through this queue. Returned so the caller can close it on
+    // shutdown like every other BullMQ worker.
+    return workers.initFlywheelControlWorker(deps);
 }
 
 module.exports = { claimCreatorFees, surveyCreatorFees, processTokenAirdrops, sendSolAirdropBatch, runFeeCollection, start, drain, getAiSelectedKoth, resetKothCache, splitClaimedFees, processPlatformFeeSweep, processTreasurySweep, FEE_SPLIT };

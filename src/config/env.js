@@ -32,7 +32,8 @@ const WALLET_SIGNER = String(process.env.WALLET_SIGNER || 'local').toLowerCase()
 if (!IS_GRINDER && process.env.WALLET_CHECK !== 'skip') {
     let problem = null;
     if (WALLET_SIGNER === 'vault') {
-        const missing = ['VAULT_ADDR', 'VAULT_TOKEN', 'VAULT_TRANSIT_KEY'].filter(v => !process.env[v]);
+        const missing = ['VAULT_ADDR', 'VAULT_TOKEN', 'VAULT_TRANSIT_KEY']
+            .filter(v => !process.env[v] && !process.env[`${v}_FILE`]);
         if (missing.length) problem = `WALLET_SIGNER=vault needs ${missing.join(', ')}`;
     } else if (WALLET_SIGNER === 'local') {
         if (!process.env.DEV_WALLET_KEY_FILE && !process.env.DEV_WALLET_PRIVATE_KEY && !IS_API_ONLY) {

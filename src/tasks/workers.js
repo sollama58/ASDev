@@ -222,6 +222,9 @@ function initDeployWorker(deps) {
                 quoteMint: quoteMint || null,
             });
             logger.info(`[Deploy] Token saved to database: ${ticker} (${mintStr})`);
+            // v30.4: the listing pages are cached for 15s per page; drop them so the new coin
+            // shows up on the next request rather than the next expiry.
+            await redis.invalidateCachePrefix('all_launches_').catch(() => {});
         } catch (dbError) {
             logger.error(`[Deploy] FAILED to save token to database`, { error: dbError.message, mint: mintStr, ticker });
         }
@@ -445,6 +448,24 @@ function initSocialWorker(deps) {
  * a scan is already in flight simply returns { scanCompleted: false, skipped: true }
  * instead of running a second concurrent scan.
  */
+/**
+ * v30.4: Consumer for admin "run it now" requests (redis.addFlywheelJob). Lives with the
+ * flywheel so it runs in the process that holds the wallet key; the API only enqueues.
+ * Each run takes the same mutex as the scheduled one, so a request that arrives mid-cycle
+ * simply finds the lock held and returns.
+ */
+function initFlywheelControlWorker(deps) {
+    const flywheel = require('./flywheel');
+    return redis.createWorker('flywheelQueue', async (job) => {
+        logger.info(`[Flywheel] Manual run requested: ${job.name}`, { source: job.data?.source || 'unknown' });
+        switch (job.name) {
+            case 'feeCollection': return flywheel.runFeeCollection(deps);
+            case 'tokenAirdrops': return flywheel.processTokenAirdrops(deps);
+            default: throw new Error(`unknown flywheel job ${job.name}`);
+        }
+    }, { concurrency: 1 });
+}
+
 function initHolderScannerWorker(deps) {
     const holderScanner = require('./holderScanner');
 
@@ -602,6 +623,7 @@ function initAsdfSyncWorker(deps) {
 }
 
 module.exports = {
+    initFlywheelControlWorker,
     initDeployWorker,
     reconcileSeedPositions,
     sellSeedPosition,

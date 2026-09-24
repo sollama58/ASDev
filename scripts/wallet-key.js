@@ -63,7 +63,9 @@ async function encrypt() {
 }
 
 async function build() {
-    const signer = await signerService.createSignerFromEnv();
+    // No signing policy here: `verify` signs a plain test message, which the policy would
+    // (correctly) refuse as not being a transaction. The server always attaches the policy.
+    const signer = await signerService.createSignerFromEnv(process.env, null);
     signerService.scrubSecretsFromEnv();
     return signer;
 }

@@ -214,13 +214,17 @@ async function startWorker() {
     }
 
     if (enabledTasks.includes('flywheel')) {
-        tasks.flywheel.start(deps);
+        tasks.flywheel.start(deps)
+            .then(control => tasks.registerWorker(control))
+            .catch(e => logger.error('[Worker] Flywheel failed to start', { error: e.message }));
         logger.info('[Worker] Flywheel started');
     }
 
     if (enabledTasks.includes('deploy')) {
         tasks.registerWorker(workers.initDeployWorker(deps));
         logger.info('[Worker] Deploy worker started (launches, refunds)');
+    } else {
+        logger.warn('[Worker] WORKER_TASKS excludes "deploy": launches are only processed if the API service holds the wallet key');
     }
 
     logger.info(`Worker ${config.VERSION} running with ${enabledTasks.length} tasks`);

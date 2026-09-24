@@ -31,7 +31,7 @@ the key.
 | Operators can check without looking | `node scripts/wallet-key.js verify` builds the signer exactly as the server does, signs a test message and confirms which wallet it controls. Nothing in that script prints key material. |
 | What is at stake is capped | With `TREASURY_WALLET` set, the flywheel sweeps anything the hot wallet holds beyond its obligations (the holder pools, the accrued platform cut) plus `HOT_WALLET_FLOAT_SOL` to a treasury address every fee-collection cycle (§5). |
 
-| The key is only ever in memory | `scripts/boot.sh` (the blueprint's start command) parks `DEV_WALLET_PRIVATE_KEY` in a private tmpfs file, drops the variable and `exec`s node; the signer reads and deletes the file as its first act. Deleting a variable from `process.env` does *not* remove it from `/proc/<pid>/environ`, which any code running as the same user can read for the life of the process — `exec` is what clears it. |
+| The key is only ever in memory | `scripts/boot.sh` (the blueprint's start command) parks `DEV_WALLET_PRIVATE_KEY` — and `DEV_WALLET_KEY_PASSPHRASE` and `VAULT_TOKEN` when set — in private tmpfs files, drops the variables and `exec`s node; the signer reads and deletes the files as its first act. Deleting a variable from `process.env` does *not* remove it from `/proc/<pid>/environ`, which any code running as the same user can read for the life of the process — `exec` is what clears it. |
 | The internet-facing process has no key | `SERVER_MODE=api-only` with no key configured runs on a *public-only* signer: it verifies launch payments and reports the address, and the worker's `deploy` task (no inbound network) runs every launch and refund. A remote-code-execution bug in the API finds nothing to sign with (§2.5). |
 | The key only signs what the platform does | `src/services/signingPolicy.js` checks every message before a signature is produced — including raw bytes handed to `signMessage`. Unknown programs, `Assign`, nonce and token `Approve`/`Transfer`/`SetAuthority` instructions are refused; Pump buys are capped; SOL leaving the wallet for anything but the treasury and fee wallets is capped per transaction and per rolling hour (§2.6). |
 
@@ -168,9 +168,12 @@ The attack surface that matters most — code reachable from the internet — no
 to steal. Running launches in the API is still supported: set `DEV_WALLET_PRIVATE_KEY` on the
 API service and it starts the deploy worker itself, as before.
 
-Both services start through `scripts/boot.sh`, which keeps the variable out of the process's
-`/proc/<pid>/environ` (see §1). With that, a shell in the running container shows no key in
-`env`, none in `/proc`, none on disk.
+Both services start through `scripts/boot.sh`, which keeps the key (and the passphrase or
+Vault token, whichever you use) out of the process's `/proc/<pid>/environ` (see §1). With that,
+a shell in the running container shows no key in `env`, none in `/proc`, none on disk.
+
+Admin "run now" buttons (fee claim, airdrop, holder scan) queue work for the worker rather
+than running in the API, so nothing in the API process ever needs to sign.
 
 ### 2.6 Let the key sign only what the platform does
 

@@ -497,20 +497,15 @@ function init(deps) {
      */
     router.post('/admin/trigger-holder-scan', adminAuth, async (req, res) => {
         try {
-            const holderScanner = require('../tasks/holderScanner');
-
             logger.info('[Admin] Triggering manual holder scan...');
 
-            // Run the update (async, don't wait for completion)
-            holderScanner.updateGlobalState(deps).then(() => {
-                logger.info('[Admin] Manual holder scan completed');
-            }).catch(e => {
-                logger.error('[Admin] Manual holder scan failed', { error: e.message });
-            });
+            // v30.4: queued for the process that runs the scanner (the worker service in the
+            // split layout) instead of running inside the API, whose globalState nobody reads.
+            await redis.addHolderScannerJob({ source: 'admin' });
 
             res.json({
                 success: true,
-                message: 'Holder scan triggered. Check logs for progress.'
+                message: 'Holder scan queued for the worker. Check the worker logs for progress.'
             });
         } catch (e) {
             logger.error('[Admin] Trigger holder scan error', { error: e.message });
@@ -525,20 +520,15 @@ function init(deps) {
      */
     router.post('/admin/trigger-fee-claim', adminAuth, async (req, res) => {
         try {
-            const flywheel = require('../tasks/flywheel');
-
             logger.info('[Admin] Triggering manual fee claim...');
 
-            // Run the fee collection (async, don't wait for completion)
-            flywheel.runFeeCollection(deps).then(() => {
-                logger.info('[Admin] Manual fee claim completed');
-            }).catch(e => {
-                logger.error('[Admin] Manual fee claim failed', { error: e.message });
-            });
+            // v30.4: queued for the process that owns the flywheel and the wallet key. The
+            // API may hold no key at all (see src/index.js), so it cannot claim here.
+            await redis.addFlywheelJob('feeCollection', { source: 'admin' });
 
             res.json({
                 success: true,
-                message: 'Fee claim triggered. Check logs for progress.'
+                message: 'Fee claim queued for the worker. Check the worker logs for progress.'
             });
         } catch (e) {
             logger.error('[Admin] Trigger fee claim error', { error: e.message });
@@ -553,8 +543,6 @@ function init(deps) {
      */
     router.post('/admin/trigger-airdrop', adminAuth, async (req, res) => {
         try {
-            const flywheel = require('../tasks/flywheel');
-
             // v30.2: runs the real per-token + central-pool distribution. This button used to
             // call the retired v11 points airdrop, which paid out the wallet's ENTIRE balance
             // above a 0.1 SOL reserve by points -- per-token pools, the central pool and the
@@ -562,15 +550,12 @@ function init(deps) {
             // database went on owing everything it had just sent. The per-token run reserves
             // each pool before sending, and shares the airdrop lock with the scheduled run.
             logger.info('[Admin] Triggering manual airdrop...');
-            flywheel.processTokenAirdrops(deps).then(() => {
-                logger.info('[Admin] Manual airdrop completed');
-            }).catch(e => {
-                logger.error('[Admin] Manual airdrop failed', { error: e.message });
-            });
+            // v30.4: queued for the flywheel's process, as with the fee claim above.
+            await redis.addFlywheelJob('tokenAirdrops', { source: 'admin' });
 
             res.json({
                 success: true,
-                message: 'Airdrop run triggered for every pool above its threshold. Check logs for progress.'
+                message: 'Airdrop run queued for the worker, for every pool above its threshold. Check the worker logs for progress.'
             });
         } catch (e) {
             logger.error('[Admin] Trigger airdrop error', { error: e.message });
@@ -1487,6 +1472,8 @@ function init(deps) {
             deleted.platform = tokenResult.changes || 0;
 
             logger.info('[Admin] Deleted platform token', { mint, ticker: platformToken.ticker });
+            // v30.4: the listing pages are cached per page; drop them all so the coin disappears now.
+            await redis.invalidateCachePrefix('all_launches_').catch(() => {});
 
             res.json({
                 success: true,

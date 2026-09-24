@@ -36,14 +36,14 @@ const adminAuth = require('./adminAuth'); // v28.6: shared middleware
 function init(deps) {
     const { db, globalState, signer } = deps;
 
-    // Bust the listing caches after any write that changes what tokens appear
+    // Bust the listing caches after any write that changes what tokens appear.
+    // v30.4: was never called, and named cache keys three versions stale. Every page of the
+    // paginated listing goes, by prefix, and the deploy worker calls this after a launch.
     async function bustListingCaches() {
         try {
             await Promise.all([
                 redis.invalidateCache('leaderboard_platform_data'),
-                // Bust first two pages of all-launches (covers the common case)
-                redis.invalidateCache('all_launches_v2600_50_0'),
-                redis.invalidateCache('all_launches_v2600_100_0'),
+                redis.invalidateCachePrefix('all_launches_'),
             ]);
         } catch (e) {
             logger.debug('[Cache] Failed to bust listing caches', { error: e.message });
@@ -287,8 +287,10 @@ function init(deps) {
     // v24.0: Added caching (10s TTL) and circuit breaker for external API resilience
     // v25.22 SECURITY: Added price bounds validation to prevent oracle manipulation
     router.get('/pump-proxy/:mint', adminAuth, async (req, res) => {
+        // v30.4: declared outside the try -- the catch below logs it, and a `const` inside the
+        // try was out of scope there, so the error path threw a ReferenceError of its own.
+        const { mint } = req.params;
         try {
-            const { mint } = req.params;
             if (!isValidPubkey(mint)) {
                 return res.status(400).json({ error: "Invalid mint address" });
             }

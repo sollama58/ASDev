@@ -152,7 +152,7 @@ SERVER_MODE=worker WORKER_TASKS=holders,metadata,deploy node src/worker.js   # s
 | Script | What it does |
 |---|---|
 | `node scripts/show-points.js` | Dump current point distribution and eligibility |
-| `node scripts/test-airdrop.js` | Simulate/test the point → airdrop distribution flow |
+| `GET /api/admin/simulate-airdrop` | Dry-run of the next per-token and central-pool distribution (admin key) |
 | `node scripts/wallet-key.js encrypt\|pubkey\|verify` | Encrypt the wallet key for a secret file; show or verify the configured signer's wallet |
 
 ## API

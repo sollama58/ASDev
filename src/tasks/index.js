@@ -37,7 +37,9 @@ function startAll(deps) {
     if (metadataWorker) activeWorkers.push(metadataWorker);
 
     // Start flywheel (still runs in main process - timing critical)
-    flywheel.start(deps);
+    flywheel.start(deps)
+        .then(control => { if (control) activeWorkers.push(control); })
+        .catch(e => logger.error('[Tasks] Flywheel failed to start', { error: e.message }));
 
     // v25.45: Start tiered metadata updater for frequent price updates
     // Top 10 tokens update every 1 minute, all tokens every 5 minutes

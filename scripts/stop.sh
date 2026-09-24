@@ -1,13 +1,6 @@
-#!/bin/bash
-# ASDev Stop Script
-
-echo "Stopping ASDev..."
-
-# Stop Node.js server
+#!/bin/sh
+# Stop the processes scripts/start.sh launched.
 pkill -f "node src/index.js" 2>/dev/null || true
-pkill -f "node server.js" 2>/dev/null || true
-
-# Stop Vanity Grinder
-pkill -f "asdf-vanity-grinder" 2>/dev/null || true
-
+pkill -f "node src/worker.js" 2>/dev/null || true
+pkill -f "node src/grinder.js" 2>/dev/null || true
 echo "Stopped."
